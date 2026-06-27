@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Bot } from 'lucide-react';
-import { CategorySidebar, DataTable, Panel, QuoteCard, Screen, StateMessage, StatusBadge } from '../../../components/ui';
+import { CategorySidebar, DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
+import { QuoteCard } from '../components/QuoteCard';
 import { builds, categories } from '../mocks/quoteMock';
 
 export function HomePage() {

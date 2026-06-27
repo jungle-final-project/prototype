@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
-import { DataTable, MetricCard, Panel, QuoteCard, Screen, StateMessage, StatusBadge } from '../../../components/ui';
+import { DataTable, MetricCard, Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
 import { toolRows } from '../../parts/mocks/toolMock';
+import { QuoteCard } from '../components/QuoteCard';
 import { builds } from '../mocks/quoteMock';
 
 export function BuildResultPage() {
