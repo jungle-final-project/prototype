@@ -4,7 +4,7 @@
 
 ## 실행
 
-로컬 Python은 3.11 이상을 권장합니다. Dev Container와 CI는 Python 3.12를 사용합니다.
+Python 3.11 기준 CLI입니다. 저장소 루트에서 `scripts/setup-dev`를 실행하면 필요한 Python 의존성이 `.venv`에 설치됩니다.
 
 ```powershell
 cd apps/pc-agent

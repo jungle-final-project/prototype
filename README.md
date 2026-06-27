@@ -19,7 +19,7 @@
 - 웹: React, TypeScript, Vite, Tailwind, React Router, TanStack Query
 - API: Spring Boot, Gradle, Java 21
 - 인프라: PostgreSQL + pgvector, Redis, RabbitMQ, Mailpit, Docker Compose
-- PC 에이전트: Python CLI 골격. 로컬은 3.11 이상을 권장하고, Dev Container와 CI는 3.12를 사용합니다.
+- PC 에이전트: Python 3.11 CLI 골격
 
 ## 빠른 실행
 
@@ -69,7 +69,27 @@ docker compose down -v
 docker compose up --build
 ```
 
-`.devcontainer/devcontainer.json`은 Node 22, Java 21, Python 3.12, Docker CLI를 포함합니다.
+`.devcontainer/devcontainer.json`은 Node 22, Java 21, Python 3.11, Docker CLI를 포함합니다. 컨테이너가 처음 열릴 때 `scripts/setup-dev.sh`가 실행되어 웹 의존성과 Python 도구 의존성을 설치합니다.
+
+## 로컬 의존성 한 번에 설치
+
+Docker만 사용할 때는 이 단계가 필요 없습니다. 로컬에서 프론트엔드, OpenAPI 검증, PC Agent를 직접 실행할 팀원은 아래 스크립트를 한 번 실행합니다.
+
+Windows:
+
+```powershell
+.\scripts\setup-dev.ps1
+.\.venv\Scripts\Activate.ps1
+```
+
+macOS/Linux:
+
+```bash
+bash scripts/setup-dev.sh
+source .venv/bin/activate
+```
+
+설치 스크립트는 `apps/web`의 npm 의존성, Playwright Chromium 브라우저, `tools/requirements.txt`, `apps/pc-agent/requirements.txt`를 설치합니다. 백엔드 Gradle 의존성은 `bootRun` 또는 `bootJar` 실행 시 Gradle Wrapper가 받습니다.
 
 ## 개발 명령어
 

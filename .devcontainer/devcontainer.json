@@ -10,14 +10,18 @@
       "installGradle": false
     },
     "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.12"
+      "version": "3.11"
     },
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
   },
   "workspaceFolder": "/workspaces/prototype",
-  "postCreateCommand": "cd apps/web && npm ci && cd ../pc-agent && python -m pip install --user -r requirements.txt",
+  "postCreateCommand": "bash scripts/setup-dev.sh",
   "customizations": {
     "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "python.terminal.activateEnvironment": true
+      },
       "extensions": [
         "ms-azuretools.vscode-docker",
         "vscjava.vscode-java-pack",
