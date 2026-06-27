@@ -36,3 +36,8 @@
 - 모바일/반응형 화면 완성도
 
 다만 팀 병렬 개발에 영향을 주는 성공 응답 구조, 인증 필요 여부, 담당 모듈 경계, mock/seed 위치, CI 기본 검증은 착수 스캐폴드의 유효한 평가 기준으로 유지합니다.
+
+## 스캐폴드 결정 사항
+
+- 기획안의 Tool API는 개별 endpoint로 표현되어 있지만, 현재 MVP 스캐폴드에서는 `compatibility`, `power`, `size`, `performance`, `price`를 `/api/tools/{tool}/check` 하나의 path parameter 방식으로 축약합니다. 프론트, 백엔드, OpenAPI가 같은 축약 계약을 사용하므로 착수 기준에서는 이 방식을 유지합니다.
+- POST 요청의 성공 계약은 프론트 API wrapper가 보내는 body를 기준으로 OpenAPI requestBody와 백엔드 controller skeleton에 반영합니다. 운영급 오류 응답 전체 목록은 각 담당자가 실제 DTO/service를 확정할 때 확장합니다.

@@ -2,7 +2,7 @@ import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Screen, StateMessage } from '../../components/ui';
 import { saveToken } from '../../lib/api';
-import { login } from './authApi';
+import { login, signup } from './authApi';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -37,15 +37,23 @@ export function LoginPage() {
 
 export function SignupPage() {
   const navigate = useNavigate();
-  function submit(event: FormEvent) {
+  const [error, setError] = useState('');
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    navigate('/login');
+    setError('');
+    try {
+      await signup('홍길동', 'user@example.com', 'password');
+      navigate('/login');
+    } catch {
+      setError('API 연결 전에는 Docker compose로 백엔드를 먼저 실행해 주세요.');
+    }
   }
   return (
     <Screen>
       <div className="mx-auto mt-16 w-[520px] panel p-8">
         <h1 className="text-xl font-bold text-brand-navy">회원가입</h1>
         <p className="mt-1 text-sm text-slate-500">이메일 로그인용 User/Auth 공통 모듈</p>
+        {error ? <div className="mt-4"><StateMessage type="warn" title="회원가입 실패" body={error} /></div> : null}
         <form onSubmit={submit} className="mt-6 grid grid-cols-2 gap-4">
           <input className="h-11 rounded border border-slate-300 px-3 text-sm" defaultValue="홍길동" />
           <input className="h-11 rounded border border-slate-300 px-3 text-sm" defaultValue="010-0000-0000" />

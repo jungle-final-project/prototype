@@ -1,3 +1,4 @@
+// 공통 UI barrel입니다. 도메인 컴포넌트는 features/* 내부에서 직접 import합니다.
 export { AdminShell } from './layout/AdminShell';
 export { AppHeader } from './layout/AppHeader';
 export { CategorySidebar } from './layout/CategorySidebar';

@@ -62,6 +62,12 @@ paths:
   /api/builds/recommend:
     post:
       summary: 시드 기반 빌드 추천
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildRecommendRequest"
       responses:
         "200":
           description: 빌드 추천 결과
@@ -92,6 +98,12 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePartRequest"
       responses:
         "200":
           description: 변경 차이
@@ -123,6 +135,12 @@ paths:
           schema:
             type: string
             enum: [compatibility, power, size, performance, price]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolCheckRequest"
       responses:
         "200":
           description: 도구 결과
@@ -208,6 +226,12 @@ paths:
           description: 알림
     post:
       summary: 목표가 알림 등록
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PriceAlertCreateRequest"
       responses:
         "201":
           description: 생성된 알림
@@ -220,6 +244,12 @@ paths:
   /api/agent-logs/upload:
     post:
       summary: 최근 에이전트 로그 업로드
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentLogUploadRequest"
       responses:
         "201":
           description: 업로드된 로그 메타데이터
@@ -238,6 +268,12 @@ paths:
   /api/as-tickets:
     post:
       summary: AS 티켓 생성
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsTicketCreateRequest"
       responses:
         "201":
           description: 생성된 티켓
@@ -393,6 +429,52 @@ components:
           type: string
         budget:
           type: integer
+    BuildRecommendRequest:
+      type: object
+      required: [requirementId]
+      properties:
+        requirementId:
+          type: string
+    ChangePartRequest:
+      type: object
+      required: [itemId, replacementPartId]
+      properties:
+        itemId:
+          type: string
+        replacementPartId:
+          type: string
+    ToolCheckRequest:
+      type: object
+      description: MVP 스캐폴드에서는 compatibility, power, size, performance, price 도구를 `/api/tools/{tool}/check` 하나의 경로로 축약한다.
+      additionalProperties: true
+    PriceAlertCreateRequest:
+      type: object
+      required: [partId, targetPrice, email]
+      properties:
+        partId:
+          type: string
+        targetPrice:
+          type: integer
+        email:
+          type: string
+          format: email
+    AgentLogUploadRequest:
+      type: object
+      required: [logRangeMinutes, consent]
+      properties:
+        logRangeMinutes:
+          type: integer
+          example: 30
+        consent:
+          type: boolean
+    AsTicketCreateRequest:
+      type: object
+      required: [symptom, logUploadId]
+      properties:
+        symptom:
+          type: string
+        logUploadId:
+          type: string
     ToolResult:
       type: object
       properties:

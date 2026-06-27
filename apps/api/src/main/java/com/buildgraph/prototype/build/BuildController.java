@@ -17,7 +17,7 @@ public class BuildController {
     }
 
     @PostMapping("/builds/recommend")
-    Map<String, Object> recommend() {
+    Map<String, Object> recommend(@RequestBody(required = false) Map<String, Object> request) {
         return Map.of("builds", BuildSeed.builds());
     }
 
@@ -32,7 +32,7 @@ public class BuildController {
     }
 
     @PostMapping("/builds/{id}/change-part")
-    Map<String, Object> changePart(@PathVariable String id) {
+    Map<String, Object> changePart(@PathVariable String id, @RequestBody(required = false) Map<String, Object> request) {
         return BuildSeed.changePart(id);
     }
 }

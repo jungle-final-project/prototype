@@ -1,3 +1,4 @@
+// Barrel 전용 파일입니다. 실제 구현은 담당 admin page 파일에 추가합니다.
 export { AdminDashboardPage } from './pages/AdminDashboardPage';
 export { AdminPartsPage } from './pages/AdminPartsPage';
 export { AdminTicketDetailPage } from './pages/AdminTicketDetailPage';
