@@ -22,6 +22,10 @@ export function saveToken(token: string) {
   localStorage.setItem('buildgraph.token', token);
 }
 
+export function getToken() {
+  return localStorage.getItem('buildgraph.token');
+}
+
 export function clearToken() {
   localStorage.removeItem('buildgraph.token');
 }
