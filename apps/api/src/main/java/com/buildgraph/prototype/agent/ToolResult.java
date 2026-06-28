@@ -1,14 +1,11 @@
 package com.buildgraph.prototype.agent;
 
-import java.util.List;
+import java.util.Map;
 
 public record ToolResult(
-        String tool,
         ToolStatus status,
-        double score,
         ConfidenceLevel confidence,
         String summary,
-        List<String> warnings,
-        List<RagEvidence> evidence
+        Map<String, Object> details
 ) {
 }

@@ -6,6 +6,8 @@ public enum AgentStatus {
     RAG_SEARCHED,
     TOOLS_CALLED,
     SUMMARY_READY,
+    FALLBACK_READY,
+    SUCCEEDED,
     FAILED,
-    FALLBACK_READY
+    CANCELLED
 }

@@ -1,11 +1,15 @@
 package com.buildgraph.prototype.agent;
 
+import java.math.BigDecimal;
+import java.util.Map;
+
 public record RagEvidence(
         String id,
+        String agentSessionId,
         String sourceId,
+        String chunkText,
         String summary,
-        double score,
-        String usedBy,
-        String owner
+        BigDecimal score,
+        Map<String, Object> metadata
 ) {
 }
