@@ -5,8 +5,9 @@
 ## 공통 체크
 
 - `docker compose up --build`가 실행되는지 확인합니다.
-- 자기 담당 경로를 [role-workspaces.md](role-workspaces.md)에서 확인합니다.
-- API 요청/응답을 바꾸면 [openapi.yaml](openapi.yaml)을 같은 PR에서 수정합니다.
+- 자기 담당 경로를 [ROUTE_OWNERSHIP.md](ROUTE_OWNERSHIP.md)에서 확인합니다.
+- API 요청/응답을 바꾸면 [API_CONTRACT.md](API_CONTRACT.md)와 [openapi.yaml](openapi.yaml)을 같은 PR에서 수정합니다.
+- DB table/column/enum/status를 바꾸면 [DB_SCHEMA.md](DB_SCHEMA.md)를 같은 PR에서 수정합니다.
 - mock 데이터는 담당 feature의 `mocks` 안에 추가합니다.
 - seed 데이터는 담당 백엔드 domain의 `*Seed.java`에 추가합니다.
 - PR 전에 `npm run test`, `python tools/validate_openapi.py`, `docker compose config`를 실행합니다.
@@ -31,7 +32,7 @@
 
 - `apps/web/src/features/parts`의 부품 표와 Tool check 흐름에 필요한 타입을 정리합니다.
 - `apps/api/src/main/java/com/buildgraph/prototype/part`와 `price`에 DTO/service skeleton을 추가합니다.
-- `/api/tools/{tool}/check`, `/api/parts`, `/api/price-alerts`의 요청/응답 필드를 구체화합니다.
+- 5개 Tool API, `/api/parts`, `/api/price-alerts`의 요청/응답 필드를 구체화합니다.
 
 완료 기준:
 

@@ -1,6 +1,6 @@
 # 역할별 작업 범위
 
-이 문서는 팀원이 자기 담당 파일과 PR 범위를 확인하기 위한 기준입니다. 기능 구현은 각 담당자가 자기 영역 안에서 시작하고, 공통 계약이 바뀌면 같은 PR에서 문서와 테스트를 함께 수정합니다.
+이 문서는 팀원이 자기 담당 파일과 PR 범위를 빠르게 확인하기 위한 요약입니다. 공식 route/API/DB owner 기준은 [ROUTE_OWNERSHIP.md](ROUTE_OWNERSHIP.md)를 따릅니다.
 
 ## 담당자별 범위
 
@@ -17,8 +17,8 @@
 | 담당 | 첫 PR에서 할 일 | 같이 확인할 것 |
 | --- | --- | --- |
 | 1번 | 로그인/회원가입 form state 연결, 요구사항 입력과 추천 API 연결 | `quoteApi.ts`, `authApi.ts`, route smoke test |
-| 2번 | 부품/가격 DTO/service skeleton, Tool별 입력 구조 초안 | `partsApi.ts`, `docs/openapi.yaml` |
-| 3번 | Agent 상태 전이 skeleton, RAG 근거 조회 경계 | 관리자 Agent/RAG/Tool 화면, OpenAPI schema |
+| 2번 | 부품/가격 DTO/service skeleton, Tool별 입력 구조 초안 | `partsApi.ts`, `docs/API_CONTRACT.md`, `docs/openapi.yaml` |
+| 3번 | Agent 상태 전이 skeleton, RAG 근거 조회 경계 | 관리자 Agent/RAG/Tool 화면, `docs/API_CONTRACT.md`, `docs/DB_SCHEMA.md` |
 | 4번 | JSONL export와 AS 업로드/티켓 생성 흐름 연결 | `supportApi.ts`, log/ticket controller |
 | 5번 | admin shell/auth guard 위치 정리, CI/Docker 유지 | GitHub Actions, `/api/health`, Docker Compose |
 
@@ -58,11 +58,13 @@
 
 ## API 계약 규칙
 
-- API 요청/응답 구조를 바꾸면 [openapi.yaml](openapi.yaml)을 같은 PR에서 수정합니다.
+- API 요청/응답 구조를 바꾸면 [API_CONTRACT.md](API_CONTRACT.md)와 [openapi.yaml](openapi.yaml)을 같은 PR에서 수정합니다.
+- DB table/column/enum/status를 바꾸면 [DB_SCHEMA.md](DB_SCHEMA.md)을 같은 PR에서 수정합니다.
+- route/API/file owner를 바꾸면 [ROUTE_OWNERSHIP.md](ROUTE_OWNERSHIP.md)를 같은 PR에서 수정합니다.
 - 기능 API 호출은 page component에서 `api()`를 직접 호출하지 말고 담당 `*Api.ts`에 추가합니다.
 - 오류 응답 세부 정책은 각 domain DTO/service가 구체화될 때 함께 확정합니다.
 - 성공 요청 body, 인증 필요 여부, 핵심 response 필드명처럼 담당자 간 해석이 갈릴 수 있는 계약은 먼저 맞춥니다.
-- 현재 Tool API는 `/api/tools/{tool}/check` 축약 방식을 사용합니다.
+- 현재 Tool API는 `POST /api/tools/compatibility/check`, `power/check`, `size/check`, `performance/check`, `price/check`의 5개 개별 경로를 사용합니다.
 
 ## CI 책임
 

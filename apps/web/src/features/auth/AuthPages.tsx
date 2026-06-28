@@ -12,7 +12,7 @@ export function LoginPage() {
     setError('');
     try {
       const response = await login('user@example.com', 'password');
-      saveToken(response.token);
+      saveToken(response.accessToken);
       navigate('/my/quotes');
     } catch {
       setError('API 연결 전에는 Docker compose로 백엔드를 먼저 실행해 주세요.');

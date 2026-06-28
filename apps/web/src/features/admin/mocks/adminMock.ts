@@ -7,20 +7,20 @@ export const agentStateRows = [
 ];
 
 export const toolInvocationRows = [
-  { id: 'tool-compat-001', tool: 'compatibility', status: 'PASS', confidence: 'HIGH', latency: '120ms', summary: 'CPU와 메인보드 소켓 호환' },
-  { id: 'tool-power-001', tool: 'power', status: 'WARN', confidence: 'MEDIUM', latency: '168ms', summary: '피크 전력 기준 PSU 여유율 낮음' },
-  { id: 'tool-perf-001', tool: 'performance', status: 'PASS', confidence: 'MEDIUM', latency: '210ms', summary: 'QHD 게임 기준 GPU 우선 구성 적합' },
-  { id: 'tool-price-001', tool: 'price', status: 'PASS', confidence: 'LOW', latency: '340ms', summary: '최근 스냅샷 기준 예산 내 구성' }
+  { id: '00000000-0000-4000-8000-000000005001', tool: 'compatibility', status: 'PASS', confidence: 'HIGH', latency: '120ms', summary: 'CPU와 메인보드 소켓 호환' },
+  { id: '00000000-0000-4000-8000-000000005002', tool: 'power', status: 'WARN', confidence: 'MEDIUM', latency: '168ms', summary: '피크 전력 기준 PSU 여유율 낮음' },
+  { id: '00000000-0000-4000-8000-000000005003', tool: 'performance', status: 'PASS', confidence: 'MEDIUM', latency: '210ms', summary: 'QHD 게임 기준 GPU 우선 구성 적합' },
+  { id: '00000000-0000-4000-8000-000000005004', tool: 'price', status: 'PASS', confidence: 'LOW', latency: '340ms', summary: '최근 스냅샷 기준 예산 내 구성' }
 ];
 
 export const ragEvidenceRows = [
-  { id: 'rag-psu-001', sourceId: 'psu-rule-001', summary: 'GPU 피크 전력과 CPU TDP 합산 후 여유율 적용', score: '0.91', owner: '3번 Agent/RAG' },
-  { id: 'rag-qhd-001', sourceId: 'qhd-gaming-4070s', summary: 'QHD 게임 기준 GPU 우선 구성 근거', score: '0.84', owner: '3번 Agent/RAG' },
-  { id: 'rag-log-001', sourceId: 'as-thermal-001', summary: 'GPU 온도 상승과 프레임 드랍 간 단순 상관 규칙', score: '0.78', owner: '4번 Log/AS' }
+  { id: '00000000-0000-4000-8000-000000004001', sourceId: 'psu-rule-001', summary: 'GPU 피크 전력과 CPU TDP 합산 후 여유율 적용', score: '0.91', owner: '3번 Agent/RAG' },
+  { id: '00000000-0000-4000-8000-000000004002', sourceId: 'qhd-gaming-4070s', summary: 'QHD 게임 기준 GPU 우선 구성 근거', score: '0.84', owner: '3번 Agent/RAG' },
+  { id: '00000000-0000-4000-8000-000000004003', sourceId: 'as-thermal-001', summary: 'GPU 온도 상승과 프레임 드랍 간 단순 상관 규칙', score: '0.78', owner: '4번 Log/AS' }
 ];
 
 export const adminTicketDetailRows = [
-  { field: 'ticketId', value: 'AS-1031' },
+  { field: 'ticketId', value: '00000000-0000-4000-8000-000000006001' },
   { field: 'user', value: 'user@example.com' },
   { field: 'symptom', value: '게임 중 프레임 급락' },
   { field: 'logRange', value: '최근 30분' },

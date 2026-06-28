@@ -36,7 +36,7 @@ export function AdminDashboardPage() {
       <div className="mt-5 grid grid-cols-[1fr_420px] gap-5">
         <Panel title="최근 Agent 세션">
           <DataTable columns={['id', 'user', 'status', 'action']} rows={[
-            { id: 'demo-session', user: 'user@example.com', status: <StatusBadge status="PASS" />, action: <Link className="font-bold text-brand-blue" to="/admin/agent-sessions/demo-session">상세</Link> },
+            { id: '00000000-0000-4000-8000-000000003001', user: 'user@example.com', status: <StatusBadge status="PASS" />, action: <Link className="font-bold text-brand-blue" to="/admin/agent-sessions/00000000-0000-4000-8000-000000003001">상세</Link> },
             { id: 'session-1002', user: 'dev@example.com', status: <StatusBadge status="WARN" />, action: '대기' }
           ]} />
         </Panel>

@@ -15,7 +15,7 @@ export function SelfQuotePage() {
           <MetricCard label="선택 합계" value="1,581,000원" />
           <div className="mt-4 space-y-3">
             <button className="w-full rounded bg-brand-blue px-4 py-3 text-sm font-bold text-white">Tool 검증하기</button>
-            <Link to="/builds/bg-1001" className="block rounded border border-slate-300 px-4 py-3 text-center text-sm font-bold">추천 결과로 보기</Link>
+            <Link to="/builds/00000000-0000-4000-8000-000000002001" className="block rounded border border-slate-300 px-4 py-3 text-center text-sm font-bold">추천 결과로 보기</Link>
           </div>
         </Panel>
       </div>

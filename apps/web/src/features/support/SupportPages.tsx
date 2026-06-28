@@ -18,7 +18,7 @@ export function SupportNewPage() {
               sample-agent-log.jsonl<br />range: recent 30 minutes<br />format: JSON Lines
             </div>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> 최근 30분 로그 업로드와 30일 보관에 동의합니다.</label>
-            <button onClick={() => navigate('/support/AS-1031')} className="rounded bg-brand-blue px-5 py-3 text-sm font-bold text-white">AS 접수하기</button>
+            <button onClick={() => navigate('/support/00000000-0000-4000-8000-000000006001')} className="rounded bg-brand-blue px-5 py-3 text-sm font-bold text-white">AS 접수하기</button>
           </div>
         </Panel>
         <Panel title="AI 1차 원인 후보">
@@ -31,7 +31,7 @@ export function SupportNewPage() {
 }
 
 export function SupportTicketPage() {
-  const { ticketId = 'AS-1031' } = useParams();
+  const { ticketId = '00000000-0000-4000-8000-000000006001' } = useParams();
   return (
     <Screen>
       <div className="grid grid-cols-[1fr_360px] gap-5">

@@ -15,13 +15,9 @@ export function runToolCheck(tool: 'compatibility' | 'power' | 'size' | 'perform
   });
 }
 
-export function createPriceAlert(partId: string, targetPrice: number, email: string) {
+export function createPriceAlert(partId: string, targetPrice: number) {
   return api('/api/price-alerts', {
     method: 'POST',
-    body: JSON.stringify({ partId, targetPrice, email })
+    body: JSON.stringify({ partId, targetPrice })
   });
-}
-
-export function collectPriceSnapshots() {
-  return api('/api/price-snapshots/collect', { method: 'POST' });
 }

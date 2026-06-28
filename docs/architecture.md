@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 저장소는 데스크톱 웹, Spring Boot API, PC Agent, Docker 인프라를 하나의 모노레포로 묶은 프로토타입입니다. 각 담당자는 자기 feature/domain을 구현하고, 공통 계약은 OpenAPI와 CI로 맞춥니다.
+이 저장소는 데스크톱 웹, Spring Boot API, PC Agent, Docker 인프라를 하나의 모노레포로 묶은 프로토타입입니다. 각 담당자는 자기 feature/domain을 구현하고, 공통 계약은 `API_CONTRACT.md`, `DB_SCHEMA.md`, `ROUTE_OWNERSHIP.md`, OpenAPI, CI로 맞춥니다.
 
 ## 전체 구성
 
@@ -12,7 +12,7 @@ apps/
 infra/
   docker    PostgreSQL 초기화 등 인프라 설정
 docs/
-  openapi.yaml, 역할/체크리스트/결정사항 문서
+  API_CONTRACT.md, DB_SCHEMA.md, ROUTE_OWNERSHIP.md, openapi.yaml, 역할/체크리스트/결정사항 문서
 seed/
   샘플 데이터와 Agent 로그
 ```

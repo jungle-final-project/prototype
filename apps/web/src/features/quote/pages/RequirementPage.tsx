@@ -7,7 +7,7 @@ export function RequirementPage() {
   const navigate = useNavigate();
   function submit(event: FormEvent) {
     event.preventDefault();
-    navigate('/builds/bg-1001');
+    navigate('/builds/00000000-0000-4000-8000-000000002001');
   }
   return (
     <Screen>
@@ -41,7 +41,7 @@ export function RequirementPage() {
         </Panel>
         <Panel title="추가 질문" subtitle="누락 필드가 있을 때 표시">
           <StateMessage type="success" title="추가 질문 없음" body="추천 생성에 필요한 기본 조건이 충족되었습니다." />
-          <Link to="/builds/bg-1001" className="mt-5 block rounded bg-brand-blue px-4 py-3 text-center text-sm font-bold text-white">추천 결과 보기</Link>
+          <Link to="/builds/00000000-0000-4000-8000-000000002001" className="mt-5 block rounded bg-brand-blue px-4 py-3 text-center text-sm font-bold text-white">추천 결과 보기</Link>
         </Panel>
       </div>
     </Screen>

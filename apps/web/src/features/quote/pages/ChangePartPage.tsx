@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
 
 export function ChangePartPage() {
-  const { buildId = 'bg-1001' } = useParams();
+  const { buildId = '00000000-0000-4000-8000-000000002001' } = useParams();
   return (
     <Screen>
       <div className="grid grid-cols-[1fr_360px] gap-5">

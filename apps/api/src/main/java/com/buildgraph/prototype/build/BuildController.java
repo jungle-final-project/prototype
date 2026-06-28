@@ -18,7 +18,7 @@ public class BuildController {
 
     @PostMapping("/builds/recommend")
     Map<String, Object> recommend(@RequestBody(required = false) Map<String, Object> request) {
-        return Map.of("builds", BuildSeed.builds());
+        return BuildSeed.recommendations();
     }
 
     @GetMapping("/builds/{id}")

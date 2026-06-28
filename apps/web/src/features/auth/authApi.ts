@@ -1,10 +1,12 @@
 import { api } from '../../lib/api';
 
 export type LoginResponse = {
-  token: string;
+  accessToken: string;
+  refreshToken: string;
   user: {
     id: string;
     email: string;
+    name: string;
     role: 'USER' | 'ADMIN';
   };
 };
@@ -25,6 +27,6 @@ export function getCurrentUser() {
 export function signup(name: string, email: string, password: string) {
   return api('/api/users', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password })
+    body: JSON.stringify({ name, email, password, termsAccepted: true, marketingAccepted: false })
   });
 }

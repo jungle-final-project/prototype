@@ -10,17 +10,28 @@ public final class UserSeed {
     public static Map<String, Object> login(String email) {
         String role = email.startsWith("admin") ? "ADMIN" : "USER";
         return MockData.map(
-                "token", "demo-jwt-" + role.toLowerCase(),
-                "user", MockData.map("id", role.equals("ADMIN") ? "admin-001" : "user-1004", "email", email, "role", role)
+                "accessToken", "demo-access-" + role.toLowerCase(),
+                "refreshToken", "demo-refresh-" + role.toLowerCase(),
+                "user", MockData.map(
+                        "id", role.equals("ADMIN") ? "00000000-0000-4000-8000-000000000001" : "00000000-0000-4000-8000-000000001004",
+                        "email", email,
+                        "name", role.equals("ADMIN") ? "관리자" : "홍길동",
+                        "role", role
+                )
         );
     }
 
     public static Map<String, Object> signup(String name, String email) {
-        return MockData.map("id", "user-1004", "email", email, "name", name, "role", "USER", "createdAt", MockData.now());
+        return MockData.map("id", "00000000-0000-4000-8000-000000001004", "email", email, "name", name, "role", "USER", "createdAt", MockData.now());
     }
 
     public static Map<String, Object> me(String authorization) {
         boolean admin = authorization != null && authorization.contains("admin");
-        return MockData.map("id", admin ? "admin-001" : "user-1004", "email", admin ? "admin@example.com" : "user@example.com", "role", admin ? "ADMIN" : "USER");
+        return MockData.map(
+                "id", admin ? "00000000-0000-4000-8000-000000000001" : "00000000-0000-4000-8000-000000001004",
+                "email", admin ? "admin@example.com" : "user@example.com",
+                "name", admin ? "관리자" : "홍길동",
+                "role", admin ? "ADMIN" : "USER"
+        );
     }
 }

@@ -8,11 +8,24 @@ except ModuleNotFoundError as exc:
 
 OPENAPI_PATH = Path("docs/openapi.yaml")
 
+TOOL_PATHS = [
+    "/api/tools/compatibility/check",
+    "/api/tools/power/check",
+    "/api/tools/size/check",
+    "/api/tools/performance/check",
+    "/api/tools/price/check",
+]
+
 REQUIRED_PATHS = [
     "/api/health",
-    "/api/auth/login",
     "/api/users",
+    "/api/auth/login",
+    "/api/auth/refresh",
+    "/api/auth/logout",
     "/api/auth/me",
+    "/api/auth/google/start",
+    "/api/auth/google/callback",
+    "/api/auth/exchange",
     "/api/requirements/parse",
     "/api/builds/recommend",
     "/api/builds/{id}",
@@ -20,21 +33,84 @@ REQUIRED_PATHS = [
     "/api/builds/{id}/change-part",
     "/api/parts",
     "/api/parts/{id}",
-    "/api/tools/{tool}/check",
+    *TOOL_PATHS,
     "/api/price-alerts",
+    "/api/admin/price-jobs",
+    "/api/admin/price-jobs/run",
+    "/api/agent/sessions",
+    "/api/agent/sessions/{id}/run",
+    "/api/agent/sessions/{id}",
+    "/api/rag/search",
+    "/api/rag/evidence/{id}",
     "/api/agent-logs/upload",
+    "/api/agent-logs/{id}",
     "/api/as-tickets",
+    "/api/as-tickets/{id}",
     "/api/admin/dashboard",
+    "/api/admin/audit-logs/recent",
+    "/api/admin/agent-sessions",
+    "/api/admin/agent-sessions/{id}",
+    "/api/admin/tool-invocations",
+    "/api/admin/tool-invocations/{id}",
+    "/api/admin/rag-evidence/{id}",
+    "/api/admin/as-tickets",
+    "/api/admin/as-tickets/{id}",
 ]
 
-POST_REQUEST_SCHEMAS = {
+POST_JSON_REQUEST_SCHEMAS = {
+    "/api/users": "SignupRequest",
+    "/api/auth/login": "LoginRequest",
+    "/api/auth/refresh": "RefreshRequest",
+    "/api/auth/logout": "RefreshRequest",
+    "/api/auth/exchange": "AuthExchangeRequest",
+    "/api/requirements/parse": "RequirementParseRequest",
     "/api/builds/recommend": "BuildRecommendRequest",
     "/api/builds/{id}/change-part": "ChangePartRequest",
-    "/api/tools/{tool}/check": "ToolCheckRequest",
     "/api/price-alerts": "PriceAlertCreateRequest",
-    "/api/agent-logs/upload": "AgentLogUploadRequest",
+    "/api/admin/price-jobs/run": "PriceJobRunRequest",
+    "/api/agent/sessions": "AgentSessionCreateRequest",
     "/api/as-tickets": "AsTicketCreateRequest",
 }
+
+REQUIRED_SCHEMAS = [
+    "ErrorResponse",
+    "AuthResponse",
+    "ChangePartRequest",
+    "ToolCheckRequest",
+    "ToolCheckResponse",
+    "AgentLogUploadRequest",
+    "AgentSessionDto",
+    "ToolInvocationDto",
+    "RagEvidenceDto",
+]
+
+REQUIRED_ERROR_CODES = {
+    "VALIDATION_ERROR",
+    "UNAUTHORIZED",
+    "FORBIDDEN",
+    "NOT_FOUND",
+    "CONFLICT_STATE",
+    "DUPLICATE_RESOURCE",
+    "FILE_VALIDATION_ERROR",
+    "INTERNAL_ERROR",
+}
+
+
+def ref_name(schema: dict) -> str | None:
+    ref = schema.get("$ref")
+    if not ref:
+        return None
+    return ref.removeprefix("#/components/schemas/")
+
+
+def request_schema_ref(operation: dict, content_type: str = "application/json") -> str | None:
+    schema = (
+        operation.get("requestBody", {})
+        .get("content", {})
+        .get(content_type, {})
+        .get("schema", {})
+    )
+    return ref_name(schema)
 
 
 def main() -> None:
@@ -49,26 +125,60 @@ def main() -> None:
     if missing_paths:
         raise SystemExit(f"Missing OpenAPI paths: {', '.join(missing_paths)}")
 
+    if "/api/tools/{tool}/check" in paths:
+        raise SystemExit("Use five concrete Tool endpoints, not /api/tools/{tool}/check")
+
+    if "/api/price-snapshots/collect" in paths:
+        raise SystemExit("Public /api/price-snapshots/collect is excluded from V1")
+
     schemas = spec.get("components", {}).get("schemas", {})
-    for path, schema_name in POST_REQUEST_SCHEMAS.items():
+    missing_schemas = [schema for schema in REQUIRED_SCHEMAS if schema not in schemas]
+    if missing_schemas:
+        raise SystemExit(f"Missing OpenAPI schemas: {', '.join(missing_schemas)}")
+
+    for path, schema_name in POST_JSON_REQUEST_SCHEMAS.items():
         post = paths.get(path, {}).get("post")
         if not post:
             raise SystemExit(f"Missing POST operation for {path}")
 
-        request_body = post.get("requestBody")
-        if not request_body:
-            raise SystemExit(f"Missing requestBody for {path}")
-
-        schema = (
-            request_body.get("content", {})
-            .get("application/json", {})
-            .get("schema", {})
-        )
-        if schema.get("$ref") != f"#/components/schemas/{schema_name}":
+        if request_schema_ref(post) != schema_name:
             raise SystemExit(f"{path} must reference {schema_name}")
 
-        if schema_name not in schemas:
-            raise SystemExit(f"Missing schema: {schema_name}")
+    for path in TOOL_PATHS:
+        post = paths.get(path, {}).get("post")
+        if not post:
+            raise SystemExit(f"Missing POST operation for {path}")
+        request_body = post.get("requestBody", {})
+        if request_body.get("$ref") != "#/components/requestBodies/ToolCheckRequestBody":
+            raise SystemExit(f"{path} must use ToolCheckRequestBody")
+
+    upload_post = paths["/api/agent-logs/upload"].get("post", {})
+    upload_schema = request_schema_ref(upload_post, "multipart/form-data")
+    if upload_schema != "AgentLogUploadRequest":
+        raise SystemExit("/api/agent-logs/upload must use multipart/form-data AgentLogUploadRequest")
+
+    auth_properties = schemas["AuthResponse"].get("properties", {})
+    for field in ["accessToken", "refreshToken", "user"]:
+        if field not in auth_properties:
+            raise SystemExit(f"AuthResponse missing {field}")
+    if "token" in auth_properties:
+        raise SystemExit("AuthResponse must not use legacy token field")
+
+    change_part_properties = schemas["ChangePartRequest"].get("properties", {})
+    if {"category", "partId"} - set(change_part_properties):
+        raise SystemExit("ChangePartRequest must use category and partId")
+    if {"itemId", "replacementPartId"} & set(change_part_properties):
+        raise SystemExit("ChangePartRequest must not use legacy itemId/replacementPartId")
+
+    error_code_enum = set(
+        schemas["ErrorResponse"]
+        .get("properties", {})
+        .get("code", {})
+        .get("enum", [])
+    )
+    missing_error_codes = REQUIRED_ERROR_CODES - error_code_enum
+    if missing_error_codes:
+        raise SystemExit(f"ErrorResponse missing codes: {', '.join(sorted(missing_error_codes))}")
 
     print(f"OpenAPI validation passed: {len(paths)} paths")
 

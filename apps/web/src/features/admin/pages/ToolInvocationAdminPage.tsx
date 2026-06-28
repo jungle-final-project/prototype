@@ -6,12 +6,12 @@ export function ToolInvocationAdminPage() {
       <div className="grid grid-cols-[1fr_420px] gap-5">
         <Panel title="호출 상세" subtitle="2번/3번 담당자가 Tool request, result, evidence 저장을 연결할 화면">
           <DataTable columns={['필드', '값']} rows={[
-            { 필드: 'invocationId', 값: 'tool-power-001' },
+            { 필드: 'invocationId', 값: '00000000-0000-4000-8000-000000005002' },
             { 필드: 'tool', 값: 'power' },
             { 필드: 'status', 값: <StatusBadge status="WARN" /> },
             { 필드: 'confidence', 값: <StatusBadge status="MEDIUM" /> },
             { 필드: 'latency', 값: '168ms' },
-            { 필드: 'sessionId', 값: 'demo-session' }
+            { 필드: 'sessionId', 값: '00000000-0000-4000-8000-000000003001' }
           ]} />
         </Panel>
         <Panel title="표준 응답 형식">

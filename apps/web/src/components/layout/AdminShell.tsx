@@ -23,7 +23,7 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
 function AdminSidebar() {
   const items = [
     ['/admin', 'Dashboard', Home],
-    ['/admin/agent-sessions/demo-session', 'Agent/RAG', Bot],
+    ['/admin/agent-sessions/00000000-0000-4000-8000-000000003001', 'Agent/RAG', Bot],
     ['/admin/parts', 'Parts/Price', Cpu],
     ['/admin/as-tickets', 'AS Tickets', LifeBuoy]
   ] as const;

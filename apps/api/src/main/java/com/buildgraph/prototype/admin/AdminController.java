@@ -6,7 +6,9 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -20,6 +22,18 @@ public class AdminController {
     Map<String, Object> dashboard(@RequestHeader(value = "Authorization", required = false) String authorization) {
         requireAdmin(authorization);
         return AdminSeed.dashboard();
+    }
+
+    @GetMapping("/audit-logs/recent")
+    Map<String, Object> auditLogs(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        requireAdmin(authorization);
+        return AdminSeed.auditLogs();
+    }
+
+    @GetMapping("/agent-sessions")
+    Map<String, Object> agentSessions(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        requireAdmin(authorization);
+        return AdminSeed.agentSessions();
     }
 
     @GetMapping("/agent-sessions/{id}")
@@ -58,6 +72,16 @@ public class AdminController {
         return TicketSeed.adminTicket(id);
     }
 
+    @PatchMapping("/as-tickets/{id}")
+    Map<String, Object> updateTicket(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        requireAdmin(authorization);
+        return TicketSeed.adminTicket(id);
+    }
+
     @GetMapping("/price-jobs")
     Map<String, Object> priceJobs(@RequestHeader(value = "Authorization", required = false) String authorization) {
         requireAdmin(authorization);
@@ -65,17 +89,17 @@ public class AdminController {
     }
 
     @PostMapping("/price-jobs/run")
-    @ResponseStatus(HttpStatus.ACCEPTED)
+    @ResponseStatus(HttpStatus.CREATED)
     Map<String, Object> runPriceJob(@RequestHeader(value = "Authorization", required = false) String authorization) {
         requireAdmin(authorization);
         return PriceSeed.runPriceJob();
     }
 
     private static void requireAdmin(String authorization) {
-        if (authorization == null || !authorization.startsWith("Bearer demo-jwt-")) {
+        if (authorization == null || !authorization.startsWith("Bearer demo-access-")) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
         }
-        if (!authorization.contains("demo-jwt-admin")) {
+        if (!authorization.contains("demo-access-admin")) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
         }
     }

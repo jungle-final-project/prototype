@@ -5,7 +5,7 @@ import { QuoteCard } from '../components/QuoteCard';
 import { builds } from '../mocks/quoteMock';
 
 export function BuildResultPage() {
-  const { buildId = 'bg-1001' } = useParams();
+  const { buildId = '00000000-0000-4000-8000-000000002001' } = useParams();
   return (
     <Screen>
       <div className="grid grid-cols-[1fr_320px] gap-5">

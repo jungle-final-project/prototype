@@ -21,8 +21,32 @@ public class PartController {
         return PartSeed.part(id);
     }
 
-    @PostMapping("/tools/{tool}/check")
-    Map<String, Object> tool(@PathVariable String tool, @RequestBody(required = false) Map<String, Object> request) {
+    @PostMapping("/tools/compatibility/check")
+    Map<String, Object> compatibility(@RequestBody(required = false) Map<String, Object> request) {
+        return tool("compatibility", request);
+    }
+
+    @PostMapping("/tools/power/check")
+    Map<String, Object> power(@RequestBody(required = false) Map<String, Object> request) {
+        return tool("power", request);
+    }
+
+    @PostMapping("/tools/size/check")
+    Map<String, Object> size(@RequestBody(required = false) Map<String, Object> request) {
+        return tool("size", request);
+    }
+
+    @PostMapping("/tools/performance/check")
+    Map<String, Object> performance(@RequestBody(required = false) Map<String, Object> request) {
+        return tool("performance", request);
+    }
+
+    @PostMapping("/tools/price/check")
+    Map<String, Object> price(@RequestBody(required = false) Map<String, Object> request) {
+        return tool("price", request);
+    }
+
+    private Map<String, Object> tool(String tool, Map<String, Object> request) {
         return ToolSeed.toolResult(tool);
     }
 }

@@ -3,21 +3,21 @@ import { expect, test } from '@playwright/test';
 const routes = [
   '/',
   '/requirements/new',
-  '/builds/bg-1001',
+  '/builds/00000000-0000-4000-8000-000000002001',
   '/self-quote',
-  '/builds/bg-1001/change-part',
+  '/builds/00000000-0000-4000-8000-000000002001/change-part',
   '/my/quotes',
   '/support/new',
-  '/support/AS-1031',
+  '/support/00000000-0000-4000-8000-000000006001',
   '/login',
   '/signup',
   '/admin',
-  '/admin/agent-sessions/demo-session',
-  '/admin/tool-invocations/tool-power-001',
-  '/admin/rag-evidence/rag-psu-001',
+  '/admin/agent-sessions/00000000-0000-4000-8000-000000003001',
+  '/admin/tool-invocations/00000000-0000-4000-8000-000000005002',
+  '/admin/rag-evidence/00000000-0000-4000-8000-000000004001',
   '/admin/parts',
   '/admin/as-tickets',
-  '/admin/as-tickets/AS-1031'
+  '/admin/as-tickets/00000000-0000-4000-8000-000000006001'
 ];
 
 for (const route of routes) {

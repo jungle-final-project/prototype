@@ -9,7 +9,7 @@
 - 데스크톱 기준 사용자/관리자 화면 출발점
 - React 프론트 라우팅과 route smoke test
 - Spring Boot 도메인 controller skeleton
-- OpenAPI 기반 성공 요청 계약
+- `API_CONTRACT.md`, `DB_SCHEMA.md`, `ROUTE_OWNERSHIP.md` 기반 공통 계약
 - PostgreSQL, Redis, RabbitMQ, Mailpit, Docker Compose 공통 환경
 - PC Agent JSONL sample/export CLI
 - GitHub Actions 기본 검증
@@ -24,24 +24,29 @@
 - 정확한 FPS 예측
 - LLM/RAG 품질 개선
 - 하드웨어 센서 상시 수집
-- `400/401/403/404/500` 오류 응답 정책
 - 모든 response schema 상세화
 - 300명/1000명 부하 테스트 완성본
 - 모바일/반응형 완성도
 
 ## API 결정
 
-- POST 요청의 성공 계약은 프론트 `*Api.ts`가 보내는 body를 기준으로 [openapi.yaml](openapi.yaml)에 기록합니다.
+- API 요청/응답 계약은 [API_CONTRACT.md](API_CONTRACT.md)를 기준으로 하고, [openapi.yaml](openapi.yaml)은 기계 검증용으로 함께 유지합니다.
+- DB table/column/enum/status 계약은 [DB_SCHEMA.md](DB_SCHEMA.md)를 기준으로 합니다.
+- route/API/file owner 계약은 [ROUTE_OWNERSHIP.md](ROUTE_OWNERSHIP.md)를 기준으로 합니다.
 - 백엔드 controller skeleton은 seed demo 안정성을 위해 `@RequestBody(required = false)`를 일부 사용합니다.
 - OpenAPI는 성공 요청 계약을 명확히 하기 위해 주요 POST requestBody를 `required: true`로 둡니다.
 - 실제 DTO/service 전환 시 각 담당자가 validation과 error response를 확정합니다.
 
 ## Tool API 결정
 
-기획안에서는 Tool API가 개별 endpoint처럼 표현되어 있지만, 현재 스캐폴드에서는 아래 하나의 경로로 축약합니다.
+현재 스캐폴드의 Tool API는 공통 계약서에 맞춰 5개 개별 경로를 사용합니다.
 
 ```text
-POST /api/tools/{tool}/check
+POST /api/tools/compatibility/check
+POST /api/tools/power/check
+POST /api/tools/size/check
+POST /api/tools/performance/check
+POST /api/tools/price/check
 ```
 
 사용 가능한 `tool` 값:
@@ -52,7 +57,7 @@ POST /api/tools/{tool}/check
 - `performance`
 - `price`
 
-이 방식은 프론트, 백엔드, OpenAPI가 모두 같은 계약을 사용하기 위한 스캐폴드 결정입니다. Tool별 엄격한 request schema는 2번/3번 담당자가 실제 규칙을 구현하면서 확장합니다.
+직접 Tool check 호출은 `tool_invocations`에 저장하지 않습니다. `tool_invocations`에는 Agent/recommend 내부에서 실행된 Tool 호출 이력만 저장합니다.
 
 ## Health 결정
 

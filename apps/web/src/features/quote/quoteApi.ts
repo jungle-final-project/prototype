@@ -22,9 +22,9 @@ export function getBuildHistory() {
   return api('/api/builds/history');
 }
 
-export function changePart(buildId: string, itemId: string, replacementPartId: string) {
+export function changePart(buildId: string, category: string, partId: string) {
   return api(`/api/builds/${buildId}/change-part`, {
     method: 'POST',
-    body: JSON.stringify({ itemId, replacementPartId })
+    body: JSON.stringify({ category, partId })
   });
 }

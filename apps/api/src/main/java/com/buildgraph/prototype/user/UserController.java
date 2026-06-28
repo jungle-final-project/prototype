@@ -3,6 +3,7 @@ package com.buildgraph.prototype.user;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -39,6 +40,12 @@ public class UserController {
     record LoginRequest(@Email String email, @NotBlank String password) {
     }
 
-    record SignupRequest(@NotBlank String name, @Email String email, @NotBlank String password) {
+    record SignupRequest(
+            @NotBlank String name,
+            @Email String email,
+            @NotBlank String password,
+            @NotNull Boolean termsAccepted,
+            Boolean marketingAccepted
+    ) {
     }
 }

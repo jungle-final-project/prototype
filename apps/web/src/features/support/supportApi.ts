@@ -1,9 +1,14 @@
 import { api } from '../../lib/api';
 
-export function uploadAgentLog(logRangeMinutes: number, consent: boolean) {
+export function uploadAgentLog(rangeMinutes: number, consentAccepted: boolean, file?: Blob) {
+  const body = new FormData();
+  body.append('file', file ?? new Blob(['{"metric":"seed"}\n'], { type: 'application/x-ndjson' }), 'agent-log.jsonl');
+  body.append('rangeMinutes', String(rangeMinutes));
+  body.append('consentAccepted', String(consentAccepted));
+
   return api('/api/agent-logs/upload', {
     method: 'POST',
-    body: JSON.stringify({ logRangeMinutes, consent })
+    body
   });
 }
 

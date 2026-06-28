@@ -5,35 +5,52 @@ import java.util.List;
 import java.util.Map;
 
 public final class TicketSeed {
+    private static final String TICKET_ID = "00000000-0000-4000-8000-000000006001";
+    private static final String LOG_UPLOAD_ID = "00000000-0000-4000-8000-000000007001";
+
     private TicketSeed() {
     }
 
     public static List<Map<String, Object>> tickets() {
         return List.of(
-                MockData.map("id", "AS-1031", "user", "user@example.com", "symptom", "게임 중 프레임 급락", "status", "OPEN", "cause", "GPU 온도 과열 가능성"),
-                MockData.map("id", "AS-1032", "user", "dev@example.com", "symptom", "IDE 실행 시 메모리 부족", "status", "IN_PROGRESS", "cause", "RAM 사용률 92% 반복")
+                ticket(TICKET_ID, "OPEN"),
+                ticket("00000000-0000-4000-8000-000000006002", "IN_PROGRESS")
         );
     }
 
     public static Map<String, Object> createTicket() {
-        return MockData.map("ticketId", "AS-1031", "status", "OPEN");
+        return ticket(TICKET_ID, "OPEN");
     }
 
     public static Map<String, Object> userTicket(String id) {
-        return MockData.map("id", id, "status", "OPEN", "symptom", "게임 중 프레임 급락", "causeCandidates", tickets());
+        return ticket(id, "OPEN");
     }
 
     public static Map<String, Object> adminTicket(String id) {
+        return ticket(id, "OPEN");
+    }
+
+    private static Map<String, Object> ticket(String id, String status) {
         return MockData.map(
                 "id", id,
-                "user", "user@example.com",
+                "status", status,
                 "symptom", "게임 중 프레임 급락",
-                "status", "OPEN",
-                "logRangeMinutes", 30,
-                "consentRequired", true,
-                "retentionDays", 30,
-                "causeCandidates", List.of("GPU 온도 과열 가능성", "드라이버 오류 이벤트 반복 가능성"),
-                "upgradeCandidates", List.of("케이스 쿨링 개선", "GPU 상위 모델 후보")
+                "logUploadId", LOG_UPLOAD_ID,
+                "assignedAdminId", null,
+                "causeCandidates", List.of(MockData.map(
+                        "code", "GPU_THERMAL",
+                        "label", "GPU 온도 과열 가능성",
+                        "confidence", "MEDIUM",
+                        "evidenceIds", List.of("00000000-0000-4000-8000-000000004001")
+                )),
+                "upgradeCandidates", List.of(MockData.map(
+                        "category", "CASE",
+                        "reason", "케이스 쿨링 개선 후보",
+                        "estimatedPrice", 90000
+                )),
+                "adminNote", null,
+                "resolvedAt", null,
+                "createdAt", MockData.now()
         );
     }
 }

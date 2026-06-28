@@ -1,35 +1,28 @@
 openapi: 3.0.3
 info:
-  title: BuildGraph AI 프로토타입 API
-  version: 0.1.0
+  title: BuildGraph AI MVP API
+  version: 0.2.0
+  description: BuildGraph 3주 MVP 공통 API 계약. 상세 기준은 docs/API_CONTRACT.md를 따른다.
 servers:
   - url: http://localhost:8080
+security:
+  - bearerAuth: []
 paths:
   /api/health:
     get:
       summary: API 상태 확인
+      security: []
       responses:
         "200":
           description: 정상 응답
-  /api/auth/login:
-    post:
-      summary: 이메일 로그인
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
-      responses:
-        "200":
-          description: JWT 토큰과 사용자 정보
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AuthResponse"
+                $ref: "#/components/schemas/HealthResponse"
   /api/users:
     post:
       summary: 회원가입
+      security: []
       requestBody:
         required: true
         content:
@@ -39,20 +32,97 @@ paths:
       responses:
         "201":
           description: 생성된 사용자
-  /api/auth/me:
-    get:
-      summary: 현재 사용자 조회
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: 현재 사용자 정보
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
+                $ref: "#/components/schemas/UserDto"
+  /api/auth/login:
+    post:
+      summary: 이메일 로그인
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: JWT와 사용자 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+  /api/auth/refresh:
+    post:
+      summary: access token 재발급
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: 재발급된 token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+  /api/auth/logout:
+    post:
+      summary: 로그아웃
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "204":
+          description: 로그아웃 완료
+  /api/auth/me:
+    get:
+      summary: 현재 사용자 조회
+      responses:
+        "200":
+          description: 현재 사용자
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserDto"
+  /api/auth/google/start:
+    get:
+      summary: Google OAuth 시작
+      security: []
+      responses:
+        "302":
+          description: Google OAuth로 redirect
+  /api/auth/google/callback:
+    get:
+      summary: Google OAuth callback
+      security: []
+      responses:
+        "302":
+          description: 프론트 callback route로 redirect
+  /api/auth/exchange:
+    post:
+      summary: OAuth one-time code 교환
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthExchangeRequest"
+      responses:
+        "200":
+          description: JWT와 사용자 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
   /api/requirements/parse:
     post:
       summary: 자연어 요구사항 파싱
@@ -65,9 +135,13 @@ paths:
       responses:
         "200":
           description: 파싱된 요구사항
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequirementDto"
   /api/builds/recommend:
     post:
-      summary: 시드 기반 빌드 추천
+      summary: 추천 Build 생성
       requestBody:
         required: true
         content:
@@ -76,34 +150,41 @@ paths:
               $ref: "#/components/schemas/BuildRecommendRequest"
       responses:
         "200":
-          description: 빌드 추천 결과
+          description: 추천 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildRecommendResponse"
   /api/builds/{id}:
     get:
-      summary: 빌드 상세 조회
+      summary: Build 상세 조회
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 빌드 상세 정보
+          description: Build 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDto"
   /api/builds/history:
     get:
-      summary: 저장된 빌드 이력
+      summary: 내 Build 이력
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
         "200":
-          description: 이력
+          description: Build 이력
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildPage"
   /api/builds/{id}/change-part:
     post:
-      summary: 부품 변경 비교 및 적용
+      summary: Build 부품 변경
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       requestBody:
         required: true
         content:
@@ -112,124 +193,53 @@ paths:
               $ref: "#/components/schemas/ChangePartRequest"
       responses:
         "200":
-          description: 변경 차이
+          description: 부품 변경 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangePartResponse"
   /api/parts:
     get:
       summary: 부품 목록
-      responses:
-        "200":
-          description: 부품
-  /api/parts/{id}:
-    get:
-      summary: 부품 상세 조회
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: 부품
-  /api/tools/{tool}/check:
-    post:
-      summary: 검증 도구 실행
-      parameters:
-        - in: path
-          name: tool
-          required: true
-          schema:
-            type: string
-            enum: [compatibility, power, size, performance, price]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ToolCheckRequest"
-      responses:
-        "200":
-          description: 도구 결과
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolResult"
-  /api/agent/sessions:
-    post:
-      summary: 제한된 에이전트 세션 생성
-      responses:
-        "200":
-          description: 생성된 에이전트 세션 임시 응답
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AgentSession"
-  /api/agent/sessions/{id}/run:
-    post:
-      summary: 제한된 에이전트 오케스트레이션 실행
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: 상태 타임라인과 도구 호출을 포함한 에이전트 실행 결과
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AgentSession"
-  /api/agent/sessions/{id}:
-    get:
-      summary: 에이전트 세션 상세 조회
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: 에이전트 세션 상세 정보
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AgentSession"
-  /api/rag/search:
-    get:
-      summary: RAG 근거 후보 검색
       parameters:
         - in: query
-          name: query
-          required: false
+          name: category
           schema:
-            type: string
+            $ref: "#/components/schemas/PartCategory"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
         "200":
-          description: RAG 근거 후보
-  /api/rag/evidence/{id}:
-    get:
-      summary: RAG 근거 상세 조회
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: RAG 근거 상세 정보
+          description: 부품 목록
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RagEvidence"
-  /api/price-alerts:
+                $ref: "#/components/schemas/PartPage"
+  /api/parts/{id}:
     get:
-      summary: 가격 알림 목록
+      summary: 부품 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 알림
+          description: 부품 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartDto"
+  /api/price-alerts:
+    get:
+      summary: 목표가 알림 목록
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 목표가 알림 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceAlertPage"
     post:
       summary: 목표가 알림 등록
       requestBody:
@@ -241,36 +251,183 @@ paths:
       responses:
         "201":
           description: 생성된 알림
-  /api/price-snapshots/collect:
-    post:
-      summary: 가격 스냅샷 수집 대기열 등록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceAlertDto"
+  /api/admin/price-jobs:
+    get:
+      summary: 관리자 가격 수집 작업 목록
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
-        "202":
-          description: 가격 수집 작업 대기열 등록 완료
-  /api/agent-logs/upload:
+        "200":
+          description: 가격 수집 작업 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceJobPage"
+  /api/admin/price-jobs/run:
     post:
-      summary: 최근 에이전트 로그 업로드
+      summary: 가격 수집 작업 실행
       requestBody:
         required: true
         content:
           application/json:
             schema:
+              $ref: "#/components/schemas/PriceJobRunRequest"
+      responses:
+        "201":
+          description: 생성된 가격 수집 작업
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceJobDto"
+  /api/tools/compatibility/check:
+    post:
+      summary: 호환성 Tool check
+      requestBody:
+        $ref: "#/components/requestBodies/ToolCheckRequestBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/ToolCheckSuccess"
+  /api/tools/power/check:
+    post:
+      summary: 전력 Tool check
+      requestBody:
+        $ref: "#/components/requestBodies/ToolCheckRequestBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/ToolCheckSuccess"
+  /api/tools/size/check:
+    post:
+      summary: 규격 Tool check
+      requestBody:
+        $ref: "#/components/requestBodies/ToolCheckRequestBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/ToolCheckSuccess"
+  /api/tools/performance/check:
+    post:
+      summary: 성능 Tool check
+      requestBody:
+        $ref: "#/components/requestBodies/ToolCheckRequestBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/ToolCheckSuccess"
+  /api/tools/price/check:
+    post:
+      summary: 가격 Tool check
+      requestBody:
+        $ref: "#/components/requestBodies/ToolCheckRequestBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/ToolCheckSuccess"
+  /api/agent/sessions:
+    post:
+      summary: Agent 세션 생성
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentSessionCreateRequest"
+      responses:
+        "201":
+          description: 생성된 Agent 세션
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionDto"
+  /api/agent/sessions/{id}/run:
+    post:
+      summary: Agent 세션 실행 시작
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: RUNNING 상태로 전이된 Agent 세션
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionDto"
+  /api/agent/sessions/{id}:
+    get:
+      summary: Agent 세션 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: Agent 세션 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionDto"
+  /api/rag/search:
+    get:
+      summary: RAG 근거 검색
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: RAG 근거 후보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagEvidencePage"
+  /api/rag/evidence/{id}:
+    get:
+      summary: RAG 근거 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: RAG 근거 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagEvidenceDto"
+  /api/agent-logs/upload:
+    post:
+      summary: PC Agent JSONL 로그 업로드
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
               $ref: "#/components/schemas/AgentLogUploadRequest"
       responses:
         "201":
           description: 업로드된 로그 메타데이터
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLogUploadDto"
   /api/agent-logs/{id}:
     get:
-      summary: 에이전트 로그 상세 조회
+      summary: Agent 로그 업로드 상세
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 로그 요약
+          description: 로그 업로드 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLogUploadDto"
   /api/as-tickets:
     post:
       summary: AS 티켓 생성
@@ -282,183 +439,274 @@ paths:
               $ref: "#/components/schemas/AsTicketCreateRequest"
       responses:
         "201":
-          description: 생성된 티켓
+          description: 생성된 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
   /api/as-tickets/{id}:
     get:
-      summary: AS 티켓 상세 조회
+      summary: AS 티켓 상세
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 티켓
+          description: AS 티켓 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
   /api/admin/dashboard:
     get:
       summary: 관리자 대시보드
-      security:
-        - bearerAuth: []
       responses:
         "200":
-          description: 대시보드
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
+          description: 관리자 요약
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDashboardDto"
+  /api/admin/audit-logs/recent:
+    get:
+      summary: 최근 관리자 감사 로그
+      responses:
+        "200":
+          description: 최근 감사 로그
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogPage"
+  /api/admin/agent-sessions:
+    get:
+      summary: 관리자 Agent 세션 목록
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Agent 세션 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionPage"
   /api/admin/agent-sessions/{id}:
     get:
-      summary: 에이전트 세션 상세 조회
-      security:
-        - bearerAuth: []
+      summary: 관리자 Agent 세션 상세
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 에이전트 세션
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
+          description: Agent 세션 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAgentSessionDto"
   /api/admin/tool-invocations:
     get:
-      summary: 도구 호출 목록
-      security:
-        - bearerAuth: []
+      summary: 관리자 Tool 호출 목록
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
         "200":
-          description: 도구 호출
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
+          description: Tool 호출 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolInvocationPage"
   /api/admin/tool-invocations/{id}:
     get:
-      summary: 도구 호출 상세 조회
-      security:
-        - bearerAuth: []
+      summary: 관리자 Tool 호출 상세
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 도구 호출 상세 정보
+          description: Tool 호출 상세
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ToolInvocation"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
+                $ref: "#/components/schemas/ToolInvocationDto"
   /api/admin/rag-evidence/{id}:
     get:
-      summary: 관리자 RAG 근거 상세 조회
-      security:
-        - bearerAuth: []
+      summary: 관리자 RAG 근거 상세
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 관리자 검토용 RAG 근거 상세 정보
+          description: 관리자 RAG 근거 상세
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RagEvidence"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
+                $ref: "#/components/schemas/AdminRagEvidenceDto"
   /api/admin/as-tickets:
     get:
       summary: 관리자 AS 티켓 목록
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: 티켓
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
-  /api/admin/as-tickets/{id}:
-    get:
-      summary: 관리자 AS 티켓 상세 조회
-      security:
-        - bearerAuth: []
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
         "200":
-          description: 로그 정책과 원인 후보를 포함한 관리자 티켓 상세 정보
+          description: AS 티켓 목록
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminAsTicket"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
-  /api/admin/price-jobs:
+                $ref: "#/components/schemas/AsTicketPage"
+  /api/admin/as-tickets/{id}:
     get:
-      summary: 가격 작업 목록
-      security:
-        - bearerAuth: []
+      summary: 관리자 AS 티켓 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
       responses:
         "200":
-          description: 작업
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
-  /api/admin/price-jobs/run:
-    post:
-      summary: 가격 수집 작업 실행
-      security:
-        - bearerAuth: []
+          description: 관리자 AS 티켓 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
+    patch:
+      summary: 관리자 AS 티켓 수정
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminAsTicketUpdateRequest"
       responses:
-        "202":
-          description: 작업 대기열 등록 완료
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
+        "200":
+          description: 수정된 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    PublicId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      in: query
+      name: page
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Size:
+      in: query
+      name: size
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  requestBodies:
+    ToolCheckRequestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ToolCheckRequest"
   responses:
-    UnauthorizedError:
-      description: 로그인 필요
+    ToolCheckSuccess:
+      description: Tool check 결과
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    ForbiddenError:
-      description: 관리자 권한 필요
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+            $ref: "#/components/schemas/ToolCheckResponse"
   schemas:
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, INTERNAL_ERROR]
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: UP
+        database:
+          type: string
+          example: UP
+    Role:
+      type: string
+      enum: [USER, ADMIN]
+    GenericStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE, DISCONTINUED]
+    ToolStatus:
+      type: string
+      enum: [PASS, WARN, FAIL]
+    Confidence:
+      type: string
+      enum: [LOW, MEDIUM, HIGH]
+    PartCategory:
+      type: string
+      enum: [CPU, GPU, RAM, MOTHERBOARD, STORAGE, PSU, CASE, COOLER]
+    AgentSessionStatus:
+      type: string
+      enum: [QUEUED, RUNNING, RAG_SEARCHED, TOOLS_CALLED, SUMMARY_READY, FALLBACK_READY, SUCCEEDED, FAILED, CANCELLED]
+    AsTicketStatus:
+      type: string
+      enum: [OPEN, ASSIGNED, IN_PROGRESS, RESOLVED, CLOSED, CANCELLED]
+    LogUploadStatus:
+      type: string
+      enum: [UPLOADED, PROCESSING, FAILED]
+    PriceAlertStatus:
+      type: string
+      enum: [ACTIVE, TRIGGERED, DISABLED]
+    PriceJobStatus:
+      type: string
+      enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]
+    UserDto:
+      type: object
+      required: [id, email, name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+    SignupRequest:
+      type: object
+      required: [email, password, name, termsAccepted, marketingAccepted]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        name:
+          type: string
+        termsAccepted:
+          type: boolean
+        marketingAccepted:
+          type: boolean
     LoginRequest:
       type: object
       required: [email, password]
@@ -468,206 +716,631 @@ components:
           format: email
         password:
           type: string
-    SignupRequest:
-      type: object
-      required: [name, email, password]
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-        password:
-          type: string
     AuthResponse:
       type: object
+      required: [accessToken, refreshToken, user]
       properties:
-        token:
+        accessToken:
+          type: string
+        refreshToken:
           type: string
         user:
-          $ref: "#/components/schemas/User"
-    User:
+          $ref: "#/components/schemas/UserDto"
+    RefreshRequest:
       type: object
+      required: [refreshToken]
       properties:
-        id:
+        refreshToken:
           type: string
-        email:
-          type: string
-        role:
-          type: string
-          enum: [USER, ADMIN]
-    ErrorResponse:
+    RefreshResponse:
       type: object
-      required: [code, message]
+      required: [accessToken, refreshToken]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+    AuthExchangeRequest:
+      type: object
+      required: [code]
       properties:
         code:
           type: string
-          enum: [UNAUTHORIZED, FORBIDDEN, API_ERROR]
-        message:
-          type: string
     RequirementParseRequest:
       type: object
+      required: [message]
       properties:
         message:
           type: string
         budget:
           type: integer
+        usageTags:
+          type: array
+          items:
+            type: string
+    RequirementDto:
+      type: object
+      required: [id, rawMessage]
+      properties:
+        id:
+          type: string
+          format: uuid
+        rawMessage:
+          type: string
+        budget:
+          type: integer
+        usageTags:
+          type: array
+          items:
+            type: string
+        parsedContext:
+          type: object
+          additionalProperties: true
     BuildRecommendRequest:
       type: object
       required: [requirementId]
       properties:
         requirementId:
           type: string
-    ChangePartRequest:
+          format: uuid
+    BuildRecommendResponse:
       type: object
-      required: [itemId, replacementPartId]
+      required: [agentSessionId, recommendations, warnings, evidenceIds]
       properties:
-        itemId:
+        agentSessionId:
           type: string
-        replacementPartId:
-          type: string
-    ToolCheckRequest:
-      type: object
-      description: MVP 스캐폴드에서는 compatibility, power, size, performance, price 도구를 `/api/tools/{tool}/check` 하나의 경로로 축약한다.
-      additionalProperties: true
-    PriceAlertCreateRequest:
-      type: object
-      required: [partId, targetPrice, email]
-      properties:
-        partId:
-          type: string
-        targetPrice:
-          type: integer
-        email:
-          type: string
-          format: email
-    AgentLogUploadRequest:
-      type: object
-      required: [logRangeMinutes, consent]
-      properties:
-        logRangeMinutes:
-          type: integer
-          example: 30
-        consent:
-          type: boolean
-    AsTicketCreateRequest:
-      type: object
-      required: [symptom, logUploadId]
-      properties:
-        symptom:
-          type: string
-        logUploadId:
-          type: string
-    ToolResult:
-      type: object
-      properties:
-        status:
-          type: string
-          enum: [PASS, WARN, FAIL]
-        score:
-          type: number
-        confidence:
-          type: string
-          enum: [LOW, MEDIUM, HIGH]
-        summary:
-          type: string
+          format: uuid
+        recommendations:
+          type: array
+          items:
+            $ref: "#/components/schemas/BuildDto"
         warnings:
           type: array
           items:
-            type: string
-        evidence:
+            $ref: "#/components/schemas/WarningDto"
+        evidenceIds:
           type: array
           items:
-            $ref: "#/components/schemas/RagEvidence"
-    AgentSession:
+            type: string
+            format: uuid
+    BuildDto:
       type: object
+      required: [id, name, totalPrice, confidence, items, warnings, evidenceIds, changeableCategories]
       properties:
         id:
           type: string
+          format: uuid
+        name:
+          type: string
+        totalPrice:
+          type: integer
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BuildItemDto"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/WarningDto"
+        evidenceIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        changeableCategories:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartCategory"
+        createdAt:
+          type: string
+          format: date-time
+    BuildItemDto:
+      type: object
+      required: [category, partId, name, price]
+      properties:
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        partId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        price:
+          type: integer
+    ChangePartRequest:
+      type: object
+      required: [category, partId]
+      properties:
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        partId:
+          type: string
+          format: uuid
+    ChangePartResponse:
+      type: object
+      required: [buildId, category, selectedPartId, totalPrice, diff, warnings]
+      properties:
+        buildId:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        previousPartId:
+          type: string
+          format: uuid
+        selectedPartId:
+          type: string
+          format: uuid
+        totalPrice:
+          type: integer
+        diff:
+          type: object
+          additionalProperties: true
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/WarningDto"
+    WarningDto:
+      type: object
+      required: [code, message, severity]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        severity:
+          type: string
+          enum: [WARN, FAIL]
+        relatedPartIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    PartDto:
+      type: object
+      required: [id, category, name, price, status, attributes]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        name:
+          type: string
+        manufacturer:
+          type: string
+        price:
+          type: integer
         status:
+          $ref: "#/components/schemas/GenericStatus"
+        attributes:
+          type: object
+          additionalProperties: true
+        benchmarkSummary:
+          type: object
+          additionalProperties: true
+    PriceAlertCreateRequest:
+      type: object
+      required: [partId, targetPrice]
+      properties:
+        partId:
           type: string
-          enum: [QUEUED, RUNNING, RAG_SEARCHED, TOOLS_CALLED, SUMMARY_READY, FAILED, FALLBACK_READY]
-        mode:
+          format: uuid
+        targetPrice:
+          type: integer
+    PriceAlertDto:
+      type: object
+      required: [partId, partName, targetPrice, currentPrice, status]
+      properties:
+        partId:
           type: string
-          example: LIMITED_ORCHESTRATOR
+          format: uuid
+        partName:
+          type: string
+        targetPrice:
+          type: integer
+        currentPrice:
+          type: integer
+        status:
+          $ref: "#/components/schemas/PriceAlertStatus"
+        createdAt:
+          type: string
+          format: date-time
+    PriceJobRunRequest:
+      type: object
+      properties:
+        source:
+          type: string
+          example: manual
+    PriceJobDto:
+      type: object
+      required: [id, status, requestedBy]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/PriceJobStatus"
+        requestedBy:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        errorSummary:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ToolCheckRequest:
+      type: object
+      required: [partIds, context]
+      properties:
+        buildId:
+          type: string
+          format: uuid
+        partIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        context:
+          type: object
+          additionalProperties: true
+    ToolCheckResponse:
+      type: object
+      required: [status, confidence, summary, details]
+      properties:
+        status:
+          $ref: "#/components/schemas/ToolStatus"
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        summary:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    AgentSessionCreateRequest:
+      type: object
+      properties:
+        requirementId:
+          type: string
+          format: uuid
+          nullable: true
+        buildId:
+          type: string
+          format: uuid
+          nullable: true
+        asTicketId:
+          type: string
+          format: uuid
+          nullable: true
+      description: requirementId, buildId, asTicketId 중 정확히 하나만 non-null이어야 한다.
+    AgentSessionDto:
+      type: object
+      required: [id, status, stateTimeline]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/AgentSessionStatus"
+        summary:
+          type: string
+          nullable: true
         stateTimeline:
           type: array
           items:
-            $ref: "#/components/schemas/AgentState"
-        toolInvocations:
+            $ref: "#/components/schemas/StateTimelineItemDto"
+        toolInvocationIds:
           type: array
           items:
-            $ref: "#/components/schemas/ToolResult"
-        fallbackPolicy:
-          type: string
-        summary:
-          type: string
-    AgentState:
+            type: string
+            format: uuid
+        evidenceIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    AdminAgentSessionDto:
+      allOf:
+        - $ref: "#/components/schemas/AgentSessionDto"
+        - type: object
+          properties:
+            toolInvocations:
+              type: array
+              items:
+                $ref: "#/components/schemas/ToolInvocationDto"
+    StateTimelineItemDto:
       type: object
+      required: [to, actor, at]
       properties:
-        state:
+        from:
           type: string
-        owner:
+          nullable: true
+        to:
+          $ref: "#/components/schemas/AgentSessionStatus"
+        actor:
           type: string
-        description:
+          enum: [USER, ADMIN, SYSTEM]
+        at:
           type: string
-    ToolInvocation:
+          format: date-time
+        reason:
+          type: string
+    RagEvidenceDto:
       type: object
+      required: [id, sourceId, summary]
       properties:
         id:
           type: string
-        sessionId:
-          type: string
-        tool:
-          type: string
-        status:
-          type: string
-          enum: [PASS, WARN, FAIL]
-        confidence:
-          type: string
-          enum: [LOW, MEDIUM, HIGH]
-        latencyMs:
-          type: integer
-        request:
-          type: object
-        result:
-          $ref: "#/components/schemas/ToolResult"
-    RagEvidence:
-      type: object
-      properties:
-        id:
-          type: string
+          format: uuid
         sourceId:
           type: string
         summary:
           type: string
         score:
           type: number
-        usedBy:
-          type: string
-    AdminAsTicket:
+        metadata:
+          type: object
+          additionalProperties: true
+    AdminRagEvidenceDto:
+      allOf:
+        - $ref: "#/components/schemas/RagEvidenceDto"
+        - type: object
+          properties:
+            agentSessionId:
+              type: string
+              format: uuid
+            chunkText:
+              type: string
+    ToolInvocationDto:
       type: object
+      required: [id, agentSessionId, toolName, status, confidence, summary]
       properties:
         id:
           type: string
-        user:
+          format: uuid
+        agentSessionId:
           type: string
+          format: uuid
+        toolName:
+          type: string
+          enum: [compatibility, power, size, performance, price]
+        status:
+          $ref: "#/components/schemas/ToolStatus"
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        summary:
+          type: string
+        requestPayload:
+          type: object
+          additionalProperties: true
+        resultPayload:
+          type: object
+          additionalProperties: true
+        latencyMs:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+    AgentLogUploadRequest:
+      type: object
+      required: [file, rangeMinutes, consentAccepted]
+      properties:
+        file:
+          type: string
+          format: binary
+        rangeMinutes:
+          type: integer
+        consentAccepted:
+          type: boolean
+    AgentLogUploadDto:
+      type: object
+      required: [id, status, fileName, rangeMinutes, deleteAfter]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/LogUploadStatus"
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+        rangeMinutes:
+          type: integer
+        summary:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        deleteAfter:
+          type: string
+          format: date-time
+    AsTicketCreateRequest:
+      type: object
+      required: [symptom]
+      properties:
+        logUploadId:
+          type: string
+          format: uuid
         symptom:
           type: string
-        status:
+    AsTicketDto:
+      type: object
+      required: [id, status, symptom, causeCandidates, upgradeCandidates]
+      properties:
+        id:
           type: string
-        logRangeMinutes:
-          type: integer
-          example: 30
-        consentRequired:
-          type: boolean
-        retentionDays:
-          type: integer
-          example: 30
+          format: uuid
+        status:
+          $ref: "#/components/schemas/AsTicketStatus"
+        symptom:
+          type: string
+        logUploadId:
+          type: string
+          format: uuid
+        assignedAdminId:
+          type: string
+          format: uuid
         causeCandidates:
           type: array
           items:
-            type: string
+            type: object
+            additionalProperties: true
         upgradeCandidates:
           type: array
           items:
-            type: string
+            type: object
+            additionalProperties: true
+        adminNote:
+          type: string
+        resolvedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AdminAsTicketUpdateRequest:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/AsTicketStatus"
+        assignedAdminId:
+          type: string
+          format: uuid
+        adminNote:
+          type: string
+    AdminDashboardDto:
+      type: object
+      required: [agentRunning, openTickets, priceJobsRunning, degraded]
+      properties:
+        agentRunning:
+          type: integer
+        openTickets:
+          type: integer
+        priceJobsRunning:
+          type: integer
+        degraded:
+          type: boolean
+        generatedAt:
+          type: string
+          format: date-time
+    AuditLogDto:
+      type: object
+      required: [action, targetType, createdAt]
+      properties:
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    BuildPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/BuildDto"
+    PartPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PartDto"
+    PriceAlertPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PriceAlertDto"
+    PriceJobPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PriceJobDto"
+    AgentSessionPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/AgentSessionDto"
+    ToolInvocationPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/ToolInvocationDto"
+    RagEvidencePage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/RagEvidenceDto"
+    AsTicketPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/AsTicketDto"
+    AuditLogPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogDto"
+    PageMeta:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items: {}
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer

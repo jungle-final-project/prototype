@@ -7,6 +7,12 @@ import java.util.List;
 import java.util.Map;
 
 public final class BuildSeed {
+    private static final String BUILD_ID = "00000000-0000-4000-8000-000000002001";
+    private static final String ALT_BUILD_ID = "00000000-0000-4000-8000-000000002002";
+    private static final String EVIDENCE_ID = "00000000-0000-4000-8000-000000004001";
+    private static final String GPU_ID = PartSeed.GPU_ID;
+    private static final String PREVIOUS_GPU_ID = "00000000-0000-4000-8000-000000010104";
+
     private BuildSeed() {
     }
 
@@ -15,18 +21,28 @@ public final class BuildSeed {
                 "id", "req-1001",
                 "rawMessage", request.getOrDefault("message", "QHD 게임용 PC"),
                 "budget", request.getOrDefault("budget", 2000000),
-                "usage", List.of("gaming", "development"),
-                "targetResolution", "QHD",
-                "brandPreference", List.of("NVIDIA"),
-                "missingFields", List.of()
+                "usageTags", List.of("GAMING", "DEVELOPMENT"),
+                "parsedContext", MockData.map(
+                        "usageTags", List.of("GAMING", "DEVELOPMENT"),
+                        "budget", request.getOrDefault("budget", 2000000),
+                        "preferredVendors", List.of("NVIDIA")
+                )
+        );
+    }
+
+    public static Map<String, Object> recommendations() {
+        return MockData.map(
+                "agentSessionId", "00000000-0000-4000-8000-000000003001",
+                "recommendations", builds(),
+                "warnings", List.of(),
+                "evidenceIds", List.of(EVIDENCE_ID)
         );
     }
 
     public static List<Map<String, Object>> builds() {
         return List.of(
-                MockData.map("id", "bg-1001", "name", "QHD 게임 균형형", "totalPrice", 1980000, "confidence", "MEDIUM", "warnings", List.of("PSU 여유율 확인 필요")),
-                MockData.map("id", "bg-1002", "name", "개발 + 게임 혼합형", "totalPrice", 2120000, "confidence", "HIGH", "warnings", List.of("RAM 32GB 권장")),
-                MockData.map("id", "bg-1003", "name", "AI 실습 입문형", "totalPrice", 1620000, "confidence", "MEDIUM", "warnings", List.of("VRAM 한계 가능성"))
+                buildSummary(BUILD_ID, "QHD 게임 균형형", 1980000, "MEDIUM"),
+                buildSummary(ALT_BUILD_ID, "개발 + 게임 혼합형", 2120000, "HIGH")
         );
     }
 
@@ -35,7 +51,12 @@ public final class BuildSeed {
                 "id", id,
                 "name", "QHD 게임 균형형",
                 "totalPrice", 1980000,
+                "confidence", "MEDIUM",
                 "items", PartSeed.parts(),
+                "warnings", List.of(warning("POWER_HEADROOM", "PSU 여유율 확인 필요")),
+                "evidenceIds", List.of(EVIDENCE_ID),
+                "changeableCategories", List.of("GPU", "RAM"),
+                "createdAt", MockData.now(),
                 "toolResults", List.of(ToolSeed.toolResult("compatibility"), ToolSeed.toolResult("power"))
         );
     }
@@ -43,12 +64,30 @@ public final class BuildSeed {
     public static Map<String, Object> changePart(String id) {
         return MockData.map(
                 "buildId", id,
-                "status", "WARN",
-                "summary", "GPU 성능은 개선되지만 PSU 여유율 확인이 필요합니다.",
-                "diff", List.of(
-                        MockData.map("metric", "price", "before", 1662000, "after", 1980000, "delta", 318000),
-                        MockData.map("metric", "qhdPerformance", "before", "1.0x", "after", "1.42x", "delta", "+42%")
-                )
+                "category", "GPU",
+                "previousPartId", PREVIOUS_GPU_ID,
+                "selectedPartId", GPU_ID,
+                "totalPrice", 1980000,
+                "diff", MockData.map("price", 318000, "qhdPerformance", "+42%"),
+                "warnings", List.of(warning("POWER_HEADROOM", "PSU 여유율 확인 필요"))
         );
+    }
+
+    private static Map<String, Object> buildSummary(String id, String name, int totalPrice, String confidence) {
+        return MockData.map(
+                "id", id,
+                "name", name,
+                "totalPrice", totalPrice,
+                "confidence", confidence,
+                "items", PartSeed.parts(),
+                "warnings", List.of(warning("POWER_HEADROOM", "PSU 여유율 확인 필요")),
+                "evidenceIds", List.of(EVIDENCE_ID),
+                "changeableCategories", List.of("GPU", "RAM"),
+                "createdAt", MockData.now()
+        );
+    }
+
+    private static Map<String, Object> warning(String code, String message) {
+        return MockData.map("code", code, "message", message, "severity", "WARN", "relatedPartIds", List.of(GPU_ID));
     }
 }

@@ -6,11 +6,14 @@
 
 | 순서 | 문서 | 목적 |
 | --- | --- | --- |
-| 1 | [docs/role-workspaces.md](docs/role-workspaces.md) | 자기 담당 범위, 파일 소유권, PR 규칙 확인 |
-| 2 | [docs/sprint-1-start-checklist.md](docs/sprint-1-start-checklist.md) | 첫 PR에서 무엇을 할지 확인 |
-| 3 | [docs/architecture.md](docs/architecture.md) | 전체 구조와 런타임 흐름 확인 |
-| 4 | [docs/scaffold-decisions.md](docs/scaffold-decisions.md) | 이번 Sprint에서 고정한 결정사항과 이후 작업 확인 |
-| 5 | [docs/openapi.yaml](docs/openapi.yaml) | API 요청/응답 계약 확인 |
+| 1 | [docs/API_CONTRACT.md](docs/API_CONTRACT.md) | API 요청/응답, 인증, pagination, 오류, public_id 계약 확인 |
+| 2 | [docs/DB_SCHEMA.md](docs/DB_SCHEMA.md) | 공통 DB 테이블, 상태 전이, JSONB, Flyway 기준 확인 |
+| 3 | [docs/ROUTE_OWNERSHIP.md](docs/ROUTE_OWNERSHIP.md) | 담당자별 route/API/DB/file owner와 공유 지점 확인 |
+| 4 | [docs/openapi.yaml](docs/openapi.yaml) | API 계약의 기계 검증용 OpenAPI 확인 |
+| 5 | [docs/role-workspaces.md](docs/role-workspaces.md) | 저장소 기존 작업공간 요약 확인 |
+| 6 | [docs/sprint-1-start-checklist.md](docs/sprint-1-start-checklist.md) | 첫 PR에서 무엇을 할지 확인 |
+| 7 | [docs/architecture.md](docs/architecture.md) | 전체 구조와 런타임 흐름 확인 |
+| 8 | [docs/scaffold-decisions.md](docs/scaffold-decisions.md) | 이번 Sprint에서 고정한 결정사항과 이후 작업 확인 |
 
 4번 담당자는 [apps/pc-agent/README.md](apps/pc-agent/README.md)도 함께 확인합니다.
 
@@ -185,7 +188,9 @@ cd apps/api
 ## 협업 규칙
 
 - 자기 담당 feature/domain 안에서 먼저 작업합니다.
-- API 요청/응답 구조를 바꾸면 같은 PR에서 [docs/openapi.yaml](docs/openapi.yaml)을 함께 수정합니다.
+- API 요청/응답 구조를 바꾸면 같은 PR에서 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)와 [docs/openapi.yaml](docs/openapi.yaml)을 함께 수정합니다.
+- DB 테이블, 컬럼, enum, 상태 전이를 바꾸면 같은 PR에서 [docs/DB_SCHEMA.md](docs/DB_SCHEMA.md)를 함께 수정합니다.
+- route, owner, 공유 파일 경계를 바꾸면 같은 PR에서 [docs/ROUTE_OWNERSHIP.md](docs/ROUTE_OWNERSHIP.md)를 함께 수정합니다.
 - mock 데이터는 담당 feature의 `mocks` 디렉터리에 둡니다.
 - seed 데이터는 담당 백엔드 domain의 `*Seed.java`에 둡니다.
 - `components/ui.tsx`, `prototypeData.ts`, `QuotePages.tsx`, `AdminPages.tsx`는 barrel 용도입니다. 새 구현을 쌓지 않습니다.

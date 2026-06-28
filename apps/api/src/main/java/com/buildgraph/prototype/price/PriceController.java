@@ -22,10 +22,4 @@ public class PriceController {
     Map<String, Object> createAlert(@RequestBody(required = false) Map<String, Object> request) {
         return PriceSeed.createAlert();
     }
-
-    @PostMapping("/price-snapshots/collect")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    Map<String, Object> collectSnapshots() {
-        return PriceSeed.collectSnapshots();
-    }
 }
