@@ -16,9 +16,11 @@ public class PartQueryService {
     private static final Set<String> CATEGORIES = Set.of("CPU", "GPU", "RAM", "MOTHERBOARD", "STORAGE", "PSU", "CASE", "COOLER");
     private static final Set<String> STATUSES = Set.of("ACTIVE", "INACTIVE", "DISCONTINUED");
     private final JdbcTemplate jdbcTemplate;
+    private final NaverShoppingOfferService naverShoppingOfferService;
 
-    public PartQueryService(JdbcTemplate jdbcTemplate) {
+    public PartQueryService(JdbcTemplate jdbcTemplate, NaverShoppingOfferService naverShoppingOfferService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.naverShoppingOfferService = naverShoppingOfferService;
     }
 
     public Map<String, Object> parts(
@@ -154,7 +156,12 @@ public class PartQueryService {
                 "attributes", DbValueMapper.json(row, "attributes", Map.of()),
                 "benchmarkSummary", benchmarkSummary(row),
                 "latestPriceSource", DbValueMapper.string(row, "latest_price_source"),
-                "latestPriceCollectedAt", DbValueMapper.timestamp(row, "latest_price_collected_at")
+                "latestPriceCollectedAt", DbValueMapper.timestamp(row, "latest_price_collected_at"),
+                "externalOffer", naverShoppingOfferService.offerFor(
+                        DbValueMapper.string(row, "id"),
+                        DbValueMapper.string(row, "name"),
+                        DbValueMapper.string(row, "manufacturer")
+                ).orElse(null)
         );
     }
 

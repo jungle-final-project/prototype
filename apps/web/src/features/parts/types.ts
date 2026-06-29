@@ -12,6 +12,14 @@ export type PartRow = {
   } | null;
   latestPriceSource?: string | null;
   latestPriceCollectedAt?: string | null;
+  externalOffer?: {
+    title?: string | null;
+    imageUrl?: string | null;
+    supplierName?: string | null;
+    offerUrl?: string | null;
+    lowPrice?: number | null;
+    source?: string | null;
+  } | null;
   score?: number;
 };
 

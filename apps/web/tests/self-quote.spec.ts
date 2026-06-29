@@ -18,8 +18,13 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
             price: 890000,
             status: 'ACTIVE',
             benchmarkSummary: { score: 92.4 },
-            latestPriceSource: 'DANAWA_BACKUP',
-            latestPriceCollectedAt: '2026-06-29T12:30:00Z'
+            externalOffer: {
+              imageUrl: 'https://example.test/rtx4070.png',
+              supplierName: '테스트몰',
+              offerUrl: 'https://example.test/rtx4070',
+              lowPrice: 890000,
+              source: 'NAVER_SHOPPING_SEARCH'
+            }
           }
         ]
       : [
@@ -31,8 +36,13 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
             price: 260000,
             status: 'ACTIVE',
             benchmarkSummary: { score: 81.1 },
-            latestPriceSource: 'seed',
-            latestPriceCollectedAt: '2026-06-29T09:20:00Z'
+            externalOffer: {
+              imageUrl: 'https://example.test/ryzen.png',
+              supplierName: 'CPU테스트몰',
+              offerUrl: 'https://example.test/ryzen',
+              lowPrice: 260000,
+              source: 'NAVER_SHOPPING_SEARCH'
+            }
           }
         ];
 
@@ -51,13 +61,15 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
   await page.goto('/self-quote');
   await expect(page.getByText('셀프 견적 / 전체 부품 목록')).toBeVisible();
   await expect(page.getByText('Ryzen 5 테스트')).toBeVisible();
-  await expect(page.getByText('seed · 2026-06-29')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'Ryzen 5 테스트 제품 사진' })).toBeVisible();
+  await expect(page.getByText('CPU테스트몰')).toBeVisible();
 
   await page.getByRole('button', { name: 'GPU' }).click();
 
   await expect(page.getByText('GPU 부품 목록')).toBeVisible();
   await expect(page.getByText('RTX 4070 SUPER 테스트')).toBeVisible();
-  await expect(page.getByText('DANAWA_BACKUP · 2026-06-29')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'RTX 4070 SUPER 테스트 제품 사진' })).toBeVisible();
+  await expect(page.getByText('테스트몰')).toBeVisible();
   expect(requestedCategories).toContain('GPU');
 
   await page.getByRole('button', { name: 'RTX 4070 SUPER 테스트 견적 담기' }).click();
@@ -82,8 +94,13 @@ test('opens GPU internal assets from home category link', async ({ page }) => {
             price: 890000,
             status: 'ACTIVE',
             benchmarkSummary: { score: 92.4 },
-            latestPriceSource: 'DANAWA_BACKUP',
-            latestPriceCollectedAt: '2026-06-29T12:30:00Z'
+            externalOffer: {
+              imageUrl: 'https://example.test/home-rtx.png',
+              supplierName: '홈테스트몰',
+              offerUrl: 'https://example.test/home-rtx',
+              lowPrice: 890000,
+              source: 'NAVER_SHOPPING_SEARCH'
+            }
           }
         ]
       : [];
@@ -106,4 +123,5 @@ test('opens GPU internal assets from home category link', async ({ page }) => {
   await expect(page).toHaveURL('/self-quote?category=GPU');
   await expect(page.getByText('GPU 부품 목록')).toBeVisible();
   await expect(page.getByText('홈에서 열린 RTX 테스트')).toBeVisible();
+  await expect(page.getByText('홈테스트몰')).toBeVisible();
 });

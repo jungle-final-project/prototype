@@ -77,7 +77,7 @@ export function SelfQuotePage() {
           {isLoading ? <div className="rounded border border-slate-200 p-5 text-sm text-slate-500">부품 목록을 불러오는 중입니다.</div> : null}
           {isError ? <div className="rounded border border-orange-200 bg-orange-50 p-5 text-sm text-orange-700">부품 목록 API를 불러오지 못했습니다.</div> : null}
           {!isLoading && !isError ? (
-            <DataTable columns={['category', 'name', 'manufacturer', 'price', 'priceSource', 'status', 'score', 'action']} rows={partRows(parts, selectedPartIds, addPart)} />
+            <DataTable columns={['product', 'manufacturer', 'supplier', 'price', 'status', 'score', 'action']} rows={partRows(parts, selectedPartIds, addPart)} />
           ) : null}
         </Panel>
         <Panel title="내 견적 / 검증">
@@ -112,11 +112,10 @@ export function SelfQuotePage() {
 
 function partRows(parts: PartRow[], selectedPartIds: Set<string>, onAddPart: (part: PartRow) => void) {
   return parts.map((part) => ({
-    category: part.category,
-    name: part.name,
+    product: <PartProductCell part={part} />,
     manufacturer: part.manufacturer ?? '-',
+    supplier: <SupplierCell part={part} />,
     price: `${part.price.toLocaleString()}원`,
-    priceSource: formatPriceSource(part),
     status: <StatusBadge status={part.status} />,
     score: formatScore(part.benchmarkSummary?.score),
     action: (
@@ -131,6 +130,38 @@ function partRows(parts: PartRow[], selectedPartIds: Set<string>, onAddPart: (pa
       </button>
     )
   }));
+}
+
+function PartProductCell({ part }: { part: PartRow }) {
+  return (
+    <div className="flex min-w-[260px] items-center gap-3">
+      <img
+        src={partImageUrl(part)}
+        alt={`${part.name} 제품 사진`}
+        className="h-14 w-14 rounded border border-slate-200 bg-slate-100 object-cover"
+      />
+      <div>
+        <div className="font-bold text-slate-900">{part.name}</div>
+        <div className="mt-1 text-[11px] text-slate-500">{partShortSpec(part)}</div>
+      </div>
+    </div>
+  );
+}
+
+function SupplierCell({ part }: { part: PartRow }) {
+  const supplierName = part.externalOffer?.supplierName;
+  const offerUrl = part.externalOffer?.offerUrl;
+  if (!supplierName) {
+    return '-';
+  }
+  if (!offerUrl) {
+    return supplierName;
+  }
+  return (
+    <a href={offerUrl} target="_blank" rel="noreferrer" className="font-bold text-brand-blue hover:underline">
+      {supplierName}
+    </a>
+  );
 }
 
 function categoryLabel(category: string) {
@@ -152,10 +183,48 @@ function formatScore(score?: number | string) {
   return typeof score === 'number' ? score.toFixed(1) : score;
 }
 
-function formatPriceSource(part: PartRow) {
-  if (!part.latestPriceSource) {
-    return '-';
+function partShortSpec(part: PartRow) {
+  const shortSpec = part.attributes?.shortSpec;
+  return typeof shortSpec === 'string' ? shortSpec : part.category;
+}
+
+function partImageUrl(part: PartRow) {
+  const imageUrl = part.externalOffer?.imageUrl ?? part.attributes?.imageUrl;
+  if (typeof imageUrl === 'string' && imageUrl.trim()) {
+    return imageUrl;
   }
-  const collectedDate = part.latestPriceCollectedAt?.slice(0, 10);
-  return collectedDate ? `${part.latestPriceSource} · ${collectedDate}` : part.latestPriceSource;
+
+  const label = part.category === 'STORAGE' ? 'SSD' : part.category;
+  const accent = categoryAccent(part.category);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112">
+      <rect width="112" height="112" rx="14" fill="#f8fafc"/>
+      <rect x="12" y="20" width="88" height="56" rx="10" fill="${accent}" opacity="0.92"/>
+      <rect x="20" y="28" width="72" height="40" rx="6" fill="#ffffff" opacity="0.16"/>
+      <text x="56" y="54" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#ffffff">${label}</text>
+      <rect x="24" y="84" width="64" height="6" rx="3" fill="#cbd5e1"/>
+    </svg>
+  `;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function categoryAccent(category: string) {
+  switch (category) {
+    case 'CPU':
+      return '#2563eb';
+    case 'MOTHERBOARD':
+      return '#475569';
+    case 'RAM':
+      return '#16a34a';
+    case 'GPU':
+      return '#7c3aed';
+    case 'STORAGE':
+      return '#0891b2';
+    case 'PSU':
+      return '#ca8a04';
+    case 'CASE':
+      return '#dc2626';
+    default:
+      return '#334155';
+  }
 }
