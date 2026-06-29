@@ -5,9 +5,11 @@ import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -15,7 +17,9 @@ import java.util.Date;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class JwtTokenService {
@@ -68,11 +72,53 @@ public class JwtTokenService {
         }
     }
 
+    public JwtAccessClaims verifyAccessToken(String token) {
+        try {
+            SignedJWT jwt = SignedJWT.parse(token);
+            if (!JWSAlgorithm.HS256.equals(jwt.getHeader().getAlgorithm())) {
+                throw unauthorized();
+            }
+            if (!jwt.verify(new MACVerifier(secret))) {
+                throw unauthorized();
+            }
+
+            JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            if (!issuer.equals(claims.getIssuer())) {
+                throw unauthorized();
+            }
+            Date expirationTime = claims.getExpirationTime();
+            if (expirationTime == null || !expirationTime.toInstant().isAfter(clock.instant())) {
+                throw unauthorized();
+            }
+
+            String userId = claims.getSubject();
+            String email = claims.getStringClaim("email");
+            String role = claims.getStringClaim("role");
+            if (isBlank(userId) || isBlank(email) || isBlank(role)) {
+                throw unauthorized();
+            }
+            return new JwtAccessClaims(userId, email, role);
+        } catch (ParseException | JOSEException exception) {
+            throw unauthorized();
+        }
+    }
+
     private String requiredString(Map<String, Object> values, String key) {
         Object value = values.get(key);
         if (value == null || value.toString().isBlank()) {
             throw new IllegalArgumentException("JWT claim is missing: " + key);
         }
         return value.toString();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private ResponseStatusException unauthorized() {
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid access token.");
+    }
+
+    public record JwtAccessClaims(String userId, String email, String role) {
     }
 }

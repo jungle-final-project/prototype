@@ -61,11 +61,9 @@ public class UserQueryService {
     }
 
     public Map<String, Object> me(String authorization) {
-        if (authorization == null || !authorization.startsWith("Bearer demo-access-")) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
-        }
-        String email = authorization.contains("admin") ? "admin@example.com" : "user@example.com";
-        return userMap(findByEmail(email));
+        String token = bearerToken(authorization);
+        JwtTokenService.JwtAccessClaims claims = jwtTokenService.verifyAccessToken(token);
+        return userMap(findByPublicId(claims.userId()));
     }
 
     private Map<String, Object> findByEmail(String email) {
@@ -73,6 +71,29 @@ public class UserQueryService {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "등록된 사용자를 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> findByPublicId(String publicId) {
+        return jdbcTemplate.queryForList("""
+                SELECT public_id::text AS id, email, password_hash, name, role, created_at
+                FROM users
+                WHERE public_id::text = ?
+                  AND deleted_at IS NULL
+                """, publicId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid access token."));
+    }
+
+    private String bearerToken(String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login required.");
+        }
+        String token = authorization.substring("Bearer ".length()).trim();
+        if (token.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login required.");
+        }
+        return token;
     }
 
     private List<Map<String, Object>> findRowsByEmail(String email) {
