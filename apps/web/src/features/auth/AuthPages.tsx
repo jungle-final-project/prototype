@@ -1,11 +1,12 @@
 import { FormEvent, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Screen, StateMessage } from '../../components/ui';
 import { saveToken } from '../../lib/api';
 import { login, signup } from './authApi';
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState('');
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -13,7 +14,7 @@ export function LoginPage() {
     try {
       const response = await login('user@example.com', 'password');
       saveToken(response.accessToken);
-      navigate('/my/quotes');
+      navigate(safeRedirect(searchParams.get('redirect')));
     } catch {
       setError('API 연결 전에는 Docker compose로 백엔드를 먼저 실행해 주세요.');
     }
@@ -33,6 +34,13 @@ export function LoginPage() {
       </div>
     </Screen>
   );
+}
+
+function safeRedirect(value: string | null) {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) {
+    return '/my/quotes';
+  }
+  return value;
 }
 
 export function SignupPage() {

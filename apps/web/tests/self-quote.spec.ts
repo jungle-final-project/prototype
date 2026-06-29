@@ -2,6 +2,62 @@ import { expect, test } from '@playwright/test';
 
 test('filters internal assets by sidebar category on self quote page', async ({ page }) => {
   const requestedCategories: string[] = [];
+  const emptyDraft = {
+    id: 'draft-test',
+    status: 'ACTIVE',
+    name: '셀프 견적',
+    items: [],
+    totalPrice: 0,
+    itemCount: 0
+  };
+  const gpuDraft = {
+    id: 'draft-test',
+    status: 'ACTIVE',
+    name: '셀프 견적',
+    items: [
+      {
+        id: 'draft-item-gpu-test',
+        partId: 'part-gpu-test',
+        category: 'GPU',
+        name: 'RTX 4070 SUPER 테스트',
+        manufacturer: 'NVIDIA',
+        quantity: 1,
+        unitPriceAtAdd: 890000,
+        currentPrice: 890000,
+        lineTotal: 890000,
+        attributes: {},
+        externalOffer: {
+          imageUrl: 'https://example.test/rtx4070.png',
+          supplierName: '테스트몰',
+          offerUrl: 'https://example.test/rtx4070',
+          lowPrice: 890000,
+          source: 'NAVER_SHOPPING_SEARCH'
+        }
+      }
+    ],
+    totalPrice: 890000,
+    itemCount: 1
+  };
+  let draft: unknown = emptyDraft;
+
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'demo-access-user');
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PUT') {
+      draft = gpuDraft;
+    }
+    if (method === 'DELETE') {
+      draft = emptyDraft;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(draft)
+    });
+  });
 
   await page.route('**/api/parts**', async (route) => {
     const url = new URL(route.request().url());
@@ -268,4 +324,193 @@ test('paginates self quote assets in 20 item pages', async ({ page }) => {
   await expect(page.getByText('페이지 2 / 3')).toBeVisible();
   await expect(page.getByText('페이징 파워 21', { exact: true })).toBeVisible();
   expect(requestedPages).toContain('1');
+});
+
+test('updates quantity only for repeatable quote draft categories', async ({ page }) => {
+  let ramQuantity = 1;
+  const ramItem = {
+    id: 'draft-item-ram-test',
+    partId: 'part-ram-quantity-test',
+    category: 'RAM',
+    name: '삼성 DDR5 32GB 테스트',
+    manufacturer: 'Samsung',
+    quantity: ramQuantity,
+    unitPriceAtAdd: 120000,
+    currentPrice: 120000,
+    lineTotal: 120000,
+    attributes: {}
+  };
+  const cpuItem = {
+    id: 'draft-item-cpu-test',
+    partId: 'part-cpu-quantity-test',
+    category: 'CPU',
+    name: 'Ryzen 9 수량고정 테스트',
+    manufacturer: 'AMD',
+    quantity: 1,
+    unitPriceAtAdd: 820000,
+    currentPrice: 820000,
+    lineTotal: 820000,
+    attributes: {}
+  };
+
+  const draft = () => ({
+    id: 'draft-quantity-test',
+    status: 'ACTIVE',
+    name: '셀프 견적',
+    items: [
+      { ...ramItem, quantity: ramQuantity, lineTotal: ramQuantity * ramItem.currentPrice },
+      cpuItem
+    ],
+    totalPrice: ramQuantity * ramItem.currentPrice + cpuItem.currentPrice,
+    itemCount: ramQuantity + 1
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'demo-access-user');
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    if (route.request().method() === 'PATCH') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { quantity?: number };
+      ramQuantity = body.quantity ?? ramQuantity;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(draft())
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes('/price-history')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          partId: 'part-ram-quantity-test',
+          partName: '삼성 DDR5 32GB 테스트',
+          currentPrice: 120000,
+          days: 3650,
+          source: 'NAVER_SHOPPING_SEARCH',
+          items: [{ price: 120000, source: 'NAVER_SHOPPING_SEARCH', collectedAt: '2026-06-29T00:00:00Z' }],
+          summary: {
+            sampleCount: 1,
+            currentPrice: 120000,
+            minPrice: 120000,
+            maxPrice: 120000,
+            firstPrice: 120000,
+            lastPrice: 120000,
+            changeAmount: 0,
+            changeRatePercent: 0
+          }
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByText('삼성 DDR5 32GB 테스트')).toBeVisible();
+  await expect(page.getByLabel('삼성 DDR5 32GB 테스트 수량 선택')).toBeVisible();
+  await expect(page.getByLabel('Ryzen 9 수량고정 테스트 수량 선택')).toHaveCount(0);
+  await expect(page.getByText('수량 1개')).toHaveCount(2);
+
+  await page.getByRole('button', { name: '삼성 DDR5 32GB 테스트 수량 증가' }).click();
+
+  await expect(page.getByText('수량 2개')).toBeVisible();
+  await expect(page.getByText('1,060,000원')).toBeVisible();
+});
+
+test('returns to product detail after login and saves selected part to quote draft', async ({ page }) => {
+  let savedToDraft = false;
+
+  await page.route('**/api/parts/part-gpu-detail-test', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'part-gpu-detail-test',
+        category: 'GPU',
+        name: '상세 담기 RTX 테스트',
+        manufacturer: 'NVIDIA',
+        price: 1200000,
+        status: 'ACTIVE',
+        attributes: {
+          shortSpec: 'RTX detail save test',
+          toolReady: true
+        },
+        externalOffer: {
+          imageUrl: 'https://example.test/detail-gpu.png',
+          supplierName: '상세테스트몰',
+          offerUrl: 'https://example.test/detail-gpu',
+          lowPrice: 1200000,
+          source: 'NAVER_SHOPPING_SEARCH'
+        }
+      })
+    });
+  });
+
+  await page.route('**/api/auth/login', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accessToken: 'demo-access-user',
+        refreshToken: 'demo-refresh-user',
+        user: {
+          id: 'user-test',
+          email: 'user@example.com',
+          name: 'Demo User',
+          role: 'USER'
+        }
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current/items/part-gpu-detail-test', async (route) => {
+    expect(route.request().method()).toBe('PUT');
+    expect(route.request().headers().authorization).toBe('Bearer demo-access-user');
+    savedToDraft = true;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-detail-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [
+          {
+            id: 'draft-item-detail-test',
+            partId: 'part-gpu-detail-test',
+            category: 'GPU',
+            name: '상세 담기 RTX 테스트',
+            quantity: 1,
+            currentPrice: 1200000,
+            lineTotal: 1200000
+          }
+        ],
+        totalPrice: 1200000,
+        itemCount: 1
+      })
+    });
+  });
+
+  await page.goto('/parts/part-gpu-detail-test');
+  await page.getByRole('button', { name: '견적에 담기' }).click();
+
+  await expect(page).toHaveURL('/login?redirect=%2Fparts%2Fpart-gpu-detail-test');
+  await page.getByRole('button', { name: '로그인' }).click();
+
+  await expect(page).toHaveURL('/parts/part-gpu-detail-test');
+  await page.getByRole('button', { name: '견적에 담기' }).click();
+
+  await expect(page.getByText('내 견적초안에 저장했습니다.')).toBeVisible();
+  expect(savedToDraft).toBe(true);
 });

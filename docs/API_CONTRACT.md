@@ -174,6 +174,26 @@ Google OAuth 정책:
 6. response에 포함된 `agentSessionId`, `recommendations[].id`, `evidenceIds`는 모두 같은 최종 저장 transaction에서 commit된 `public_id`다.
 7. 1번 추천 API는 `agent_sessions`, `tool_invocations`, `rag_evidence`를 직접 조작하지 않고, 3번이 제공하는 내부 Agent trace service를 호출해 추적 데이터를 기록한다.
 
+### Quote Draft
+
+수동 견적초안은 상품 상세/셀프 견적 화면에서 사용자가 직접 담은 부품 목록이다. AI 추천 결과인 `builds/build_items`와 분리한다.
+
+| Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
+|---|---|---|---|---|---|---|
+| `GET` | `/api/quote-drafts/current` | USER | 2번 | - | `{ "id": null, "status": "EMPTY", "name": "셀프 견적", "items": [], "totalPrice": 0, "itemCount": 0 }` | `quote_drafts`, `quote_draft_items`, `parts` |
+| `PUT` | `/api/quote-drafts/current/items/{partId}` | USER | 2번 | `{ "quantity": 2 }` | `{ "id": "3ff6d7a2-1c51-4c9d-9720-94b7ef1d62bd", "status": "ACTIVE", "items": [{ "partId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "category": "RAM", "name": "DDR5 32GB", "quantity": 2, "currentPrice": 120000, "lineTotal": 240000 }], "totalPrice": 240000, "itemCount": 2 }` | `quote_drafts`, `quote_draft_items`, `parts` |
+| `PATCH` | `/api/quote-drafts/current/items/{partId}` | USER | 2번 | `{ "quantity": 1 }` | `QuoteDraftDto` | `quote_draft_items`, `parts` |
+| `DELETE` | `/api/quote-drafts/current/items/{partId}` | USER | 2번 | - | `QuoteDraftDto` | `quote_draft_items`, `parts` |
+
+수동 견적초안 규칙:
+
+- `GET /api/quote-drafts/current`는 active draft가 없어도 DB row를 만들지 않고 `status=EMPTY` DTO를 반환한다.
+- `PUT item`은 active draft가 없으면 생성한 뒤 item을 저장한다.
+- `CPU`, `GPU`, `MOTHERBOARD`, `PSU`, `CASE`, `COOLER`는 같은 category의 다른 부품을 담으면 기존 active item을 교체한다.
+- `RAM`, `STORAGE`는 서로 다른 상품을 여러 개 담을 수 있다. 같은 상품을 다시 담으면 row를 추가하지 않고 `quantity`를 갱신한다.
+- 단일 구성 카테고리의 `quantity`는 1만 허용한다. `RAM`, `STORAGE`의 `quantity`는 1~9만 허용한다.
+- `totalPrice`와 `lineTotal`은 현재 `parts.price` 기준으로 계산한다. `unitPriceAtAdd`는 담은 시점 추적용이다.
+
 ### Parts/Price
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |

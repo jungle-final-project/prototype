@@ -1,5 +1,5 @@
 import { api } from '../../lib/api';
-import type { PartPage, PartPriceHistory, PartPriceHistoryParams, PartSearchParams, PartRow } from './types';
+import type { PartPage, PartPriceHistory, PartPriceHistoryParams, PartSearchParams, PartRow, QuoteDraft } from './types';
 
 export function listParts(params: PartSearchParams = {}) {
   const search = new URLSearchParams();
@@ -25,6 +25,30 @@ export function getPartPriceHistory(partId: string, params: PartPriceHistoryPara
   });
   const query = search.toString();
   return api<PartPriceHistory>(`/api/parts/${partId}/price-history${query ? `?${query}` : ''}`);
+}
+
+export function getCurrentQuoteDraft() {
+  return api<QuoteDraft>('/api/quote-drafts/current');
+}
+
+export function putQuoteDraftItem(partId: string, quantity: number) {
+  return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ quantity })
+  });
+}
+
+export function patchQuoteDraftItem(partId: string, quantity: number) {
+  return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ quantity })
+  });
+}
+
+export function deleteQuoteDraftItem(partId: string) {
+  return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
+    method: 'DELETE'
+  });
 }
 
 export function runToolCheck(tool: 'compatibility' | 'power' | 'size' | 'performance' | 'price', payload: unknown) {

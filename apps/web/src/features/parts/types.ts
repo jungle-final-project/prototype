@@ -76,6 +76,33 @@ export type PartPriceHistoryParams = {
   limit?: number;
 };
 
+export type QuoteDraftItem = {
+  id: string;
+  partId: string;
+  category: string;
+  name: string;
+  manufacturer?: string | null;
+  quantity: number;
+  unitPriceAtAdd: number;
+  currentPrice: number;
+  lineTotal: number;
+  attributes?: Record<string, unknown>;
+  externalOffer?: PartRow['externalOffer'];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type QuoteDraft = {
+  id?: string | null;
+  status: 'EMPTY' | 'ACTIVE' | 'ORDERED' | 'ARCHIVED';
+  name: string;
+  items: QuoteDraftItem[];
+  totalPrice: number;
+  itemCount: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
 export type ToolRow = {
   tool: string;
   status: string;

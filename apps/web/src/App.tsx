@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { LoginPage, SignupPage } from './features/auth/AuthPages';
 import { RequireAdmin } from './features/auth/RequireAdmin';
-import { SelfQuotePage } from './features/parts/PartsPages';
+import { PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
 import { SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
 import { AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, RagEvidenceAdminPage, ToolInvocationAdminPage } from './features/admin/AdminPages';
@@ -13,6 +13,7 @@ export default function App() {
       <Route path="/requirements/new" element={<RequirementPage />} />
       <Route path="/builds/:buildId" element={<BuildResultPage />} />
       <Route path="/self-quote" element={<SelfQuotePage />} />
+      <Route path="/parts/:partId" element={<PartDetailPage />} />
       <Route path="/builds/:buildId/change-part" element={<ChangePartPage />} />
       <Route path="/my/quotes" element={<MyQuotesPage />} />
       <Route path="/support/new" element={<SupportNewPage />} />

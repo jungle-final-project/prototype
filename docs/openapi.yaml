@@ -293,6 +293,77 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PartPriceHistoryResponse"
+  /api/quote-drafts/current:
+    get:
+      summary: 현재 로그인 사용자의 수동 견적초안
+      responses:
+        "200":
+          description: 현재 견적초안. active draft가 없으면 status=EMPTY로 반환한다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftDto"
+  /api/quote-drafts/current/items/{partId}:
+    put:
+      summary: 견적초안에 부품 담기 또는 같은 카테고리 교체
+      parameters:
+        - in: path
+          name: partId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteDraftItemUpsertRequest"
+      responses:
+        "200":
+          description: 갱신된 견적초안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftDto"
+    patch:
+      summary: 견적초안 부품 수량 변경
+      parameters:
+        - in: path
+          name: partId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteDraftItemUpsertRequest"
+      responses:
+        "200":
+          description: 갱신된 견적초안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftDto"
+    delete:
+      summary: 견적초안에서 부품 제거
+      parameters:
+        - in: path
+          name: partId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 갱신된 견적초안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftDto"
   /api/price-alerts:
     get:
       summary: 목표가 알림 목록
@@ -1212,6 +1283,85 @@ components:
         source:
           type: string
         refreshedAt:
+          type: string
+          format: date-time
+          nullable: true
+    QuoteDraftItemUpsertRequest:
+      type: object
+      description: CPU/GPU/MOTHERBOARD/PSU/CASE/COOLER are single-item categories. RAM and STORAGE can hold multiple distinct parts.
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 9
+          default: 1
+          description: Single-item categories accept only 1. RAM and STORAGE accept 1 to 9.
+    QuoteDraftDto:
+      type: object
+      required: [status, name, items, totalPrice, itemCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum: [EMPTY, ACTIVE, ORDERED, ARCHIVED]
+        name:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuoteDraftItemDto"
+        totalPrice:
+          type: integer
+        itemCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    QuoteDraftItemDto:
+      type: object
+      required: [id, partId, category, name, quantity, unitPriceAtAdd, currentPrice, lineTotal]
+      properties:
+        id:
+          type: string
+          format: uuid
+        partId:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        name:
+          type: string
+        manufacturer:
+          type: string
+          nullable: true
+        quantity:
+          type: integer
+        unitPriceAtAdd:
+          type: integer
+        currentPrice:
+          type: integer
+        lineTotal:
+          type: integer
+        attributes:
+          type: object
+          additionalProperties: true
+        externalOffer:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PartExternalOfferDto"
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
           type: string
           format: date-time
           nullable: true

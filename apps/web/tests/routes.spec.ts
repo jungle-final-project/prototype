@@ -5,6 +5,7 @@ const routes = [
   '/requirements/new',
   '/builds/00000000-0000-4000-8000-000000002001',
   '/self-quote',
+  '/parts/00000000-0000-4000-8000-000000013001',
   '/builds/00000000-0000-4000-8000-000000002001/change-part',
   '/my/quotes',
   '/support/new',

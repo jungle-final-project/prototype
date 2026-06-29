@@ -326,6 +326,67 @@ MVP 기준 결정값:
 - 교체 이력 테이블은 V1에서 만들지 않는다. 교체 전후 diff는 API 응답으로만 반환한다.
 - category 값은 `parts.category`와 동일한 대문자 식별자를 사용한다. 예: `CPU`, `GPU`, `RAM`, `MOTHERBOARD`, `STORAGE`, `PSU`, `CASE`, `COOLER`.
 
+### quote_drafts
+
+목적: 사용자가 상품 상세/셀프 견적 화면에서 직접 담은 수동 견적초안을 저장한다. AI 추천 결과인 `builds`와 의미를 분리한다.
+
+Owner: 2번, Auth 협업 5번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `user_id` | `BIGINT` | no | `users.id` | 로그인 사용자 |
+| `status` | `VARCHAR(30)` | no | - | `ACTIVE`, `ORDERED`, `ARCHIVED` |
+| `name` | `VARCHAR(120)` | no | - | 견적초안 이름 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+Index:
+
+- unique: `quote_drafts.public_id`
+- unique partial: `quote_drafts.user_id` where `status='ACTIVE' AND deleted_at IS NULL`
+- index: `(user_id, status)`
+- index: `quote_drafts.deleted_at`
+
+### quote_draft_items
+
+목적: 수동 견적초안에 담긴 부품과 수량을 저장한다.
+
+Owner: 2번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `quote_draft_id` | `BIGINT` | no | `quote_drafts.id` | 견적초안 |
+| `part_id` | `BIGINT` | no | `parts.id` | 부품 |
+| `category` | `VARCHAR(50)` | no | - | CPU/GPU/RAM 등 |
+| `quantity` | `INTEGER` | no | - | 1~9 |
+| `unit_price_at_add` | `INTEGER` | no | - | 담은 시점의 단가 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+MVP 기준 결정값:
+
+- 사용자 1명은 active 견적초안을 1개만 가진다.
+- 한 견적초안 안에서 `CPU`, `GPU`, `MOTHERBOARD`, `PSU`, `CASE`, `COOLER`는 category별 active item을 1개만 유지한다.
+- 위 단일 구성 카테고리에서 같은 category의 다른 부품을 담으면 기존 active item을 교체한다.
+- `RAM`, `STORAGE`는 서로 다른 상품을 여러 개 담을 수 있다. 같은 상품을 다시 담으면 row를 추가하지 않고 `quantity`를 갱신한다.
+- 단일 구성 카테고리의 `quantity`는 1만 허용하고, `RAM`, `STORAGE`의 `quantity`는 1~9를 허용한다.
+- API 응답 total은 저장 당시 단가가 아니라 현재 `parts.price * quantity` 기준으로 계산한다.
+
+Index:
+
+- unique: `quote_draft_items.public_id`
+- unique partial: `(quote_draft_id, category)` where `deleted_at IS NULL AND category IN ('CPU', 'GPU', 'MOTHERBOARD', 'PSU', 'CASE', 'COOLER')`
+- unique partial: `(quote_draft_id, part_id)` where `deleted_at IS NULL`
+- index: `quote_draft_items.quote_draft_id`
+- index: `quote_draft_items.part_id`
+- index: `quote_draft_items.deleted_at`
+
 ### parts
 
 목적: PC 부품 카탈로그와 현재 기준 가격을 저장한다.
@@ -1156,6 +1217,11 @@ V21__official_spec_option_gap_seed.sql
 V22__gpu_tool_dimension_seed.sql
 V23__team_shared_naver_offer_price_seed.sql
 V24__agent_rag_asset_knowledge_seed.sql
+V25__requirement_parse_rag_seed.sql
+V26__premium_intent_requirement_parse_rag.sql
+V27__rag_v2_policy_example_seed.sql
+V28__quote_drafts.sql
+V29__quote_draft_category_policy.sql
 ```
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.
