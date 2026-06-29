@@ -112,7 +112,7 @@ public class PartQueryService {
         }
         params.add(safeLimit);
         List<Map<String, Object>> items = jdbcTemplate.queryForList("""
-                        SELECT *
+                        SELECT price, source, collected_at
                         FROM (
                           SELECT ps.price,
                                  ps.source,

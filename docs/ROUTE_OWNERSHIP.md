@@ -94,7 +94,7 @@ Auth 화면 주 owner는 1번이다. Auth API, `users`, OAuth, refresh token, ro
 | frontend files | `features/parts/**`, `features/admin/parts/**` |
 | backend packages | `part`, `price`, `tool` |
 | DB tables | `parts`, `price_snapshots`, `part_external_offers`, `part_catalog_refresh_jobs`, `part_catalog_candidates`, `price_alerts`, `price_jobs`, `compatibility_rules`, `benchmark_summaries` |
-| API endpoints | `GET /api/parts`, `GET /api/parts/{id}`, `GET /api/price-alerts`, `POST /api/price-alerts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, 5개 Tool API |
+| API endpoints | `GET /api/parts`, `GET /api/parts/{id}`, `GET /api/parts/{id}/price-history`, `GET /api/price-alerts`, `POST /api/price-alerts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, 5개 Tool API |
 | 협업자 | `price_jobs`, catalog refresh, external offer refresh infra 실행 환경은 5번, build 연동은 1번, Agent Tool 이력은 3번 |
 
 `price_jobs`의 주 owner는 2번이고 협업자는 5번이다.
@@ -141,14 +141,14 @@ Auth 화면 주 owner는 1번이다. Auth API, `users`, OAuth, refresh token, ro
 | `/builds/:buildId` | 1번 | 2번, 3번 | `GET /api/builds/{id}`, `GET /api/rag/evidence/{id}` |
 | `/builds/:buildId/change-part` | 1번 | 2번 | `POST /api/builds/{id}/change-part`, `GET /api/parts` |
 | `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts` |
-| `/self-quote` | 2번 | 1번 | `GET /api/parts`, 5개 Tool API |
+| `/self-quote` | 2번 | 1번 | `GET /api/parts`, `GET /api/parts/{id}/price-history`, 5개 Tool API |
 | `/login` | 1번 | 5번 | `POST /api/auth/login`, `GET /api/auth/google/start` |
 | `/signup` | 1번 | 5번 | `POST /api/users` |
 | `/auth/callback` | 1번 | 5번 | `POST /api/auth/exchange` |
 | `/support/new` | 4번 | 5번 | `POST /api/agent-logs/upload`, `POST /api/as-tickets` |
 | `/support/:ticketId` | 4번 | - | `GET /api/as-tickets/{id}` |
 | `/admin` | 5번 | 2번, 3번, 4번 | `GET /api/admin/dashboard`, `GET /api/admin/audit-logs/recent` |
-| `/admin/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh` |
+| `/admin/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/parts/{id}/price-history`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh` |
 | `/admin/agent-sessions/:id` | 3번 | 5번 | `GET /api/admin/agent-sessions/{id}` |
 | `/admin/tool-invocations/:id` | 3번 | 5번 | `GET /api/admin/tool-invocations/{id}` |
 | `/admin/rag-evidence/:id` | 3번 | 5번 | `GET /api/admin/rag-evidence/{id}` |
@@ -176,6 +176,7 @@ Auth 화면 주 owner는 1번이다. Auth API, `users`, OAuth, refresh token, ro
 | `POST /api/builds/{id}/change-part` | 1번 | 2번 |
 | `GET /api/parts` | 2번 | - |
 | `GET /api/parts/{id}` | 2번 | - |
+| `GET /api/parts/{id}/price-history` | 2번 | 3번 |
 | `GET /api/price-alerts` | 2번 | 1번 |
 | `POST /api/price-alerts` | 2번 | 1번 |
 | `GET /api/admin/price-jobs` | 2번 | 5번 |
@@ -223,7 +224,7 @@ Auth 화면 주 owner는 1번이다. Auth API, `users`, OAuth, refresh token, ro
 | 담당자 | 완료 기준 |
 |---|---|
 | 1번 | `/requirements/new`에서 `POST /api/requirements/parse`와 `POST /api/builds/recommend` mock 또는 dev API를 호출하고, `/builds/:buildId`가 `BuildDto`의 `items`, `totalPrice`, `confidence`, `warnings`, `evidenceIds`, `changeableCategories`를 렌더링한다. `/builds/:buildId/change-part`는 `POST /api/builds/{id}/change-part`의 성공/409 응답을 화면에서 구분한다. |
-| 2번 | `GET /api/parts`, `GET /api/parts/{id}`, 5개 Tool API, `GET/POST /api/price-alerts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`가 계약 DTO로 응답한다. pagination 기본값/최대값, `price_jobs` 중복 실행 409, seed 기준 `parts` 조회 제외 조건, 내부 자산 갱신이 사용자 조회 중 외부 API를 호출하지 않는 조건을 contract test로 확인한다. |
+| 2번 | `GET /api/parts`, `GET /api/parts/{id}`, `GET /api/parts/{id}/price-history`, 5개 Tool API, `GET/POST /api/price-alerts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`가 계약 DTO로 응답한다. pagination 기본값/최대값, `price_jobs` 중복 실행 409, seed 기준 `parts` 조회 제외 조건, 내부 자산 갱신이 사용자 조회 중 외부 API를 호출하지 않는 조건, 가격 이력 조회가 `price_snapshots`만 읽는 조건을 contract test로 확인한다. |
 | 3번 | `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`, admin Agent/RAG/Tool 상세 API가 public_id만 반환한다. 실행 중 세션 재실행 409, 금지 상태 전이 409, `stateTimeline`/`requestPayload`/`resultPayload` DTO shape를 contract test로 확인한다. |
 | 4번 | `POST /api/agent-logs/upload`가 JSONL 파일 크기/MIME/확장자/라인 validation을 수행하고 `FILE_VALIDATION_ERROR`를 반환할 수 있다. `GET /api/agent-logs/{id}`, `POST/GET /api/as-tickets`, `PATCH /api/admin/as-tickets/{id}`가 본인 소유 404, 금지 상태 전이 409, soft delete 조회 제외를 contract test로 확인한다. |
 | 5번 | Auth/OAuth/refresh/guard, AdminShell, `apps/web/src/lib/api.ts`, `config/security`, Flyway 순서 검증, `GET /api/health`, `GET /api/admin/dashboard`, `GET /api/admin/audit-logs/recent`가 최소 DTO로 연결된다. 401/403 분기, public API BIGINT 비노출, migration 순서 검증을 contract test로 확인한다. |
