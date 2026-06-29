@@ -107,6 +107,32 @@ docker compose up --build
 
 `.devcontainer/devcontainer.json`은 Node 22, Java 21, Python 3.11, Docker CLI를 포함합니다. 컨테이너가 처음 열릴 때 `scripts/setup-dev.sh`가 실행되어 웹 의존성과 Python 도구 의존성을 설치합니다.
 
+## Agent LLM 실행
+
+기본 실행은 OpenAI API 키가 없어도 동작하는 `deterministic` runner입니다. 3번 Agent/RAG 담당 기능에서 실제 LLM summary가 관리자 화면까지 표시되는 흐름을 확인하려면 저장소 루트에 `.env`를 만들고 아래 값을 넣습니다.
+
+```env
+AGENT_RUNNER_MODE=llm
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+그 다음 Docker를 다시 올립니다.
+
+```powershell
+docker compose down -v
+docker compose up --build
+```
+
+검증 흐름:
+
+1. `POST /api/agent/sessions`로 Agent 세션을 생성합니다.
+2. `POST /api/agent/sessions/{id}/run`을 호출합니다.
+3. `GET /api/admin/agent-sessions/{id}`에서 `summary`가 LLM 생성 문장으로 표시되는지 확인합니다.
+
+`OPENAI_API_KEY`는 절대 커밋하지 않습니다. 저장소에는 `.env.example`만 유지합니다.
+
 ## Java 21 로컬 설치
 
 API는 Java 21을 기준으로 빌드합니다. 로컬 Java 버전이 다르면 `./gradlew bootJar --no-daemon`이 실패할 수 있으므로 백엔드 코드를 수정하는 팀원은 Java 21을 설치합니다.

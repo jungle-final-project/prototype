@@ -196,10 +196,37 @@ AS 흐름의 목적은 `AS_ANALYZE`이며, 현재 mock runner는 `performance`, 
 | `/admin/tool-invocations/:id` | `GET /api/admin/tool-invocations/{id}` | Tool status, confidence, request/result payload |
 | `/admin/rag-evidence/:id` | `GET /api/admin/rag-evidence/{id}` | sourceId, score, chunkText, metadata |
 
+## Agent runner 모드
+
+Agent 실행 방식은 `AGENT_RUNNER_MODE` 환경변수로 고른다.
+
+| mode | 동작 | 필요한 환경변수 | 용도 |
+|---|---|---|---|
+| `deterministic` | seed 기반 RAG/Tool trace와 고정 summary 생성 | 없음 | 키가 없는 팀원 개발, 기본 Docker 실행 |
+| `llm` | seed 기반 RAG/Tool trace를 저장한 뒤 OpenAI Responses API로 summary 생성 | `OPENAI_API_KEY` | 실제 LLM 생성 결과가 관리자 화면까지 표시되는 검증 |
+
+LLM 실행에 필요한 `.env` 예시는 아래와 같다.
+
+```env
+AGENT_RUNNER_MODE=llm
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+API 키는 저장소에 커밋하지 않는다. 각자 로컬 `.env`에만 넣는다.
+
+LLM mode에서도 외부 담당자가 보는 계약은 바뀌지 않는다.
+
+1. `POST /api/agent/sessions`로 세션 생성
+2. `POST /api/agent/sessions/{id}/run`으로 실행
+3. `GET /api/agent/sessions/{id}` 또는 `GET /api/admin/agent-sessions/{id}`로 summary, Tool, RAG 근거 조회
+
 ## 현재 구현 상태
 
-- 실제 OpenAI 호출, 실제 embedding 검색, 실제 Tool 계산은 아직 연결하지 않았다.
-- `AgentMockRunService`가 목적별 deterministic 결과를 생성한다.
 - DB 저장은 실제 PostgreSQL/Flyway 테이블에 연결되어 있다.
 - 관리자 Agent/Tool/RAG 상세 화면은 실제 API 응답을 읽는다.
-- 실제 LLM/RAG 교체 시에도 외부 담당자는 `sessionId`, `toolInvocationIds`, `evidenceIds` 계약을 유지하면 된다.
+- `deterministic` runner는 키 없이 같은 흐름을 재현한다.
+- `llm` runner는 RAG evidence와 Tool invocation을 저장한 뒤 OpenAI Responses API로 생성한 summary를 `agent_sessions.summary`에 저장한다.
+- 실제 embedding 검색과 실제 2번 Tool 계산은 아직 각 담당자 구현과 연결해야 한다.
+- 외부 담당자는 `sessionId`, `toolInvocationIds`, `evidenceIds` 계약을 유지하면 runner 내부 구현 변경에 영향받지 않는다.
