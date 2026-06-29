@@ -172,10 +172,56 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
   await expect(page.locator('main')).toContainText('0건');
   await expect(page.locator('main')).toContainText('정상');
   await expect(page.locator('main')).toContainText('2026-06-29T10:50:00Z');
+  await expect(page.locator('main')).toContainText('최근 Agent 세션 요약');
+  await expect(page.locator('main')).toContainText('운영 작업');
+  await expect(page.locator('main')).toContainText('관리자 할 일');
+  await expect(page.locator('main')).toContainText('가격 Job');
+  await expect(page.locator('main')).toContainText('Mailpit');
+  await expect(page.locator('main')).toContainText('Mock Worker');
+  await expect(page.locator('main')).toContainText('k6 Smoke');
+  await expect(page.locator('main')).toContainText('부품/가격');
+  await expect(page.locator('main')).toContainText('Agent/RAG');
+  await expect(page.locator('main')).toContainText('AS 티켓');
   await expect(page.locator('main')).not.toContainText('undefined');
   expect(authMeAuthorization).toBe('Bearer demo-jwt-admin');
   expect(dashboardCalls).toBe(1);
   expect(dashboardAuthorization).toBe('Bearer demo-jwt-admin');
+});
+
+test('shows degraded alert on admin dashboard when dashboard API reports degraded', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+  await page.route('**/api/admin/dashboard', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agentRunning: 4,
+        openTickets: 7,
+        priceJobsRunning: 2,
+        degraded: true,
+        generatedAt: '2026-06-29T11:05:00Z'
+      })
+    });
+  });
+
+  await page.goto('/admin');
+
+  await expect(page.locator('main')).toContainText('운영 상태 주의');
+  await expect(page.locator('main')).toContainText('일부 운영 지표가 주의 상태입니다.');
+  await expect(page.locator('main')).toContainText('4건');
+  await expect(page.locator('main')).toContainText('7건');
+  await expect(page.locator('main')).toContainText('2건');
+  await expect(page.locator('main')).toContainText('주의');
+  await expect(page.locator('main')).not.toContainText('undefined');
 });
 
 test('shows admin dashboard loading state while dashboard API is pending', async ({ page }) => {
