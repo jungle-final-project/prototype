@@ -235,11 +235,11 @@ cd apps/api
 
 | 담당 | API 연결 책임 | 주로 연결할 DB 테이블 | 직접 해도 되는 작업 | 먼저 상의할 작업 |
 | --- | --- | --- | --- | --- |
-| 1번 Quote/Auth 화면 | 견적 입력, 추천 Build 화면, 내 견적함, 로그인/회원가입 화면 | `requirements`, `builds`, `build_items` | 1번 route와 quote feature에서 견적 API 응답을 화면에 연결 | Auth token 저장 방식, Build 생성 과정에서 Agent 추적 데이터 쓰기 |
+| 1번 Quote/Auth | 견적 입력, 추천 Build 화면, 내 견적함, 로그인/회원가입 화면/API | `requirements`, `builds`, `build_items`, `users`, `user_auth_providers`, `refresh_tokens` | 1번 route와 quote/auth feature에서 견적 API와 Auth/User API 응답을 연결 | Auth token 저장 방식, Build 생성 과정에서 Agent 추적 데이터 쓰기 |
 | 2번 Parts/Price/Tool | 부품 목록, 부품 상세, 가격 알림, 가격 작업, 호환성/전력/규격/성능/가격 Tool | `parts`, `price_snapshots`, `price_alerts`, `price_jobs`, `compatibility_rules`, `benchmark_summaries` | 부품/가격 API를 DB 조회로 전환, Tool 계산 로직 구현 | Agent 내부 Tool 호출 이력 저장 방식, `price_jobs` 실행 권한/중복 실행 정책 |
 | 3번 Agent/RAG/Tool 근거 | Agent session, Tool invocation, RAG evidence 관리자 상세 | `agent_sessions`, `tool_invocations`, `rag_evidence` | Agent/RAG/Tool 추적 API를 DB 조회/저장으로 전환 | 1번 추천 생성 로직, 2번 Tool 계산 결과 구조, 4번 AS 분석 트리거 방식 |
 | 4번 Support/PC Agent | 로그 업로드, AS 접수, AS 티켓 상세, PC Agent CLI | `agent_log_uploads`, `as_tickets` | 로그 업로드/AS 티켓 API를 DB 저장으로 전환 | 로그 분석 Agent session 생성, 로그 보관/삭제 스케줄러 |
-| 5번 Auth/Admin/Infra | 인증 API, 관리자 shell, 공통 admin dashboard, audit, security, migration | `users`, `user_auth_providers`, `refresh_tokens`, `admin_audit_logs` | 인증/권한/관리자 공통 API와 Flyway 순서 관리 | 각 도메인 관리자 상세의 내부 데이터 구조 변경 |
+| 5번 Admin/Auth Common/Infra | 관리자 shell, 공통 admin dashboard, audit, auth 공통 연동, security review, migration | `admin_audit_logs` | `api.ts` token 전달, `RequireAdmin`, admin 401/403, Health, Flyway 순서 관리 | Auth/User 구현 세부, 각 도메인 관리자 상세의 내부 데이터 구조 변경 |
 
 공통 기준:
 
