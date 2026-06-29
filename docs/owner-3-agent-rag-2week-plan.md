@@ -60,8 +60,8 @@
 | 3 | Agent session 기본 흐름 | 완료 | `POST /api/agent/sessions`, root 구분, 목적 타입, `QUEUED -> RUNNING` | 인증/소유권 검증은 5번 공통 정책과 맞춘 뒤 보강 |
 | 4 | RAG 근거 기록 기반 | 완료 | `AgentTraceService.recordRagEvidence`, `AgentRagEvidenceDraft` | 실제 runner에서 호출해 세션별 evidence 생성 |
 | 5 | Tool 호출 기록 기반 | 완료 | `AgentTraceService.recordToolInvocation`, `AgentToolInvocationDraft` | 2번 Tool 결과 DTO와 payload shape 최종 합의 |
-| 6 | Agent 상태 전이 공통화 | 다음 작업 | 현재 `runSession` 내부에 `QUEUED -> RUNNING` 존재 | `advanceStatus` 공통 메서드, 허용 전이/금지 전이 검증 |
-| 7 | 목적별 mock Agent runner | 대기 | 목적 프로필 `BUILD_RECOMMEND`, `BUILD_EXPLAIN`, `AS_ANALYZE` 존재 | RAG 기록, Tool 기록, 상태 전이를 한 번에 연결 |
+| 6 | Agent 상태 전이 공통화 | 완료 | `AgentTraceService.advanceStatus`, 허용 전이/금지 전이 검증 | runner와 화면에서 상태 전이 결과 사용 |
+| 7 | 목적별 mock Agent runner | 다음 작업 | 목적 프로필 `BUILD_RECOMMEND`, `BUILD_EXPLAIN`, `AS_ANALYZE` 존재 | RAG 기록, Tool 기록, 상태 전이를 한 번에 연결 |
 | 8 | 관리자 Agent 상세 화면 API 연결 | 대기 | 와이어프레임 화면과 route 존재 | mock table을 `GET /api/admin/agent-sessions/{id}` 응답으로 교체 |
 | 9 | Tool/RAG 상세 화면 API 연결 | 대기 | 상세 화면 route와 API wrapper 존재 | Tool payload, RAG chunk/metadata/score 실제 표시 |
 | 10 | 테스트와 계약 검증 | 대기 | 기존 build 검증 통과 | backend smoke, frontend route smoke, OpenAPI 검증 |
