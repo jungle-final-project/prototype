@@ -6,6 +6,8 @@ const adminRoutes = [
   '/admin/tool-invocations/tool-power-001',
   '/admin/rag-evidence/rag-psu-001',
   '/admin/parts',
+  '/admin/price-jobs',
+  '/admin/load-tests',
   '/admin/as-tickets',
   '/admin/as-tickets/AS-1031'
 ];
@@ -127,6 +129,71 @@ test('renders admin page when auth/me returns ADMIN role', async ({ page }) => {
   await expect(page.locator('body')).toContainText('Agent / RAG / Tool 근거 상세');
   await expect(page.getByRole('main')).toContainText('Agent 상태 전이');
   expect(authMeCalls).toBeGreaterThan(0);
+});
+
+test('renders eight admin shell navigation entries for ADMIN role', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+  await page.route('**/api/admin/dashboard', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agentRunning: 1,
+        openTickets: 3,
+        priceJobsRunning: 0,
+        degraded: false,
+        generatedAt: '2026-06-29T10:50:00Z'
+      })
+    });
+  });
+
+  await page.goto('/admin');
+
+  const navigation = page.getByRole('navigation', { name: '관리자 메뉴' });
+  await expect(navigation.getByRole('link')).toHaveCount(8);
+  await expect(navigation.getByRole('link', { name: '대시보드' })).toHaveAttribute('href', '/admin');
+  await expect(navigation.getByRole('link', { name: 'Agent 세션' })).toHaveAttribute('href', '/admin/agent-sessions/00000000-0000-4000-8000-000000003001');
+  await expect(navigation.getByRole('link', { name: 'Tool 이력' })).toHaveAttribute('href', '/admin/tool-invocations/00000000-0000-4000-8000-000000005002');
+  await expect(navigation.getByRole('link', { name: 'RAG 근거' })).toHaveAttribute('href', '/admin/rag-evidence/00000000-0000-4000-8000-000000004001');
+  await expect(navigation.getByRole('link', { name: '부품/가격' })).toHaveAttribute('href', '/admin/parts');
+  await expect(navigation.getByRole('link', { name: 'AS 티켓' })).toHaveAttribute('href', '/admin/as-tickets');
+  await expect(navigation.getByRole('link', { name: '가격 Job' })).toHaveAttribute('href', '/admin/price-jobs');
+  await expect(navigation.getByRole('link', { name: '부하 테스트' })).toHaveAttribute('href', '/admin/load-tests');
+});
+
+test('renders price job and load test admin menu pages for ADMIN role', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+
+  await page.goto('/admin/price-jobs');
+  await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
+  await expect(page.locator('body')).toContainText('가격 Job 관리자');
+  await expect(page.locator('main')).toContainText('가격 수집 작업');
+  await expect(page.locator('main')).toContainText('네이버 쇼핑 API');
+  await expect(page.locator('main')).toContainText('다나와 제한 크롤링');
+
+  await page.goto('/admin/load-tests');
+  await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
+  await expect(page.locator('body')).toContainText('부하 테스트');
+  await expect(page.locator('main')).toContainText('k6 Smoke');
+  await expect(page.locator('main')).toContainText('300명');
 });
 
 test('renders admin dashboard with ADMIN role and dashboard API response', async ({ page }) => {

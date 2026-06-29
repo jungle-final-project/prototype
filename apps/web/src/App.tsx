@@ -4,7 +4,7 @@ import { RequireAdmin } from './features/auth/RequireAdmin';
 import { SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
 import { SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
-import { AdminDashboardPage, AdminPartsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, RagEvidenceAdminPage, ToolInvocationAdminPage } from './features/admin/AdminPages';
+import { AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, RagEvidenceAdminPage, ToolInvocationAdminPage } from './features/admin/AdminPages';
 
 export default function App() {
   return (
@@ -24,6 +24,8 @@ export default function App() {
       <Route path="/admin/tool-invocations/:id" element={<RequireAdmin><ToolInvocationAdminPage /></RequireAdmin>} />
       <Route path="/admin/rag-evidence/:id" element={<RequireAdmin><RagEvidenceAdminPage /></RequireAdmin>} />
       <Route path="/admin/parts" element={<RequireAdmin><AdminPartsPage /></RequireAdmin>} />
+      <Route path="/admin/price-jobs" element={<RequireAdmin><AdminPriceJobsPage /></RequireAdmin>} />
+      <Route path="/admin/load-tests" element={<RequireAdmin><AdminLoadTestsPage /></RequireAdmin>} />
       <Route path="/admin/as-tickets" element={<RequireAdmin><AdminTicketsPage /></RequireAdmin>} />
       <Route path="/admin/as-tickets/:ticketId" element={<RequireAdmin><AdminTicketDetailPage /></RequireAdmin>} />
       <Route path="*" element={<Navigate to="/" replace />} />
