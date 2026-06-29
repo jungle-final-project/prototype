@@ -391,6 +391,8 @@ public class NaverShoppingOfferService {
     }
 
     private void upsertOffer(long partId, String query, Map<String, Object> offer) {
+        Integer lowPrice = integerValue(offer.get("lowPrice"));
+        String rawPayload = json(offer.get("rawPayload"));
         jdbcTemplate.update("""
                 INSERT INTO part_external_offers (
                   part_id,
@@ -426,8 +428,40 @@ public class NaverShoppingOfferService {
                 offer.get("imageUrl"),
                 limited(stringValue(offer.get("supplierName")), 255),
                 offer.get("offerUrl"),
-                offer.get("lowPrice"),
-                json(offer.get("rawPayload"))
+                lowPrice,
+                rawPayload
+        );
+        syncPartPrice(partId, lowPrice, rawPayload);
+    }
+
+    private void syncPartPrice(long partId, Integer lowPrice, String rawPayload) {
+        if (lowPrice == null) {
+            return;
+        }
+        jdbcTemplate.update("""
+                UPDATE parts
+                SET price = ?,
+                    updated_at = now()
+                WHERE id = ?
+                  AND deleted_at IS NULL
+                """,
+                lowPrice,
+                partId
+        );
+        jdbcTemplate.update("""
+                INSERT INTO price_snapshots (
+                  part_id,
+                  price,
+                  source,
+                  collected_at,
+                  raw_payload
+                )
+                VALUES (?, ?, ?, now(), ?::jsonb)
+                """,
+                partId,
+                lowPrice,
+                SOURCE,
+                rawPayload
         );
     }
 

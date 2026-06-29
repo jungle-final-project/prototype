@@ -922,6 +922,8 @@ JSONB 금지 대상:
 
 외부 가격 백업은 별도 `products` 테이블을 만들지 않고 `parts` 도메인 안에 보관한다. 수집된 가격 이력은 `price_snapshots.source`, `price_snapshots.raw_payload`에 저장하며, 쇼핑몰 목록에 노출할 외부 상품 사진/공급업체/URL 후보는 `part_external_offers`에 캐시한다. 내부 쇼핑몰 노출 기준 상품명/카테고리/기준 가격은 항상 `parts`를 기준으로 한다.
 
+네이버 쇼핑 검색 갱신 작업이 `part_external_offers.low_price`를 저장하면 같은 가격을 `parts.price`에 동기화하고 `price_snapshots`에도 `NAVER_SHOPPING_SEARCH` 이력으로 남긴다. 따라서 `/api/parts`의 가격, 가격 정렬, 가격 필터, 목표가 알림의 현재가는 모두 마지막으로 저장된 외부 검색 가격이 우선 기준이다. 사용자 조회 API는 실시간 검색 API를 직접 호출하지 않고 저장된 값을 읽는다.
+
 `/api/parts`와 `/api/parts/{id}`는 외부 검색 API를 직접 호출하지 않는다. 내부 자산 최신화는 `part_catalog_refresh_jobs` 작업이 외부 API를 호출해 `part_catalog_candidates`를 채운 뒤, 게시된 후보를 `parts`에 반영하는 방식으로 수행한다. 사용자 화면은 마지막으로 저장된 `parts`와 `part_external_offers` row만 읽는다.
 
 카테고리별 대량 갱신은 query pack을 사용한다. GPU, MOTHERBOARD, PSU처럼 제조사와 라인업이 많은 category는 한 검색어에 의존하지 않고 여러 모델/제조사 검색어를 나눠 후보를 수십 개 이상 확보한다.
@@ -1134,6 +1136,7 @@ V12__part_tool_spec_enrichment.sql
 V13__part_psu_capacity_enrichment.sql
 V14__part_spec_confidence_normalization.sql
 V15__part_manual_verified_specs.sql
+V16__sync_parts_price_from_external_offers.sql
 ```
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.

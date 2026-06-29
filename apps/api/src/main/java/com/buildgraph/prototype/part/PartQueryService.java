@@ -52,8 +52,14 @@ public class PartQueryService {
                                p.attributes,
                                bs.summary AS benchmark_summary,
                                bs.score AS benchmark_score,
-                               ps.source AS latest_price_source,
-                               ps.collected_at AS latest_price_collected_at,
+                               CASE
+                                 WHEN peo.low_price IS NOT NULL AND peo.low_price = p.price THEN peo.source
+                                 ELSE ps.source
+                               END AS latest_price_source,
+                               CASE
+                                 WHEN peo.low_price IS NOT NULL AND peo.low_price = p.price THEN peo.refreshed_at
+                                 ELSE ps.collected_at
+                               END AS latest_price_collected_at,
                                peo.title AS external_offer_title,
                                peo.image_url AS external_offer_image_url,
                                peo.supplier_name AS external_offer_supplier_name,
@@ -121,8 +127,14 @@ public class PartQueryService {
                                p.attributes,
                                bs.summary AS benchmark_summary,
                                bs.score AS benchmark_score,
-                               ps.source AS latest_price_source,
-                               ps.collected_at AS latest_price_collected_at,
+                               CASE
+                                 WHEN peo.low_price IS NOT NULL AND peo.low_price = p.price THEN peo.source
+                                 ELSE ps.source
+                               END AS latest_price_source,
+                               CASE
+                                 WHEN peo.low_price IS NOT NULL AND peo.low_price = p.price THEN peo.refreshed_at
+                                 ELSE ps.collected_at
+                               END AS latest_price_collected_at,
                                peo.title AS external_offer_title,
                                peo.image_url AS external_offer_image_url,
                                peo.supplier_name AS external_offer_supplier_name,
