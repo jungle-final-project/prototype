@@ -23,6 +23,28 @@
 
 3번의 핵심 책임은 추천이나 AS 결과 자체를 대신 만드는 것이 아니라, Agent 실행 과정에서 어떤 RAG 근거와 Tool 결과를 사용했는지 추적 가능하게 저장하고 관리자 화면에서 확인할 수 있게 만드는 것이다.
 
+## 와이어프레임 기준 작업 화면
+
+3번이 직접 구현 책임을 가지는 화면은 사용자 쇼핑몰 메인 화면이 아니라, 운영자가 Agent 판단 근거를 확인하는 관리자 상세 화면이다.
+
+| 와이어프레임 화면 | route | 구현 파일 | 3번 작업 내용 | 연결 API |
+|---|---|---|---|---|
+| Agent/RAG/Tool 근거 상세 | `/admin/agent-sessions/:id` | `apps/web/src/features/admin/pages/AgentSessionAdminPage.tsx` | Agent 상태 전이, 실행 목적, summary, Tool 호출 목록, RAG 근거 목록을 실제 API 데이터로 표시 | `GET /api/admin/agent-sessions/{id}` |
+| Tool Invocation 상세 | `/admin/tool-invocations/:id` | `apps/web/src/features/admin/pages/ToolInvocationAdminPage.tsx` | Tool 이름, status, confidence, latency, requestPayload, resultPayload, summary를 표시 | `GET /api/admin/tool-invocations/{id}` |
+| RAG Evidence 상세 | `/admin/rag-evidence/:id` | `apps/web/src/features/admin/pages/RagEvidenceAdminPage.tsx` | sourceId, score, summary, chunkText, metadata, agentSessionId를 표시 | `GET /api/admin/rag-evidence/{id}` |
+
+3번이 직접 만들지는 않지만 협업해야 하는 와이어프레임 지점은 아래와 같다.
+
+| 협업 화면 | 주 담당 | 3번이 제공할 것 |
+|---|---|---|
+| AI 견적 입력 / 추가 질문 | 1번 | Agent session 생성과 실행 API 계약, 진행 상태 조회 방식 |
+| 추천 Build 결과 | 1번 | `evidenceIds`, `toolInvocationIds`, RAG 근거 상세 링크/조회 API |
+| 부품 변경 비교 | 1번/2번 | 변경 전후 설명에 사용할 RAG/Tool trace 저장 방식 |
+| AS 접수 / 로그 업로드 | 4번 | `asTicketId` 기반 `AS_ANALYZE` Agent session 생성 방식 |
+| AS 티켓 상세 / 관리자 AS 티켓 | 4번 | 원인 후보와 업그레이드 후보가 참조할 `rag_evidence` id 제공 방식 |
+
+이번 2주 안에 3번 화면은 완성형 UI가 아니라, 와이어프레임에서 약속한 정보 구조가 실제 API 데이터로 채워지는 수준을 목표로 한다. 색상, 여백, 세부 시각 개선은 AdminShell과 공통 컴포넌트 기준을 따른다.
+
 ## 1주차 계획
 
 | 일자 | 목표 | 산출물 | 검증 |
