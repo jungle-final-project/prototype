@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api")
@@ -26,13 +25,19 @@ public class UserController {
 
     @PostMapping("/auth/login")
     Map<String, Object> login(@Valid @RequestBody LoginRequest request) {
-        return userQueryService.login(request.email());
+        return userQueryService.login(request.email(), request.password());
     }
 
     @PostMapping("/users")
     @ResponseStatus(HttpStatus.CREATED)
     Map<String, Object> signup(@Valid @RequestBody SignupRequest request) {
-        return userQueryService.signup(request.name(), request.email(), request.marketingAccepted());
+        return userQueryService.signup(
+                request.name(),
+                request.email(),
+                request.password(),
+                request.termsAccepted(),
+                request.marketingAccepted()
+        );
     }
 
     @GetMapping("/auth/me")
