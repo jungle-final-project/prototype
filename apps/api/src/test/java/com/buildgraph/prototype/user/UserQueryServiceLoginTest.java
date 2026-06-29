@@ -2,10 +2,15 @@ package com.buildgraph.prototype.user;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.nimbusds.jwt.SignedJWT;
+import java.security.SecureRandom;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -26,7 +31,17 @@ class UserQueryServiceLoginTest {
             Duration.ofMinutes(15),
             Clock.fixed(Instant.parse("2026-06-29T09:00:00Z"), ZoneOffset.UTC)
     );
-    private final UserQueryService userQueryService = new UserQueryService(jdbcTemplate, passwordService, jwtTokenService);
+    private final RefreshTokenService refreshTokenService = new RefreshTokenService(
+            new SecureRandom(),
+            Duration.ofDays(30),
+            Clock.fixed(Instant.parse("2026-06-29T09:00:00Z"), ZoneOffset.UTC)
+    );
+    private final UserQueryService userQueryService = new UserQueryService(
+            jdbcTemplate,
+            passwordService,
+            jwtTokenService,
+            refreshTokenService
+    );
 
     @Test
     void loginReturnsAuthResponseWhenPasswordMatches() throws Exception {
@@ -42,7 +57,15 @@ class UserQueryServiceLoginTest {
         assertThat(jwt.getJWTClaimsSet().getSubject()).isEqualTo("00000000-0000-4000-8000-000000001004");
         assertThat(jwt.getJWTClaimsSet().getStringClaim("email")).isEqualTo("user@example.com");
         assertThat(jwt.getJWTClaimsSet().getStringClaim("role")).isEqualTo("USER");
-        assertThat(response).containsEntry("refreshToken", "demo-refresh-user");
+        String refreshToken = (String) response.get("refreshToken");
+        assertThat(refreshToken).isNotBlank();
+        assertThat(refreshToken).doesNotStartWith("demo-refresh-");
+        verify(jdbcTemplate).update(
+                anyString(),
+                eq(1004L),
+                eq(refreshTokenService.hash(refreshToken)),
+                any(Timestamp.class)
+        );
         assertThat(response.get("user")).isInstanceOf(Map.class);
     }
 
@@ -69,6 +92,7 @@ class UserQueryServiceLoginTest {
 
     private Map<String, Object> userRow(String passwordHash) {
         return Map.of(
+                "internal_id", 1004L,
                 "id", "00000000-0000-4000-8000-000000001004",
                 "email", "user@example.com",
                 "password_hash", passwordHash,

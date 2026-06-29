@@ -26,7 +26,17 @@ class UserQueryServiceMeTest {
             Duration.ofMinutes(15),
             Clock.fixed(Instant.parse("2026-06-29T09:00:00Z"), ZoneOffset.UTC)
     );
-    private final UserQueryService userQueryService = new UserQueryService(jdbcTemplate, passwordService, jwtTokenService);
+    private final RefreshTokenService refreshTokenService = new RefreshTokenService(
+            new java.security.SecureRandom(),
+            Duration.ofDays(30),
+            Clock.fixed(Instant.parse("2026-06-29T09:00:00Z"), ZoneOffset.UTC)
+    );
+    private final UserQueryService userQueryService = new UserQueryService(
+            jdbcTemplate,
+            passwordService,
+            jwtTokenService,
+            refreshTokenService
+    );
 
     @Test
     void meReturnsUserForValidJwt() {
