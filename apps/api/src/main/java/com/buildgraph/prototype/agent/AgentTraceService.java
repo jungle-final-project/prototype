@@ -34,6 +34,10 @@ public class AgentTraceService {
     }
 
     public String createQueuedSession(AgentSessionRoot root, String actor, AgentPurpose purpose) {
+        return createQueuedSession(root, actor, purpose, null);
+    }
+
+    public String createQueuedSession(AgentSessionRoot root, String actor, AgentPurpose purpose, Long userId) {
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_sessions (
                   user_id,
@@ -44,7 +48,7 @@ public class AgentTraceService {
                   state_timeline
                 )
                 VALUES (
-                  (SELECT id FROM users WHERE email = 'user@example.com'),
+                  COALESCE(?, (SELECT id FROM users WHERE email = 'user@example.com')),
                   (SELECT id FROM requirements WHERE public_id = ?::uuid),
                   (SELECT id FROM builds WHERE public_id = ?::uuid),
                   (SELECT id FROM as_tickets WHERE public_id = ?::uuid),
@@ -53,6 +57,7 @@ public class AgentTraceService {
                 )
                 RETURNING public_id::text AS id
                 """,
+                userId,
                 root.requirementId(),
                 root.buildId(),
                 root.asTicketId(),

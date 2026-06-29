@@ -1,11 +1,163 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../components/ui';
+import { ApiError } from '../../lib/api';
+import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat } from './asChatApi';
+import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { createSupportTicket, getSupportTicket, uploadAgentLog } from './supportApi';
 import type { AsTicketDto, CauseCandidate } from './types';
 
 type SubmitState = 'default' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_created';
+
+export function AsChatPage() {
+  const [ticketId, setTicketId] = useState(AS_CHAT_DEFAULT_TICKET_ID);
+  const [message, setMessage] = useState('게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요.');
+  const [latestResponse, setLatestResponse] = useState<AsChatResponse | null>(null);
+  const [error, setError] = useState('');
+
+  const chatQuery = useQuery({
+    queryKey: ['as-chat', ticketId],
+    queryFn: () => getAsChat(ticketId)
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: () => sendAsChat(ticketId, message.trim()),
+    onSuccess: (response) => {
+      setLatestResponse(response);
+      setMessage('');
+      setError('');
+    },
+    onError: (cause) => {
+      if (cause instanceof ApiError && cause.status === 428) {
+        setError('서버에 OPENAI_API_KEY가 필요합니다. API 컨테이너 환경 변수 설정 후 다시 실행해 주세요.');
+        return;
+      }
+      if (cause instanceof ApiError && cause.status === 404) {
+        setError('현재 로그인 사용자에게 연결된 AS 티켓을 찾을 수 없습니다.');
+        return;
+      }
+      setError('AS AI 챗봇 요청에 실패했습니다. 백엔드 실행 상태와 로그인 토큰을 확인해 주세요.');
+    }
+  });
+
+  const chat = latestResponse?.asTicketId === ticketId ? latestResponse : chatQuery.data;
+  const isBusy = sendMutation.isPending;
+  const canSend = Boolean(message.trim()) && !isBusy;
+
+  function submitTicket(event: FormEvent) {
+    event.preventDefault();
+    setLatestResponse(null);
+    setError('');
+    void chatQuery.refetch();
+  }
+
+  function submitMessage(event: FormEvent) {
+    event.preventDefault();
+    if (!canSend) return;
+    setError('');
+    sendMutation.mutate();
+  }
+
+  return (
+    <Screen>
+      <div className="grid grid-cols-[minmax(0,1fr)_430px] gap-5">
+        <Panel title="AS AI 챗봇" subtitle="AS 접수 후 티켓 증상, RAG 근거, Tool 결과를 사용해 1차 상담 답변을 생성합니다.">
+          <form onSubmit={submitTicket} className="mb-4 flex gap-3">
+            <input
+              className="h-11 flex-1 rounded border border-slate-300 px-3 text-sm"
+              value={ticketId}
+              onChange={(event) => setTicketId(event.target.value)}
+              aria-label="AS ticket id"
+            />
+            <button className="rounded border border-slate-300 px-4 py-2 text-sm font-bold">티켓 불러오기</button>
+          </form>
+
+          {chatQuery.isLoading ? <StateMessage type="info" title="챗봇 세션 조회 중" body="AS 티켓과 기존 대화 이력을 불러오고 있습니다." /> : null}
+          {chatQuery.isError ? <StateMessage type="warn" title="챗봇 세션 조회 실패" body="GET /api/ai/as-chat 응답을 불러오지 못했습니다." /> : null}
+          {error ? <div className="mb-4"><StateMessage type="warn" title="AS AI 확인 필요" body={error} /></div> : null}
+
+          <div className="h-[560px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
+            {chat?.messages.length ? (
+              <div className="space-y-3">
+                {chat.messages.map((item) => (
+                  <div key={item.id} className={`flex ${item.role === 'USER' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[72%] rounded px-4 py-3 text-sm leading-6 shadow-sm ${item.role === 'USER' ? 'bg-brand-blue text-white' : 'border border-slate-200 bg-white text-slate-800'}`}>
+                      <div className="mb-1 text-[11px] font-bold opacity-75">{item.role === 'USER' ? '사용자' : 'AI 상담'}</div>
+                      <p className="whitespace-pre-wrap">{item.content}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                아직 저장된 대화가 없습니다. 아래 입력창으로 AS 증상을 이어서 설명해 주세요.
+              </div>
+            )}
+            {isBusy ? <div className="mt-3 text-sm font-bold text-brand-blue">AI가 RAG 근거와 Tool 결과를 확인하고 있습니다...</div> : null}
+          </div>
+
+          <form onSubmit={submitMessage} className="mt-4 flex gap-3">
+            <textarea
+              className="h-24 flex-1 rounded border border-slate-300 p-3 text-sm"
+              placeholder="예: 게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요."
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+            />
+            <button disabled={!canSend} className="w-32 rounded bg-brand-blue text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+              {isBusy ? '전송 중' : '전송'}
+            </button>
+          </form>
+        </Panel>
+
+        <div className="space-y-5">
+          <Panel title="티켓 / 모델">
+            <div className="space-y-3 text-sm">
+              <InfoRow label="AS 티켓" value={chat?.asTicketId ?? ticketId} />
+              <InfoRow label="모델" value={chat?.model ?? '-'} />
+              <InfoRow label="Agent 세션" value={chat?.agentSessionId ?? '-'} />
+              <InfoRow label="상태" value={chat?.ticket.status ?? '-'} />
+              <div>
+                <div className="mb-1 text-xs font-bold text-slate-500">증상 요약</div>
+                <p className="rounded border border-slate-200 bg-white p-3 leading-6 text-slate-700">{chat?.ticket.symptom ?? '-'}</p>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel title="LLM 구조화 결과">
+            {chat?.assistantMessage ? (
+              <div className="space-y-4">
+                <div>
+                  <div className="mb-1 text-xs font-bold text-slate-500">원인 후보</div>
+                  <DataTable columns={['원인', '신뢰도', '근거']} rows={causeRowsForChat(chat)} />
+                </div>
+                <div>
+                  <div className="mb-1 text-xs font-bold text-slate-500">다음 조치</div>
+                  <DataTable columns={['조치', '우선순위', '안내']} rows={actionRowsForChat(chat)} />
+                </div>
+                <StateMessage
+                  type={chat.escalation?.required ? 'warn' : 'info'}
+                  title={chat.escalation?.required ? '상담원 연결 필요' : 'AI 1차 조치 가능'}
+                  body={chat.escalation?.reason ?? 'LLM escalation 결과가 아직 없습니다.'}
+                />
+              </div>
+            ) : (
+              <StateMessage type="info" title="답변 대기" body="메시지를 보내면 LLM 구조화 결과가 여기에 표시됩니다." />
+            )}
+          </Panel>
+
+          <Panel title="Tool 결과">
+            <DataTable columns={['Tool', '판정', '요약']} rows={toolRows(chat?.toolResults ?? [])} />
+          </Panel>
+
+          <Panel title="RAG 근거">
+            <DataTable columns={['근거', '점수', '요약']} rows={evidenceRows(chat?.evidence ?? [])} />
+          </Panel>
+        </div>
+      </div>
+    </Screen>
+  );
+}
 
 export function SupportNewPage() {
   const navigate = useNavigate();
@@ -238,4 +390,59 @@ function formatTime(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2">
+      <span className="text-xs font-bold text-slate-500">{label}</span>
+      <span className="max-w-[260px] break-all text-right font-semibold text-slate-800">{value}</span>
+    </div>
+  );
+}
+
+function causeRowsForChat(chat: AsChatResponse) {
+  const candidates = chat.causeCandidates ?? [];
+  if (!candidates.length) {
+    return [{ 원인: '원인 후보 없음', 신뢰도: <StatusBadge status="LOW" />, 근거: 'LLM 응답에 원인 후보가 없습니다.' }];
+  }
+  return candidates.map((candidate) => ({
+    원인: candidate.label ?? '원인 후보',
+    신뢰도: <StatusBadge status={candidate.confidence ?? 'MEDIUM'} />,
+    근거: candidate.reason ?? '-'
+  }));
+}
+
+function actionRowsForChat(chat: AsChatResponse) {
+  const actions = chat.nextActions ?? [];
+  if (!actions.length) {
+    return [{ 조치: '추가 조치 없음', 우선순위: <StatusBadge status="LOW" />, 안내: 'LLM 응답에 다음 조치가 없습니다.' }];
+  }
+  return actions.map((action) => ({
+    조치: action.label ?? '다음 조치',
+    우선순위: <StatusBadge status={action.priority ?? 'MEDIUM'} />,
+    안내: action.instruction ?? '-'
+  }));
+}
+
+function toolRows(toolResults: AsChatToolResult[]) {
+  if (!toolResults.length) {
+    return [{ Tool: '대기', 판정: <StatusBadge status="LOW" />, 요약: '메시지 전송 후 Tool 결과가 표시됩니다.' }];
+  }
+  return toolResults.map((tool) => ({
+    Tool: tool.toolName,
+    판정: <StatusBadge status={tool.status} />,
+    요약: tool.summary
+  }));
+}
+
+function evidenceRows(evidence: AsChatEvidence[]) {
+  if (!evidence.length) {
+    return [{ 근거: '대기', 점수: '-', 요약: '메시지 전송 후 RAG 근거가 표시됩니다.' }];
+  }
+  return evidence.map((item) => ({
+    근거: item.sourceId,
+    점수: item.score == null ? '-' : String(item.score),
+    요약: item.summary
+  }));
 }

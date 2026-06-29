@@ -61,6 +61,8 @@ API DTO의 `id`는 내부 PK가 아니라 `public_id` 문자열이다.
 | `CONFLICT_STATE` | `409` | 허용되지 않은 상태 전이, 이미 실행 중인 job/session |
 | `DUPLICATE_RESOURCE` | `409` | 이메일 중복, 동일 active price alert 중복 |
 | `FILE_VALIDATION_ERROR` | `400` | JSONL 업로드 파일 크기/MIME/확장자/line 검증 실패 |
+| `PRECONDITION_REQUIRED` | `428` | LLM 필수 기능에서 `OPENAI_API_KEY` 등 서버 선행 설정 누락 |
+| `UPSTREAM_ERROR` | `502` | LLM 응답 JSON 계약 위반 또는 외부 LLM 호출 처리 실패 |
 | `INTERNAL_ERROR` | `500` | 서버 내부 오류 |
 
 ## status code 규칙
@@ -76,6 +78,8 @@ API DTO의 `id`는 내부 PK가 아니라 `public_id` 문자열이다.
 | `403` | 인증은 되었지만 필요한 role 부족 |
 | `404` | public_id에 해당하는 리소스 없음, soft delete, 본인 소유 아님 |
 | `409` | 중복 리소스, 상태 전이 충돌, 중복 실행 |
+| `428` | 서버 선행 설정이 필요한 기능에서 환경변수나 외부 키 누락 |
+| `502` | 외부 LLM 응답을 계약 DTO로 해석할 수 없음 |
 | `500` | 서버 오류 |
 
 ## pagination 규칙
@@ -313,6 +317,26 @@ Agent 실행 방식:
 - 클라이언트는 `POST /run` 응답만으로 완료를 판단하지 않고 `GET /api/agent/sessions/{id}`로 최종 상태와 근거 ID를 조회한다.
 - Sprint 1 mock/dev 구현이 내부에서 즉시 완료 상태를 만들어도 public contract의 시작 응답 기준은 `RUNNING`이다.
 
+### AS AI Chat
+
+AS AI Chat은 AS 접수 이후 티켓을 기준으로 동작하는 3번 AI 담당 기능이다. 4번의 `as_tickets`를 읽지만 `cause_candidates`, `upgrade_candidates`, ticket status를 수정하지 않는다. 대화 결과는 `as_chat_sessions`, `as_chat_messages`에 저장하고, 근거 추적은 기존 `agent_sessions`, `rag_evidence`, `tool_invocations`를 사용한다.
+
+| Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
+|---|---|---|---|---|---|---|
+| `GET` | `/api/ai/as-chat` | USER | 3번 | `?asTicketId=4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` | `{ "sessionId": null, "asTicketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "ticket": { "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "게임 중 프레임 급락" }, "model": "gpt-4.1-mini", "messages": [], "evidence": [], "toolResults": [] }` | `as_chat_sessions`, `as_chat_messages`, `as_tickets` |
+| `POST` | `/api/ai/as-chat` | USER | 3번 | `{ "asTicketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "message": "게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요" }` | `{ "sessionId": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "agentSessionId": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "assistantMessage": "GPU 온도 상승과 프레임 급락이 함께 나타나므로 냉각/드라이버를 우선 확인해야 합니다.", "messages": [], "causeCandidates": [{ "label": "GPU 과열 가능성", "confidence": "MEDIUM", "reason": "티켓 증상과 thermal RAG 근거가 일치" }], "nextActions": [{ "label": "팬과 먼지 확인", "priority": "HIGH", "instruction": "전원을 끄고 흡기/배기 팬과 먼지를 확인하세요." }], "escalation": { "required": false, "reason": "추가 로그 확인 전 원격지원 필수는 아님" }, "ticketDraft": { "symptomSummary": "게임 20분 후 프레임 급락", "recommendedLogRequest": "GPU 온도와 frame time 로그" }, "evidence": [], "toolResults": [] }` | `as_chat_sessions`, `as_chat_messages`, `agent_sessions`, `rag_evidence`, `tool_invocations`, `as_tickets` |
+
+AS AI Chat 규칙:
+
+- `asTicketId`는 로그인 사용자의 티켓이어야 하며, 본인 소유가 아니면 `404 NOT_FOUND`다.
+- 한 사용자와 한 AS 티켓에는 `ACTIVE` chat session 1개만 유지한다.
+- `GET /api/ai/as-chat`은 세션이 없으면 DB row를 만들지 않고 빈 `messages`를 반환한다.
+- `POST /api/ai/as-chat`은 세션이 없으면 생성하고, 사용자 메시지와 AI 메시지를 `as_chat_messages`에 저장한다.
+- `POST /api/ai/as-chat`은 LLM 필수 기능이다. `OPENAI_API_KEY`가 없으면 대화 저장 전에 `428 PRECONDITION_REQUIRED`를 반환한다.
+- LLM은 JSON만 반환해야 한다. 필수 필드는 `assistantMessage`, `causeCandidates`, `nextActions`, `escalation`, `ticketDraft`다.
+- LLM JSON 계약을 지키지 못하면 assistant message를 저장하지 않고 `502 UPSTREAM_ERROR`를 반환한다.
+- AS 티켓의 `cause_candidates`, `upgrade_candidates` 저장은 4번 담당 API가 결정한다. 이 API는 챗봇 결과를 반환만 한다.
+
 ### PC Agent/AS
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
@@ -520,6 +544,27 @@ Agent 실행 방식:
 | `ToolInvocationDto` | `resultPayload` | `object` | yes | `{}` |
 | `ToolInvocationDto` | `latencyMs` | `number` | yes | `120` |
 | `ToolInvocationDto` | `createdAt` | `string` | yes | `2026-06-29T10:36:10Z` |
+| `AsChatRequest` | `asTicketId` | `string` | no | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |
+| `AsChatRequest` | `message` | `string` | no | `게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요` |
+| `AsChatResponse` | `sessionId` | `string` | yes | `7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01` |
+| `AsChatResponse` | `asTicketId` | `string` | no | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |
+| `AsChatResponse` | `ticket` | `AsTicketDto` | no | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a" }` |
+| `AsChatResponse` | `model` | `string` | no | `gpt-4.1-mini` |
+| `AsChatResponse` | `agentSessionId` | `string` | yes | `7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a` |
+| `AsChatResponse` | `messages` | `AsChatMessageDto[]` | no | `[]` |
+| `AsChatResponse` | `assistantMessage` | `string` | yes | `GPU 과열 가능성을 먼저 확인하세요.` |
+| `AsChatResponse` | `causeCandidates` | `object[]` | yes | `[{ "label": "GPU 과열", "confidence": "MEDIUM" }]` |
+| `AsChatResponse` | `nextActions` | `object[]` | yes | `[{ "label": "팬 확인", "priority": "HIGH" }]` |
+| `AsChatResponse` | `escalation` | `object` | yes | `{ "required": false, "reason": "원격지원 전 확인 가능" }` |
+| `AsChatResponse` | `ticketDraft` | `object` | yes | `{ "symptomSummary": "게임 중 프레임 급락" }` |
+| `AsChatResponse` | `evidence` | `RagEvidenceDto[]` | no | `[]` |
+| `AsChatResponse` | `toolResults` | `ToolInvocationDto[]` | no | `[]` |
+| `AsChatMessageDto` | `id` | `string` | no | `7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01` |
+| `AsChatMessageDto` | `role` | `string` | no | `USER` |
+| `AsChatMessageDto` | `content` | `string` | no | `게임 중 프레임이 급락합니다.` |
+| `AsChatMessageDto` | `structuredPayload` | `object` | yes | `{ "causeCandidates": [] }` |
+| `AsChatMessageDto` | `agentSessionId` | `string` | yes | `7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a` |
+| `AsChatMessageDto` | `createdAt` | `string` | yes | `2026-06-29T10:36:10Z` |
 
 ### PC Agent/AS/Admin DTO
 

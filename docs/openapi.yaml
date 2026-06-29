@@ -721,6 +721,54 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AsTicketDto"
+  /api/ai/as-chat:
+    get:
+      summary: AS AI 챗봇 세션과 메시지 조회
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: asTicketId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: AS AI 챗봇 세션과 대화 이력
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsChatResponse"
+    post:
+      summary: AS AI 챗봇 메시지 전송
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsChatRequest"
+      responses:
+        "200":
+          description: AS AI 챗봇 LLM 구조화 응답
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsChatResponse"
+        "428":
+          description: OPENAI_API_KEY 등 서버 선행 설정 누락
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: LLM JSON 계약 위반 또는 외부 LLM 응답 처리 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/dashboard:
     get:
       summary: 관리자 대시보드
@@ -917,7 +965,7 @@ components:
       properties:
         code:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, INTERNAL_ERROR]
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR]
         message:
           type: string
         details:
@@ -1765,6 +1813,170 @@ components:
         createdAt:
           type: string
           format: date-time
+    AsChatRequest:
+      type: object
+      required: [asTicketId, message]
+      properties:
+        asTicketId:
+          type: string
+          format: uuid
+        message:
+          type: string
+    AsChatResponse:
+      type: object
+      required: [asTicketId, ticket, model, messages, evidence, toolResults]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          nullable: true
+        asTicketId:
+          type: string
+          format: uuid
+        ticket:
+          $ref: "#/components/schemas/AsChatTicketDto"
+        model:
+          type: string
+        agentSessionId:
+          type: string
+          format: uuid
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsChatMessageDto"
+        assistantMessage:
+          type: string
+        causeCandidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsChatCauseCandidateDto"
+        nextActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsChatNextActionDto"
+        escalation:
+          $ref: "#/components/schemas/AsChatEscalationDto"
+        ticketDraft:
+          $ref: "#/components/schemas/AsChatTicketDraftDto"
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsChatEvidenceDto"
+        toolResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsChatToolResultDto"
+    AsChatTicketDto:
+      type: object
+      required: [id, status, symptom]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/AsTicketStatus"
+        symptom:
+          type: string
+        logSummary:
+          type: string
+        causeCandidates:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        upgradeCandidates:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    AsChatMessageDto:
+      type: object
+      required: [id, role, content]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [USER, ASSISTANT]
+        content:
+          type: string
+        structuredPayload:
+          type: object
+          additionalProperties: true
+        agentSessionId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    AsChatCauseCandidateDto:
+      type: object
+      required: [label, confidence, reason]
+      properties:
+        label:
+          type: string
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        reason:
+          type: string
+    AsChatNextActionDto:
+      type: object
+      required: [label, priority, instruction]
+      properties:
+        label:
+          type: string
+        priority:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        instruction:
+          type: string
+    AsChatEscalationDto:
+      type: object
+      required: [required, reason]
+      properties:
+        required:
+          type: boolean
+        reason:
+          type: string
+    AsChatTicketDraftDto:
+      type: object
+      required: [symptomSummary, recommendedLogRequest]
+      properties:
+        symptomSummary:
+          type: string
+        recommendedLogRequest:
+          type: string
+    AsChatEvidenceDto:
+      allOf:
+        - $ref: "#/components/schemas/RagEvidenceDto"
+        - type: object
+          properties:
+            chunkText:
+              type: string
+    AsChatToolResultDto:
+      type: object
+      required: [id, toolName, status, confidence, summary]
+      properties:
+        id:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+          enum: [compatibility, power, size, performance, price]
+        status:
+          $ref: "#/components/schemas/ToolStatus"
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        summary:
+          type: string
+        resultPayload:
+          type: object
+          additionalProperties: true
     AgentLogUploadRequest:
       type: object
       required: [file, rangeMinutes, consentAccepted]

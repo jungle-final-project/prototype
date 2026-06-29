@@ -103,11 +103,11 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 
 | 항목 | 내용 |
 |---|---|
-| 담당 화면 route | `/admin/agent-sessions/:id`, `/admin/tool-invocations/:id`, `/admin/rag-evidence/:id` |
-| frontend files | `features/admin/agent/**`, `features/admin/evidence/**` |
+| 담당 화면 route | `/support/ai-chat`, `/admin/agent-sessions/:id`, `/admin/tool-invocations/:id`, `/admin/rag-evidence/:id` |
+| frontend files | `features/support/**` 중 AS AI Chat 화면/API, `features/admin/agent/**`, `features/admin/evidence/**` |
 | backend packages | `agent`, `rag` |
-| DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence` |
-| API endpoints | `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence/{id}` |
+| DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages` |
+| API endpoints | `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence/{id}` |
 | 협업자 | 추천 결과 UI는 1번, Tool 판정 로직은 2번, AS 원인 후보는 4번 |
 
 ### 4번: PC Agent/AS
@@ -147,6 +147,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | `/signup` | 1번 | 5번 | `POST /api/users` |
 | `/auth/callback` | 1번 | 5번 | `POST /api/auth/exchange` |
 | `/support/new` | 4번 | 5번 | `POST /api/agent-logs/upload`, `POST /api/as-tickets` |
+| `/support/ai-chat` | 3번 | 4번, 5번 | `GET /api/ai/as-chat`, `POST /api/ai/as-chat` |
 | `/support/:ticketId` | 4번 | - | `GET /api/as-tickets/{id}` |
 | `/admin` | 5번 | 2번, 3번, 4번 | `GET /api/admin/dashboard`, `GET /api/admin/audit-logs/recent` |
 | `/admin/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/parts/{id}/price-history`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh` |
@@ -195,6 +196,8 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | `POST /api/tools/size/check` | 2번 | 3번 |
 | `POST /api/tools/performance/check` | 2번 | 3번 |
 | `POST /api/tools/price/check` | 2번 | 3번 |
+| `GET /api/ai/as-chat` | 3번 | 4번, 5번 |
+| `POST /api/ai/as-chat` | 3번 | 4번, 5번 |
 | `POST /api/agent/sessions` | 3번 | - |
 | `POST /api/agent/sessions/{id}/run` | 3번 | - |
 | `GET /api/agent/sessions/{id}` | 3번 | - |
@@ -225,6 +228,9 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 - 3번은 `agent_sessions`, `tool_invocations`, `rag_evidence` 저장 방식과 관리자 상세 조회 contract를 담당한다.
 - 1번은 3번 table을 직접 insert/update하지 않고, 3번이 제공하는 내부 Agent trace service를 호출한다.
 - 3번은 2번의 Tool 직접 check API 호출을 `tool_invocations`에 저장하지 않는다. `tool_invocations`에는 Agent/recommend 내부 Tool 호출 이력만 저장한다.
+- `/support/ai-chat`은 3번 owner API/화면이지만 AS 티켓을 기준으로 동작하므로 4번과 협업한다.
+- 3번은 AS Chat에서 `as_tickets`를 읽기만 하고 `cause_candidates`, `upgrade_candidates`, `status`를 수정하지 않는다.
+- AS Chat 대화 이력은 `as_chat_sessions`, `as_chat_messages`에 저장하고, 원인 후보를 티켓에 반영하는 작업은 4번 API가 별도로 결정한다.
 
 ## 1주차 완료 기준
 

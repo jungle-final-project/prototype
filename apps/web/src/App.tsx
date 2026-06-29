@@ -4,7 +4,7 @@ import { RequireAdmin } from './features/auth/RequireAdmin';
 import { RequireUser } from './features/auth/RequireUser';
 import { PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
-import { SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
+import { AsChatPage, SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
 import { AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, RagEvidenceAdminPage, ToolInvocationAdminPage } from './features/admin/AdminPages';
 
 export default function App() {
@@ -17,6 +17,7 @@ export default function App() {
       <Route path="/parts/:partId" element={<RequireUser><PartDetailPage /></RequireUser>} />
       <Route path="/builds/:buildId/change-part" element={<RequireUser><ChangePartPage /></RequireUser>} />
       <Route path="/my/quotes" element={<RequireUser><MyQuotesPage /></RequireUser>} />
+      <Route path="/support/ai-chat" element={<RequireUser><AsChatPage /></RequireUser>} />
       <Route path="/support/new" element={<RequireUser><SupportNewPage /></RequireUser>} />
       <Route path="/support/:ticketId" element={<RequireUser><SupportTicketPage /></RequireUser>} />
       <Route path="/login" element={<LoginPage />} />

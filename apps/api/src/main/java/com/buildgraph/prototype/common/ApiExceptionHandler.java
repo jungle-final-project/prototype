@@ -39,6 +39,12 @@ public class ApiExceptionHandler {
         if (statusCode.isSameCodeAs(HttpStatus.CONFLICT)) {
             return "CONFLICT_STATE";
         }
+        if (statusCode.isSameCodeAs(HttpStatus.PRECONDITION_REQUIRED)) {
+            return "PRECONDITION_REQUIRED";
+        }
+        if (statusCode.isSameCodeAs(HttpStatus.BAD_GATEWAY)) {
+            return "UPSTREAM_ERROR";
+        }
         return "INTERNAL_ERROR";
     }
 }

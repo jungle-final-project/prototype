@@ -33,7 +33,11 @@ public class AgentRagRetrievalService {
     }
 
     public List<AgentRagEvidenceDraft> retrieveEvidenceSet(AgentSessionRoot root, AgentRunProfile profile, int limit) {
-        RootContext context = rootContext(root);
+        return retrieveEvidenceSet(root, profile, "", limit);
+    }
+
+    public List<AgentRagEvidenceDraft> retrieveEvidenceSet(AgentSessionRoot root, AgentRunProfile profile, String extraQuery, int limit) {
+        RootContext context = withExtraQuery(rootContext(root), extraQuery);
         List<String> queryTokens = tokens(context.queryText());
         List<RetrievalCandidate> ranked = reusableEvidenceRows().stream()
                 .map(row -> candidate(row, root, profile, context, queryTokens))
@@ -48,6 +52,14 @@ public class AgentRagRetrievalService {
 
     public List<AgentRagEvidenceDraft> retrieveEvidenceSet(AgentSessionRoot root, AgentRunProfile profile) {
         return retrieveEvidenceSet(root, profile, DEFAULT_EVIDENCE_LIMIT);
+    }
+
+    private static RootContext withExtraQuery(RootContext context, String extraQuery) {
+        String extra = safe(extraQuery);
+        if (extra.isBlank()) {
+            return context;
+        }
+        return new RootContext(String.join(" ", safe(context.queryText()), extra));
     }
 
     private List<Map<String, Object>> reusableEvidenceRows() {
