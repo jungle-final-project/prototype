@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -18,8 +19,18 @@ public class PartController {
     }
 
     @GetMapping("/parts")
-    Map<String, Object> parts() {
-        return partQueryService.parts();
+    Map<String, Object> parts(
+            @RequestParam(value = "category", required = false) String category,
+            @RequestParam(value = "q", required = false) String query,
+            @RequestParam(value = "manufacturer", required = false) String manufacturer,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "minPrice", required = false) Integer minPrice,
+            @RequestParam(value = "maxPrice", required = false) Integer maxPrice,
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "size", required = false) Integer size,
+            @RequestParam(value = "sort", required = false) String sort
+    ) {
+        return partQueryService.parts(category, query, manufacturer, status, minPrice, maxPrice, page, size, sort);
     }
 
     @GetMapping("/parts/{id}")
