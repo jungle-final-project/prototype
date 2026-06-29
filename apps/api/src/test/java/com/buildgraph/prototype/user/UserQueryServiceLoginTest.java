@@ -5,6 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
+import com.nimbusds.jwt.SignedJWT;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -15,16 +20,28 @@ import org.springframework.web.server.ResponseStatusException;
 class UserQueryServiceLoginTest {
     private final JdbcTemplate jdbcTemplate = org.mockito.Mockito.mock(JdbcTemplate.class);
     private final PasswordService passwordService = new PasswordService();
-    private final UserQueryService userQueryService = new UserQueryService(jdbcTemplate, passwordService);
+    private final JwtTokenService jwtTokenService = new JwtTokenService(
+            "test-buildgraph-jwt-secret-change-me-2026",
+            "buildgraph-api-test",
+            Duration.ofMinutes(15),
+            Clock.fixed(Instant.parse("2026-06-29T09:00:00Z"), ZoneOffset.UTC)
+    );
+    private final UserQueryService userQueryService = new UserQueryService(jdbcTemplate, passwordService, jwtTokenService);
 
     @Test
-    void loginReturnsAuthResponseWhenPasswordMatches() {
+    void loginReturnsAuthResponseWhenPasswordMatches() throws Exception {
         when(jdbcTemplate.queryForList(anyString(), anyString()))
                 .thenReturn(List.of(userRow(passwordService.hash("passw0rd!"))));
 
         Map<String, Object> response = userQueryService.login("user@example.com", "passw0rd!");
 
-        assertThat(response).containsEntry("accessToken", "demo-access-user");
+        String accessToken = (String) response.get("accessToken");
+        SignedJWT jwt = SignedJWT.parse(accessToken);
+
+        assertThat(accessToken).doesNotStartWith("demo-access-");
+        assertThat(jwt.getJWTClaimsSet().getSubject()).isEqualTo("00000000-0000-4000-8000-000000001004");
+        assertThat(jwt.getJWTClaimsSet().getStringClaim("email")).isEqualTo("user@example.com");
+        assertThat(jwt.getJWTClaimsSet().getStringClaim("role")).isEqualTo("USER");
         assertThat(response).containsEntry("refreshToken", "demo-refresh-user");
         assertThat(response.get("user")).isInstanceOf(Map.class);
     }

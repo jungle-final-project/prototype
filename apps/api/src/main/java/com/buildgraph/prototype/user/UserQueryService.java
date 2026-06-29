@@ -14,10 +14,12 @@ import org.springframework.web.server.ResponseStatusException;
 public class UserQueryService {
     private final JdbcTemplate jdbcTemplate;
     private final PasswordService passwordService;
+    private final JwtTokenService jwtTokenService;
 
-    public UserQueryService(JdbcTemplate jdbcTemplate, PasswordService passwordService) {
+    public UserQueryService(JdbcTemplate jdbcTemplate, PasswordService passwordService, JwtTokenService jwtTokenService) {
         this.jdbcTemplate = jdbcTemplate;
         this.passwordService = passwordService;
+        this.jwtTokenService = jwtTokenService;
     }
 
     public Map<String, Object> login(String email, String password) {
@@ -27,10 +29,11 @@ public class UserQueryService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "이메일 또는 비밀번호가 올바르지 않습니다.");
         }
         String role = DbValueMapper.string(user, "role");
+        Map<String, Object> userDto = userMap(user);
         return MockData.map(
-                "accessToken", "demo-access-" + role.toLowerCase(),
+                "accessToken", jwtTokenService.issueAccessToken(userDto),
                 "refreshToken", "demo-refresh-" + role.toLowerCase(),
-                "user", userMap(user)
+                "user", userDto
         );
     }
 
