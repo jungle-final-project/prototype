@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
-  ArrowRight,
-  Bell,
   Bot,
   Cpu,
   Database,
@@ -14,7 +12,6 @@ import {
   SearchCheck,
   ShieldCheck,
   ShoppingCart,
-  Sparkles,
   Star,
   Zap,
   type LucideIcon
@@ -61,6 +58,21 @@ type PopularPart = {
 };
 
 type RecommendationTab = 'popular' | 'ai';
+
+const promoSlides = [
+  {
+    src: '/assets/home-banners/pc-build-festa.png',
+    alt: 'PC Build Festa 프리미엄 PC 완성 광고'
+  },
+  {
+    src: '/assets/home-banners/summer-upgrade.png',
+    alt: '여름 PC 업그레이드 특가 광고'
+  },
+  {
+    src: '/assets/home-banners/ai-workstation.png',
+    alt: 'AI 작업용 PC 특가전 광고'
+  }
+];
 
 const quickCategories: QuickCategory[] = [
   { label: 'CPU', detail: '작업 성능 기준', to: '/self-quote?category=CPU', icon: Cpu },
@@ -295,58 +307,44 @@ function AiRecommendationCard({
 }
 
 function PromoBanner() {
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveIndex((current) => (current + 1) % promoSlides.length);
+    }, 4_000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
-    <section className="overflow-hidden rounded-lg border border-commerce-line bg-slate-950 text-white shadow-product">
-      <div className="relative min-h-[350px] p-5 sm:p-8 lg:p-10">
-        <div className="relative z-10 max-w-xl">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-black text-blue-100">
-            <Sparkles size={14} />
-            내부 자산 가격 기준 오늘 업데이트
-          </div>
-          <h1 className="mt-9 break-keep text-4xl font-black leading-tight tracking-tight sm:text-5xl">
-            오늘의 PC 부품 특가
-          </h1>
-          <p className="mt-4 max-w-lg break-keep text-base leading-7 text-slate-300">
-            게임, 개발, AI 실습용 조합을 검증 가능한 부품 카테고리로 바로 탐색하세요.
-          </p>
-          <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Link to="/self-quote?category=GPU" className="inline-flex min-h-11 items-center gap-2 rounded-md bg-commerce-sale px-5 text-sm font-black text-white transition hover:bg-red-500">
-              이벤트 부품 보기
-              <ArrowRight size={17} />
-            </Link>
-            <Link to="/my/quotes" className="inline-flex min-h-11 items-center gap-2 rounded-md border border-white/20 bg-white/10 px-5 text-sm font-black text-white transition hover:bg-white/15">
-              목표가 알림
-              <Bell size={16} />
-            </Link>
-          </div>
+    <section className="self-start overflow-hidden rounded-lg border border-commerce-line bg-slate-950 shadow-product" aria-label="홈 광고 배너">
+      <div className="relative aspect-[1460/720] min-h-[280px]">
+        <div
+          className="flex h-full transition-transform duration-700 ease-out"
+          style={{ transform: `translateX(-${activeIndex * 100}%)` }}
+        >
+          {promoSlides.map((slide) => (
+            <img
+              key={slide.src}
+              src={slide.src}
+              alt={slide.alt}
+              className="h-full w-full shrink-0 bg-slate-950 object-contain"
+              draggable={false}
+            />
+          ))}
         </div>
-
-        <div className="absolute right-5 top-10 hidden w-[420px] max-w-[44%] lg:block">
-          <div className="relative h-64">
-            <div className="absolute left-4 top-8 h-44 w-28 rotate-[-5deg] rounded-lg border border-blue-400/30 bg-slate-900 shadow-2xl">
-              <div className="p-4">
-                <div className="text-4xl font-black text-white">7</div>
-                <div className="mt-12 text-xs font-black uppercase tracking-[0.22em] text-blue-200">Core</div>
-                <div className="mt-1 text-2xl font-black text-white">Ultra</div>
-              </div>
-            </div>
-            <div className="absolute left-28 top-2 h-56 w-36 rotate-[3deg] rounded-lg border border-blue-300/40 bg-gradient-to-b from-slate-800 to-slate-950 shadow-2xl">
-              <div className="p-5">
-                <div className="text-5xl font-black text-white">BG</div>
-                <div className="mt-16 text-xs font-black uppercase tracking-[0.2em] text-blue-200">Build kit</div>
-                <div className="mt-1 text-lg font-black text-white">QHD Ready</div>
-              </div>
-            </div>
-            <div className="absolute bottom-0 right-0 grid h-36 w-36 place-items-center rounded-2xl border border-cyan-300/30 bg-cyan-400/10 text-cyan-100 shadow-2xl">
-              <Monitor size={74} />
-            </div>
-          </div>
-        </div>
-
-        <div className="absolute inset-x-0 bottom-0 z-10 grid grid-cols-3 border-t border-white/10 bg-white/10 text-xs font-black text-white/75 sm:text-sm">
-          <div className="bg-commerce-sale px-4 py-3 text-center text-white">이벤트</div>
-          <div className="px-4 py-3 text-center">호환성 PASS 상품</div>
-          <div className="px-4 py-3 text-center">목표가 알림 CTA</div>
+        <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-2">
+          {promoSlides.map((slide, index) => (
+            <button
+              key={slide.src}
+              type="button"
+              aria-label={`${index + 1}번 광고 보기`}
+              aria-current={activeIndex === index ? 'true' : undefined}
+              onClick={() => setActiveIndex(index)}
+              className={`h-2.5 rounded-full transition-all ${activeIndex === index ? 'w-7 bg-white' : 'w-2.5 bg-white/40 hover:bg-white/70'}`}
+            />
+          ))}
         </div>
       </div>
     </section>

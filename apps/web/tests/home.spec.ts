@@ -258,7 +258,7 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   const main = page.getByRole('main');
 
   await expect(main.getByRole('textbox', { name: '원하는 PC 사양 입력' })).toHaveCount(0);
-  await expect(main.getByRole('heading', { name: '오늘의 PC 부품 특가' })).toBeVisible();
+  await expect(main.getByRole('img', { name: 'PC Build Festa 프리미엄 PC 완성 광고' })).toBeVisible();
   await expect(main.getByRole('heading', { name: '부품 바로가기' })).toBeVisible();
   await expect(main.getByRole('heading', { name: '추천상품' })).toBeVisible();
   await expect(main.getByRole('tab', { name: '인기상품' })).toHaveAttribute('aria-selected', 'true');
@@ -364,7 +364,7 @@ test('keeps the unified home usable on mobile width', async ({ page }) => {
   await openHomeAsUser(page);
   const main = page.getByRole('main');
 
-  await expect(main.getByRole('heading', { name: '오늘의 PC 부품 특가' })).toBeVisible();
+  await expect(main.getByRole('img', { name: 'PC Build Festa 프리미엄 PC 완성 광고' })).toBeVisible();
   await expect(main.getByRole('heading', { name: '부품 바로가기' })).toBeVisible();
   await expect(main.getByRole('tab', { name: '인기상품' })).toBeVisible();
   await page.getByRole('button', { name: 'AI 견적 챗봇 열기' }).click();

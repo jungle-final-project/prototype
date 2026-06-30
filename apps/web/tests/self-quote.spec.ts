@@ -666,7 +666,7 @@ test('updates quantity only for repeatable quote draft categories', async ({ pag
   await expect(page.getByText('1,060,000원')).toBeVisible();
 });
 
-test('returns to product detail after login and saves selected part to quote draft', async ({ page }) => {
+test('goes home after login from product detail redirect', async ({ page }) => {
   let savedToDraft = false;
 
   await page.route('**/api/parts/part-gpu-detail-test', async (route) => {
@@ -763,13 +763,11 @@ test('returns to product detail after login and saves selected part to quote dra
   await page.getByLabel('비밀번호').fill('passw0rd!');
   await page.getByRole('button', { name: '로그인' }).click();
 
-  await expect(page).toHaveURL('/parts/part-gpu-detail-test');
+  await expect(page).toHaveURL('/');
   expect(await page.evaluate(() => localStorage.getItem('buildgraph.refreshToken'))).toBe('demo-refresh-user');
   await expect(page.getByText('로그인됨 · user@example.com · USER')).toBeVisible();
   await expect(page.getByText('Demo User')).toBeVisible();
   await expect(page.getByRole('button', { name: '로그아웃' })).toBeVisible();
-  await page.getByRole('button', { name: '견적에 담기' }).click();
 
-  await expect(page.getByText('내 견적초안에 저장했습니다.')).toBeVisible();
-  expect(savedToDraft).toBe(true);
+  expect(savedToDraft).toBe(false);
 });
