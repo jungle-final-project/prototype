@@ -126,6 +126,47 @@ async function mockAiBuildChatApi(page: Page) {
   return requests;
 }
 
+async function mockHomeCasePartsApi(page: Page) {
+  const cases = [1, 2, 3].map((index) => ({
+    id: `home-case-${index}`,
+    category: 'CASE',
+    name: `Home Case ${index}`,
+    manufacturer: 'BuildGraph',
+    price: 190000 - index * 10000,
+    status: 'ACTIVE',
+    attributes: {
+      shortSpec: index === 1 ? 'ATX airflow case' : index === 2 ? 'Quiet ATX case' : 'Compact tower case'
+    },
+    externalOffer: {
+      imageUrl: `https://example.test/case-home-${index}.png`,
+      supplierName: 'Naver Store',
+      offerUrl: null,
+      lowPrice: 190000 - index * 10000,
+      source: 'NAVER_SHOPPING_SEARCH',
+      refreshedAt: '2026-07-01T00:00:00Z'
+    }
+  }));
+
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/parts' && url.searchParams.get('category') === 'CASE') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: cases,
+          page: 0,
+          size: cases.length,
+          total: cases.length
+        })
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+}
+
 async function openHomeAsUser(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
@@ -143,6 +184,7 @@ async function openHomeAsUser(page: Page) {
       })
     });
   });
+  await mockHomeCasePartsApi(page);
   await page.goto('/');
 }
 
@@ -264,6 +306,7 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   await expect(main.getByRole('tab', { name: '인기상품' })).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByRole('tab', { name: 'AI 추천상품' })).toHaveAttribute('aria-selected', 'false');
   await expect(main.getByText('QHD 게이밍 추천팩')).toBeVisible();
+  await expect(main.getByRole('img', { name: /Home Case 1/ })).toBeVisible();
   await main.getByRole('tab', { name: 'AI 추천상품' }).click();
   await expect(main.getByText('AI에게 예산이나 부품을 물어보면 추천상품 3개가 여기에 표시됩니다.')).toBeVisible();
   await expect(main.getByRole('heading', { name: '인기 부품 랭킹' })).toBeVisible();
@@ -350,7 +393,7 @@ test('keeps shared header and navigation destinations unchanged', async ({ page 
   const header = page.locator('header');
   const nav = page.getByRole('navigation');
 
-  await expect(header.getByRole('link', { name: 'AI 견적' })).toHaveAttribute('href', '/requirements/new');
+  await expect(header.getByRole('link', { name: 'AI 견적' })).toHaveCount(0);
   await expect(header.getByRole('link', { name: '내 견적함' })).toHaveAttribute('href', '/my/quotes');
   await expect(header.getByRole('link', { name: 'AS 접수' })).toHaveAttribute('href', '/support/new');
   await expect(nav.getByRole('link', { name: '홈' })).toHaveAttribute('href', '/');

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -17,7 +18,9 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import { Screen } from '../../../components/ui';
-import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
+import { partImageUrl } from '../../parts/partDisplay';
+import { applyAiBuildToQuoteDraft, listParts } from '../../parts/partsApi';
+import type { PartRow } from '../../parts/types';
 import { AiBuildAssistant } from '../components/AiBuildAssistant';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -131,6 +134,12 @@ export function HomePage() {
   const [recommendationTab, setRecommendationTab] = useState<RecommendationTab>(() => readAssistantSession().latestBuilds.length > 0 ? 'ai' : 'popular');
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const { data: featuredCasePartsData } = useQuery({
+    queryKey: ['parts', 'home-featured-cases'],
+    queryFn: () => listParts({ category: 'CASE', page: 0, size: featuredBuilds.length, sort: 'price_desc' }),
+    staleTime: 60_000
+  });
+  const featuredCaseParts = featuredCasePartsData?.items ?? [];
 
   useEffect(() => {
     const syncAssistantSession = () => {
@@ -209,8 +218,8 @@ export function HomePage() {
           </div>
           {recommendationTab === 'popular' ? (
             <div className="grid gap-3 md:grid-cols-3">
-              {featuredBuilds.map((build) => (
-                <FeaturedBuildCard key={build.name} build={build} />
+              {featuredBuilds.map((build, index) => (
+                <FeaturedBuildCard key={build.name} build={build} casePart={featuredCaseParts[index]} />
               ))}
             </div>
           ) : (
@@ -384,24 +393,37 @@ function QuickCategoryPanel() {
   );
 }
 
-function FeaturedBuildCard({ build }: { build: FeaturedBuild }) {
+function FeaturedBuildCard({ build, casePart }: { build: FeaturedBuild; casePart?: PartRow }) {
   return (
     <Link
       to={build.to}
       className={`group rounded-lg border border-commerce-line bg-gradient-to-br ${build.tone} p-4 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100`}
     >
-      <div className="mb-4 flex items-center justify-between">
-        <span className="rounded bg-commerce-sale px-2 py-1 text-[11px] font-black text-white">{build.tag}</span>
-        <Heart size={17} className="text-slate-400 group-hover:text-commerce-sale" />
+      <div className="mb-3 flex min-h-8 items-start justify-between gap-3">
+        <h3 className="min-w-0 truncate text-base font-black text-commerce-ink">{build.name}</h3>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded bg-commerce-sale px-2 py-1 text-[11px] font-black text-white">{build.tag}</span>
+          <Heart size={17} className="text-slate-400 group-hover:text-commerce-sale" />
+        </div>
       </div>
-      <h3 className="text-base font-black text-commerce-ink">{build.name}</h3>
-      <p className="mt-2 min-h-10 text-xs leading-5 text-slate-500">{build.spec}</p>
-      <p className="mt-2 min-h-10 break-keep text-xs leading-5 text-slate-600">{build.summary}</p>
-      <div className="mt-4 flex flex-wrap items-end gap-2">
+      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-100">
+        {casePart ? (
+          <img
+            src={partImageUrl(casePart)}
+            alt={`${casePart.name} 제품 사진`}
+            className="h-[29.9rem] w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+          />
+        ) : (
+          <div className="grid h-[29.9rem] place-items-center bg-slate-50 text-xs font-black text-slate-400">
+            케이스 사진 준비 중
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
         <span className="text-xl font-black tracking-tight text-commerce-sale">{build.price.toLocaleString()}원</span>
         <span className="text-xs font-bold text-slate-400 line-through">{build.originalPrice.toLocaleString()}원</span>
       </div>
-      <div className="mt-4 flex items-center gap-2 text-xs font-black text-commerce-green">
+      <div className="mt-3 flex items-center gap-2 text-xs font-black text-commerce-green">
         <PackageCheck size={15} />
         호환성 통과
       </div>
