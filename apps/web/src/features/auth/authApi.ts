@@ -12,6 +12,7 @@ export type LoginResponse = {
 };
 
 export type CurrentUser = LoginResponse['user'];
+export type SignupResponse = LoginResponse['user'];
 
 export function login(email: string, password: string) {
   return api<LoginResponse>('/api/auth/login', {
@@ -24,9 +25,17 @@ export function getCurrentUser() {
   return api<CurrentUser>('/api/auth/me');
 }
 
-export function signup(name: string, email: string, password: string) {
-  return api('/api/users', {
+type SignupPayload = {
+  name: string;
+  email: string;
+  password: string;
+  termsAccepted: boolean;
+  marketingAccepted: boolean;
+};
+
+export function signup(payload: SignupPayload) {
+  return api<SignupResponse>('/api/users', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password, termsAccepted: true, marketingAccepted: false })
+    body: JSON.stringify(payload)
   });
 }

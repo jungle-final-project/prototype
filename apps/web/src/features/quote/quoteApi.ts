@@ -1,4 +1,5 @@
 import { api } from '../../lib/api';
+import type { AiBuildChatRequest, AiBuildChatResponse } from './aiSelection';
 import type { BuildSummary, ChangePartResponse, ParseRequirementPayload, ParsedRequirement, RecommendBuildResponse } from './types';
 
 export function parseRequirements(payload: ParseRequirementPayload) {
@@ -27,5 +28,12 @@ export function changePart(buildId: string, category: string, partId: string) {
   return api<ChangePartResponse>(`/api/builds/${buildId}/change-part`, {
     method: 'POST',
     body: JSON.stringify({ category, partId })
+  });
+}
+
+export function buildChat(payload: AiBuildChatRequest) {
+  return api<AiBuildChatResponse>('/api/ai/build-chat', {
+    method: 'POST',
+    body: JSON.stringify(payload)
   });
 }

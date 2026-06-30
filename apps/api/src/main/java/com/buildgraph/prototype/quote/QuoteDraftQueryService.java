@@ -4,8 +4,10 @@ import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -43,6 +45,42 @@ public class QuoteDraftQueryService {
         Map<String, Object> draft = activeDraft(userId);
         Long draftId = draft == null ? createDraft(userId) : longValue(draft, "internal_id");
         upsertDraftItem(draftId, part, quantity);
+        return draftMap(activeDraft(userId));
+    }
+
+    @Transactional
+    public Map<String, Object> applyAiBuild(String authorization, Map<String, Object> request) {
+        Long userId = currentUserId(authorization);
+        if (!"REPLACE".equals(text(request.get("conflictPolicy")))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "conflictPolicy는 REPLACE만 지원합니다.");
+        }
+        List<ResolvedAiItem> items = resolveAiItems(request.get("items"));
+        Map<String, Object> draft = activeDraft(userId);
+        Long draftId = draft == null ? createDraft(userId) : longValue(draft, "internal_id");
+        Set<String> categories = new LinkedHashSet<>();
+        items.forEach(item -> categories.add(item.category()));
+        for (String category : categories) {
+            jdbcTemplate.update("""
+                    UPDATE quote_draft_items
+                    SET deleted_at = now(),
+                        updated_at = now()
+                    WHERE quote_draft_id = ?
+                      AND category = ?
+                      AND deleted_at IS NULL
+                    """, draftId, category);
+        }
+        for (ResolvedAiItem item : items) {
+            jdbcTemplate.update("""
+                    INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    draftId,
+                    longValue(item.part(), "internal_id"),
+                    item.category(),
+                    item.quantity(),
+                    DbValueMapper.integer(item.part(), "price"));
+        }
+        jdbcTemplate.update("UPDATE quote_drafts SET updated_at = now() WHERE id = ?", draftId);
         return draftMap(activeDraft(userId));
     }
 
@@ -142,6 +180,33 @@ public class QuoteDraftQueryService {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "부품을 찾을 수 없습니다."));
+    }
+
+    private List<ResolvedAiItem> resolveAiItems(Object value) {
+        List<Map<String, Object>> rows = objectMaps(value);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "items는 1개 이상이어야 합니다.");
+        }
+        Set<String> categories = new LinkedHashSet<>();
+        List<ResolvedAiItem> items = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            String partId = text(row.get("partId"));
+            if (partId == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "items[].partId는 필수입니다.");
+            }
+            Map<String, Object> part = part(partId);
+            String partCategory = DbValueMapper.string(part, "category");
+            String requestedCategory = text(row.get("category"));
+            String category = requestedCategory == null ? partCategory : requestedCategory;
+            if (!Objects.equals(category, partCategory)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "items[].category가 부품 카테고리와 일치하지 않습니다.");
+            }
+            if (!categories.add(category)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "AI 조합 적용은 카테고리당 1개 부품만 허용합니다.");
+            }
+            items.add(new ResolvedAiItem(part, quantity(row.get("quantity"), category), category));
+        }
+        return items;
     }
 
     private void upsertDraftItem(Long draftId, Map<String, Object> part, int quantity) {
@@ -337,6 +402,33 @@ public class QuoteDraftQueryService {
         return value == null ? null : Long.valueOf(value.toString());
     }
 
+    private static String text(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isBlank() ? null : text;
+    }
+
+    private static List<Map<String, Object>> objectMaps(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Object item : list) {
+            rows.add(objectMap(item));
+        }
+        return rows;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> objectMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        return Map.of();
+    }
+
     private static Map<String, Object> emptyDraft() {
         return MockData.map(
                 "id", null,
@@ -348,5 +440,8 @@ public class QuoteDraftQueryService {
                 "createdAt", null,
                 "updatedAt", null
         );
+    }
+
+    private record ResolvedAiItem(Map<String, Object> part, int quantity, String category) {
     }
 }

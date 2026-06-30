@@ -14,10 +14,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api")
 public class BuildController {
     private final BuildQueryService buildQueryService;
+    private final BuildChatService buildChatService;
     private final CurrentUserService currentUserService;
 
-    public BuildController(BuildQueryService buildQueryService, CurrentUserService currentUserService) {
+    public BuildController(BuildQueryService buildQueryService, BuildChatService buildChatService, CurrentUserService currentUserService) {
         this.buildQueryService = buildQueryService;
+        this.buildChatService = buildChatService;
         this.currentUserService = currentUserService;
     }
 
@@ -62,5 +64,14 @@ public class BuildController {
     ) {
         currentUserService.requireUser(authorization);
         return buildQueryService.changePart(id, request == null ? Map.of() : request);
+    }
+
+    @PostMapping("/ai/build-chat")
+    Map<String, Object> buildChat(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireUser(authorization);
+        return buildChatService.chat(request == null ? Map.of() : request);
     }
 }

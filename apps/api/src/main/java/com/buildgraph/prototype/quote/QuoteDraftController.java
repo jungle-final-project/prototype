@@ -34,6 +34,14 @@ public class QuoteDraftController {
         return quoteDraftQueryService.putItem(authorization, partId, request == null ? Map.of() : request);
     }
 
+    @PutMapping("/quote-drafts/current/apply-ai-build")
+    Map<String, Object> applyAiBuild(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        return quoteDraftQueryService.applyAiBuild(authorization, request == null ? Map.of() : request);
+    }
+
     @PatchMapping("/quote-drafts/current/items/{partId}")
     Map<String, Object> patchItem(
             @PathVariable String partId,

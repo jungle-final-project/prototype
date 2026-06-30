@@ -14,14 +14,14 @@ Figma 기준으로 5번이 직접 맡아야 할 화면은 `153:1880 STATE-15 ADM
 
 | 기능 단위 | 상태 | 5번에게 남은 작업 |
 | --- | --- | --- |
-| Auth 공통 연동 | 진행중 | `Authorization` header와 token helper는 완료. Common API Client 정책 결정 완료. 1번 Auth 구현 후 실제 응답과 `RequireAdmin` 연동 검토 필요 |
-| JWT/Token 연동 | 진행중 | 프론트 header 전달은 완료. 1번의 실제 JWT 구현 이후 admin guard/security 전환 검토 필요 |
-| Auth Error 연동 | 진행중 | admin 401/403 분기는 완료. 1번 Auth 오류 응답이 공통 `ErrorResponse`와 충돌 없는지 검토 필요 |
+| Auth 공통 연동 | 진행중 | 1번 Auth/User 백엔드 구현은 `main`에 반영됨. `Authorization` header와 access token helper는 완료. refresh token 저장/재시도, logout API 호출, `ApiError`의 `ErrorResponse` 보존이 남음 |
+| JWT/Token 연동 | 진행중 | JWT access token 발급/검증과 admin role 확인은 반영됨. `RequireUser`의 만료 token 처리와 Spring Security filter 전환 여부 검토가 남음 |
+| Auth Error 연동 | 진행중 | admin 401/403 분기는 완료. 백엔드 `ErrorResponse`는 있으나 프론트 `ApiError`가 `code/message/details`를 버리고 있어 공통 오류 표시 고도화가 필요 |
 | RequireAdmin | 완료 | `/admin/*` guard, `auth/me` role 확인, 401/403 화면 분기와 테스트 완료 |
 | AdminShell | 진행중 | 8개 nav 메뉴와 route 연결 완료. topbar search 제외와 disabled action frame 완료. nav label/order owner 공유 미완료 |
 | AdminDashboard | 완료 | DTO 정합성, metric, loading/error/success, degraded alert, 운영 작업, 관리자 할 일 link frame 완료 |
 | Admin Audit Logs | 완료 | 백엔드 endpoint, 권한 테스트, seed 조회, 프론트 `최근 관리자 작업` 표시 연결 완료 |
-| Common API Client | 진행중 | token header 첨부 완료. refresh retry, token 만료 시 clear, logout 후 clear, error normalization 정책 결정 완료. 구현 고도화는 1번 Auth/JWT PR 이후 |
+| Common API Client | 진행중 | token header 첨부 완료. refresh/logout API가 들어왔으므로 refresh retry 1회, refresh 실패 시 token 정리, logout API 호출 후 clear, error normalization 구현을 시작할 수 있음 |
 | Common UI | 완료 | 공통 UI barrel/layout/display/feedback 구조 유지 완료 |
 | Health | 완료 | `/api/health` DB probe, 503 DOWN, 테스트/OpenAPI 완료. 2026-06-29 runtime 응답 `{"status":"UP","database":"UP"}` 확인 완료 |
 | Docker Compose | 완료 | `docker compose config` 완료. Postgres init SQL 주입 제거 완료. `docker compose up --build` 기준 web/api/postgres/redis/rabbitmq/mailpit 기동과 health 응답 확인 완료 |
@@ -38,14 +38,14 @@ Figma 기준으로 5번이 직접 맡아야 할 화면은 `153:1880 STATE-15 ADM
 
 | 기능 단위 | 상태 | 최신 판단 |
 | --- | --- | --- |
-| Auth 공통 연동 | 진행중 | `Authorization` header, `saveToken`, `getToken`, `clearToken` helper는 완료. Common API Client 정책 결정 완료. 1번 Auth 구현 후 실제 token/refresh 응답과 `RequireAdmin` 연동 검토 필요 |
-| JWT/Token 연동 | 진행중 | 현재 프론트는 저장된 token을 `Bearer`로 전달한다. 실제 JWT role/expiry 연동은 1번 JWT 구현 후 검토 |
-| Auth Error 연동 | 진행중 | `RequireAdmin`의 401/403 화면 분기는 완료. 공통 error normalization과 1번 Auth 오류 응답 정합성 검토 필요 |
+| Auth 공통 연동 | 진행중 | `Authorization` header, `saveToken`, `getToken`, `clearToken` helper는 완료. 1번 Auth 구현이 `main`에 들어왔으므로 refresh token 저장/재시도와 logout API 연동 검토가 필요 |
+| JWT/Token 연동 | 진행중 | 현재 프론트는 저장된 access token을 `Bearer`로 전달한다. 실제 JWT role 확인은 동작하므로 남은 것은 만료 token 처리와 Spring Security filter 전환 여부 검토 |
+| Auth Error 연동 | 진행중 | `RequireAdmin`의 401/403 화면 분기는 완료. 공통 error normalization과 회원가입/로그인 validation 오류 표시 정합성 검토 필요 |
 | RequireAdmin | 완료 | `/admin/*` guard, `auth/me` role 확인, token 없음/401/403/USER role 분기와 테스트 완료 |
 | AdminShell | 진행중 | 8개 nav, topbar search 제외, export/action disabled frame 완료. nav label/order owner 공유만 남음 |
 | AdminDashboard | 완료 | DTO 정합성, metric, loading/error/success, degraded alert, 운영 작업, 관리자 할 일 frame 완료 |
 | Admin Audit Logs | 완료 | `getRecentAdminAuditLogs()` wrapper와 `/admin` 최근 관리자 작업 표시, 실패 패널 분리 완료 |
-| Common API Client | 진행중 | token header 첨부는 완료. token 만료 시 `clearToken()`, refresh retry 위치, logout 후 token 정리, error normalization 정책 결정 완료. 구현은 1번 Auth/JWT PR 이후 |
+| Common API Client | 진행중 | token header 첨부는 완료. refresh/logout API가 있으므로 token 만료 시 `clearToken()`, refresh retry 1회, logout 후 token 정리, error normalization 구현을 진행할 수 있음 |
 | Common UI | 완료 | `components/ui.tsx` barrel 유지, 공통 layout/display/feedback 구조 유지 완료 |
 
 ### 백엔드
@@ -53,7 +53,7 @@ Figma 기준으로 5번이 직접 맡아야 할 화면은 `153:1880 STATE-15 ADM
 | 기능 단위 | 상태 | 최신 판단 |
 | --- | --- | --- |
 | JWT/Token 연동 | 진행중 | 현재 admin/user API는 seed 사용자 비밀번호 검증과 JWT access token을 사용한다. Spring Security filter 전환 여부는 후속 작업에서 검토한다. |
-| Auth Error 연동 | 진행중 | `ApiExceptionHandler`의 401/403 `ErrorResponse`는 완료. 400 validation, 409 duplicate, refresh/logout 오류 shape는 1번 Auth 구현 후 검토 필요 |
+| Auth Error 연동 | 진행중 | `ApiExceptionHandler`의 401/403 `ErrorResponse`는 완료. 400 validation, 409 duplicate, refresh/logout 오류 shape가 프론트 공통 `ApiError`에 보존되는지 검토 필요 |
 | AdminDashboard | 완료 | `GET /api/admin/dashboard`가 OpenAPI DTO 기준 필드와 일치한다. 계약 변경 시 계속 동시 검토 필요 |
 | Admin Audit Logs | 완료 | `GET /api/admin/audit-logs/recent` 응답 shape, seed 조회, 권한 테스트, 프론트 표시 연결 완료 |
 | Health | 완료 | `/api/health` DB probe, DB 실패 503, OpenAPI, 테스트, runtime smoke 확인 완료 |
@@ -70,7 +70,7 @@ Figma 기준으로 5번이 직접 맡아야 할 화면은 `153:1880 STATE-15 ADM
 | CI/GitHub Actions | 완료 | web build/test, OpenAPI 검증, API test/bootJar, compose config, Docker build, API runtime smoke 구성 완료 |
 | k6/부하 테스트 | 진행중 | smoke script와 smoke report template 완료. 300명/1000명 부하 시나리오 확장은 별도 작업 |
 | 테스트/검증 | 완료 | frontend/backend/OpenAPI/compose/runtime health 검증 기록 완료 |
-| API 계약 문서 | 완료 | `API_CONTRACT.md`의 Auth/User owner를 1번으로 정리했다. 1번 Auth 구현 PR에서 error/refresh 세부 계약 변경이 있으면 `openapi.yaml`과 같이 검토 |
+| API 계약 문서 | 완료 | `API_CONTRACT.md`의 Auth/User owner를 1번으로 정리했다. Auth error/refresh/logout 세부 계약이 바뀌면 `openapi.yaml`과 같이 검토 |
 | Route Ownership 문서 | 완료 | `ROUTE_OWNERSHIP.md`, `role-workspaces.md`, `README.md`, Sprint 1 체크리스트에 Auth/User 구현 owner 1번, Auth 공통/token/guard owner 5번 기준을 반영했다 |
 
 ### 분류 요약
@@ -80,6 +80,257 @@ Figma 기준으로 5번이 직접 맡아야 할 화면은 `153:1880 STATE-15 ADM
 | 프론트 | `RequireAdmin`, `AdminDashboard`, `Admin Audit Logs`, `Common UI` | `Auth 공통 연동`, `JWT/Token 연동`, `Auth Error 연동`, `AdminShell`, `Common API Client` | 없음 |
 | 백엔드 | `AdminDashboard`, `Admin Audit Logs`, `Health` | `JWT/Token 연동`, `Auth Error 연동`, `Common API/Error` | 없음 |
 | 인프라·문서·검증 | `Docker Compose`, `Redis`, `RabbitMQ`, `Mailpit`, `CI/GitHub Actions`, `테스트/검증`, `API 계약 문서`, `Route Ownership 문서` | `k6/부하 테스트` | 없음 |
+
+## 2026-06-30 main 반영 후 1~4번 작업 기반 5번 후속 작업
+
+현재 `main`에는 1번 Auth/JWT/refresh/logout, 2번 parts/price 일부, 3번 Agent/RAG/AS Chat, 4번 AS ticket 흐름이 들어와 있다. 이 변경을 기준으로 5번에게 남은 일은 새 도메인 기능 구현이 아니라 **공통 API client, 관리자 shell/guard, 인프라 smoke, API 계약 위반 감시, PR 전 검증**이다.
+
+## 2026-06-30 1~4번 작업 완료 여부 감사
+
+결론: **1~4번 모두 프로젝트 계약 기준으로 완전 완료는 아니다.** 현재 상태는 "핵심 골격과 일부 주요 흐름 구현 완료, 계약/소유권/관리자 화면/테스트 보강 필요"다.
+
+완료 판단 기준은 `docs/ROUTE_OWNERSHIP.md`, `docs/API_CONTRACT.md`, 실제 frontend route, backend controller/service, DB migration, 테스트 존재 여부를 함께 봤다.
+
+| 담당 | 완료 판정 | 완료된 것 | 완료 아님/남은 것 |
+| --- | --- | --- | --- |
+| 1번 Quote/Auth | 부분완료 | Auth 백엔드 로그인/회원가입/JWT/refresh/logout, 기본 로그인/회원가입 화면, 요구사항 분석/추천/Build 상세/부품 변경 API 호출 흐름 | Google OAuth start/callback/exchange 미구현, `BuildQueryService`가 현재 사용자 대신 `user@example.com`에 저장, build history/detail/change 소유권 404 미흡, `/my/quotes` mock/정적 가격 알림, refresh token 프론트 저장/재시도 미연결 |
+| 2번 Parts/Price/Tool | 부분완료 | 부품 목록/상세/가격 이력, 셀프 견적초안, Tool check, 네이버 외부 가격 후보/cache, catalog/external-offer refresh 골격 | 가격 알림이 현재 사용자 기준이 아니고 중복 409 없음, `/admin/price-jobs` 화면 정적/disabled, `POST /api/admin/price-jobs/run` active job 409 계약 불일치, 실제 queue/worker 가격 수집 미연결, price/domain contract test 부족 |
+| 3번 Agent/RAG/AS Chat | 부분완료 | RAG 검색/근거 조회, Agent trace 저장, AS Chat SSE/LLM 구조화 응답, admin Agent/RAG/Tool 상세 API 연결 | 일반 Agent session API가 본인 소유 404를 보장하지 않음, Agent queue/RabbitMQ worker 미구현, AdminShell 메뉴가 list가 아니라 seed id 상세로 직접 이동, AgentController/AsChatController contract test 부족 |
+| 4번 PC Agent/AS | 부분완료 | 사용자 AS 접수 화면, 로그 업로드 API, AS 티켓 생성/조회 API, 사용자 티켓 상세 화면 | 로그 업로드가 현재 사용자 대신 `user@example.com`에 저장, JSONL/MIME/크기 검증 미흡, 티켓 생성/조회 소유권 404 미흡, 관리자 AS 티켓 화면 mock/no-op, `PATCH /api/admin/as-tickets/{id}` 상태 전이 409/audit log/assignedAdminId 정책 미구현, backend test 없음 |
+
+### 1번 상세 감사
+
+| 영역 | 상태 | 근거 |
+| --- | --- | --- |
+| Auth/User 백엔드 | 완료에 가까움 | `UserController`, `UserQueryService`, `PasswordService`, `JwtTokenService`, `RefreshTokenService`가 있고 관련 테스트가 있다. |
+| Auth 프론트 | 부분완료 | 로그인/회원가입 API 호출은 하지만 refresh token은 저장하지 않고, 실패 시 backend validation 메시지를 보여주지 않는다. |
+| Google OAuth | 미완료 | 계약에는 `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange`가 있으나 controller 구현이 없다. |
+| Quote/Build API | 부분완료 | `parse`, `recommend`, `build detail`, `history`, `change-part`는 있으나 현재 사용자 소유권 기준이 빠져 있다. |
+| 내 견적함 | 미완료 | `/my/quotes`는 `quoteMock`을 렌더링하고 가격 알림 등록도 정적 form이다. |
+| 테스트 | 부족 | Auth 테스트는 많지만 Build/Quote controller/service contract test가 없다. |
+
+핵심 근거:
+
+- `BuildQueryService.parse()`는 인증 사용자가 아니라 `(SELECT id FROM users WHERE email = 'user@example.com')`로 requirement를 저장한다.
+- `BuildQueryService.builds()`는 모든 build를 최신순으로 반환하고 사용자별 filtering이 없다.
+- `BuildQueryService.buildRow()`는 `public_id`만 보고 조회하며 소유자 조건이 없다.
+- `MyQuotesPage.tsx`는 `../mocks/quoteMock`의 `builds`를 그대로 사용한다.
+
+### 2번 상세 감사
+
+| 영역 | 상태 | 근거 |
+| --- | --- | --- |
+| Parts 조회 | 완료에 가까움 | 목록, 상세, 가격 이력, 필터, pagination, 저장된 외부 가격 cache 표시가 있다. |
+| Quote Draft | 완료에 가까움 | 현재 사용자 기준의 견적초안 생성/담기/수량 변경/삭제가 구현되어 있다. |
+| Tool check | 부분완료 | 5개 Tool API와 rule 기반 판정은 있으나 일부 fallback은 seed 결과 중심이다. |
+| Price Alert | 부분완료 | API는 있으나 현재 사용자 대신 `user@example.com`에 저장하고, 중복 active alert는 409가 아니라 기존 row 반환이다. |
+| Price Job | 미완료에 가까움 | backend skeleton은 있으나 active job 중복 409 계약과 다르고, frontend `/admin/price-jobs`는 정적/disabled다. |
+| 테스트 | 부족 | `PartControllerTest`는 Tool auth 중심이고 parts/quote draft/price alert/price job contract test가 없다. |
+
+핵심 근거:
+
+- `PriceQueryService.createAlert()`는 `(SELECT id FROM users WHERE email = 'user@example.com')`로 저장한다.
+- `PriceQueryService.createAlert()`는 중복 alert가 있으면 `409 DUPLICATE_RESOURCE`가 아니라 기존 row를 반환한다.
+- `PriceQueryService.runPriceJob()`은 active job이 있으면 `409 CONFLICT_STATE`가 아니라 기존 job을 반환한다.
+- `AdminPriceJobsPage.tsx`는 `GET /api/admin/price-jobs`를 호출하지 않고 정적 row와 disabled 버튼만 보여준다.
+
+### 3번 상세 감사
+
+| 영역 | 상태 | 근거 |
+| --- | --- | --- |
+| RAG 검색/상세 | 부분완료 | `RagController`, `RagQueryService`, admin evidence 조회가 있고 테스트도 일부 있다. |
+| Agent 세션 | 부분완료 | create/run/get과 trace 저장은 있으나 사용자 소유권 조건이 없다. |
+| AS Chat | 완료에 가까움 | 사용자 티켓 소유권 확인, SSE, RAG/Tool/LLM 구조화 응답, `llm_generations` 저장 흐름이 있다. |
+| Admin Agent/RAG/Tool 화면 | 부분완료 | 상세 화면은 API 연결됐지만 메뉴가 목록이 아니라 seed 상세 id로 바로 이동한다. |
+| Queue/Worker | 미완료 | RabbitMQ 기반 Agent job queue/ack/retry는 아직 없다. |
+| 테스트 | 부족 | RAG retrieval/profile/OpenAI request 테스트는 있으나 AgentController/AsChatController contract test가 부족하다. |
+
+핵심 근거:
+
+- `AgentQueryService.createSession()`은 `currentUser`를 받지 않고 `AgentTraceService.createQueuedSession(root, "USER")`만 호출한다.
+- `AgentQueryService.agentSessionRow()`는 `s.public_id = ?`만 조건으로 보고 사용자 소유자 조건이 없다.
+- `AdminShell`의 Agent/Tool/RAG 메뉴는 seed public_id 상세 route로 직접 이동한다.
+
+### 4번 상세 감사
+
+| 영역 | 상태 | 근거 |
+| --- | --- | --- |
+| 사용자 AS 접수 화면 | 부분완료 | 파일 선택, 동의, 로그 업로드, 티켓 생성 API 호출, 상세 화면 이동 흐름은 있다. |
+| 로그 업로드 API | 미완료에 가까움 | `MultipartFile`을 받지만 JSONL 파싱/확장자/MIME/크기 검증이 없고, 현재 사용자 대신 seed user에 저장한다. |
+| AS 티켓 API | 부분완료 | 생성/조회/update skeleton은 있으나 소유권, 상태 전이, audit log가 빠져 있다. |
+| 관리자 AS 화면 | 미완료 | `/admin/as-tickets`, `/admin/as-tickets/:ticketId`가 mock data와 no-op 버튼이다. |
+| 테스트 | 미완료 | `log`, `ticket` package에 backend controller/service test가 없다. |
+
+핵심 근거:
+
+- `AgentLogQueryService.upload()`는 file이 없어도 기본 파일명으로 저장하고 `user@example.com`에 연결한다.
+- `AgentLogQueryService.detail()`은 `public_id`만 보고 조회하며 현재 사용자 소유 조건이 없다.
+- `TicketQueryService.create()`는 `user@example.com`으로 티켓을 생성한다.
+- `TicketQueryService.ticket()`은 `public_id`만 보고 조회하며 현재 사용자 소유 조건이 없다.
+- `TicketQueryService.update()`는 임의 status update만 하고 허용 상태 전이, 409, `assignedAdminId`, audit log를 처리하지 않는다.
+- `AdminTicketsPage.tsx`와 `AdminTicketDetailPage.tsx`는 mock data와 정적 버튼을 사용한다.
+
+### 검증 결과
+
+| 검증 | 결과 | 해석 |
+| --- | --- | --- |
+| OpenAPI validation | 통과, 49 paths | 문법 검증 통과다. 실제 구현이 계약을 모두 만족한다는 뜻은 아니다. |
+| Backend test | 통과 | 현재 존재하는 테스트는 통과. 단, Build/Price/Agent ownership/Log/Ticket contract test가 부족하다. |
+| Frontend test | 통과, 61개 | 현재 UI smoke/mock 테스트는 통과. mock/static 화면도 테스트를 통과할 수 있어 완료 근거로는 부족하다. |
+
+### 완료라고 볼 수 없는 결정적 이유
+
+- [ ] 사용자별 소유권이 여러 핵심 API에서 빠져 있다. 계약상 본인 소유가 아니면 `404 NOT_FOUND`여야 한다.
+- [ ] 1번 `/my/quotes`, 2번 `/admin/price-jobs`, 4번 `/admin/as-tickets`가 실제 데이터 연결이 아니라 mock/static이다.
+- [ ] 가격 alert/job의 409 계약이 구현과 다르다.
+- [ ] Google OAuth 계약 endpoint가 구현되지 않았다.
+- [ ] PC Agent 로그 업로드의 JSONL/MIME/크기 validation이 부족하다.
+- [ ] AS 티켓 관리자 상태 전이/audit log 정책이 구현되지 않았다.
+- [ ] Agent job/price job의 RabbitMQ queue/worker 처리는 아직 없다.
+- [ ] 통과한 테스트가 현재 미완료 계약을 잡지 못한다.
+
+## 2026-06-30 1~4번에게 공유할 말
+
+아래 내용은 5번이 다른 owner 기능을 대신 구현하겠다는 뜻이 아니다. 각 owner가 자기 담당 기능을 마무리할 때 **계약 문서, 공통 인증, 관리자 shell, 인프라 검증과 충돌하지 않게 맞춰야 하는 지점**을 공유하는 것이다.
+
+### 공통 공유 메시지
+
+현재 1~4번 작업은 전체적으로 골격은 들어왔지만, `docs/API_CONTRACT.md`와 `docs/ROUTE_OWNERSHIP.md` 기준으로는 아직 완전 완료가 아닙니다.
+
+특히 **현재 로그인 사용자 기준 소유권 처리, 409 상태 충돌, mock/static 관리자 화면, 부족한 contract test**가 남아 있습니다.
+
+각자 담당 API는 다음 기준을 맞춰 주세요.
+
+- 로그인 사용자 자원은 JWT의 현재 사용자 기준으로 저장/조회해야 합니다.
+- 본인 소유가 아닌 build, ticket, log, agent session은 `403`이 아니라 `404 NOT_FOUND`여야 합니다.
+- active job/session/alert 중복이나 금지 상태 전이는 `409 CONFLICT_STATE` 또는 `409 DUPLICATE_RESOURCE`로 맞춰야 합니다.
+- public response에는 내부 DB `BIGINT id`가 나가면 안 되고 `public_id` 문자열만 나가야 합니다.
+- mock/static 화면은 실제 API 연결 전이면 PR 설명과 화면 문구에 명확히 표시해 주세요.
+- API path/request/response/error code를 바꾸면 `docs/API_CONTRACT.md`와 `docs/openapi.yaml`을 같이 수정해 주세요.
+- 새 기능은 controller/service 테스트나 Playwright 테스트까지 같이 넣어 주세요.
+
+### 1번에게 전달할 말
+
+1번은 Quote/Auth owner라서 Auth는 많이 진행됐지만, Quote/Build 쪽 계약이 아직 남아 있습니다.
+
+- Auth 백엔드의 로그인/회원가입/JWT/refresh/logout은 들어왔습니다.
+- Google OAuth 계약 endpoint인 `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange`는 구현 여부를 확정해 주세요. MVP에서 제외할 거면 계약 문서도 같이 바꿔야 합니다.
+- `BuildQueryService`에서 requirement/build 저장이 현재 로그인 사용자 기준이 아니라 `user@example.com` 기준으로 들어가는 부분을 현재 사용자 기준으로 바꿔 주세요.
+- `GET /api/builds/history`, `GET /api/builds/{id}`, `POST /api/builds/{id}/change-part`는 현재 로그인 사용자 소유권을 확인하고, 남의 자원이면 `404 NOT_FOUND`를 반환해야 합니다.
+- `/my/quotes`는 현재 `quoteMock` 기반입니다. 실제 `GET /api/builds/history`와 2번의 `GET/POST /api/price-alerts` 연동 범위를 정리해 주세요.
+- 로그인/회원가입 실패 시 backend `ErrorResponse`의 validation/duplicate 메시지를 화면에 보여줄 수 있게 5번 `api.ts` 공통 오류 처리와 맞춰 주세요.
+- Build/Quote controller/service contract test를 추가해 주세요. 특히 소유권 404, validation 400, public_id 노출을 확인해야 합니다.
+
+5번 협업 지점:
+
+- refresh token 저장/재시도/logout API 호출은 5번 `api.ts` 공통 client와 같이 맞추겠습니다.
+- Auth 오류 응답 shape가 바뀌면 5번이 `ErrorResponse` 보존 로직을 같이 맞추겠습니다.
+
+### 2번에게 전달할 말
+
+2번은 Parts/Price/Tool owner라서 parts와 quote draft는 많이 진행됐지만, price alert와 price job 계약이 남아 있습니다.
+
+- `GET /api/parts`, `GET /api/parts/{id}`, `GET /api/parts/{id}/price-history`, quote draft, Tool check는 현재 구현 수준이 높습니다.
+- `GET /api/price-alerts`와 `POST /api/price-alerts`는 현재 로그인 사용자 기준으로 조회/생성되게 바꿔 주세요.
+- 같은 사용자, 같은 `partId`, 같은 `targetPrice`의 active alert 중복은 기존 row 반환이 아니라 `409 DUPLICATE_RESOURCE`여야 합니다.
+- `POST /api/admin/price-jobs/run`은 active job이 있으면 기존 job 반환이 아니라 `409 CONFLICT_STATE`여야 합니다.
+- `/admin/price-jobs`는 현재 정적 안내와 disabled 버튼입니다. 2번 owner 화면으로 실제 `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`을 연결할지 확정해 주세요.
+- 네이버 쇼핑 API/다나와 제한 크롤링 key나 설정은 프론트에 노출하지 말고 API 서버 env에서만 관리해야 합니다.
+- price alert, price job, catalog refresh, external offer refresh에 대한 controller/service contract test를 추가해 주세요.
+
+5번 협업 지점:
+
+- 가격 수집 작업을 RabbitMQ worker로 연결하는 시점이 오면 `price.jobs` queue, 중복 실행, 실패 기록, Docker/RabbitMQ smoke를 같이 검토하겠습니다.
+- Mailpit으로 가격 알림 메일을 검증해야 하면 5번이 SMTP/Mailpit runtime smoke를 맡겠습니다.
+
+### 3번에게 전달할 말
+
+3번은 Agent/RAG/AS Chat owner라서 AS Chat과 RAG 근거 흐름은 많이 들어왔지만, 일반 Agent session 계약과 queue 정책이 남아 있습니다.
+
+- AS Chat은 사용자 티켓 소유권 확인, SSE 진행 이벤트, RAG/Tool/LLM 구조화 응답까지 잘 들어와 있습니다.
+- 일반 `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`는 현재 로그인 사용자 소유권을 확인해야 합니다.
+- 본인 소유가 아닌 Agent session은 계약대로 `404_NOT_FOUND`를 반환해야 합니다.
+- AdminShell의 `Agent 세션`, `Tool 이력`, `RAG 근거` 메뉴가 현재 seed 상세 id로 바로 이동합니다. list route를 만들지, seed/sample link로 둘지 결정해 주세요.
+- Agent job을 실제 비동기 queue로 처리할 계획이면 상태 전이 `QUEUED -> RUNNING -> RAG_SEARCHED -> TOOLS_CALLED -> SUMMARY_READY -> SUCCEEDED`와 실패/취소 정책을 문서와 테스트에 맞춰 주세요.
+- AgentController/AsChatController contract test를 보강해 주세요. 특히 소유권 404, 상태 전이 409, SSE fallback/error, LLM JSON 실패 502를 확인해야 합니다.
+
+5번 협업 지점:
+
+- Agent job을 RabbitMQ로 연결하는 시점이 오면 `agent.jobs` queue, ack/retry, 최종 실패 기록, Docker/RabbitMQ smoke를 같이 검토하겠습니다.
+- AS Chat SSE는 `api.ts` 공통 wrapper를 우회하므로, token header/401/ErrorResponse 처리 정책은 5번과 맞춰 주세요.
+
+### 4번에게 전달할 말
+
+4번은 PC Agent/AS owner라서 사용자 AS 접수 흐름은 들어왔지만, 로그 검증과 관리자 AS 화면은 아직 남아 있습니다.
+
+- `/support/new`에서 로그 업로드 후 AS 티켓 생성, `/support/:ticketId` 상세 조회 흐름은 들어왔습니다.
+- `POST /api/agent-logs/upload`는 현재 file이 없어도 저장될 수 있고 JSONL/확장자/MIME/크기 validation이 부족합니다. 계약대로 실패 시 `400 FILE_VALIDATION_ERROR`를 반환하고 DB row를 만들지 않아야 합니다.
+- 로그 업로드와 티켓 생성은 현재 로그인 사용자 기준으로 저장해야 합니다. 현재처럼 `user@example.com` seed user에 묶이면 안 됩니다.
+- `GET /api/agent-logs/{id}`, `GET /api/as-tickets/{id}`는 현재 로그인 사용자 소유권을 확인하고, 남의 자원이면 `404_NOT_FOUND`여야 합니다.
+- `/admin/as-tickets`, `/admin/as-tickets/:ticketId`는 현재 mock/static 화면입니다. 실제 `GET /api/admin/as-tickets`, `GET/PATCH /api/admin/as-tickets/{id}`와 연결해 주세요.
+- `PATCH /api/admin/as-tickets/{id}`는 계약의 허용 상태 전이만 허용하고, 금지 전이는 `409 CONFLICT_STATE`를 반환해야 합니다.
+- 관리자 상태 변경, 담당자 배정, 상태 전이 거절은 `admin_audit_logs` 기록 정책과 맞춰 주세요.
+- log/ticket controller/service test를 추가해 주세요. 특히 파일 validation, 소유권 404, 상태 전이 409, soft delete 제외를 확인해야 합니다.
+
+5번 협업 지점:
+
+- 관리자 AS 화면은 AdminShell/RequireAdmin 안에서 동작해야 하므로 route guard와 401/403은 5번이 같이 검토하겠습니다.
+- 로그 업로드/AS ticket runtime smoke가 필요하면 Docker/API/파일 업로드 검증을 같이 보겠습니다.
+
+### 5번이 팀에 약속할 것
+
+- 5번은 1~4번 도메인 비즈니스 로직을 대신 구현하지 않는다.
+- 대신 공통 API client, `RequireUser`/`RequireAdmin`, AdminShell, 인프라, CI, OpenAPI/계약 검증을 책임진다.
+- 각 owner PR에서 auth/error/pagination/public_id/admin 권한/인프라 영향이 있으면 5번이 reviewer로 확인한다.
+- 계약 위반이 보이면 기능 완성 여부와 별개로 먼저 문서와 테스트 기준을 맞추도록 요청한다.
+
+### 1번 Auth/User 작업 반영 후
+
+| 상태 | 5번 후속 작업 | 근거 |
+| --- | --- | --- |
+| 진행 필요 | `api.ts`가 backend `ErrorResponse`의 `code`, `message`, `details`를 보존하도록 `ApiError`를 확장한다. | 현재 `ApiError`는 `status/path`만 보존해서 회원가입 400, 중복 이메일 409, refresh 실패 원인을 화면에서 구분하기 어렵다. |
+| 진행 필요 | refresh token 저장 위치와 `api.ts` refresh retry 1회 정책을 실제 `POST /api/auth/refresh` 응답에 맞춘다. | 1번이 refresh/logout 백엔드를 구현했지만 프론트 공통 client는 access token만 저장한다. |
+| 진행 필요 | logout 버튼이 단순 `clearToken()`이 아니라 `POST /api/auth/logout` 호출 후 token을 정리할지 1번과 맞춘다. | 현재 header logout은 로컬 access token만 삭제한다. 서버 refresh token 폐기와 연결되어 있지 않다. |
+| 진행 필요 | `RequireUser`가 token 존재만 보는 현재 방식으로 충분한지, 만료 token이면 `/api/auth/me` 확인 또는 API 401 처리로 정리할지 결정한다. | 현재 일반 사용자 route는 localStorage token만 있으면 진입하고, 만료/폐기 token은 내부 API 호출 때 실패한다. |
+| 진행 필요 | 회원가입 400/409 응답이 화면에서 실제 validation 메시지로 보이도록 Auth UI owner 1번과 오류 표시 계약을 맞춘다. | 1번 화면 owner, 5번 공통 `ApiError` owner가 겹치는 지점이다. |
+
+### 2번 Parts/Price 작업 반영 후
+
+| 상태 | 5번 후속 작업 | 근거 |
+| --- | --- | --- |
+| 진행 필요 | `POST /api/admin/price-jobs/run`의 중복 실행 정책을 2번과 확인한다. 계약은 active job 존재 시 `409 CONFLICT_STATE`인데 현재 구현은 기존 job을 그대로 반환한다. | `docs/API_CONTRACT.md`와 `PriceQueryService.runPriceJob()` 동작이 다르다. |
+| 진행 필요 | `/admin/price-jobs` 화면이 실제 `GET /api/admin/price-jobs`/`POST /api/admin/price-jobs/run`과 연결될지, 2번 owner 화면으로 남길지 명확히 공유한다. | 현재 `AdminPriceJobsPage`는 정적 안내와 disabled 버튼이다. |
+| 대기 | 2번이 실제 부품 가격 수집 작업을 queue/worker로 연결하면 `price.jobs` 작업 등록, 중복 실행, 실패 기록, RabbitMQ smoke를 같이 검토한다. | 5번은 가격 비즈니스 로직이 아니라 작업 대기열/인프라 협업자다. |
+| 대기 | 네이버 쇼핑 API key, 다나와 제한 크롤링 설정, 가격 알림 메일 설정이 프론트에 노출되지 않고 API 서버 env로만 관리되는지 확인한다. | 외부 API/메일 설정은 인프라·보안 검토 대상이다. |
+
+### 3번 Agent/RAG/AS Chat 작업 반영 후
+
+| 상태 | 5번 후속 작업 | 근거 |
+| --- | --- | --- |
+| 진행 필요 | AdminShell의 `Agent 세션`, `Tool 이력`, `RAG 근거` 메뉴가 고정 sample id로 이동하는 현재 방식을 3번과 확인한다. list route를 만들지, 최신 항목으로 이동할지 결정해야 한다. | 현재 sidebar는 seed public_id에 직접 연결되어 있다. |
+| 진행 필요 | `streamAsChat()`이 공통 `api()`를 우회하는 fetch/SSE 흐름이라 401, token header, `ApiError` body 보존 정책이 공통 client와 어긋나지 않는지 검토한다. | SSE는 일반 JSON API wrapper와 처리 방식이 다르다. |
+| 대기 | 3번이 AI 견적 추천 실행 작업을 RabbitMQ로 연결하면 `agent.jobs` 작업 등록, 성공 확인, 재시도, 최종 실패 기록 정책을 같이 검토한다. | 5번은 Agent 내부 로직이 아니라 queue 운영 정책 협업자다. |
+| 진행 필요 | LLM profile/benchmark 설정값이 `.env.example`, compose, 문서에 안전하게 정리되어 있고 실제 secret이 커밋되지 않는지 확인한다. | AS Chat profile benchmark가 추가되어 환경변수 관리 범위가 늘었다. |
+
+### 4번 PC Agent/AS 작업 반영 후
+
+| 상태 | 5번 후속 작업 | 근거 |
+| --- | --- | --- |
+| 진행 필요 | `/admin/as-tickets`와 `/admin/as-tickets/:ticketId`가 mock/static 화면으로 남아 있는지 4번과 공유한다. 실제 API 연결은 4번 owner, 5번은 shell/guard/route slot을 유지한다. | 현재 관리자 AS 티켓 목록/상세는 mock data와 no-op 버튼을 사용한다. |
+| 진행 필요 | `PATCH /api/admin/as-tickets/{id}`의 상태 전이 409, 401/403, audit log 정책이 계약과 맞는지 4번 PR에서 reviewer로 확인한다. | AS 티켓 내부는 4번이지만 admin 권한/오류/감사 로그는 5번 공통 기준과 맞아야 한다. |
+| 대기 | PC Agent 로그 업로드/AS 티켓 생성이 실제 파일 validation과 연결되면 Docker/runtime smoke와 public_id 비노출 검증을 다시 실행한다. | 4번 기능이 운영 데이터와 파일 업로드를 포함하므로 공통 검증 영향이 있다. |
+
+### 5번 단독으로 바로 할 수 있는 일
+
+- [ ] `api.ts`의 `ApiError`가 backend `ErrorResponse`를 보존하도록 테스트를 먼저 추가하고 구현한다.
+- [ ] refresh token 저장/조회/삭제 helper와 refresh retry 1회 정책을 1번 Auth 계약 기준으로 구현할지 최종 확인한다.
+- [ ] `RequireUser`의 만료 token 처리 정책을 문서화하고, 필요하면 테스트를 먼저 작성한다.
+- [ ] AdminShell sample id 메뉴를 3번과 공유하고, list route가 없으면 seed/sample link임을 화면 또는 문서에 명확히 둔다.
+- [ ] `/admin/price-jobs`와 `/admin/as-tickets`가 현재 static/mock 상태임을 2번/4번과 공유한다.
+- [ ] `POST /api/admin/price-jobs/run` 중복 실행 409 계약 위반 여부를 2번과 확인한다.
+- [ ] AS Chat SSE fetch가 공통 auth/error 정책과 맞는지 확인한다.
+- [ ] 300명/1000명 k6 시나리오를 Auth, Parts, AS Chat, Admin smoke로 분리해 설계한다.
+- [ ] 새로 들어온 1~4번 작업 기준으로 `npm --prefix apps/web run build`, `npm --prefix apps/web run test`, `cd apps/api && ./gradlew test --no-daemon`, `cd apps/api && ./gradlew bootJar --no-daemon`, OpenAPI validation, `docker compose config`를 PR 전 다시 기록한다.
 
 5번이 하면 안 되는 것도 명확합니다.
 
@@ -336,8 +587,10 @@ AdminShell nav 분석 결과:
 
 - [x] `POST /api/users`, `POST /api/auth/login`, `GET /api/auth/me`, refresh/logout/OAuth 구현은 1번에게 이관한다.
 - [x] password hashing, login password verification, JWT 발급/검증, refresh token hash 저장/회전/폐기, duplicate email 409, Auth validation error 구현은 1번에게 이관한다.
-- [ ] 1번 Auth API 구현 후 `apps/web/src/lib/api.ts`의 Authorization header/token 저장 정책과 충돌 없는지 확인한다.
-- [ ] 1번 Auth API 구현 후 `RequireAdmin`이 실제 JWT/role 기반 `/api/auth/me` 응답과 맞는지 확인한다.
+- [x] 1번 Auth API 구현 후 `apps/web/src/lib/api.ts`의 Authorization header가 실제 JWT access token 전달과 충돌 없는지 확인했다.
+- [x] 1번 Auth API 구현 후 `RequireAdmin`이 실제 JWT/role 기반 `/api/auth/me` 응답과 맞는지 확인했다.
+- [ ] refresh token 저장/재발급/로그아웃 호출을 `api.ts`와 header logout 흐름에 연결한다.
+- [ ] `ApiError`가 Auth validation/duplicate/refresh 실패 응답의 `code`, `message`, `details`를 보존하게 한다.
 - [ ] Spring Security filter 도입 시 admin API 권한 분기를 현재 `CurrentUserService` 기반 JWT 검사에서 filter 기반 정책으로 전환할지 결정한다.
 - [ ] Auth API 계약 변경 시 `docs/API_CONTRACT.md`와 `docs/openapi.yaml`의 오류 응답/예시를 1번 변경과 같이 검토한다.
 - [x] 401과 403 메시지를 더 명확히 분리한다. 프론트는 로그인 필요/관리자 권한 없음 메시지를 분리하고, 백엔드는 `UNAUTHORIZED`/`FORBIDDEN` 응답을 분리한다.
@@ -353,9 +606,9 @@ AdminShell nav 분석 결과:
 | --- | --- | --- |
 | token 저장 key | 현재 `buildgraph.token` 유지 | 1번이 refresh token 저장 위치를 별도 제안하면 XSS/보안 정책 검토 |
 | Authorization header | `api.ts`가 access token을 `Authorization: Bearer <token>`으로 자동 첨부 | owner별 API wrapper는 page에서 직접 `api()`를 호출하지 않는 규칙 유지 |
-| 401 처리 | refresh 불가 또는 refresh 실패 시 `clearToken()` 호출 후 로그인 필요 상태로 전환 | 1번 refresh 구현 전에는 자동 refresh retry를 넣지 않음 |
+| 401 처리 | refresh 불가 또는 refresh 실패 시 `clearToken()` 호출 후 로그인 필요 상태로 전환 | refresh endpoint가 구현되었으므로 `api.ts` 구현 고도화 대상 |
 | refresh retry | `api.ts` 공통 wrapper에서 요청당 최대 1회만 허용 | `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`, `/api/auth/exchange`는 retry 제외 |
-| logout | 1번 Auth flow가 logout API를 호출하고, 프론트 token 정리는 `clearToken()` 사용 | logout API 실패 시에도 강제 로컬 로그아웃이 필요한지 1번 PR에서 최종 확인 |
+| logout | 1번 Auth flow가 logout API를 호출하고, 프론트 token 정리는 `clearToken()` 사용 | 현재 header logout은 로컬 token만 삭제하므로 서버 refresh token 폐기 호출 연결 필요 |
 | error normalization | `ApiError`가 backend `ErrorResponse`의 `code`, `message`, `details`, `status`를 보존하는 방향 | 공통 `ErrorResponse` 세부 field가 변경되면 `API_CONTRACT.md`/`openapi.yaml` 동시 수정 |
 | admin guard | `RequireAdmin`은 `getToken()` 확인 후 `/api/auth/me`의 `role`을 기준으로 판단 | security chain 전환 검토 |
 
@@ -473,6 +726,34 @@ AdminShell nav 분석 결과:
 - [x] 2026-06-30 추가 UI 변경 기준 홈 첫 화면 추천 견적/인기 부품 랭킹, 셀프 견적 쇼핑 workspace, 공통 commerce 색상/패널/테이블/헤더 스타일, 모바일 셀프 견적 테스트 범위를 확인했다.
 - [x] 2026-06-30 추가 변경 기준 홈 화면의 빠른 쇼핑/상담 요약 보조 섹션 숨김과 Vite 개발 서버 API 프록시 대상 환경변수 분리 범위를 확인했다.
 - [x] 2026-06-30 `origin/main` 최신 변경을 `feat/improve-home-ui`에 병합하고, 숨긴 홈 보조 섹션 기준으로 Playwright 기대값을 정리했다. 검증: web build, web test 61개, OpenAPI 49 paths, backend test, backend bootJar, docker compose config 통과.
+- [x] 2026-06-30 구매 컨설팅 개선 기준 `POST /api/ai/build-chat`, `PUT /api/quote-drafts/current/apply-ai-build`, 홈 AI 추천상품 탭, 챗봇 대화 세션, 셀프 견적 batch 적용, 구매 컨설팅 아이콘 자산, 관련 backend/frontend 테스트와 OpenAPI 계약 변경 범위를 확인했다.
+- [x] 2026-06-30 구매 상담 추천의 toolReady 부품 조회 SQL에서 `trueORDER BY`가 붙지 않도록 공백을 보정하고, 예산 추천 호출 시 SQL 조합 공백 회귀 테스트가 추가된 범위를 확인했다.
+
+#### 2026-06-30 공동계약서 위반 감사 기록
+
+- [x] 현재 브랜치 `feat/aiChatImprove`가 `main` 대비 21개 파일을 변경하는 것을 확인했다. 주요 변경은 `POST /api/ai/build-chat`, `PUT /api/quote-drafts/current/apply-ai-build`, 홈 AI 추천 UI, 셀프 견적 batch 적용, 구매 컨설팅 아이콘 자산이다.
+- [x] 계약 문서 동기화 여부를 확인했다. `docs/API_CONTRACT.md`, `docs/ROUTE_OWNERSHIP.md`, `docs/openapi.yaml`에는 새 API와 route owner 변경이 반영되어 있다.
+- [x] 공동계약서 위반 가능성이 있는 항목을 구분했다.
+  - [ ] 5번 단독 PR이라면 owner 범위 위반 가능성이 있다. 이 브랜치는 1번 owner 영역인 `build`, `features/quote`, 홈 화면과 2번 owner 영역인 `quote`, `features/parts`, 셀프 견적 화면을 직접 수정한다. 1번/2번 작업 또는 명시적 리뷰가 있으면 허용 가능하고, 5번 단독 작업이면 계약 위반이다.
+  - [ ] 새 API 2개가 `docs/openapi.yaml`에는 들어갔지만 `tools/validate_openapi.py`의 `REQUIRED_PATHS`와 request schema 검사 목록에는 포함되지 않았다. CI의 OpenAPI 검증이 새 API 누락을 잡지 못하므로 검증 계약 보강이 필요하다.
+  - [ ] `HomePage.tsx` 안에 `featuredBuilds`, `popularPartDeals` 같은 domain mock/static 데이터가 직접 들어 있다. 유지하려면 "홈 마케팅용 정적 데이터"로 합의해야 하고, mock 데이터라면 `features/quote/mocks`로 옮기는 것이 계약에 맞다.
+- [x] 위반으로 보지 않는 항목을 확인했다.
+  - [x] 페이지 컴포넌트가 공통 `api()`를 직접 호출하지 않고 `quoteApi.ts`, `partsApi.ts` wrapper를 사용한다.
+  - [x] `POST /api/ai/build-chat`는 계약상 LLM/RAG 없이 DB/룰 기반으로 동작하므로 3번 Agent/RAG owner 영역을 직접 침범하지 않는다. 단, Tool 계산은 2번 owner review가 필요하다.
+  - [x] `PUT /api/quote-drafts/current/apply-ai-build`는 `conflictPolicy=REPLACE`와 transaction 적용 흐름을 갖고 있어 새 계약 방향과 대체로 맞다.
+  - [x] 구매 컨설팅 아이콘 자산은 `docs/hosoek/assets` 문서 자산이므로 route/API/DB owner 계약 위반은 아니다.
+- [x] 검증 결과를 기록했다.
+  - [x] `git diff --check main...HEAD` 통과.
+  - [x] `cd apps/api && ./gradlew test --no-daemon` 통과.
+  - [x] `cd apps/web && npm run test` 통과. Playwright 60개 통과.
+  - [x] Ruby YAML 기반 OpenAPI 보조 검증 통과. 51 paths 확인.
+  - [ ] 공식 `python tools/validate_openapi.py`는 로컬 `python` 명령 없음, `python3` PyYAML 없음, system pip 외부 관리 환경 제한 때문에 직접 실행하지 못했다. CI 또는 `.venv`에서 공식 스크립트 재확인이 필요하다.
+
+#### 2026-07-01 커밋 메시지 요청 전 점검 기록
+
+- [x] `origin/main` 병합 후 현재 브랜치가 `feat/aiChatImprove`이고, 마지막 커밋이 `fix: 로그인 후 헤더 사용자 표시를 유지`임을 확인했다.
+- [x] 현재 unstaged 변경은 `docs/hosoek/owner5-work-analysis-checklist.md` 1개뿐이며, 코드/API/OpenAPI 추가 변경은 없다.
+- [x] 이번 커밋 메시지는 구매 상담 기능 구현이 아니라 공동계약서 감사와 커밋 메시지 요청 전 점검 기록을 남기는 문서 커밋으로 분리한다.
 
 ## 우선순위
 
@@ -485,7 +766,8 @@ AdminShell nav 분석 결과:
 - [x] `/admin` dashboard가 실제 API 응답을 안전하게 표시하도록 수정
 - [x] 401/403 권한 분기 확인
 - [x] PR 전 기본 검증 명령 실행
-- [ ] 1번 Auth/User 구현 후 `api.ts`, `RequireAdmin`, admin guard 연동 검토
+- [x] 1번 Auth/User 구현 후 `api.ts`, `RequireAdmin`, admin guard 기본 연동 검토
+- [ ] `api.ts` refresh retry, logout API 호출, `ErrorResponse` 보존 구현
 
 ### P1
 
@@ -502,19 +784,23 @@ AdminShell nav 분석 결과:
 
 - [ ] Redis/RabbitMQ/Mailpit 실제 기능 연동. 조건: OAuth one-time code, AI 견적 추천 실행 작업, 부품 가격 수집 작업, 가격 알림 메일 중 해당 owner 구현 PR 발생
 - [ ] 부하 테스트 300명/1000명 시나리오 확장
-- [ ] 1번 refresh/JWT 구현 후 5번 공통 API client/admin guard 연동 고도화
+- [ ] AdminShell sample id 메뉴를 3번과 합의해 list route 또는 seed link 정책으로 정리
+- [ ] `/admin/price-jobs` 중복 실행 409 계약 위반 여부를 2번과 정리
+- [ ] `/admin/as-tickets` mock/static 상태를 4번과 정리
 
 ## 다음 작업 순서
 
-1. **1번 Auth 구현 후 5번 공통 연동 검토**
-   - `apps/web/src/lib/api.ts`의 token 저장/전달 정책이 실제 access token/refresh token 응답과 맞는지 확인한다.
-   - `RequireAdmin`이 실제 `/api/auth/me`의 role, 401, 403 응답과 맞는지 확인한다.
-   - admin API 권한 분기를 현재 JWT service 검사에서 Spring Security/JWT filter 정책으로 전환할지 결정한다.
-
-2. **Common API Client 구현 고도화**
-   - 1번 refresh/JWT 구현 후 `api.ts`에 최대 1회 refresh retry를 구현한다.
+1. **Common API Client 구현 고도화**
+   - `apps/web/src/lib/api.ts`에 backend `ErrorResponse` 보존 테스트를 먼저 추가한다.
+   - refresh token 저장/조회/삭제 helper와 요청당 최대 1회 refresh retry를 구현한다.
+   - `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`, `/api/auth/exchange`는 retry 제외 대상으로 둔다.
    - refresh 실패 또는 refresh 불가 401에서 `clearToken()`과 로그인 필요 상태가 일관되게 동작하는지 확인한다.
-   - `ApiError`가 backend `ErrorResponse`의 `code`, `message`, `details`, `status`를 보존하도록 확장한다.
+
+2. **Owner 2/3/4 관리자 route 정합성 공유**
+   - 2번과 `/admin/price-jobs` 실제 API 연결 범위와 중복 실행 409 정책을 확인한다.
+   - 3번과 AdminShell의 Agent/Tool/RAG 메뉴가 sample id link인지 list route인지 확인한다.
+   - 4번과 `/admin/as-tickets` mock/static 화면을 실제 API 연결로 넘길 시점을 확인한다.
+   - admin API 권한 분기를 현재 JWT service 검사에서 Spring Security/JWT filter 정책으로 전환할지 결정한다.
 
 3. **Redis/RabbitMQ/Mailpit 실제 기능 연동 대기**
    - Sprint 1 smoke는 완료했다. Redis `PONG`, RabbitMQ management API 200, Mailpit UI/API/SMTP 응답 확인.
@@ -538,8 +824,8 @@ AdminShell nav 분석 결과:
 
 | 구분 | 남은 일 | 상태 |
 | --- | --- | --- |
-| 로그인 토큰 공통 연결 | 1번이 로그인/JWT/로그아웃/구글 로그인을 만들면 `api.ts`, `RequireAdmin`, 관리자 권한 검사와 충돌 없는지 확인 | 대기 |
-| API 공통 호출 함수 | 로그인 만료 시 토큰 삭제, API 오류 응답 통일, refresh 재시도 1회 처리 | 1번 Auth 이후 |
+| 로그인 토큰 공통 연결 | 1번 로그인/JWT/refresh/logout 백엔드가 들어왔으므로 `api.ts` refresh/logout 연동과 오류 표시를 고도화 | 바로 가능 |
+| API 공통 호출 함수 | 로그인 만료 시 토큰 삭제, API 오류 응답 통일, refresh 재시도 1회 처리 | 바로 가능 |
 | 관리자 권한 검사 | 현재 JWT service 방식에서 Spring Security filter 방식으로 바꿀지 결정 | 후속 보안 정리 시점 |
 | 관리자 메뉴/레이아웃 | 관리자 메뉴 이름과 순서를 2/3/4번 담당자와 공유 | 바로 가능 |
 | 동시 접속 부하 테스트 | 300명/1000명 접속 상황 테스트 시나리오 만들기 | 남음 |
