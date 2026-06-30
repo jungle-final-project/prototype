@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -28,7 +28,8 @@ import {
   readAssistantSession,
   saveSelectedAiBuild,
   type AiAssistantSession,
-  type AiRecommendedBuild
+  type AiRecommendedBuild,
+  type PartCategory
 } from '../aiSelection';
 
 type QuickCategory = {
@@ -39,14 +40,23 @@ type QuickCategory = {
 };
 
 type FeaturedBuild = {
+  id: string;
   name: string;
   tag: string;
-  price: number;
-  originalPrice: number;
   spec: string;
   summary: string;
   tone: string;
-  to: string;
+  partSearches: FeaturedBuildPartSearch[];
+};
+
+type FeaturedBuildPartSearch = {
+  category: PartCategory;
+  searchQuery: string;
+};
+
+type FeaturedBuildResolvedPart = {
+  search: FeaturedBuildPartSearch;
+  part: PartRow;
 };
 
 type PopularPart = {
@@ -54,7 +64,6 @@ type PopularPart = {
   label: string;
   category: string;
   searchQuery: string;
-  price: number;
   sale: string;
   detail: string;
   to: string;
@@ -91,42 +100,66 @@ const quickCategories: QuickCategory[] = [
 
 const featuredBuilds: FeaturedBuild[] = [
   {
+    id: 'home-featured-qhd-gaming',
     name: 'QHD 게이밍 추천팩',
     tag: 'SALE 12%',
-    price: 1980000,
-    originalPrice: 2250000,
     spec: 'RTX 5070 · Ryzen 7 · DDR5 32GB',
     summary: 'QHD 게임과 개발 병행을 위한 균형형 조합입니다.',
     tone: 'from-blue-50 via-white to-white',
-    to: '/builds/00000000-0000-4000-8000-000000002001'
+    partSearches: [
+      { category: 'CPU', searchQuery: 'Ryzen 7' },
+      { category: 'MOTHERBOARD', searchQuery: 'B850' },
+      { category: 'RAM', searchQuery: 'DDR5 32GB' },
+      { category: 'GPU', searchQuery: 'RTX 5070' },
+      { category: 'STORAGE', searchQuery: 'NVMe 1TB' },
+      { category: 'PSU', searchQuery: '850W' },
+      { category: 'CASE', searchQuery: 'FRAME 4000D' },
+      { category: 'COOLER', searchQuery: 'Phantom Spirit' }
+    ]
   },
   {
+    id: 'home-featured-ai-cuda',
     name: 'AI CUDA 실습팩',
     tag: 'AI 추천',
-    price: 2480000,
-    originalPrice: 2690000,
     spec: 'VRAM 우선 · 850W PSU · 2TB SSD',
     summary: 'CUDA 실습과 모델 테스트를 고려한 GPU 우선 조합입니다.',
     tone: 'from-indigo-50 via-white to-white',
-    to: '/requirements/new'
+    partSearches: [
+      { category: 'CPU', searchQuery: 'Ryzen 9' },
+      { category: 'MOTHERBOARD', searchQuery: 'X870E' },
+      { category: 'RAM', searchQuery: 'DDR5 64GB' },
+      { category: 'GPU', searchQuery: 'RTX 5070 Ti' },
+      { category: 'STORAGE', searchQuery: 'NVMe 2TB' },
+      { category: 'PSU', searchQuery: '1000W' },
+      { category: 'CASE', searchQuery: 'H9 Flow' },
+      { category: 'COOLER', searchQuery: 'Liquid Freezer III' }
+    ]
   },
   {
+    id: 'home-featured-low-noise',
     name: '저소음 작업팩',
     tag: '검증 통과',
-    price: 2140000,
-    originalPrice: 2290000,
     spec: '듀얼타워 공랭 · 흡기형 케이스',
     summary: '장시간 개발 작업에서 소음과 발열을 낮추는 구성입니다.',
     tone: 'from-emerald-50 via-white to-white',
-    to: '/builds/00000000-0000-4000-8000-000000002001'
+    partSearches: [
+      { category: 'CPU', searchQuery: 'Ryzen 7' },
+      { category: 'MOTHERBOARD', searchQuery: 'B850' },
+      { category: 'RAM', searchQuery: 'DDR5 32GB' },
+      { category: 'GPU', searchQuery: 'RTX 5070' },
+      { category: 'STORAGE', searchQuery: 'NVMe 2TB' },
+      { category: 'PSU', searchQuery: '850W' },
+      { category: 'CASE', searchQuery: 'LIGHT BASE 900' },
+      { category: 'COOLER', searchQuery: 'Dark Rock Pro 5' }
+    ]
   }
 ];
 
 const popularPartDeals: PopularPart[] = [
-  { rank: 1, label: 'RTX 5070 QHD 그래픽카드', category: 'GPU', searchQuery: 'RTX 5070', price: 890000, sale: 'SALE', detail: 'QHD 고주사율 후보', to: '/self-quote?category=GPU', icon: Monitor },
-  { rank: 2, label: 'Ryzen 7 작업용 CPU', category: 'CPU', searchQuery: 'Ryzen 7', price: 420000, sale: 'BEST', detail: '게임/개발 균형형', to: '/self-quote?category=CPU', icon: Cpu },
-  { rank: 3, label: 'DDR5 32GB 메모리', category: 'RAM', searchQuery: 'DDR5 32GB', price: 128000, sale: 'LOW', detail: '멀티태스킹 표준', to: '/self-quote?category=RAM', icon: Database },
-  { rank: 4, label: 'ATX 3.1 850W 파워', category: 'PSU', searchQuery: 'ATX 3.1 850W', price: 165000, sale: 'PASS', detail: '전력 여유 확보', to: '/self-quote?category=PSU', icon: Zap }
+  { rank: 1, label: 'RTX 5070 QHD 그래픽카드', category: 'GPU', searchQuery: 'RTX 5070', sale: 'SALE', detail: 'QHD 고주사율 후보', to: '/self-quote?category=GPU', icon: Monitor },
+  { rank: 2, label: 'Ryzen 7 작업용 CPU', category: 'CPU', searchQuery: 'Ryzen 7', sale: 'BEST', detail: '게임/개발 균형형', to: '/self-quote?category=CPU', icon: Cpu },
+  { rank: 3, label: 'DDR5 32GB 메모리', category: 'RAM', searchQuery: 'DDR5 32GB', sale: 'LOW', detail: '멀티태스킹 표준', to: '/self-quote?category=RAM', icon: Database },
+  { rank: 4, label: 'ATX 3.1 850W 파워', category: 'PSU', searchQuery: 'ATX 3.1 850W', sale: 'PASS', detail: '전력 여유 확보', to: '/self-quote?category=PSU', icon: Zap }
 ];
 
 export function HomePage() {
@@ -134,13 +167,26 @@ export function HomePage() {
   const [assistantSession, setAssistantSession] = useState<AiAssistantSession>(() => readAssistantSession());
   const [recommendationTab, setRecommendationTab] = useState<RecommendationTab>(() => readAssistantSession().latestBuilds.length > 0 ? 'ai' : 'popular');
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
+  const [applyingFeaturedBuildId, setApplyingFeaturedBuildId] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const { data: featuredCasePartsData } = useQuery({
-    queryKey: ['parts', 'home-featured-cases'],
-    queryFn: () => listParts({ category: 'CASE', page: 0, size: featuredBuilds.length, sort: 'price_desc' }),
-    staleTime: 60_000
+  const featuredBuildPartQueries = useQueries({
+    queries: featuredBuilds.map((build) => ({
+      queryKey: ['parts', 'home-featured-build', build.id],
+      queryFn: async (): Promise<FeaturedBuildResolvedPart[]> => {
+        const partPages = await Promise.all(
+          build.partSearches.map((part) => listParts({ category: part.category, q: part.searchQuery, page: 0, size: 1, sort: 'price_desc' }))
+        );
+
+        return partPages
+          .map((page, index) => {
+            const part = page.items[0];
+            return part ? { search: build.partSearches[index], part } : null;
+          })
+          .filter((item): item is FeaturedBuildResolvedPart => item !== null);
+      },
+      staleTime: 60_000
+    }))
   });
-  const featuredCaseParts = featuredCasePartsData?.items ?? [];
 
   useEffect(() => {
     const syncAssistantSession = () => {
@@ -181,6 +227,33 @@ export function HomePage() {
     }
   }
 
+  async function selectFeaturedBuild(build: FeaturedBuild, buildParts: FeaturedBuildResolvedPart[]) {
+    if (applyingFeaturedBuildId || applyingBuildId) return;
+    setApplyError(null);
+    if (buildParts.length < build.partSearches.length) {
+      setApplyError('추천상품 견적 정보를 아직 모두 불러오고 있습니다. 잠시 후 다시 선택해 주세요.');
+      return;
+    }
+
+    setApplyingFeaturedBuildId(build.id);
+    try {
+      await applyAiBuildToQuoteDraft({
+        buildId: build.id,
+        conflictPolicy: 'REPLACE',
+        items: buildParts.map(({ search, part }) => ({
+          partId: part.id,
+          category: search.category,
+          quantity: 1
+        }))
+      });
+      navigate('/self-quote');
+    } catch {
+      setApplyError('추천상품 견적을 셀프견적 장바구니에 담지 못했습니다. 백엔드 실행 상태를 확인해 주세요.');
+    } finally {
+      setApplyingFeaturedBuildId(null);
+    }
+  }
+
   return (
     <Screen>
       <div className="space-y-7 pb-12">
@@ -217,21 +290,37 @@ export function HomePage() {
               </button>
             </div>
           </div>
+          {applyError ? (
+            <div role="alert" className="mb-3 rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+              {applyError}
+            </div>
+          ) : null}
           {recommendationTab === 'popular' ? (
             <div className="grid gap-3 md:grid-cols-3">
-              {featuredBuilds.map((build, index) => (
-                <FeaturedBuildCard key={build.name} build={build} casePart={featuredCaseParts[index]} />
-              ))}
+              {featuredBuilds.map((build, index) => {
+                const buildParts = featuredBuildPartQueries[index]?.data ?? [];
+                const casePart = buildParts.find((item) => item.part.category === 'CASE')?.part;
+                const assetTotalPrice = buildParts.length === build.partSearches.length
+                  ? buildParts.reduce((sum, item) => sum + item.part.price, 0)
+                  : null;
+
+                return (
+                  <FeaturedBuildCard
+                    key={build.id}
+                    build={build}
+                    buildParts={buildParts}
+                    casePart={casePart}
+                    assetTotalPrice={assetTotalPrice}
+                    isApplying={applyingFeaturedBuildId === build.id}
+                    onSelect={selectFeaturedBuild}
+                  />
+                );
+              })}
             </div>
           ) : (
             <div data-testid="home-ai-recommendations">
               {assistantSession.latestBuilds.length > 0 ? (
                 <>
-                  {applyError ? (
-                    <div role="alert" className="mb-3 rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
-                      {applyError}
-                    </div>
-                  ) : null}
                   <div className="grid gap-3 md:grid-cols-3">
                     {assistantSession.latestBuilds.map((build) => (
                       <AiRecommendationCard
@@ -394,11 +483,28 @@ function QuickCategoryPanel() {
   );
 }
 
-function FeaturedBuildCard({ build, casePart }: { build: FeaturedBuild; casePart?: PartRow }) {
+function FeaturedBuildCard({
+  build,
+  buildParts,
+  casePart,
+  assetTotalPrice,
+  isApplying,
+  onSelect
+}: {
+  build: FeaturedBuild;
+  buildParts: FeaturedBuildResolvedPart[];
+  casePart?: PartRow;
+  assetTotalPrice: number | null;
+  isApplying: boolean;
+  onSelect: (build: FeaturedBuild, buildParts: FeaturedBuildResolvedPart[]) => void;
+}) {
   return (
-    <Link
-      to={build.to}
-      className={`group rounded-lg border border-commerce-line bg-gradient-to-br ${build.tone} p-4 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100`}
+    <button
+      type="button"
+      onClick={() => onSelect(build, buildParts)}
+      disabled={isApplying}
+      aria-label={`${build.name} 셀프견적에 담기`}
+      className={`group rounded-lg border border-commerce-line bg-gradient-to-br ${build.tone} p-4 text-left transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-70`}
     >
       <div className="mb-3 flex min-h-8 items-start justify-between gap-3">
         <h3 className="min-w-0 truncate text-base font-black text-commerce-ink">{build.name}</h3>
@@ -421,14 +527,17 @@ function FeaturedBuildCard({ build, casePart }: { build: FeaturedBuild; casePart
         )}
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <span className="text-xl font-black tracking-tight text-commerce-sale">{build.price.toLocaleString()}원</span>
-        <span className="text-xs font-bold text-slate-400 line-through">{build.originalPrice.toLocaleString()}원</span>
+        {assetTotalPrice !== null ? (
+          <span className="text-xl font-black tracking-tight text-commerce-sale">{assetTotalPrice.toLocaleString()}원</span>
+        ) : (
+          <span className="text-sm font-black text-slate-400">가격 계산 중</span>
+        )}
       </div>
       <div className="mt-3 flex items-center gap-2 text-xs font-black text-commerce-green">
         <PackageCheck size={15} />
-        호환성 통과
+        {isApplying ? '견적 담는 중' : '호환성 통과'}
       </div>
-    </Link>
+    </button>
   );
 }
 
@@ -476,7 +585,11 @@ function PopularPartsSection() {
               <h3 className="mt-1 min-h-10 text-sm font-black leading-5 text-commerce-ink">{part.label}</h3>
               <p className="mt-1 text-xs text-slate-500">{part.detail}</p>
               <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="text-lg font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
+                {matchedPart ? (
+                  <span className="text-lg font-black text-commerce-ink">{matchedPart.price.toLocaleString()}원</span>
+                ) : (
+                  <span className="text-sm font-black text-slate-400">가격 확인 중</span>
+                )}
                 <div className="flex items-center gap-1 text-[11px] font-bold text-amber-600">
                   <Star size={12} fill="currentColor" />
                   인기
