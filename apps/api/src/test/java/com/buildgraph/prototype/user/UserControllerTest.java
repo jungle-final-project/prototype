@@ -80,6 +80,21 @@ class UserControllerTest {
     }
 
     @Test
+    void logoutReturnsNoContent() throws Exception {
+        mockMvc.perform(post("/api/auth/logout")
+                        .header("Authorization", "Bearer jwt-access-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "refreshToken": "opaque-refresh-token"
+                                }
+                                """))
+                .andExpect(status().isNoContent());
+
+        verify(userQueryService).logout("Bearer jwt-access-token", "opaque-refresh-token");
+    }
+
+    @Test
     void signupReturnsCreatedUserResponse() throws Exception {
         when(userQueryService.signup("Demo User", "user@example.com", "passw0rd!", true, false)).thenReturn(Map.of(
                 "id", "00000000-0000-4000-8000-000000001004",

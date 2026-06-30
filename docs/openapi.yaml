@@ -78,6 +78,8 @@ paths:
                 $ref: "#/components/schemas/RefreshResponse"
   /api/auth/logout:
     post:
+      security:
+        - bearerAuth: []
       summary: 로그아웃
       requestBody:
         required: true
