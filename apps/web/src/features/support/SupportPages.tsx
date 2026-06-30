@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
@@ -11,7 +11,9 @@ import type { AsTicketDto, CauseCandidate } from './types';
 type SubmitState = 'default' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_created';
 
 export function AsChatPage() {
-  const [ticketId, setTicketId] = useState(AS_CHAT_DEFAULT_TICKET_ID);
+  const [searchParams] = useSearchParams();
+  const initialTicketId = searchParams.get('asTicketId')?.trim() || AS_CHAT_DEFAULT_TICKET_ID;
+  const [ticketId, setTicketId] = useState(initialTicketId);
   const [message, setMessage] = useState('게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요.');
   const [latestResponse, setLatestResponse] = useState<AsChatResponse | null>(null);
   const [error, setError] = useState('');
