@@ -211,6 +211,8 @@ test('opens cooler internal assets from home category link', async ({ page }) =>
   });
 
   await page.goto('/');
+  await page.getByRole('textbox', { name: '원하는 PC 사양 입력' }).fill('저소음 작업용 PC 추천해줘');
+  await page.getByRole('button', { name: '견적 상담 시작' }).click();
   await page.getByRole('link', { name: '쿨러' }).click();
 
   await expect(page).toHaveURL('/self-quote?category=COOLER');
@@ -263,6 +265,8 @@ test('opens GPU internal assets from home category link', async ({ page }) => {
   });
 
   await page.goto('/');
+  await page.getByRole('textbox', { name: '원하는 PC 사양 입력' }).fill('QHD 게임용 PC 추천해줘');
+  await page.getByRole('button', { name: '견적 상담 시작' }).click();
   await page.getByRole('link', { name: 'GPU' }).click();
 
   await expect(page).toHaveURL('/self-quote?category=GPU');

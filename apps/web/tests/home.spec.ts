@@ -37,7 +37,7 @@ test('renders bright shopping sections for product discovery', async ({ page }) 
   await expect(main.getByRole('heading', { name: '오늘의 추천 견적' })).toBeVisible();
   await expect(main.getByRole('heading', { name: '인기 부품 랭킹' })).toBeVisible();
   await expect(main.getByText('SALE', { exact: true }).first()).toBeVisible();
-  await expect(main.getByRole('link', { name: 'GPU', exact: true })).toHaveAttribute('href', '/self-quote?category=GPU');
+  await expect(main.getByRole('link', { name: '인기 부품 1번 보기' })).toHaveAttribute('href', '/self-quote?category=GPU');
   await expect(main.getByRole('link', { name: '셀프 견적 전체 보기' })).toHaveAttribute('href', '/self-quote');
 });
 
@@ -80,7 +80,7 @@ test('starts a local consultation and renders simulated recommendations', async 
 
   await expect(main.getByRole('heading', { name: '추천 컴퓨터를 메인화면에 제공해드렸습니다' })).toBeVisible();
   await expect(main.getByText('균형형 표준 견적')).toBeVisible();
-  await expect(main.getByText('Tool 검증')).toBeVisible();
+  await expect(main.getByRole('heading', { name: '부품 바로가기' })).toBeVisible();
   await expect(page.getByTestId('assistant-bar')).toBeVisible();
   await expect(page.getByTestId('assistant-answer')).toContainText('추천 컴퓨터를 메인화면에 제공해드렸습니다');
   await expect(page.getByTestId('wizard-options').getByRole('button', { name: '게임' })).toBeVisible();
