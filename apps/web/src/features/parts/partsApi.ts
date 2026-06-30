@@ -1,4 +1,5 @@
 import { api } from '../../lib/api';
+import type { AiBuildItem } from '../quote/aiSelection';
 import type { PartPage, PartPriceHistory, PartPriceHistoryParams, PartSearchParams, PartRow, QuoteDraft } from './types';
 
 export function listParts(params: PartSearchParams = {}) {
@@ -48,6 +49,17 @@ export function patchQuoteDraftItem(partId: string, quantity: number) {
 export function deleteQuoteDraftItem(partId: string) {
   return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
     method: 'DELETE'
+  });
+}
+
+export function applyAiBuildToQuoteDraft(payload: {
+  buildId?: string;
+  items: Array<Pick<AiBuildItem, 'partId' | 'category' | 'quantity'>>;
+  conflictPolicy: 'REPLACE';
+}) {
+  return api<QuoteDraft>('/api/quote-drafts/current/apply-ai-build', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
   });
 }
 

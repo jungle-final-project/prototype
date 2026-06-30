@@ -2,13 +2,13 @@ import { ReactNode, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bot, FileText, LifeBuoy, LogIn, LogOut, Search, ShieldCheck, UserRound } from 'lucide-react';
 import { getCurrentUser, type CurrentUser } from '../../features/auth/authApi';
-import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../lib/api';
+import { AUTH_CHANGED_EVENT, ApiError, clearToken, getCachedAuthUser, getToken } from '../../lib/api';
 import { PrimaryNav } from './PrimaryNav';
 
 export function AppHeader() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<CurrentUser | null>(null);
-  const [checkingUser, setCheckingUser] = useState(false);
+  const [user, setUser] = useState<CurrentUser | null>(() => readCachedCurrentUser());
+  const [checkingUser, setCheckingUser] = useState(() => Boolean(getToken() && !readCachedCurrentUser()));
 
   useEffect(() => {
     let cancelled = false;
@@ -125,6 +125,11 @@ function isCurrentUser(value: unknown): value is CurrentUser {
     typeof candidate.name === 'string' &&
     (candidate.role === 'USER' || candidate.role === 'ADMIN')
   );
+}
+
+function readCachedCurrentUser() {
+  const cachedUser = getCachedAuthUser();
+  return isCurrentUser(cachedUser) ? cachedUser : null;
 }
 
 function HeaderButton({ to, icon, label, dark }: { to: string; icon: ReactNode; label: string; dark?: boolean }) {

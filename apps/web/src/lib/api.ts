@@ -2,6 +2,7 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 export const AUTH_CHANGED_EVENT = 'buildgraph-auth-change';
 const ACCESS_TOKEN_KEY = 'buildgraph.token';
 const REFRESH_TOKEN_KEY = 'buildgraph.refreshToken';
+const AUTH_USER_KEY = 'buildgraph.authUser';
 
 type ErrorResponseBody = {
   code?: unknown;
@@ -137,13 +138,22 @@ function storeAuthTokens(accessToken: string, refreshToken: string) {
   localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
 }
 
+function storeAuthUser(user: unknown) {
+  if (user === undefined) {
+    return;
+  }
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+}
+
 export function saveAuthTokens(accessToken: string, refreshToken: string, user?: unknown) {
   storeAuthTokens(accessToken, refreshToken);
+  storeAuthUser(user);
   dispatchAuthChanged({ user });
 }
 
 export function saveToken(token: string) {
   localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  localStorage.removeItem(AUTH_USER_KEY);
   dispatchAuthChanged();
 }
 
@@ -155,8 +165,18 @@ export function getRefreshToken() {
   return localStorage.getItem(REFRESH_TOKEN_KEY);
 }
 
+export function getCachedAuthUser() {
+  try {
+    const raw = localStorage.getItem(AUTH_USER_KEY);
+    return raw ? JSON.parse(raw) as unknown : null;
+  } catch {
+    return null;
+  }
+}
+
 export function clearToken() {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
   dispatchAuthChanged();
 }

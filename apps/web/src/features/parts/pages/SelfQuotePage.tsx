@@ -1,9 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, PackageCheck, Search, ShoppingCart, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, Bell, CheckCircle2, PackageCheck, Search, ShoppingCart, SlidersHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { CategorySidebar, DataTable, MetricCard, Panel, Screen } from '../../../components/ui';
 import { getToken } from '../../../lib/api';
+import { AiBuildAssistant } from '../../quote/components/AiBuildAssistant';
+import {
+  AI_SELECTED_BUILD_CHANGED_EVENT,
+  PART_CATEGORY_LABELS,
+  clearSelectedAiBuild,
+  readSelectedAiBuild,
+  type AiSelectedBuild
+} from '../../quote/aiSelection';
 import { partImageUrl, partShortSpec } from '../partDisplay';
 import { deleteQuoteDraftItem, getCurrentQuoteDraft, getPartPriceHistory, listParts, patchQuoteDraftItem, putQuoteDraftItem } from '../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../types';
@@ -31,6 +39,7 @@ export function SelfQuotePage() {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<PartSearchParams['sort']>('category');
   const [page, setPage] = useState(() => normalizePage(searchParams.get('page')));
+  const [aiBuild, setAiBuild] = useState<AiSelectedBuild | null>(() => readSelectedAiBuild());
   const hasToken = Boolean(getToken());
   const { data, isError, isLoading } = useQuery({
     queryKey: ['parts', 'self-quote', category, query, sort, page],
@@ -129,6 +138,16 @@ export function SelfQuotePage() {
     movePage(safePage);
   }, [data, movePage, page, safePage]);
 
+  useEffect(() => {
+    const syncSelectedBuild = () => setAiBuild(readSelectedAiBuild());
+    window.addEventListener(AI_SELECTED_BUILD_CHANGED_EVENT, syncSelectedBuild);
+    window.addEventListener('storage', syncSelectedBuild);
+    return () => {
+      window.removeEventListener(AI_SELECTED_BUILD_CHANGED_EVENT, syncSelectedBuild);
+      window.removeEventListener('storage', syncSelectedBuild);
+    };
+  }, []);
+
   const addPart = (part: PartRow) => {
     if (!hasToken) {
       navigate(`/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`);
@@ -191,6 +210,17 @@ export function SelfQuotePage() {
             </div>
           </div>
         </section>
+
+        {aiBuild ? (
+          <AiSelectedBuildPanel
+            build={aiBuild}
+            selectedPartIds={selectedPartIds}
+            onClear={() => {
+              clearSelectedAiBuild();
+              setAiBuild(null);
+            }}
+          />
+        ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[216px_minmax(0,1fr)_320px]">
           <CategorySidebar items={selfQuoteCategories} activeValue={category} onSelect={selectCategory} />
@@ -303,7 +333,89 @@ export function SelfQuotePage() {
           </aside>
         </div>
       </div>
+      <AiBuildAssistant surface="self-quote" />
     </Screen>
+  );
+}
+
+function AiSelectedBuildPanel({
+  build,
+  selectedPartIds,
+  onClear
+}: {
+  build: AiSelectedBuild;
+  selectedPartIds: Set<string>;
+  onClear: () => void;
+}) {
+  const duplicateCount = build.items.filter((item) => selectedPartIds.has(item.partId)).length;
+  const appliedPartCategories = build.appliedPartCategories ?? [];
+
+  return (
+    <section data-testid="ai-selected-build-panel" className="panel overflow-hidden border-blue-100 bg-blue-50/60">
+      <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="rounded bg-commerce-ink px-2 py-1 text-[11px] font-black text-white">AI 선택</span>
+            <span className="rounded bg-white px-2 py-1 text-[11px] font-black text-brand-blue">실제 장바구니 적용 기록</span>
+            {appliedPartCategories.map((category) => (
+              <span key={category} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">
+                {PART_CATEGORY_LABELS[category]} 반영됨
+              </span>
+            ))}
+            {duplicateCount > 0 ? <span className="rounded bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-700">중복 {duplicateCount}개 감지</span> : null}
+          </div>
+          <h2 className="text-xl font-black text-commerce-ink">AI 선택 조합</h2>
+          <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-slate-600">
+            {build.title} · {build.summary} 선택 시점의 AI 조합과 현재 견적 장바구니 반영 상태를 비교합니다.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="rounded-md bg-white px-4 py-3 text-right">
+            <div className="text-xs font-bold text-slate-500">AI 조합 합계</div>
+            <div className="text-lg font-black text-commerce-sale">{build.totalPrice.toLocaleString()}원</div>
+          </div>
+          <button
+            type="button"
+            aria-label="AI 선택 조합 비우기"
+            onClick={onClear}
+            className="grid h-10 w-10 place-items-center rounded-md border border-commerce-line bg-white text-slate-600 hover:border-commerce-sale hover:text-commerce-sale"
+          >
+            <X size={17} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 border-t border-blue-100 bg-white/75 p-5 md:grid-cols-2 xl:grid-cols-4">
+        {build.items.map((item) => {
+          const alreadySelected = selectedPartIds.has(item.partId);
+          const categoryLabel = PART_CATEGORY_LABELS[item.category] ?? item.category;
+          return (
+            <div key={item.partId} className="rounded-lg border border-commerce-line bg-white p-3 text-xs">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="rounded bg-slate-100 px-2 py-1 font-black text-slate-700">{categoryLabel}</span>
+                <span className={`rounded px-2 py-1 font-black ${alreadySelected ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-brand-blue'}`}>
+                  {alreadySelected ? '이미 담김' : '별도 표시'}
+                </span>
+              </div>
+              <div className="min-h-10 font-black leading-5 text-commerce-ink">{item.name}</div>
+              <div className="mt-1 text-slate-500">{item.manufacturer} · 수량 {item.quantity}</div>
+              <div className="mt-2 break-keep text-slate-500">{item.note}</div>
+              <div className="mt-3 font-black text-brand-blue">{item.price.toLocaleString()}원</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-blue-100 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="break-keep text-xs font-bold leading-5 text-slate-500">
+          AI 조합 적용은 서버 batch API로 처리되며, 현재 견적 장바구니에 있는 부품은 이미 담김으로 표시합니다.
+        </div>
+        <Link to="/my/quotes" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 text-sm font-black text-commerce-ink hover:border-commerce-ink">
+          <Bell size={16} />
+          목표가 알림 설정
+        </Link>
+      </div>
+    </section>
   );
 }
 

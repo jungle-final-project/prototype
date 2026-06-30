@@ -218,6 +218,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ChangePartResponse"
+  /api/ai/build-chat:
+    post:
+      summary: AI 챗봇 DB/룰 기반 Build 추천
+      description: LLM/RAG 없이 message를 예산/부품/일반 질문으로 분류하고 ACTIVE parts DB와 Tool 검증 결과로 최신 AI 추천 조합을 반환한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiBuildChatRequest"
+      responses:
+        "200":
+          description: 챗봇 추천 응답
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiBuildChatResponse"
   /api/parts:
     get:
       summary: 부품 목록
@@ -321,6 +340,25 @@ paths:
       responses:
         "200":
           description: 현재 견적초안. active draft가 없으면 status=EMPTY로 반환한다.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftDto"
+  /api/quote-drafts/current/apply-ai-build:
+    put:
+      summary: AI 추천 조합을 현재 견적초안에 batch 적용
+      description: conflictPolicy=REPLACE만 지원한다. 요청 items의 카테고리는 기존 draft에서 교체되며 RAM/STORAGE도 append가 아니라 AI 조합 기준으로 교체된다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiBuildApplyRequest"
+      responses:
+        "200":
+          description: 갱신된 견적초안
           content:
             application/json:
               schema:
@@ -1290,6 +1328,169 @@ components:
         attributes:
           type: object
           additionalProperties: true
+    AiBuildTier:
+      type: string
+      enum: [budget, balanced, performance]
+    AiBuildChatAnswerType:
+      type: string
+      enum: [BUDGET, PART, GENERAL]
+    AiBuildChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        currentBuilds:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiBuildRecommendationDto"
+        appliedPartPreferences:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiAppliedPartPreferenceDto"
+    AiBuildChatResponse:
+      type: object
+      required: [answerType, message, builds, warnings]
+      properties:
+        answerType:
+          $ref: "#/components/schemas/AiBuildChatAnswerType"
+        message:
+          type: string
+        builds:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiBuildRecommendationDto"
+        partRecommendation:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AiPartRecommendationDto"
+        warnings:
+          type: array
+          items:
+            type: string
+    AiBuildRecommendationDto:
+      type: object
+      required: [id, tier, label, title, summary, totalPrice, badges, budgetWon, budgetLabel, tierLabel, appliedPartCategories, items, toolResults, warnings, confidence]
+      properties:
+        id:
+          type: string
+        tier:
+          $ref: "#/components/schemas/AiBuildTier"
+        label:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        totalPrice:
+          type: integer
+        badges:
+          type: array
+          items:
+            type: string
+        budgetWon:
+          type: integer
+        budgetLabel:
+          type: string
+        tierLabel:
+          type: string
+        appliedPartCategories:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartCategory"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiBuildItemDto"
+        toolResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolResultDto"
+        warnings:
+          type: array
+          items:
+            type: string
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+    AiBuildItemDto:
+      type: object
+      required: [partId, category, name, quantity, price]
+      properties:
+        partId:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        name:
+          type: string
+        manufacturer:
+          type: string
+          nullable: true
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 9
+        price:
+          type: integer
+        note:
+          type: string
+    AiPartRecommendationDto:
+      type: object
+      required: [category, label, intro, options]
+      properties:
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        label:
+          type: string
+        intro:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiBuildItemDto"
+    AiAppliedPartPreferenceDto:
+      type: object
+      required: [category, label, appliedAt, options]
+      properties:
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        label:
+          type: string
+        appliedAt:
+          type: string
+          format: date-time
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiBuildItemDto"
+    AiBuildApplyRequest:
+      type: object
+      required: [items, conflictPolicy]
+      properties:
+        buildId:
+          type: string
+          nullable: true
+        conflictPolicy:
+          type: string
+          enum: [REPLACE]
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AiBuildApplyItem"
+    AiBuildApplyItem:
+      type: object
+      required: [partId, category, quantity]
+      properties:
+        partId:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 9
     ChangePartRequest:
       type: object
       required: [category, partId]
