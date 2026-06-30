@@ -409,12 +409,12 @@ public class AsChatService {
 
     private static Map<String, Object> responseLimits(AiProfileDefinition aiProfile) {
         return switch (aiProfile.profile()) {
-            case AS_CHAT_FAST, AS_CHAT_NANO_FAST, AS_CHAT_GEMINI_FAST -> MockData.map(
+            case AS_CHAT_FAST, AS_CHAT_NANO_FAST -> MockData.map(
                     "assistantMessage", "Korean, around 220 characters",
                     "causeCandidatesMax", 1,
                     "nextActionsMax", 2
             );
-            case AS_CHAT_BALANCED, AS_CHAT_GEMINI_BALANCED -> MockData.map(
+            case AS_CHAT_BALANCED -> MockData.map(
                     "assistantMessage", "Korean, around 350 characters",
                     "causeCandidatesMax", 2,
                     "nextActionsMax", 3

@@ -81,22 +81,6 @@ class AsChatProfilePolicyTest {
                 5,
                 true,
                 false,
-                true,
-                "gemini-2.5-flash",
-                "none",
-                2,
-                900,
-                3,
-                false,
-                false,
-                true,
-                "gemini-2.5-pro",
-                "none",
-                3,
-                1200,
-                4,
-                false,
-                false,
                 true
         );
     }

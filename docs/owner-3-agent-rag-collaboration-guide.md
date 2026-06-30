@@ -203,7 +203,7 @@ Agent 실행 방식은 `AGENT_RUNNER_MODE` 환경변수로 고른다.
 | mode | 동작 | 필요한 환경변수 | 용도 |
 |---|---|---|---|
 | `deterministic` | seed 기반 RAG/Tool trace와 고정 summary 생성 | 없음 | 키가 없는 팀원 개발, 기본 Docker 실행 |
-| `llm` | seed 기반 RAG/Tool trace를 저장한 뒤 provider별 LLM API로 summary 생성 | `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` | 실제 LLM 생성 결과가 관리자 화면까지 표시되는 검증 |
+| `llm` | seed 기반 RAG/Tool trace를 저장한 뒤 OpenAI API로 summary 생성 | `OPENAI_API_KEY` | 실제 LLM 생성 결과가 관리자 화면까지 표시되는 검증 |
 
 LLM 실행에 필요한 `.env` 예시는 아래와 같다.
 
@@ -212,7 +212,6 @@ AGENT_RUNNER_MODE=llm
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.5
 OPENAI_REASONING_EFFORT=medium
-GEMINI_API_KEY=
 AS_CHAT_DEFAULT_PROFILE=AS_CHAT_FAST
 AS_CHAT_FAST_MODEL=gpt-5.5
 AS_CHAT_FAST_REASONING_EFFORT=low
@@ -231,19 +230,12 @@ AS_CHAT_HIGH_QUALITY_MODEL=gpt-5.5
 AS_CHAT_HIGH_QUALITY_REASONING_EFFORT=medium
 AS_CHAT_HIGH_QUALITY_RAG_TOP_K=5
 AS_CHAT_HIGH_QUALITY_MAX_OUTPUT_TOKENS=2600
-AS_CHAT_GEMINI_FAST_MODEL=gemini-2.5-flash
-AS_CHAT_GEMINI_FAST_RAG_TOP_K=2
-AS_CHAT_GEMINI_FAST_MAX_OUTPUT_TOKENS=900
-AS_CHAT_GEMINI_BALANCED_MODEL=gemini-2.5-pro
-AS_CHAT_GEMINI_BALANCED_RAG_TOP_K=3
-AS_CHAT_GEMINI_BALANCED_MAX_OUTPUT_TOKENS=1200
 OPENAI_BASE_URL=https://api.openai.com/v1
-GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 ```
 
 API 키는 저장소에 커밋하지 않는다. 각자 로컬 `.env`에만 넣는다.
 
-AS Chat은 기본 요청에서 `AS_CHAT_DEFAULT_PROFILE` 하나만 실행한다. OpenAI/Gemini profile 비교는 `tools/benchmark_as_chat_profiles.py`가 내부 검증용 header `X-BuildGraph-AI-Profile`을 사용해 순차 실행한다. 사용자 화면은 `POST /api/ai/as-chat/stream`을 우선 사용해 `STARTED -> RAG_READY -> TOOLS_READY -> LLM_RUNNING -> DONE` 진행 상태를 표시한다.
+AS Chat은 기본 요청에서 `AS_CHAT_DEFAULT_PROFILE` 하나만 실행한다. OpenAI profile 비교는 `tools/benchmark_as_chat_profiles.py`가 내부 검증용 header `X-BuildGraph-AI-Profile`을 사용해 순차 실행한다. 사용자 화면은 `POST /api/ai/as-chat/stream`을 우선 사용해 `STARTED -> RAG_READY -> TOOLS_READY -> LLM_RUNNING -> DONE` 진행 상태를 표시한다.
 
 | profile | provider | 목적 | 기본 모델 | reasoning | RAG topK | max output |
 |---|---|---|---|---|---:|---:|
@@ -251,8 +243,6 @@ AS Chat은 기본 요청에서 `AS_CHAT_DEFAULT_PROFILE` 하나만 실행한다.
 | `AS_CHAT_NANO_FAST` | OpenAI | 속도 개선 기본값 후보 | `gpt-5.4-nano` | `low` | 2 | 700 |
 | `AS_CHAT_BALANCED` | OpenAI | 고위험/품질 보강 후보 | `gpt-5.5` | `low` | 3 | 1100 |
 | `AS_CHAT_HIGH_QUALITY` | OpenAI | 관리자 검증/고품질 후보 | `gpt-5.5` | `medium` | 5 | 2600 |
-| `AS_CHAT_GEMINI_FAST` | Gemini | 속도 비교 후보 | `gemini-2.5-flash` | `none` | 2 | 900 |
-| `AS_CHAT_GEMINI_BALANCED` | Gemini | 품질 비교 후보 | `gemini-2.5-pro` | `none` | 3 | 1200 |
 
 LLM 호출 결과는 `llm_generations`에 저장한다. 저장 대상은 provider, profile, model, reasoning, latency, token usage, schema validity, error 요약이다. prompt 원문, API key, 원본 로그 전문은 저장하지 않는다.
 
@@ -269,6 +259,6 @@ LLM mode에서도 외부 담당자가 보는 계약은 바뀌지 않는다.
 - Agent 실행 시 선택된 지식 청크는 세션별 `rag_evidence` row로 복사되어 관리자 화면과 `evidenceIds`에서 추적된다.
 - 관리자 Agent/Tool/RAG 상세 화면은 실제 API 응답을 읽는다.
 - `deterministic` runner는 키 없이 같은 흐름을 재현한다.
-- `llm` runner는 RAG evidence와 Tool invocation을 저장한 뒤 provider별 structured output API로 생성한 summary를 `agent_sessions.summary`에 저장한다.
+- `llm` runner는 RAG evidence와 Tool invocation을 저장한 뒤 OpenAI structured output API로 생성한 summary를 `agent_sessions.summary`에 저장한다.
 - 실제 embedding 검색과 실제 2번 Tool 계산은 아직 각 담당자 구현과 연결해야 한다.
 - 외부 담당자는 `sessionId`, `toolInvocationIds`, `evidenceIds` 계약을 유지하면 runner 내부 구현 변경에 영향받지 않는다.

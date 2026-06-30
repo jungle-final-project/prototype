@@ -146,7 +146,6 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_MODEL: gpt-5.5
           OPENAI_REASONING_EFFORT: medium
           AS_CHAT_DEFAULT_PROFILE: AS_CHAT_FAST

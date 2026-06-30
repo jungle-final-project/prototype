@@ -126,7 +126,7 @@ OPENAI_REASONING_EFFORT=medium
 - `AS_CHAT_FAST`가 평균 10초 이하와 p95 20초 이하 조건을 만족하므로 현재 사용자 기본 profile로 둔다.
 - 첫 진행 이벤트는 모든 profile이 평균 1초 이내라, 사용자는 요청 직후 처리 진행 상태를 볼 수 있다.
 - `AS_CHAT_BALANCED`와 `AS_CHAT_HIGH_QUALITY`는 관리자 검증 또는 고위험 분석 후보로 유지한다.
-- Gemini profile은 동일 AS Chat 실행 경로에 연결됐고 모델명은 `gemini-2.5-flash`, `gemini-2.5-pro`로 교정했다. 다만 제공된 Gemini key가 `HTTP 429 RESOURCE_EXHAUSTED`를 반환해 실제 품질 비교는 quota 문제로 분리 기록한다.
+- 현재 PR 범위의 AS Chat profile 비교는 OpenAI profile만 대상으로 한다. 다른 provider 비교는 별도 합의 후 추가한다.
 
 ## 책임 경계
 

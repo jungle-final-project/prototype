@@ -892,8 +892,8 @@ Owner: 3번
 | `id` | `BIGINT` | no | - | 내부 PK |
 | `public_id` | `UUID` | no | - | 외부 ID |
 | `agent_session_id` | `BIGINT` | no | `agent_sessions.id` | LLM 호출이 속한 Agent 세션 |
-| `ai_profile` | `VARCHAR(60)` | no | - | `AS_CHAT_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY`, `AS_CHAT_GEMINI_FAST`, `AS_CHAT_GEMINI_BALANCED` |
-| `provider` | `VARCHAR(40)` | no | - | `openai`, `gemini` |
+| `ai_profile` | `VARCHAR(60)` | no | - | `AS_CHAT_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY` |
+| `provider` | `VARCHAR(40)` | no | - | `openai` |
 | `model` | `VARCHAR(120)` | no | - | 실제 호출 모델 |
 | `reasoning_effort` | `VARCHAR(30)` | yes | - | reasoning effort |
 | `use_case` | `VARCHAR(60)` | no | - | `AS_CHAT` |
@@ -1382,7 +1382,6 @@ V29__quote_draft_category_policy.sql
 V30__auth_seed_password_hashes.sql
 V31__as_chat_sessions.sql
 V32__llm_generations.sql
-V33__llm_generations_gemini_profiles.sql
 V34__llm_generations_nano_profile.sql
 V35__correct_corsair_ram_offer_seed.sql
 ```

@@ -1,8 +1,7 @@
 package com.buildgraph.prototype.agent;
 
 public enum LlmProvider {
-    OPENAI("openai"),
-    GEMINI("gemini");
+    OPENAI("openai");
 
     private final String storageValue;
 

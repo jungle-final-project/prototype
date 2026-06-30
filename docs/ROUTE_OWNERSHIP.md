@@ -232,7 +232,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 - `/support/ai-chat`은 3번 owner API/화면이지만 AS 티켓을 기준으로 동작하므로 4번과 협업한다.
 - 3번은 AS Chat에서 `as_tickets`를 읽기만 하고 `cause_candidates`, `upgrade_candidates`, `status`를 수정하지 않는다.
 - AS Chat 대화 이력은 `as_chat_sessions`, `as_chat_messages`에 저장하고, 원인 후보를 티켓에 반영하는 작업은 4번 API가 별도로 결정한다.
-- AS Chat provider/profile 비교와 `llm_generations` 기록은 3번 owner 범위다. 기본 사용자 요청은 profile 1개만 실행하고, OpenAI/Gemini 동시 비교는 benchmark 명령에서만 수행한다.
+- AS Chat profile 비교와 `llm_generations` 기록은 3번 owner 범위다. 기본 사용자 요청은 profile 1개만 실행하고, OpenAI profile 비교는 benchmark 명령에서만 수행한다.
 
 ## 1주차 완료 기준
 

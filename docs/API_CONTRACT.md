@@ -333,13 +333,13 @@ AS AI Chat 규칙:
 - 한 사용자와 한 AS 티켓에는 `ACTIVE` chat session 1개만 유지한다.
 - `GET /api/ai/as-chat`은 세션이 없으면 DB row를 만들지 않고 빈 `messages`를 반환한다.
 - `POST /api/ai/as-chat`은 세션이 없으면 생성하고, 사용자 메시지와 AI 메시지를 `as_chat_messages`에 저장한다.
-- `POST /api/ai/as-chat`은 LLM 필수 기능이다. 선택된 provider의 API key가 없으면 대화 저장 전에 `428 PRECONDITION_REQUIRED`를 반환한다.
+- `POST /api/ai/as-chat`은 LLM 필수 기능이다. `OPENAI_API_KEY`가 없으면 대화 저장 전에 `428 PRECONDITION_REQUIRED`를 반환한다.
 - 사용자 화면은 `POST /api/ai/as-chat/stream`을 우선 사용해 `STARTED`, `RAG_READY`, `TOOLS_READY`, `LLM_RUNNING` 진행 상태를 표시한다. 기존 `POST /api/ai/as-chat`은 호환과 fallback을 위해 유지한다.
-- AS Chat LLM 호출은 provider별 structured output 기능을 사용한다. OpenAI는 Responses API JSON schema, Gemini는 Gemini API `responseSchema`를 사용하며, 단순 prompt 지시만으로 JSON을 생성하지 않는다.
+- AS Chat LLM 호출은 OpenAI Responses API structured output 기능을 사용하며, 단순 prompt 지시만으로 JSON을 생성하지 않는다.
 - 기본 사용자 profile은 체감 속도를 위해 `AS_CHAT_FAST`다. `AS_CHAT_NANO_FAST`는 더 빠른 기본값 후보로 벤치마크에서 먼저 검증한다.
 - AS Chat은 `AS_CHAT_DEFAULT_PROFILE` 기준 profile 1개만 실행한다. 내부 검증용 `X-BuildGraph-AI-Profile` header가 있으면 해당 profile 1개만 실행한다.
-- 일반 요청에서 전원 꺼짐, 재부팅, 과열 같은 고위험 문맥이면 서버가 같은 provider의 balanced profile로 승격할 수 있다.
-- 지원 profile은 `AS_CHAT_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY`, `AS_CHAT_GEMINI_FAST`, `AS_CHAT_GEMINI_BALANCED`다.
+- 일반 요청에서 전원 꺼짐, 재부팅, 과열 같은 고위험 문맥이면 서버가 balanced profile로 승격할 수 있다.
+- 지원 profile은 `AS_CHAT_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY`다.
 - 각 profile은 model, reasoning effort, RAG topK, prompt version, max output tokens, 최근 대화 개수, RAG 원문/Tool payload 포함 여부를 가진다.
 - LLM 필수 필드는 `assistantMessage`, `causeCandidates`, `nextActions`, `escalation`, `ticketDraft`다.
 - `causeCandidates[]`, `nextActions[]`는 `evidenceIds`, `toolInvocationIds`를 포함하며, 현재 응답에서 제공된 RAG/Tool id만 참조한다.

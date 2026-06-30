@@ -7,7 +7,6 @@ import argparse
 import datetime as dt
 import json
 import math
-import os
 import re
 import statistics
 import sys
@@ -18,7 +17,6 @@ from pathlib import Path
 
 
 DEFAULT_OPENAI_PROFILES = ["AS_CHAT_FAST", "AS_CHAT_NANO_FAST", "AS_CHAT_BALANCED", "AS_CHAT_HIGH_QUALITY"]
-DEFAULT_GEMINI_PROFILES = ["AS_CHAT_GEMINI_FAST", "AS_CHAT_GEMINI_BALANCED"]
 
 
 def main() -> int:
@@ -31,12 +29,11 @@ def main() -> int:
     parser.add_argument("--admin-email", default="admin@example.com")
     parser.add_argument("--admin-password", default="passw0rd!")
     parser.add_argument("--profiles", nargs="+", default=None)
-    parser.add_argument("--include-gemini", action="store_true", help="Gemini profile까지 함께 실행")
     parser.add_argument("--strict", action="store_true", help="모든 케이스가 통과하지 않으면 non-zero로 종료")
     args = parser.parse_args()
 
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))
-    profiles = selected_profiles(args.profiles, args.include_gemini)
+    profiles = selected_profiles(args.profiles)
     user_token = login(args.base_url, args.user_email, args.user_password)
     admin_token = login(args.base_url, args.admin_email, args.admin_password)
 
@@ -225,13 +222,10 @@ def login(base_url: str, email: str, password: str) -> str:
     return token
 
 
-def selected_profiles(explicit_profiles: list[str] | None, include_gemini: bool) -> list[str]:
+def selected_profiles(explicit_profiles: list[str] | None) -> list[str]:
     if explicit_profiles:
         return explicit_profiles
-    profiles = list(DEFAULT_OPENAI_PROFILES)
-    if include_gemini or configured_secret("GEMINI_API_KEY"):
-        profiles.extend(DEFAULT_GEMINI_PROFILES)
-    return profiles
+    return list(DEFAULT_OPENAI_PROFILES)
 
 
 def grounded_evidence_rate(response: dict | None) -> float:
@@ -302,25 +296,8 @@ def provider_failure_type(error: str | None) -> str:
     return "runtime"
 
 
-def configured_secret(key: str) -> bool:
-    value = os.environ.get(key)
-    if value and value.strip():
-        return True
-    env_path = Path(".env")
-    if not env_path.exists():
-        return False
-    for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        name, raw_value = stripped.split("=", 1)
-        if name.strip() == key and raw_value.strip().strip('"').strip("'"):
-            return True
-    return False
-
-
 def provider_from_profile(profile: str) -> str:
-    return "gemini" if "GEMINI" in profile else "openai"
+    return "openai"
 
 
 def availability_notes(results: list[dict]) -> list[str]:

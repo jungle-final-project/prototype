@@ -168,8 +168,6 @@ AS_CHAT_DEFAULT_PROFILE=AS_CHAT_FAST
 
 `AS_CHAT_NANO_FAST`는 실험 후보로 남겨두었다. 평균 응답은 빠르지만 현재 benchmark에서 schema valid가 낮아 기본값으로 전환하지 않았다.
 
-Gemini profile도 연결되어 있지만 제공 key의 quota 문제로 실제 비교 결과는 아직 확정하지 않았다.
-
 ## 4번이 바로 하면 되는 작업
 
 1. `/support/:ticketId`에 `AI 1차 상담 열기` 버튼 추가
