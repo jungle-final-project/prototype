@@ -80,6 +80,42 @@ export type RagEvidenceDetail = {
   metadata?: Record<string, unknown>;
 };
 
+export type AsTicketStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'CANCELLED';
+
+export type AdminAsTicket = {
+  id: string;
+  status: AsTicketStatus;
+  symptom: string;
+  title?: string | null;
+  description?: string | null;
+  detailDescription?: string | null;
+  logUploadId?: string | null;
+  logSummary?: string | null;
+  userId?: string | null;
+  userEmail?: string | null;
+  userName?: string | null;
+  assignedAdminId?: string | null;
+  causeCandidates: Record<string, unknown>[];
+  upgradeCandidates: Record<string, unknown>[];
+  adminNote?: string | null;
+  resolvedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminTicketsResponse = {
+  items: AdminAsTicket[];
+  page?: number;
+  size?: number;
+  total?: number;
+};
+
+export type AdminAsTicketUpdateRequest = {
+  status?: AsTicketStatus;
+  assignedAdminId?: string | null;
+  adminNote?: string | null;
+};
+
 export function getAdminDashboard() {
   return api<AdminDashboard>('/api/admin/dashboard');
 }
@@ -100,8 +136,19 @@ export function getRagEvidence(evidenceId: string) {
   return api<RagEvidenceDetail>(`/api/admin/rag-evidence/${evidenceId}`);
 }
 
+export function getAdminTickets() {
+  return api<AdminTicketsResponse>('/api/admin/as-tickets');
+}
+
 export function getAdminTicket(ticketId: string) {
-  return api(`/api/admin/as-tickets/${ticketId}`);
+  return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`);
+}
+
+export function updateAdminTicket(ticketId: string, request: AdminAsTicketUpdateRequest) {
+  return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(request)
+  });
 }
 
 export function runPriceJob() {
