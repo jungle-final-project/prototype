@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+export const AUTH_CHANGED_EVENT = 'buildgraph-auth-change';
 
 export class ApiError extends Error {
   constructor(
@@ -31,6 +32,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function saveToken(token: string) {
   localStorage.setItem('buildgraph.token', token);
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 export function getToken() {
@@ -39,4 +41,5 @@ export function getToken() {
 
 export function clearToken() {
   localStorage.removeItem('buildgraph.token');
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }

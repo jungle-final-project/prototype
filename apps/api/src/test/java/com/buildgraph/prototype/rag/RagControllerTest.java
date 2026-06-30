@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -16,11 +17,16 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(RagController.class)
 class RagControllerTest {
+    private static final String USER_TOKEN = "Bearer jwt-user-token";
+
     @Autowired
     private MockMvc mockMvc;
 
     @MockitoBean
     private RagQueryService ragQueryService;
+
+    @MockitoBean
+    private CurrentUserService currentUserService;
 
     @Test
     void searchPassesQueryAndPaginationToService() throws Exception {
@@ -38,6 +44,7 @@ class RagControllerTest {
         ));
 
         mockMvc.perform(get("/api/rag/search")
+                        .header("Authorization", USER_TOKEN)
                         .param("q", "gpu")
                         .param("page", "1")
                         .param("size", "5"))
@@ -48,6 +55,7 @@ class RagControllerTest {
                 .andExpect(jsonPath("$.size").value(5))
                 .andExpect(jsonPath("$.total").value(1));
 
+        verify(currentUserService).requireUser(USER_TOKEN);
         verify(ragQueryService).search("gpu", 1, 5);
     }
 
@@ -60,11 +68,13 @@ class RagControllerTest {
                 ));
 
         mockMvc.perform(get("/api/rag/search")
+                        .header("Authorization", USER_TOKEN)
                         .param("q", "gpu")
                         .param("page", "0")
                         .param("size", "101"))
                 .andExpect(status().isBadRequest());
 
+        verify(currentUserService).requireUser(USER_TOKEN);
         verify(ragQueryService).search("gpu", 0, 101);
     }
 }

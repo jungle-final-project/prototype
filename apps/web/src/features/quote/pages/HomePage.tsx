@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Bot } from 'lucide-react';
-import { CategorySidebar, DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
+import { CategorySidebar, DataTable, Panel, Screen, StatusBadge } from '../../../components/ui';
 import { QuoteCard } from '../components/QuoteCard';
 import { builds, categories } from '../mocks/quoteMock';
 
@@ -8,7 +8,7 @@ export function HomePage() {
   return (
     <Screen>
       <div className="mb-3 text-xs text-slate-500">Home / AI PC consulting</div>
-      <div className="grid grid-cols-[216px_1fr_388px] gap-5">
+      <div className="grid grid-cols-[216px_1fr] gap-5">
         <CategorySidebar items={categories} />
         <div className="space-y-5">
           <Panel title="AI 기반 온라인 견적" subtitle="용도와 예산을 입력하면 요구사항을 구조화하고 추천 Build를 생성합니다.">
@@ -34,14 +34,6 @@ export function HomePage() {
             ]} />
           </Panel>
         </div>
-        <Panel title="빠른 로그인" subtitle="프로토타입 JWT 흐름">
-          <div className="space-y-3">
-            <input className="h-10 w-full rounded border border-slate-300 px-3 text-sm" defaultValue="user@example.com" />
-            <Link to="/login" className="block rounded bg-brand-blue px-4 py-2 text-center text-sm font-bold text-white">로그인</Link>
-            <Link to="/signup" className="block rounded border border-slate-300 px-4 py-2 text-center text-sm font-bold">회원가입</Link>
-            <StateMessage type="info" title="MVP 제외" body="결제/배송/자체 원격제어는 이 프로토타입 범위에서 제외합니다." />
-          </div>
-        </Panel>
       </div>
     </Screen>
   );

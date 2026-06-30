@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api")
@@ -26,13 +25,24 @@ public class UserController {
 
     @PostMapping("/auth/login")
     Map<String, Object> login(@Valid @RequestBody LoginRequest request) {
-        return userQueryService.login(request.email());
+        return userQueryService.login(request.email(), request.password());
+    }
+
+    @PostMapping("/auth/refresh")
+    Map<String, Object> refresh(@Valid @RequestBody RefreshRequest request) {
+        return userQueryService.refresh(request.refreshToken());
     }
 
     @PostMapping("/users")
     @ResponseStatus(HttpStatus.CREATED)
     Map<String, Object> signup(@Valid @RequestBody SignupRequest request) {
-        return userQueryService.signup(request.name(), request.email(), request.marketingAccepted());
+        return userQueryService.signup(
+                request.name(),
+                request.email(),
+                request.password(),
+                request.termsAccepted(),
+                request.marketingAccepted()
+        );
     }
 
     @GetMapping("/auth/me")
@@ -40,12 +50,15 @@ public class UserController {
         return userQueryService.me(authorization);
     }
 
-    record LoginRequest(@Email String email, @NotBlank String password) {
+    record LoginRequest(@NotBlank @Email String email, @NotBlank String password) {
+    }
+
+    record RefreshRequest(@NotBlank String refreshToken) {
     }
 
     record SignupRequest(
             @NotBlank String name,
-            @Email String email,
+            @NotBlank @Email String email,
             @NotBlank String password,
             @NotNull Boolean termsAccepted,
             Boolean marketingAccepted

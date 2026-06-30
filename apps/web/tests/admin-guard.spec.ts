@@ -6,6 +6,8 @@ const adminRoutes = [
   '/admin/tool-invocations/tool-power-001',
   '/admin/rag-evidence/rag-psu-001',
   '/admin/parts',
+  '/admin/price-jobs',
+  '/admin/load-tests',
   '/admin/as-tickets',
   '/admin/as-tickets/AS-1031'
 ];
@@ -47,7 +49,7 @@ test('does not expose protected admin page content without admin permission', as
 test('shows permission screen when auth/me returns USER role', async ({ page }) => {
   let authMeCalls = 0;
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-user');
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
   });
   await page.route('**/api/auth/me', async (route) => {
     authMeCalls += 1;
@@ -89,7 +91,7 @@ test('shows login-needed message when auth/me returns 401', async ({ page }) => 
 test('shows permission message when auth/me returns 403', async ({ page }) => {
   let authMeCalls = 0;
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-user');
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
   });
   await page.route('**/api/auth/me', async (route) => {
     authMeCalls += 1;
@@ -110,7 +112,7 @@ test('shows permission message when auth/me returns 403', async ({ page }) => {
 test('renders admin page when auth/me returns ADMIN role', async ({ page }) => {
   let authMeCalls = 0;
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
   await page.route('**/api/auth/me', async (route) => {
     authMeCalls += 1;
@@ -172,9 +174,85 @@ test('renders admin page when auth/me returns ADMIN role', async ({ page }) => {
   expect(authMeCalls).toBeGreaterThan(0);
 });
 
+test('renders eight admin shell navigation entries for ADMIN role', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+  await page.route('**/api/admin/dashboard', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agentRunning: 1,
+        openTickets: 3,
+        priceJobsRunning: 0,
+        degraded: false,
+        generatedAt: '2026-06-29T10:50:00Z'
+      })
+    });
+  });
+  await page.route('**/api/admin/audit-logs/recent', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] })
+    });
+  });
+
+  await page.goto('/admin');
+
+  const navigation = page.getByRole('navigation', { name: '관리자 메뉴' });
+  await expect(navigation.getByRole('link')).toHaveCount(8);
+  await expect(navigation.getByRole('link', { name: '대시보드' })).toHaveAttribute('href', '/admin');
+  await expect(navigation.getByRole('link', { name: 'Agent 세션' })).toHaveAttribute('href', '/admin/agent-sessions/00000000-0000-4000-8000-000000003001');
+  await expect(navigation.getByRole('link', { name: 'Tool 이력' })).toHaveAttribute('href', '/admin/tool-invocations/00000000-0000-4000-8000-000000005002');
+  await expect(navigation.getByRole('link', { name: 'RAG 근거' })).toHaveAttribute('href', '/admin/rag-evidence/00000000-0000-4000-8000-000000004001');
+  await expect(navigation.getByRole('link', { name: '부품/가격' })).toHaveAttribute('href', '/admin/parts');
+  await expect(navigation.getByRole('link', { name: 'AS 티켓' })).toHaveAttribute('href', '/admin/as-tickets');
+  await expect(navigation.getByRole('link', { name: '가격 Job' })).toHaveAttribute('href', '/admin/price-jobs');
+  await expect(navigation.getByRole('link', { name: '부하 테스트' })).toHaveAttribute('href', '/admin/load-tests');
+
+  await expect(page.getByRole('searchbox', { name: '관리자 검색' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '내보내기' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '작업 실행' })).toBeDisabled();
+});
+
+test('renders price job and load test admin menu pages for ADMIN role', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+
+  await page.goto('/admin/price-jobs');
+  await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
+  await expect(page.locator('body')).toContainText('가격 Job 관리자');
+  await expect(page.locator('main')).toContainText('가격 수집 작업');
+  await expect(page.locator('main')).toContainText('네이버 쇼핑 API');
+  await expect(page.locator('main')).toContainText('다나와 제한 크롤링');
+
+  await page.goto('/admin/load-tests');
+  await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
+  await expect(page.locator('body')).toContainText('부하 테스트');
+  await expect(page.locator('main')).toContainText('k6 Smoke');
+  await expect(page.locator('main')).toContainText('300명');
+});
+
 test('renders admin dashboard with ADMIN role and dashboard API response', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
   let authMeAuthorization: string | undefined;
   await page.route('**/api/auth/me', async (route) => {
@@ -202,6 +280,27 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
       })
     });
   });
+  let auditLogCalls = 0;
+  let auditLogAuthorization: string | undefined;
+  await page.route('**/api/admin/audit-logs/recent', async (route) => {
+    auditLogCalls += 1;
+    auditLogAuthorization = route.request().headers().authorization;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            action: 'AS_TICKET_UPDATED',
+            targetType: 'as_tickets',
+            targetId: '4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a',
+            metadata: { beforeStatus: 'OPEN', afterStatus: 'IN_PROGRESS' },
+            createdAt: '2026-06-29T10:45:00Z'
+          }
+        ]
+      })
+    });
+  });
 
   await page.goto('/admin');
 
@@ -218,6 +317,11 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
   await expect(page.locator('main')).toContainText('최근 Agent 세션 요약');
   await expect(page.locator('main')).toContainText('운영 작업');
   await expect(page.locator('main')).toContainText('관리자 할 일');
+  await expect(page.locator('main')).toContainText('최근 관리자 작업');
+  await expect(page.locator('main')).toContainText('AS_TICKET_UPDATED');
+  await expect(page.locator('main')).toContainText('as_tickets');
+  await expect(page.locator('main')).toContainText('4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a');
+  await expect(page.locator('main')).toContainText('2026-06-29T10:45:00Z');
   await expect(page.locator('main')).toContainText('가격 Job');
   await expect(page.locator('main')).toContainText('Mailpit');
   await expect(page.locator('main')).toContainText('Mock Worker');
@@ -226,14 +330,16 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
   await expect(page.locator('main')).toContainText('Agent/RAG');
   await expect(page.locator('main')).toContainText('AS 티켓');
   await expect(page.locator('main')).not.toContainText('undefined');
-  expect(authMeAuthorization).toBe('Bearer demo-jwt-admin');
+  expect(authMeAuthorization).toBe('Bearer jwt-admin-token');
   expect(dashboardCalls).toBe(1);
-  expect(dashboardAuthorization).toBe('Bearer demo-jwt-admin');
+  expect(dashboardAuthorization).toBe('Bearer jwt-admin-token');
+  expect(auditLogCalls).toBe(1);
+  expect(auditLogAuthorization).toBe('Bearer jwt-admin-token');
 });
 
 test('shows degraded alert on admin dashboard when dashboard API reports degraded', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({
@@ -255,6 +361,13 @@ test('shows degraded alert on admin dashboard when dashboard API reports degrade
       })
     });
   });
+  await page.route('**/api/admin/audit-logs/recent', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] })
+    });
+  });
 
   await page.goto('/admin');
 
@@ -267,9 +380,50 @@ test('shows degraded alert on admin dashboard when dashboard API reports degrade
   await expect(page.locator('main')).not.toContainText('undefined');
 });
 
+test('keeps admin dashboard usable when audit logs API fails', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+  await page.route('**/api/admin/dashboard', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agentRunning: 1,
+        openTickets: 3,
+        priceJobsRunning: 0,
+        degraded: false,
+        generatedAt: '2026-06-29T10:50:00Z'
+      })
+    });
+  });
+  await page.route('**/api/admin/audit-logs/recent', async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'INTERNAL_ERROR', message: '감사 로그 조회 실패' })
+    });
+  });
+
+  await page.goto('/admin');
+
+  await expect(page.locator('main')).toContainText('진행 중 Agent');
+  await expect(page.locator('main')).toContainText('1건');
+  await expect(page.locator('main')).toContainText('감사 로그 조회 실패');
+  await expect(page.locator('main')).toContainText('최근 관리자 작업을 불러오지 못했습니다.');
+  await expect(page.locator('main')).not.toContainText('undefined');
+});
+
 test('shows admin dashboard loading state while dashboard API is pending', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({
@@ -310,7 +464,7 @@ test('shows admin dashboard loading state while dashboard API is pending', async
 
 test('shows admin dashboard error state when dashboard API fails', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.token', 'demo-jwt-admin');
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({

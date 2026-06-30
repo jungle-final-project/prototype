@@ -1,10 +1,12 @@
 package com.buildgraph.prototype.build;
 
+import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -12,33 +14,53 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api")
 public class BuildController {
     private final BuildQueryService buildQueryService;
+    private final CurrentUserService currentUserService;
 
-    public BuildController(BuildQueryService buildQueryService) {
+    public BuildController(BuildQueryService buildQueryService, CurrentUserService currentUserService) {
         this.buildQueryService = buildQueryService;
+        this.currentUserService = currentUserService;
     }
 
     @PostMapping("/requirements/parse")
-    Map<String, Object> parse(@RequestBody Map<String, Object> request) {
+    Map<String, Object> parse(
+            @RequestBody Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireUser(authorization);
         return buildQueryService.parse(request);
     }
 
     @PostMapping("/builds/recommend")
-    Map<String, Object> recommend(@RequestBody(required = false) Map<String, Object> request) {
+    Map<String, Object> recommend(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireUser(authorization);
         return buildQueryService.recommendations(request == null ? Map.of() : request);
     }
 
     @GetMapping("/builds/{id}")
-    Map<String, Object> build(@PathVariable String id) {
+    Map<String, Object> build(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireUser(authorization);
         return buildQueryService.buildDetail(id);
     }
 
     @GetMapping("/builds/history")
-    Map<String, Object> history() {
+    Map<String, Object> history(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        currentUserService.requireUser(authorization);
         return Map.of("items", buildQueryService.builds());
     }
 
     @PostMapping("/builds/{id}/change-part")
-    Map<String, Object> changePart(@PathVariable String id, @RequestBody(required = false) Map<String, Object> request) {
+    Map<String, Object> changePart(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireUser(authorization);
         return buildQueryService.changePart(id, request == null ? Map.of() : request);
     }
 }

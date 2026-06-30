@@ -11,18 +11,22 @@ import com.buildgraph.prototype.agent.AgentQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagQueryService;
 import com.buildgraph.prototype.ticket.TicketQueryService;
+import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.server.ResponseStatusException;
 
 @WebMvcTest(AdminController.class)
 class AdminControllerTest {
-    private static final String ADMIN_TOKEN = "Bearer demo-access-admin";
-    private static final String USER_TOKEN = "Bearer demo-access-user";
+    private static final String ADMIN_TOKEN = "Bearer jwt-admin-token";
+    private static final String USER_TOKEN = "Bearer jwt-user-token";
 
     @Autowired
     private MockMvc mockMvc;
@@ -41,6 +45,17 @@ class AdminControllerTest {
 
     @MockitoBean
     private PriceQueryService priceQueryService;
+
+    @MockitoBean
+    private CurrentUserService currentUserService;
+
+    @BeforeEach
+    void setUpAuth() {
+        when(currentUserService.requireAdmin(null))
+                .thenThrow(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."));
+        when(currentUserService.requireAdmin(USER_TOKEN))
+                .thenThrow(new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다."));
+    }
 
     @Test
     void dashboardReturnsUnauthorizedErrorResponseWhenAdminTokenIsMissing() throws Exception {

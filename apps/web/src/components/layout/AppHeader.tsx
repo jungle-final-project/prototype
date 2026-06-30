@@ -1,15 +1,67 @@
-import { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { Bot, FileText, LifeBuoy, LogIn, Search } from 'lucide-react';
+import { ReactNode, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Bot, FileText, LifeBuoy, LogIn, LogOut, Search, ShieldCheck, UserRound } from 'lucide-react';
+import { getCurrentUser, type CurrentUser } from '../../features/auth/authApi';
+import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../lib/api';
 import { PrimaryNav } from './PrimaryNav';
 
 export function AppHeader() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState<CurrentUser | null>(null);
+  const [checkingUser, setCheckingUser] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrentUser() {
+      if (!getToken()) {
+        setUser(null);
+        setCheckingUser(false);
+        return;
+      }
+
+      setCheckingUser(true);
+      try {
+        const currentUser = await getCurrentUser();
+        if (!cancelled) {
+          setUser(currentUser);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setUser(null);
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          clearToken();
+        }
+      } finally {
+        if (!cancelled) {
+          setCheckingUser(false);
+        }
+      }
+    }
+
+    void loadCurrentUser();
+    window.addEventListener(AUTH_CHANGED_EVENT, loadCurrentUser);
+    window.addEventListener('storage', loadCurrentUser);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AUTH_CHANGED_EVENT, loadCurrentUser);
+      window.removeEventListener('storage', loadCurrentUser);
+    };
+  }, []);
+
+  function logout() {
+    clearToken();
+    navigate('/login');
+  }
+
   return (
     <>
       <div className="h-[30px] bg-brand-navy text-xs text-slate-200">
         <div className="mx-auto flex h-full w-[1320px] items-center justify-between">
           <span>BuildGraph AI prototype · desktop only</span>
-          <span>로그인 | 회원가입 | 관리자 | PC Agent</span>
+          <span>{user ? `로그인됨 · ${user.email} · ${user.role}` : checkingUser ? '로그인 상태 확인 중' : '로그인 필요 · 회원가입 · 관리자 · PC Agent'}</span>
         </div>
       </div>
       <header className="h-[72px] border-b border-slate-200 bg-white">
@@ -30,7 +82,20 @@ export function AppHeader() {
             <HeaderButton to="/requirements/new" icon={<Bot size={15} />} label="AI 견적" />
             <HeaderButton to="/my/quotes" icon={<FileText size={15} />} label="내 견적함" />
             <HeaderButton to="/support/new" icon={<LifeBuoy size={15} />} label="AS 접수" />
-            <HeaderButton to="/login" icon={<LogIn size={15} />} label="로그인" dark />
+            {user ? (
+              <>
+                <div className="flex h-9 items-center gap-2 rounded border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-800">
+                  {user.role === 'ADMIN' ? <ShieldCheck size={15} /> : <UserRound size={15} />}
+                  <span>{user.name || user.email}</span>
+                </div>
+                <button onClick={logout} className="flex h-9 items-center gap-1 rounded bg-brand-navy px-3 text-xs font-semibold text-white">
+                  <LogOut size={15} />
+                  로그아웃
+                </button>
+              </>
+            ) : (
+              <HeaderButton to="/login" icon={<LogIn size={15} />} label="로그인" dark />
+            )}
           </div>
         </div>
       </header>

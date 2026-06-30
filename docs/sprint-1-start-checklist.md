@@ -17,12 +17,14 @@
 첫 PR 목표:
 
 - `apps/web/src/features/auth`의 로그인/회원가입 form 값을 실제 state와 연결합니다.
+- Auth/User API skeleton을 계약 기준으로 정리하고 `POST /api/users`, `POST /api/auth/login`, `GET /api/auth/me`부터 테스트합니다.
 - `apps/web/src/features/quote/pages`에서 요구사항 입력, 추천 결과, 부품 변경 흐름의 loading/error/success 상태를 추가합니다.
 - `quoteApi.ts`를 통해 `/api/requirements/parse`, `/api/builds/recommend`, `/api/builds/{id}/change-part`를 호출합니다.
 
 완료 기준:
 
 - 로그인/회원가입 화면이 하드코딩 값만 쓰지 않습니다.
+- Auth/User API가 `API_CONTRACT.md`와 `openapi.yaml`의 request/response/error 정책과 충돌하지 않습니다.
 - 추천 생성 버튼이 API wrapper를 통해 동작합니다.
 - route smoke test가 계속 통과합니다.
 
@@ -68,16 +70,17 @@
 - 원인 후보와 업그레이드 후보는 관리자 화면에만 노출됩니다.
 - 사용자 티켓 상세와 관리자 티켓 상세의 정보 깊이가 구분됩니다.
 
-## 5번: Infra/Admin/Auth
+## 5번: Infra/Admin/Auth Common
 
 첫 PR 목표:
 
 - `apps/web/src/features/admin`의 공통 shell, dashboard, route 진입점을 관리합니다.
-- 인증/관리자 route guard를 추가할 위치를 정합니다.
+- 인증 공통 token 전달과 관리자 route guard를 추가할 위치를 정합니다.
 - CI, Docker Compose, k6 skeleton이 깨지지 않도록 유지합니다.
 
 완료 기준:
 
 - 관리자 공통 shell과 도메인별 admin page 소유권이 충돌하지 않습니다.
+- 1번 Auth/User 구현과 `apps/web/src/lib/api.ts`, `RequireAdmin`, admin 401/403 정책이 충돌하지 않습니다.
 - GitHub Actions가 web build/test, OpenAPI 검증, API build, API runtime smoke를 통과합니다.
 - 인프라 변경 시 `docker compose config`가 통과합니다.

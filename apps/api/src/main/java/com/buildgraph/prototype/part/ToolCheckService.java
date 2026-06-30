@@ -282,7 +282,8 @@ public class ToolCheckService {
     private Map<String, Object> ruleFor(String toolName) {
         String category = categoryForTool(toolName);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
-                SELECT status, summary
+                SELECT result_status AS status,
+                       message AS summary
                 FROM compatibility_rules
                 WHERE category = ?
                   AND deleted_at IS NULL

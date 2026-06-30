@@ -5,9 +5,11 @@ const routes = [
   '/requirements/new',
   '/builds/00000000-0000-4000-8000-000000002001',
   '/self-quote',
+  '/parts/00000000-0000-4000-8000-000000013001',
   '/builds/00000000-0000-4000-8000-000000002001/change-part',
   '/my/quotes',
   '/support/new',
+  '/support/ai-chat',
   '/support/00000000-0000-4000-8000-000000006001',
   '/login',
   '/signup',
@@ -16,6 +18,8 @@ const routes = [
   '/admin/tool-invocations/00000000-0000-4000-8000-000000005002',
   '/admin/rag-evidence/00000000-0000-4000-8000-000000004001',
   '/admin/parts',
+  '/admin/price-jobs',
+  '/admin/load-tests',
   '/admin/as-tickets',
   '/admin/as-tickets/00000000-0000-4000-8000-000000006001'
 ];

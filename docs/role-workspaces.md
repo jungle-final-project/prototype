@@ -6,21 +6,21 @@
 
 | 담당 | 주요 경로 | 책임 |
 | --- | --- | --- |
-| 1번 | `apps/web/src/features/quote`, `apps/web/src/features/auth` | 소비자 견적 흐름, 추천 UI, 로그인/회원가입 화면 |
+| 1번 | `apps/web/src/features/quote`, `apps/web/src/features/auth`, `apps/api/src/main/java/com/buildgraph/prototype/user`, `apps/api/src/main/java/com/buildgraph/prototype/auth` | 소비자 견적 흐름, 추천 UI, 로그인/회원가입 화면/API |
 | 2번 | `apps/api/src/main/java/com/buildgraph/prototype/part`, `apps/api/src/main/java/com/buildgraph/prototype/price`, `apps/web/src/features/parts` | 부품 DB, Tool check, 가격 알림 |
 | 3번 | `apps/api/src/main/java/com/buildgraph/prototype/agent`, `apps/api/src/main/java/com/buildgraph/prototype/rag`, `apps/web/src/features/admin/pages/*Agent*`, `*Tool*`, `*Rag*` | Agent/RAG/Tool 근거와 관리자 검토 화면 |
 | 4번 | `apps/pc-agent`, `apps/api/src/main/java/com/buildgraph/prototype/log`, `apps/api/src/main/java/com/buildgraph/prototype/ticket`, `apps/web/src/features/support` | PC Agent, 로그 업로드, AS 티켓 |
-| 5번 | `infra`, `.github/workflows`, `tools`, `apps/api/src/main/java/com/buildgraph/prototype/user`, `apps/api/src/main/java/com/buildgraph/prototype/admin`, `apps/web/src/components`, `apps/web/src/features/admin/pages/AdminDashboardPage.tsx` | 인프라, 인증 공통, 관리자 shell, CI |
+| 5번 | `infra`, `.github/workflows`, `tools`, `apps/api/src/main/java/com/buildgraph/prototype/admin`, `apps/api/src/main/java/com/buildgraph/prototype/common`, `apps/web/src/components`, `apps/web/src/features/admin/pages/AdminDashboardPage.tsx` | 인프라, 인증 공통 연동, 관리자 shell, CI |
 
 ## 첫 PR 목표
 
 | 담당 | 첫 PR에서 할 일 | 같이 확인할 것 |
 | --- | --- | --- |
-| 1번 | 로그인/회원가입 form state 연결, 요구사항 입력과 추천 API 연결 | `quoteApi.ts`, `authApi.ts`, route smoke test |
+| 1번 | 로그인/회원가입 form state와 Auth/User API 연결, 요구사항 입력과 추천 API 연결 | `quoteApi.ts`, `authApi.ts`, Auth/User controller test, route smoke test |
 | 2번 | 부품/가격 DTO/service skeleton, Tool별 입력 구조 초안 | `partsApi.ts`, `docs/API_CONTRACT.md`, `docs/openapi.yaml` |
 | 3번 | Agent 상태 전이 skeleton, RAG 근거 조회 경계 | 관리자 Agent/RAG/Tool 화면, `docs/API_CONTRACT.md`, `docs/DB_SCHEMA.md` |
 | 4번 | JSONL export와 AS 업로드/티켓 생성 흐름 연결 | `supportApi.ts`, log/ticket controller |
-| 5번 | admin shell/auth guard 위치 정리, CI/Docker 유지 | GitHub Actions, `/api/health`, Docker Compose |
+| 5번 | admin shell/auth common guard 위치 정리, CI/Docker 유지 | GitHub Actions, `/api/health`, Docker Compose |
 
 ## 프론트엔드 소유권
 
@@ -28,7 +28,7 @@
 | --- | --- | --- |
 | `apps/web/src/features/quote/pages` | 1번 | 홈, 요구사항 입력, 추천 결과, 부품 변경, 내 견적 |
 | `apps/web/src/features/quote/components` | 1번 | 견적 카드 등 quote 전용 컴포넌트 |
-| `apps/web/src/features/auth` | 1번, 5번 | 1번은 화면 state, 5번은 인증 공통 정책 |
+| `apps/web/src/features/auth` | 1번, 5번 | 1번은 화면 state와 Auth API 연동, 5번은 token helper와 admin guard 연동 정책 |
 | `apps/web/src/features/parts` | 2번 | 셀프 견적, 부품 표, Tool check |
 | `apps/web/src/features/support` | 4번 | AS 접수, 티켓 상세, 로그 업로드 정책 |
 | `apps/web/src/components` | 5번 | 공통 layout/display/feedback만 배치 |
@@ -40,12 +40,14 @@
 | 파일 | 담당 | 책임 |
 | --- | --- | --- |
 | `AdminDashboardPage.tsx` | 5번 | 관리자 첫 화면, 운영 요약 |
-| `AdminPartsPage.tsx` | 2번 | 부품, 가격, 가격 작업 상태 |
+| `AdminPartsPage.tsx` | 2번 | 부품 DB, 가격 데이터 기준 |
+| `AdminPriceJobsPage.tsx` | 2번 | 가격 수집 Job 상태, 실행 정책, 실패 이력 |
 | `AgentSessionAdminPage.tsx` | 3번 | Agent 세션 상태와 근거 |
 | `ToolInvocationAdminPage.tsx` | 3번 | Tool 호출 상세 |
 | `RagEvidenceAdminPage.tsx` | 3번 | RAG 근거 상세 |
 | `AdminTicketsPage.tsx` | 4번 | AS 티켓 목록 |
 | `AdminTicketDetailPage.tsx` | 4번 | AS 티켓 상세, 로그 정책, 원인 후보 |
+| `AdminLoadTestsPage.tsx` | 5번 | k6 smoke/부하 테스트 계획과 리포트 상태 |
 | `AdminShell` | 5번 | 관리자 layout과 navigation |
 
 ## 시드와 Mock 데이터

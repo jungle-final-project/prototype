@@ -8,6 +8,18 @@ export type AdminDashboard = {
   generatedAt?: string;
 };
 
+export type AdminAuditLog = {
+  action?: string;
+  targetType?: string;
+  targetId?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: string;
+};
+
+export type AdminAuditLogsResponse = {
+  items: AdminAuditLog[];
+};
+
 export type AgentTimelineItem = {
   from: string | null;
   to: string;
@@ -51,6 +63,10 @@ export type RagEvidenceDetail = {
 
 export function getAdminDashboard() {
   return api<AdminDashboard>('/api/admin/dashboard');
+}
+
+export function getRecentAdminAuditLogs() {
+  return api<AdminAuditLogsResponse>('/api/admin/audit-logs/recent');
 }
 
 export function getAgentSession(sessionId: string) {

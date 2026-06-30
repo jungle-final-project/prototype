@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, MetricCard, Panel, StateMessage, StatusBadge } from '../../../components/ui';
-import { getAdminDashboard } from '../adminApi';
+import { getAdminDashboard, getRecentAdminAuditLogs } from '../adminApi';
 
 function countLabel(value: number | null | undefined) {
   return `${value ?? 0}건`;
@@ -13,6 +13,12 @@ export function AdminDashboardPage() {
   const { data: dashboard, isError, isLoading } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn: getAdminDashboard
+  });
+  const auditLogsQuery = useQuery({
+    queryKey: ['admin-audit-logs-recent'],
+    queryFn: getRecentAdminAuditLogs,
+    enabled: Boolean(dashboard),
+    retry: false
   });
 
   if (isLoading) {
@@ -33,6 +39,12 @@ export function AdminDashboardPage() {
 
   const statusLabel = dashboard.degraded ? '주의' : '정상';
   const generatedAt = dashboard.generatedAt ?? '갱신 시간 없음';
+  const auditLogRows = (auditLogsQuery.data?.items ?? []).map((item) => ({
+    action: item.action ?? 'UNKNOWN',
+    targetType: item.targetType ?? 'unknown',
+    targetId: item.targetId ?? '-',
+    createdAt: item.createdAt ?? '시간 없음'
+  }));
   const operatingTasks = [
     {
       작업: '가격 Job',
@@ -130,6 +142,19 @@ export function AdminDashboardPage() {
         </Panel>
         <Panel title="관리자 할 일">
           <DataTable columns={['영역', 'owner', '처리']} rows={adminTodos} />
+        </Panel>
+      </div>
+      <div className="mt-5">
+        <Panel title="최근 관리자 작업" subtitle="admin_audit_logs 기준 최근 작업">
+          {auditLogsQuery.isLoading ? (
+            <StateMessage type="info" title="감사 로그 로딩 중" body="최근 관리자 작업을 불러오고 있습니다." />
+          ) : auditLogsQuery.isError ? (
+            <StateMessage type="warn" title="감사 로그 조회 실패" body="최근 관리자 작업을 불러오지 못했습니다." />
+          ) : auditLogRows.length > 0 ? (
+            <DataTable columns={['action', 'targetType', 'targetId', 'createdAt']} rows={auditLogRows} />
+          ) : (
+            <StateMessage type="info" title="감사 로그 없음" body="표시할 최근 관리자 작업이 없습니다." />
+          )}
         </Panel>
       </div>
     </AdminShell>

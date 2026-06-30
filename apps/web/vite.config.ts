@@ -10,7 +10,12 @@ export default defineConfig({
         target: 'http://api:8080',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path
+        rewrite: (path) => path,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+          });
+        }
       }
     }
   }
