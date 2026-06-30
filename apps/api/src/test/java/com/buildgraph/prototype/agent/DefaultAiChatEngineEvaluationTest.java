@@ -294,6 +294,8 @@ class DefaultAiChatEngineEvaluationTest {
                 case OPEN_SELF_QUOTE -> has(action.payload(), "route");
                 case ADD_PART_TO_DRAFT -> has(action.payload(), "partId") && has(action.payload(), "category") && has(action.payload(), "quantity");
                 case REPLACE_DRAFT_PART -> has(action.payload(), "category") && has(action.payload(), "quantity");
+                case REMOVE_DRAFT_PART -> has(action.payload(), "partId") && has(action.payload(), "category");
+                case UPDATE_DRAFT_QUANTITY -> has(action.payload(), "partId") && has(action.payload(), "category") && has(action.payload(), "quantity");
                 case ADD_BUILD_TO_DRAFT -> action.payload().get("items") instanceof List<?> items && !items.isEmpty();
                 case CREATE_PRICE_ALERT -> has(action.payload(), "targetPrice");
                 case ASK_FOLLOW_UP -> has(action.payload(), "missing") && has(action.payload(), "message");

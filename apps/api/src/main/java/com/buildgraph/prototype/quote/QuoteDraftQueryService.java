@@ -57,18 +57,13 @@ public class QuoteDraftQueryService {
         List<ResolvedAiItem> items = resolveAiItems(request.get("items"));
         Map<String, Object> draft = activeDraft(userId);
         Long draftId = draft == null ? createDraft(userId) : longValue(draft, "internal_id");
-        Set<String> categories = new LinkedHashSet<>();
-        items.forEach(item -> categories.add(item.category()));
-        for (String category : categories) {
-            jdbcTemplate.update("""
-                    UPDATE quote_draft_items
-                    SET deleted_at = now(),
-                        updated_at = now()
-                    WHERE quote_draft_id = ?
-                      AND category = ?
-                      AND deleted_at IS NULL
-                    """, draftId, category);
-        }
+        jdbcTemplate.update("""
+                UPDATE quote_draft_items
+                SET deleted_at = now(),
+                    updated_at = now()
+                WHERE quote_draft_id = ?
+                  AND deleted_at IS NULL
+                """, draftId);
         for (ResolvedAiItem item : items) {
             jdbcTemplate.update("""
                     INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)

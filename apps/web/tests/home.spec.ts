@@ -42,7 +42,7 @@ function item(category: PartCategory, tier: AiTier, budgetWon: number, suffix = 
     category,
     name,
     manufacturer: category === 'CPU' ? 'AMD' : category === 'GPU' ? 'NVIDIA' : 'BuildGraph',
-    quantity: 1,
+    quantity: category === 'RAM' ? 2 : 1,
     price,
     note: 'DB 현재가 기준'
   };
@@ -72,12 +72,44 @@ function build(tier: AiTier, budgetWon: number, appliedPartCategories: PartCateg
   };
 }
 
+function partDetail(partId: string) {
+  return {
+    id: partId,
+    category: partId.includes('case') ? 'CASE' : 'GPU',
+    name: partId.includes('case') ? 'AI 추천 케이스' : 'AI 추천 부품',
+    manufacturer: 'BuildGraph',
+    price: 100000,
+    status: 'ACTIVE',
+    attributes: {
+      shortSpec: 'AI 추천 대표 이미지',
+      imageUrl: '/assets/home-banners/pc-build-festa.png'
+    },
+    externalOffer: {
+      imageUrl: '/assets/home-banners/pc-build-festa.png',
+      supplierName: 'BuildGraph',
+      offerUrl: null,
+      lowPrice: 100000,
+      source: 'TEST',
+      refreshedAt: '2026-06-30T00:00:00Z'
+    }
+  };
+}
+
 function budgetBuilds(budgetWon: number, appliedPartCategories: PartCategory[] = []) {
   return (['budget', 'balanced', 'performance'] as AiTier[]).map((tier) => build(tier, budgetWon, appliedPartCategories));
 }
 
 async function mockAiBuildChatApi(page: Page) {
   const requests: Array<{ message: string; currentBuilds?: unknown[] }> = [];
+
+  await page.route('**/api/parts/part-case-*', async (route) => {
+    const partId = decodeURIComponent(route.request().url().split('/').pop() ?? 'part-case-test');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(partDetail(partId))
+    });
+  });
 
   await page.route('**/api/ai/build-chat', async (route) => {
     const body = JSON.parse(route.request().postData() ?? '{}') as { message?: string; currentBuilds?: unknown[] };
@@ -256,6 +288,12 @@ async function mockSelfQuoteApis(page: Page) {
     if (url.pathname.endsWith('/apply-ai-build')) {
       const body = JSON.parse(route.request().postData() ?? '{}') as { items?: Array<{ partId: string; category: string; quantity: number }> };
       applyRequests.push(body);
+      const knownAiItems = [
+        ...budgetBuilds(2_000_000),
+        ...budgetBuilds(2_000_000, ['GPU']),
+        ...budgetBuilds(3_000_000),
+        ...budgetBuilds(3_000_000, ['GPU'])
+      ].flatMap((build) => build.items);
       const items = (body.items ?? []).map((next, index) => ({
         id: `applied-${index}`,
         partId: next.partId,
@@ -263,9 +301,9 @@ async function mockSelfQuoteApis(page: Page) {
         name: draftPartNames[next.partId] ?? (next.category === 'GPU' ? '서버 반영 RTX 5070 서버 GPU' : `${next.category} 적용 부품`),
         manufacturer: next.category === 'GPU' ? 'NVIDIA' : 'BuildGraph',
         quantity: next.quantity,
-        unitPriceAtAdd: 100000 + index,
-        currentPrice: 100000 + index,
-        lineTotal: (100000 + index) * next.quantity,
+        unitPriceAtAdd: knownAiItems.find((item) => item.partId === next.partId)?.price ?? 100000 + index,
+        currentPrice: knownAiItems.find((item) => item.partId === next.partId)?.price ?? 100000 + index,
+        lineTotal: (knownAiItems.find((item) => item.partId === next.partId)?.price ?? 100000 + index) * next.quantity,
         attributes: {}
       }));
       draft = {
@@ -287,6 +325,16 @@ async function mockSelfQuoteApis(page: Page) {
 
   await page.route('**/api/parts**', async (route) => {
     const url = new URL(route.request().url());
+    const detailMatch = url.pathname.match(/\/api\/parts\/([^/]+)$/);
+    if (detailMatch) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(partDetail(decodeURIComponent(detailMatch[1])))
+      });
+      return;
+    }
+
     if (url.pathname.includes('/price-history')) {
       await route.fulfill({
         status: 200,
@@ -387,6 +435,9 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(main.getByRole('tab', { name: 'AI 추천상품' })).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 실속형');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 균형형');
+  await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
+  await expect(main.getByTestId('home-ai-recommendations')).toContainText('AI 추천');
+  await expect(main.getByTestId('home-ai-recommendations')).toContainText('호환성 통과');
   await expect(page.getByTestId('ai-chat-messages')).toContainText('200만원 예산 기준');
 
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('300만원 PC 추천');
@@ -416,8 +467,9 @@ test('chatbot part questions show backend parts and apply them to home AI builds
   expect(buildChatRequests[1].currentBuilds?.length).toBe(3);
   await expect(page.getByTestId('ai-chat-messages')).toContainText('GPU 추천 후보');
   await expect(page.getByTestId('ai-chat-messages')).toContainText('서버 균형 RTX 5070 서버 GPU');
-  await expect(main.getByTestId('home-ai-recommendations').getByText('GPU 반영됨')).toHaveCount(3);
-  await expect(main.getByTestId('home-ai-recommendations')).toContainText('서버 반영 RTX 5070 서버 GPU');
+  await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
+  await expect(main.getByTestId('home-ai-recommendations')).toContainText('AI 추천');
+  await expect(main.getByTestId('home-ai-recommendations')).toContainText('호환성 통과');
 });
 
 test('selects a home AI recommendation through batch API and shows applied cart in self quote', async ({ page }) => {
@@ -431,13 +483,18 @@ test('selects a home AI recommendation through batch API and shows applied cart 
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('GPU 추천해줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
-  await main.getByTestId('home-ai-recommendations').getByRole('button', { name: /셀프 견적으로 보기/ }).nth(1).click();
+  await main.getByTestId('home-ai-recommendations').getByRole('button', { name: /200만원 균형형 셀프 견적으로 적용/ }).click();
 
   await expect.poll(() => applyRequests.length).toBe(1);
+  const expectedTotal = budgetBuilds(2_000_000, ['GPU'])[1].totalPrice.toLocaleString();
+  expect((applyRequests[0] as { conflictPolicy?: string; items?: unknown[] }).conflictPolicy).toBe('REPLACE');
+  expect((applyRequests[0] as { items?: unknown[] }).items).toHaveLength(8);
   await expect(page).toHaveURL('/self-quote');
   await expect(page.getByTestId('ai-selected-build-panel')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI 선택 조합' })).toBeVisible();
   await expect(page.getByText('200만원 균형형')).toBeVisible();
+  await expect(page.getByTestId('ai-selected-build-panel').getByText(`${expectedTotal}원`)).toBeVisible();
+  await expect(page.getByText(`${expectedTotal}원`)).toHaveCount(2);
   await expect(page.getByText('GPU 반영됨')).toBeVisible();
   await expect(page.getByText('서버 반영 RTX 5070 서버 GPU').first()).toBeVisible();
   await expect(page.getByRole('heading', { name: '견적 장바구니', exact: true })).toBeVisible();

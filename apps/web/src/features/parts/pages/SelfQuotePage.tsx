@@ -326,7 +326,7 @@ export function SelfQuotePage() {
                 </button>
                 <Link to="/builds/00000000-0000-4000-8000-000000002001" className="flex min-h-11 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 py-3 text-center text-sm font-black text-commerce-ink hover:border-commerce-ink">
                   <AlertTriangle size={17} className="text-commerce-amber" />
-                  추천 결과로 보기
+                  구매하기
                 </Link>
               </div>
             </Panel>

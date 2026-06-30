@@ -220,8 +220,8 @@ paths:
                 $ref: "#/components/schemas/ChangePartResponse"
   /api/ai/build-chat:
     post:
-      summary: AI 챗봇 DB/룰 기반 Build 추천
-      description: LLM/RAG 없이 message를 예산/부품/일반 질문으로 분류하고 ACTIVE parts DB와 Tool 검증 결과로 최신 AI 추천 조합을 반환한다. 부품 질문에 currentBuilds가 없으면 기본 예산 build를 만들지 않고 partRecommendation과 빈 builds를 반환한다.
+      summary: AI 챗봇 LLM/RAG 기반 Build 추천
+      description: LLM/RAG로 message의 intent와 구조화 조건을 분석하고, 실제 ACTIVE parts DB와 Tool 검증 결과로 AI 추천 조합을 반환한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 428을 반환한다.
       security:
         - bearerAuth: []
       requestBody:
@@ -237,6 +237,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AiBuildChatResponse"
+        "428":
+          description: OPENAI_API_KEY 등 LLM 필수 설정 누락
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: LLM 호출 실패 또는 JSON 계약 위반
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/parts:
     get:
       summary: 부품 목록
@@ -347,7 +359,7 @@ paths:
   /api/quote-drafts/current/apply-ai-build:
     put:
       summary: AI 추천 조합을 현재 견적초안에 batch 적용
-      description: conflictPolicy=REPLACE만 지원한다. 요청 items의 카테고리는 기존 draft에서 교체되며 RAM/STORAGE도 append가 아니라 AI 조합 기준으로 교체된다.
+      description: conflictPolicy=REPLACE만 지원한다. 현재 active 견적초안의 모든 항목을 soft delete한 뒤 요청 items를 하나의 AI 추천 조합으로 다시 담는다.
       security:
         - bearerAuth: []
       requestBody:
@@ -1468,6 +1480,9 @@ components:
     AiBuildChatAnswerType:
       type: string
       enum: [BUDGET, PART, GENERAL]
+    AiDraftActionType:
+      type: string
+      enum: [ADD_PART_TO_DRAFT, REPLACE_DRAFT_PART, REMOVE_DRAFT_PART, UPDATE_DRAFT_QUANTITY, ASK_FOLLOW_UP]
     AiBuildChatRequest:
       type: object
       required: [message]
@@ -1482,6 +1497,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AiAppliedPartPreferenceDto"
+        currentQuoteDraft:
+          description: /self-quote 챗봇에서만 전달하는 현재 견적초안 문맥. 서버는 이 값으로 action만 제안하고 직접 저장하지 않는다.
+          allOf:
+            - $ref: "#/components/schemas/QuoteDraftDto"
     AiBuildChatResponse:
       type: object
       required: [answerType, message, builds, warnings]
@@ -1499,10 +1518,24 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/AiPartRecommendationDto"
+        actions:
+          type: array
+          description: /self-quote에서 사용자가 확인 후 적용할 견적초안 변경안. 실제 저장은 quote-drafts API가 수행한다.
+          items:
+            $ref: "#/components/schemas/AiDraftActionDto"
         warnings:
           type: array
           items:
             type: string
+        evidenceIds:
+          type: array
+          items:
+            type: string
+          description: Build chat RAG 검색에 사용된 reusable evidence public id 목록
+        agentSessionId:
+          type: string
+          nullable: true
+          description: 저장 가능한 Agent root가 있을 때만 채워진다. 홈 챗봇 단독 대화는 null일 수 있다.
     AiBuildRecommendationDto:
       type: object
       required: [id, tier, label, title, summary, totalPrice, badges, budgetWon, budgetLabel, tierLabel, appliedPartCategories, items, toolResults, warnings, confidence]
@@ -1519,6 +1552,7 @@ components:
           type: string
         totalPrice:
           type: integer
+          description: 사용자 표시 가격. 항상 items[].price * items[].quantity 합계이며 LLM 추정값을 사용하지 않는다.
         badges:
           type: array
           items:
@@ -1598,6 +1632,25 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AiBuildItemDto"
+    AiDraftActionDto:
+      type: object
+      required: [id, type, label, payload, requiresConfirmation]
+      properties:
+        id:
+          type: string
+        type:
+          $ref: "#/components/schemas/AiDraftActionType"
+        label:
+          type: string
+        description:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+          description: partId, category, quantity 등 quote draft API 실행에 필요한 값
+        requiresConfirmation:
+          type: boolean
+          default: true
     AiBuildApplyRequest:
       type: object
       required: [items, conflictPolicy]

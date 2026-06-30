@@ -16,6 +16,8 @@
 - 응답 DTO: `AiChatEngineResponse`
 - 요구사항 분석 연결 DTO: `QuoteRequirementAnalysisRequest`, `QuoteRequirementAnalysisResult`
 
+실서비스 홈 챗봇 경로인 `POST /api/ai/build-chat`은 `AiChatEngine.respondLlmRequired()`를 호출한다. 이 경로는 LLM/RAG 필수이며 `OPENAI_API_KEY`가 없으면 `428 PRECONDITION_REQUIRED`를 반환한다. `respond()`는 엔진 단위 평가와 내부 deterministic baseline을 위한 메서드로 남겨 둔다.
+
 ## 입력
 
 `AiChatEngineRequest`
@@ -64,9 +66,13 @@
 | `OPEN_SELF_QUOTE` | `{ route: "/self-quote" }` | UI 라우터 |
 | `ADD_PART_TO_DRAFT` | `{ partId, category, quantity, source }` | `PUT /api/quote-drafts/current/items/{partId}` |
 | `REPLACE_DRAFT_PART` | `{ category, partId?, quantity, source }` | 견적초안 API. 카테고리 중복/교체 규칙은 2번 API가 처리 |
+| `REMOVE_DRAFT_PART` | `{ partId, category, source }` | `DELETE /api/quote-drafts/current/items/{partId}` |
+| `UPDATE_DRAFT_QUANTITY` | `{ partId, category, quantity, source }` | `PATCH /api/quote-drafts/current/items/{partId}`. RAM/SSD 수량 조정에 우선 사용 |
 | `ADD_BUILD_TO_DRAFT` | `{ items: [{ partId, category, quantity }], source }` | 현재는 UI가 품목별로 견적초안 API 호출. 추후 bulk API가 생기면 2번 계약에 맞춰 변경 |
 | `CREATE_PRICE_ALERT` | `{ partId?, category?, targetPrice, source }` | `POST /api/price-alerts` |
 | `ASK_FOLLOW_UP` | `{ missing, message }` | UI 채팅창에 후속 질문 표시 |
+
+`AiChatEngine` 내부 action 범위는 위 표처럼 넓게 둔다. 다만 공개 `POST /api/ai/build-chat` 응답에서 현재 프론트가 적용하는 action은 `ADD_PART_TO_DRAFT`, `REPLACE_DRAFT_PART`, `REMOVE_DRAFT_PART`, `UPDATE_DRAFT_QUANTITY`, `ASK_FOLLOW_UP` subset이다. `OPEN_SELF_QUOTE`, `ADD_BUILD_TO_DRAFT`, `CREATE_PRICE_ALERT`는 엔진 공통화와 후속 UI 연결을 위한 내부 계약으로 남긴다.
 
 ## 소유권 원칙
 
@@ -74,6 +80,8 @@
 - 1번 `BuildQueryService`는 AI 엔진 결과를 사용하되 `builds`, `build_items` 저장 책임을 유지한다.
 - 2번 `parts`, `ToolCheckService`, `quote_drafts` 저장 규칙은 3번이 직접 수정하지 않는다.
 - AI 엔진은 `quote_drafts`, `quote_draft_items`, `parts`를 직접 쓰지 않는다.
+- `/self-quote` 챗봇이 `currentQuoteDraft`를 전달하면 3번 엔진은 장바구니 변경안을 `actions`로만 반환한다. 사용자가 적용 버튼을 누를 때 UI가 기존 quote draft API를 호출한다.
+- AI build의 표시 가격은 `items[].price * items[].quantity` 합계다. `estimatedTotalPrice`는 LLM/엔진 참고값이며 홈 추천 카드나 견적초안 총액의 기준으로 사용하지 않는다.
 - 직접 Tool check API 호출 결과는 `tool_invocations`에 저장하지 않는다. Agent 또는 추천 흐름 내부에서 실행된 Tool trace만 저장한다.
 - AS Chat은 이번 문서의 직접 범위가 아니다. 다만 향후 `AsChatEngine`으로 분리해도 `assistantMessage`, `actions`, `evidenceIds`, `toolResults`, `agentSessionId` 형태는 재사용한다.
 
@@ -134,6 +142,11 @@
 
 ## 현재 구현 수준
 
-- `AiChatEngine.respond()`는 내부 자산 `parts`를 읽어 action과 추천 후보를 반환한다.
+- `POST /api/ai/build-chat`은 기존 UI 응답 shape를 유지하되, 내부적으로 `AiChatEngine.respondLlmRequired()`를 호출한다.
+- `POST /api/ai/build-chat`은 선택 필드 `currentQuoteDraft`를 받을 수 있고, 응답에는 선택 필드 `actions`가 포함될 수 있다. 이 필드는 기존 홈 챗봇 응답을 깨지 않는다.
+- `respondLlmRequired()`는 RAG 근거와 LLM structured output으로 intent/조건을 판단하고, 실제 부품 선택은 내부 자산 `parts`에서만 수행한다.
+- LLM은 부품 ID, 가격, FPS, 상품명을 만들지 않는다. 명시 조건은 `parsedContext.requiredGpuClasses`, `requiredPartKeywords`, `hardConstraintPolicy`에 보존한다.
+- `/self-quote` 변경 요청은 LLM이 내부 `draftEdit`으로 `operation`, `category`, `priceDirection`, `targetMaxPrice`, `targetQuantity`를 구조화한다. 이 값은 공개 응답 필드가 아니라 서버가 더 싼 GPU 교체, 수량 변경, 삭제 같은 action 후보를 만드는 중간 표현이다.
+- `AiChatEngine.respond()`는 내부 자산 `parts`를 읽어 action과 추천 후보를 반환하는 deterministic baseline이다.
 - `AiChatEngine.analyzeQuoteRequirement()`는 기존 `/api/requirements/parse` 흐름에서 사용되며 RAG evidence와 Agent trace를 3번 테이블에 남긴다.
 - Tool 고도화는 2번 구현을 그대로 사용한다. 이 엔진은 Tool 결과를 직접 계산하지 않는다.

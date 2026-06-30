@@ -19,12 +19,12 @@ import {
 } from 'lucide-react';
 import { Screen } from '../../../components/ui';
 import { partImageUrl } from '../../parts/partDisplay';
-import { applyAiBuildToQuoteDraft, listParts } from '../../parts/partsApi';
+import { applyAiBuildToQuoteDraft, getPart, listParts } from '../../parts/partsApi';
 import type { PartRow } from '../../parts/types';
 import { AiBuildAssistant } from '../components/AiBuildAssistant';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
-  PART_CATEGORY_LABELS,
+  normalizeAiRecommendedBuild,
   readAssistantSession,
   saveSelectedAiBuild,
   type AiAssistantSession,
@@ -179,12 +179,27 @@ export function HomePage() {
         return partPages
           .map((page, index) => {
             const part = page.items[0];
-            return part ? { search: build.partSearches[index], part } : null;
+            if (!part) return null;
+            return {
+              search: build.partSearches[index],
+              part
+            };
           })
-          .filter((item): item is FeaturedBuildResolvedPart => item !== null);
+          .filter((item): item is FeaturedBuildResolvedPart => Boolean(item));
       },
       staleTime: 60_000
     }))
+  });
+  const aiBuildCaseQueries = useQueries({
+    queries: assistantSession.latestBuilds.map((build) => {
+      const caseItem = build.items.find((item) => item.category === 'CASE');
+      return {
+        queryKey: ['parts', 'home-ai-build-case', build.id, caseItem?.partId],
+        queryFn: () => caseItem ? getPart(caseItem.partId) : Promise.resolve(null),
+        enabled: Boolean(caseItem),
+        staleTime: 60_000
+      };
+    })
   });
 
   useEffect(() => {
@@ -204,15 +219,16 @@ export function HomePage() {
   }, []);
 
   async function selectAiBuild(build: AiRecommendedBuild) {
-    if (applyingBuildId) return;
-    saveSelectedAiBuild(build);
+    if (applyingBuildId || applyingFeaturedBuildId) return;
+    const normalizedBuild = normalizeAiRecommendedBuild(build);
+    saveSelectedAiBuild(normalizedBuild);
     setApplyError(null);
-    setApplyingBuildId(build.id);
+    setApplyingBuildId(normalizedBuild.id);
     try {
       await applyAiBuildToQuoteDraft({
-        buildId: build.id,
+        buildId: normalizedBuild.id,
         conflictPolicy: 'REPLACE',
-        items: build.items.map((item) => ({
+        items: normalizedBuild.items.map((item) => ({
           partId: item.partId,
           category: item.category,
           quantity: item.quantity
@@ -321,10 +337,11 @@ export function HomePage() {
               {assistantSession.latestBuilds.length > 0 ? (
                 <>
                   <div className="grid gap-3 md:grid-cols-3">
-                    {assistantSession.latestBuilds.map((build) => (
+                    {assistantSession.latestBuilds.map((build, index) => (
                       <AiRecommendationCard
                         key={build.id}
                         build={build}
+                        casePart={aiBuildCaseQueries[index]?.data ?? undefined}
                         isApplying={applyingBuildId === build.id}
                         onSelect={selectAiBuild}
                       />
@@ -358,49 +375,59 @@ export function HomePage() {
 
 function AiRecommendationCard({
   build,
+  casePart,
   isApplying,
   onSelect
 }: {
   build: AiRecommendedBuild;
+  casePart?: PartRow | null;
   isApplying: boolean;
   onSelect: (build: AiRecommendedBuild) => void;
 }) {
+  const hasWarnings = Boolean(build.warnings && build.warnings.length > 0);
   return (
-    <article className="rounded-lg border border-commerce-line bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product">
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="rounded bg-commerce-ink px-2 py-1 text-[11px] font-black text-white">{build.label}</span>
-        {build.appliedPartCategories.map((category) => (
-          <span key={category} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">
-            {PART_CATEGORY_LABELS[category]} 반영됨
+    <button
+      type="button"
+      onClick={() => onSelect(build)}
+      disabled={isApplying}
+      aria-label={`${build.title} 셀프 견적으로 적용`}
+      className={`group rounded-lg border border-commerce-line bg-gradient-to-br ${aiBuildTone(build)} p-4 text-left transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-70`}
+    >
+      <div className="mb-3 flex min-h-8 items-start justify-between gap-3">
+        <h3 className="min-w-0 truncate text-base font-black text-commerce-ink">{build.title}</h3>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className={`rounded px-2 py-1 text-[11px] font-black ${hasWarnings ? 'bg-amber-100 text-amber-700' : 'bg-commerce-sale text-white'}`}>
+            {isApplying ? '적용 중' : hasWarnings ? '검증 확인' : 'AI 추천'}
           </span>
-        ))}
+          {isApplying ? (
+            <ShoppingCart size={17} className="text-commerce-sale" />
+          ) : (
+            <Heart size={17} className="text-slate-400 group-hover:text-commerce-sale" />
+          )}
+        </div>
       </div>
-      <h3 className="text-base font-black text-commerce-ink">{build.title}</h3>
-      <p className="mt-2 min-h-10 break-keep text-xs leading-5 text-slate-500">{build.summary}</p>
-      <div className="mt-4 flex flex-wrap items-end gap-2">
-        <span className="text-xl font-black tracking-tight text-commerce-sale">{build.totalPrice.toLocaleString()}원</span>
-        <span className="pb-0.5 text-xs font-bold text-commerce-green">AI 최신 추천</span>
-      </div>
-      <div className="mt-4 grid gap-2 text-xs">
-        {build.items.slice(0, 4).map((item) => (
-          <div key={item.partId} className="flex min-w-0 items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2">
-            <span className="min-w-0 truncate font-bold text-slate-600">
-              {PART_CATEGORY_LABELS[item.category]} · {item.name}
-            </span>
-            <span className="shrink-0 font-black text-slate-900">{item.price.toLocaleString()}원</span>
+      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-100">
+        {casePart ? (
+          <img
+            src={partImageUrl(casePart)}
+            alt={`${casePart.name} 제품 사진`}
+            className="h-[29.9rem] w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+          />
+        ) : (
+          <div className="grid h-[29.9rem] place-items-center bg-slate-50 text-xs font-black text-slate-400">
+            케이스 사진 준비 중
           </div>
-        ))}
+        )}
       </div>
-      <button
-        type="button"
-        onClick={() => onSelect(build)}
-        disabled={isApplying}
-        className="mt-4 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 text-sm font-black text-white transition hover:bg-slate-700 focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:bg-slate-300"
-      >
-        <ShoppingCart size={16} />
-        {isApplying ? '장바구니 적용 중' : '셀프 견적으로 보기'}
-      </button>
-    </article>
+      <div className="flex flex-wrap items-end gap-2">
+        <span className="text-xl font-black tracking-tight text-commerce-sale">{build.totalPrice.toLocaleString()}원</span>
+        <span className="text-xs font-bold text-slate-400">{build.budgetLabel ?? build.tierLabel}</span>
+      </div>
+      <div className={`mt-3 flex items-center gap-2 text-xs font-black ${hasWarnings ? 'text-amber-600' : 'text-commerce-green'}`}>
+        <PackageCheck size={15} />
+        {isApplying ? '셀프 견적 적용 중' : hasWarnings ? 'Tool 확인 필요' : '호환성 통과'}
+      </div>
+    </button>
   );
 }
 
@@ -540,6 +567,19 @@ function FeaturedBuildCard({
   );
 }
 
+function aiBuildTone(build: AiRecommendedBuild) {
+  if (build.warnings && build.warnings.length > 0) {
+    return 'from-amber-50 via-white to-white';
+  }
+  if (build.tier === 'performance') {
+    return 'from-indigo-50 via-white to-white';
+  }
+  if (build.tier === 'budget') {
+    return 'from-emerald-50 via-white to-white';
+  }
+  return 'from-blue-50 via-white to-white';
+}
+
 function PopularPartsSection() {
   const popularPartQueries = useQueries({
     queries: popularPartDeals.map((part) => ({
@@ -588,14 +628,10 @@ function PopularPartsSection() {
                 )}
               </div>
               <div className="mt-3 text-xs font-black text-brand-blue">{part.category}</div>
-              <h3 className="mt-1 min-h-10 text-sm font-black leading-5 text-commerce-ink">{part.label}</h3>
+              <h3 className="mt-1 min-h-10 text-sm font-black leading-5 text-commerce-ink">{matchedPart?.name ?? part.label}</h3>
               <p className="mt-1 text-xs text-slate-500">{part.detail}</p>
               <div className="mt-3 flex items-center justify-between gap-2">
-                {matchedPart ? (
-                  <span className="text-lg font-black text-commerce-ink">{matchedPart.price.toLocaleString()}원</span>
-                ) : (
-                  <span className="text-sm font-black text-slate-400">가격 확인 중</span>
-                )}
+                <span className="text-lg font-black text-commerce-ink">{matchedPart ? `${matchedPart.price.toLocaleString()}원` : '가격 확인 중'}</span>
                 <div className="flex items-center gap-1 text-[11px] font-bold text-amber-600">
                   <Star size={12} fill="currentColor" />
                   인기

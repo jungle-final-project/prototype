@@ -739,7 +739,7 @@ AdminShell nav 분석 결과:
   - [ ] `HomePage.tsx` 안에 `featuredBuilds`, `popularPartDeals` 같은 domain mock/static 데이터가 직접 들어 있다. 유지하려면 "홈 마케팅용 정적 데이터"로 합의해야 하고, mock 데이터라면 `features/quote/mocks`로 옮기는 것이 계약에 맞다.
 - [x] 위반으로 보지 않는 항목을 확인했다.
   - [x] 페이지 컴포넌트가 공통 `api()`를 직접 호출하지 않고 `quoteApi.ts`, `partsApi.ts` wrapper를 사용한다.
-  - [x] `POST /api/ai/build-chat`는 계약상 LLM/RAG 없이 DB/룰 기반으로 동작하므로 3번 Agent/RAG owner 영역을 직접 침범하지 않는다. 단, Tool 계산은 2번 owner review가 필요하다.
+  - [x] `POST /api/ai/build-chat`는 이후 3번 owner의 LLM/RAG 필수 AI 엔진 API로 변경되었다. 홈 UI는 1번과 협업하고, Tool 계산은 2번 구현을 호출/참조한다.
   - [x] `PUT /api/quote-drafts/current/apply-ai-build`는 `conflictPolicy=REPLACE`와 transaction 적용 흐름을 갖고 있어 새 계약 방향과 대체로 맞다.
   - [x] 구매 컨설팅 아이콘 자산은 `docs/hosoek/assets` 문서 자산이므로 route/API/DB owner 계약 위반은 아니다.
 - [x] 검증 결과를 기록했다.

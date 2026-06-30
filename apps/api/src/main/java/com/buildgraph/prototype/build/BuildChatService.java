@@ -1,17 +1,20 @@
 package com.buildgraph.prototype.build;
 
+import com.buildgraph.prototype.agent.AiChatEngine;
+import com.buildgraph.prototype.agent.AiChatEngineRequest;
+import com.buildgraph.prototype.agent.AiChatEngineResponse;
+import com.buildgraph.prototype.agent.AiChatIntent;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.part.ToolBuildPart;
 import com.buildgraph.prototype.part.ToolCheckService;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
@@ -23,11 +26,12 @@ import org.springframework.web.server.ResponseStatusException;
 public class BuildChatService {
     private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(?:만원|만)");
     private static final Pattern BUDGET_WON = Pattern.compile("(\\d{6,})\\s*원?");
-    private static final List<String> BUILD_CATEGORIES = List.of("CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER");
+    private static final Pattern QUANTITY_PATTERN = Pattern.compile("(\\d+)\\s*(?:개|장|ea|pcs|개로)");
+    private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
     private static final List<Tier> TIERS = List.of(
-            new Tier("budget", "가성비", "실속형", 0.86),
-            new Tier("balanced", "균형", "균형형", 0.94),
-            new Tier("performance", "고성능", "성능형", 0.99)
+            new Tier("budget", "가성비", "가성비형"),
+            new Tier("balanced", "균형", "균형형"),
+            new Tier("performance", "성능", "고성능형")
     );
     private static final Map<String, String> CATEGORY_LABELS = Map.of(
             "CPU", "CPU",
@@ -39,79 +43,30 @@ public class BuildChatService {
             "CASE", "케이스",
             "COOLER", "쿨러"
     );
-    private static final Map<String, Double> CATEGORY_RATIOS = Map.of(
-            "CPU", 0.17,
-            "MOTHERBOARD", 0.11,
-            "RAM", 0.07,
-            "GPU", 0.39,
-            "STORAGE", 0.07,
-            "PSU", 0.08,
-            "CASE", 0.06,
-            "COOLER", 0.05
-    );
 
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
+    private final AiChatEngine aiChatEngine;
 
-    public BuildChatService(JdbcTemplate jdbcTemplate, ToolCheckService toolCheckService) {
+    public BuildChatService(JdbcTemplate jdbcTemplate, ToolCheckService toolCheckService, AiChatEngine aiChatEngine) {
         this.jdbcTemplate = jdbcTemplate;
         this.toolCheckService = toolCheckService;
+        this.aiChatEngine = aiChatEngine;
     }
 
     public Map<String, Object> chat(Map<String, Object> request) {
         Map<String, Object> body = request == null ? Map.of() : request;
-        String message = text(body.get("message"));
-        if (message == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "message는 필수입니다.");
-        }
-
-        Integer budgetWon = parseBudgetWon(message);
-        if (budgetWon != null) {
-            List<Map<String, Object>> builds = buildsForBudget(budgetWon, List.of());
-            return MockData.map(
-                    "answerType", "BUDGET",
-                    "message", formatBudgetLabel(budgetWon) + " 예산 기준으로 실속형, 균형형, 성능형 3개 조합을 DB/룰 기반으로 계산했습니다.",
-                    "builds", builds,
-                    "partRecommendation", null,
-                    "warnings", buildWarnings(builds)
-            );
-        }
-
-        String category = detectPartCategory(message);
-        if (category != null) {
-            List<String> warnings = new ArrayList<>();
-            List<PartCandidate> options = partRecommendationOptions(category);
-            List<AiBuildCandidate> baseBuilds = currentBuilds(body.get("currentBuilds"), warnings);
-            List<Map<String, Object>> updatedBuilds = baseBuilds.isEmpty()
-                    ? List.of()
-                    : applyPartOptions(baseBuilds, category, options);
-            Map<String, Object> partRecommendation = MockData.map(
-                    "category", category,
-                    "label", categoryLabel(category),
-                    "intro", categoryLabel(category) + " 후보를 실제 부품 DB 현재가 기준으로 비교했습니다.",
-                    "options", options.stream()
-                            .map(option -> partItem(option, categoryLabel(category) + " DB 추천 후보"))
-                            .toList()
-            );
-            warnings.addAll(buildWarnings(updatedBuilds));
-            return MockData.map(
-                    "answerType", "PART",
-                    "message", baseBuilds.isEmpty()
-                            ? categoryLabel(category) + " 추천 후보 3개를 실제 부품 DB 현재가 기준으로 정리했습니다."
-                            : categoryLabel(category) + " 추천 후보 3개를 정리했고 최신 AI 추천 컴퓨터 3개에도 반영했습니다.",
-                    "builds", updatedBuilds,
-                    "partRecommendation", partRecommendation,
-                    "warnings", distinct(warnings)
-            );
-        }
-
-        return MockData.map(
-                "answerType", "GENERAL",
-                "message", "예산은 “200만원 PC 추천”, 부품은 “GPU 추천해줘”처럼 물어보면 DB/룰 기반 추천을 계산합니다.",
-                "builds", currentBuilds(body.get("currentBuilds"), new ArrayList<>()).stream().map(this::buildMap).toList(),
-                "partRecommendation", null,
-                "warnings", List.of()
-        );
+        String message = requireText(body.get("message"), "message는 필수입니다.");
+        AiChatEngineResponse engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
+                message,
+                "HOME",
+                firstText(text(body.get("selectedCategory")), detectPartCategory(message)),
+                text(body.get("buildId")),
+                text(body.get("draftId")),
+                body,
+                null
+        ));
+        return responseMap(engineResponse, body);
     }
 
     static Integer parseBudgetWon(String message) {
@@ -149,38 +104,338 @@ public class BuildChatService {
                 .orElse(null);
     }
 
-    private List<Map<String, Object>> buildsForBudget(int budgetWon, List<String> appliedPartCategories) {
-        return buildCandidatesForBudget(budgetWon, new LinkedHashSet<>(appliedPartCategories)).stream()
-                .map(this::buildMap)
-                .toList();
+    private Map<String, Object> responseMap(AiChatEngineResponse engineResponse, Map<String, Object> request) {
+        List<String> warnings = new ArrayList<>();
+        List<Map<String, Object>> builds = switch (engineResponse.intent()) {
+            case FULL_BUILD_RECOMMEND -> engineBuilds(engineResponse, warnings);
+            case PART_RECOMMEND, BUILD_MODIFY -> changedCurrentBuilds(engineResponse, request, warnings);
+            default -> engineBuilds(engineResponse, warnings);
+        };
+        Map<String, Object> partRecommendation = partRecommendation(engineResponse.partRecommendations());
+        List<Map<String, Object>> actions = draftActions(engineResponse, request);
+        warnings.addAll(buildWarnings(builds));
+        warnings.addAll(stringList(engineResponse.parsedContext().get("warnings")));
+        return MockData.map(
+                "answerType", answerType(engineResponse.intent()),
+                "message", engineResponse.assistantMessage(),
+                "builds", builds,
+                "partRecommendation", partRecommendation,
+                "actions", actions,
+                "warnings", distinct(warnings),
+                "evidenceIds", engineResponse.evidenceIds(),
+                "agentSessionId", engineResponse.agentSessionId()
+        );
     }
 
-    private List<AiBuildCandidate> buildCandidatesForBudget(int budgetWon, Set<String> appliedPartCategories) {
-        return TIERS.stream()
-                .map(tier -> buildCandidateForTier(tier, budgetWon, appliedPartCategories))
-                .toList();
+    private List<Map<String, Object>> engineBuilds(AiChatEngineResponse engineResponse, List<String> warnings) {
+        List<AiChatEngineResponse.BuildRecommendation> recommendations = engineResponse.recommendations();
+        if (recommendations == null || recommendations.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int index = 0; index < recommendations.size(); index += 1) {
+            result.add(engineBuildMap(recommendations.get(index), index, engineResponse, warnings));
+        }
+        return result;
     }
 
-    private AiBuildCandidate buildCandidateForTier(Tier tier, int budgetWon, Set<String> appliedPartCategories) {
-        List<PartCandidate> parts = BUILD_CATEGORIES.stream()
-                .map(category -> choosePart(category, (int) Math.round(budgetWon * tier.factor() * CATEGORY_RATIOS.get(category))))
+    private Map<String, Object> engineBuildMap(
+            AiChatEngineResponse.BuildRecommendation recommendation,
+            int index,
+            AiChatEngineResponse engineResponse,
+            List<String> warnings
+    ) {
+        Tier tier = TIERS.get(Math.max(0, Math.min(index, TIERS.size() - 1)));
+        List<PartCandidate> parts = recommendation.items().stream()
+                .map(this::partCandidate)
                 .toList();
-        return new AiBuildCandidate(tier, budgetWon, parts, new ArrayList<>(appliedPartCategories));
+        int totalPrice = totalPrice(parts);
+        Integer userBudget = numberValue(engineResponse.parsedContext().get("budget"));
+        int toolBudget = userBudget == null || userBudget <= 0 ? totalPrice : userBudget;
+        List<Map<String, Object>> toolResults = toolResults(parts, toolBudget, warnings);
+        List<String> buildWarnings = new ArrayList<>(toolWarnings(toolResults));
+        if (userBudget != null && totalPrice > userBudget && hasHardConstraint(engineResponse.parsedContext())) {
+            buildWarnings.add("명시한 부품 조건을 지키기 위해 예산을 초과했습니다.");
+        }
+        List<Map<String, Object>> items = parts.stream()
+                .map(part -> partItem(part, "AI 엔진 내부 자산 추천"))
+                .toList();
+        return MockData.map(
+                "id", "ai-engine-" + (index + 1) + "-" + slug(recommendation.name()),
+                "tier", tier.id(),
+                "label", tier.label(),
+                "title", recommendation.name(),
+                "summary", recommendation.summary(),
+                "recommendedFor", recommendation.recommendedFor(),
+                "totalPrice", totalPrice,
+                "badges", badges(tier.title(), engineResponse.parsedContext()),
+                "budgetWon", toolBudget,
+                "budgetLabel", userBudget == null ? "예산 미지정" : formatBudgetLabel(userBudget),
+                "tierLabel", tier.title(),
+                "appliedPartCategories", List.of(),
+                "items", items,
+                "toolResults", toolResults,
+                "warnings", distinct(buildWarnings),
+                "confidence", firstText(recommendation.confidence(), confidence(toolResults, buildWarnings)),
+                "evidenceIds", engineResponse.evidenceIds()
+        );
     }
 
-    private List<Map<String, Object>> applyPartOptions(List<AiBuildCandidate> baseBuilds, String category, List<PartCandidate> options) {
+    private List<Map<String, Object>> changedCurrentBuilds(
+            AiChatEngineResponse engineResponse,
+            Map<String, Object> request,
+            List<String> warnings
+    ) {
+        List<AiChatEngineResponse.PartRecommendation> options = engineResponse.partRecommendations();
+        if (options == null || options.isEmpty()) {
+            return engineBuilds(engineResponse, warnings);
+        }
+        String category = options.get(0).category();
+        List<AiBuildCandidate> baseBuilds = currentBuilds(request.get("currentBuilds"), warnings);
+        if (baseBuilds.isEmpty()) {
+            return engineBuilds(engineResponse, warnings);
+        }
+        List<PartCandidate> replacements = options.stream().map(this::partCandidate).toList();
         List<Map<String, Object>> updatedBuilds = new ArrayList<>();
         for (int index = 0; index < baseBuilds.size(); index += 1) {
             AiBuildCandidate baseBuild = baseBuilds.get(index);
-            PartCandidate option = options.get(Math.min(index, options.size() - 1));
+            PartCandidate replacement = replacements.get(Math.min(index, replacements.size() - 1));
             List<PartCandidate> nextParts = baseBuild.parts().stream()
-                    .map(part -> part.category().equals(category) ? option : part)
+                    .map(part -> category.equals(part.category()) ? replacement : part)
                     .toList();
-            Set<String> applied = new LinkedHashSet<>(baseBuild.appliedPartCategories());
+            List<String> applied = new ArrayList<>(baseBuild.appliedPartCategories());
             applied.add(category);
-            updatedBuilds.add(buildMap(new AiBuildCandidate(baseBuild.tier(), baseBuild.budgetWon(), nextParts, new ArrayList<>(applied))));
+            updatedBuilds.add(buildMap(new AiBuildCandidate(baseBuild.tier(), baseBuild.budgetWon(), baseBuild.budgetLabel(), nextParts, distinct(applied))));
         }
         return updatedBuilds;
+    }
+
+    private Map<String, Object> partRecommendation(List<AiChatEngineResponse.PartRecommendation> parts) {
+        if (parts == null || parts.isEmpty()) {
+            return null;
+        }
+        String category = parts.get(0).category();
+        return MockData.map(
+                "category", category,
+                "label", categoryLabel(category),
+                "intro", categoryLabel(category) + " 후보를 AI 엔진과 내부 자산 DB 기준으로 정리했습니다.",
+                "options", parts.stream()
+                        .map(part -> partItem(partCandidate(part), "AI 엔진 내부 자산 추천"))
+                        .toList()
+        );
+    }
+
+    private List<Map<String, Object>> draftActions(AiChatEngineResponse engineResponse, Map<String, Object> request) {
+        Map<String, Object> currentQuoteDraft = objectMap(request.get("currentQuoteDraft"));
+        if (currentQuoteDraft.isEmpty()) {
+            return List.of();
+        }
+        String message = text(request.get("message"));
+        List<Map<String, Object>> draftItems = objectMaps(currentQuoteDraft.get("items"));
+        Map<String, Object> parsedContext = engineResponse.parsedContext() == null ? Map.of() : engineResponse.parsedContext();
+        Map<String, Object> draftEdit = objectMap(parsedContext.get("draftEdit"));
+        String category = firstText(text(draftEdit.get("category")), firstText(detectPartCategory(message), firstRecommendedCategory(engineResponse)));
+        String operation = text(draftEdit.get("operation"));
+        String priceDirection = text(draftEdit.get("priceDirection"));
+
+        if ("REMOVE".equals(operation) || isRemoveIntent(message)) {
+            Map<String, Object> item = findDraftItem(draftItems, category, message);
+            if (!item.isEmpty()) {
+                return List.of(removeAction(item));
+            }
+            return List.of(askFollowUpAction("삭제할 부품을 찾지 못했습니다.", "예: GPU 빼줘, RAM 삭제해줘처럼 부품 종류를 함께 알려주세요."));
+        }
+
+        if ("UPDATE_QUANTITY".equals(operation) || isQuantityIntent(message) || parseCapacityGb(message) != null) {
+            Map<String, Object> item = findDraftItem(draftItems, category, message);
+            if (!item.isEmpty()) {
+                return List.of(quantityAction(item, message));
+            }
+        }
+
+        if ("CHEAPER".equals(priceDirection) || isBudgetIntent(message)) {
+            List<Map<String, Object>> actions = replacementActions(engineResponse, draftItems, true);
+            return actions.isEmpty()
+                    ? List.of(askFollowUpAction("예산 조정 후보가 부족합니다.", "CPU/GPU/RAM처럼 낮추고 싶은 부품을 알려주면 교체안을 제안할 수 있습니다."))
+                    : actions;
+        }
+
+        List<Map<String, Object>> actions = replacementActions(engineResponse, draftItems, false);
+        if (!actions.isEmpty()) {
+            return actions;
+        }
+
+        return List.of();
+    }
+
+    private List<Map<String, Object>> replacementActions(
+            AiChatEngineResponse engineResponse,
+            List<Map<String, Object>> draftItems,
+            boolean multiple
+    ) {
+        List<AiChatEngineResponse.PartRecommendation> recommendations = engineResponse.partRecommendations();
+        if (recommendations == null || recommendations.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> actions = new ArrayList<>();
+        int limit = multiple ? Math.min(3, recommendations.size()) : 1;
+        for (int index = 0; index < limit; index += 1) {
+            AiChatEngineResponse.PartRecommendation candidate = recommendations.get(index);
+            Map<String, Object> existing = findDraftItem(draftItems, candidate.category(), candidate.name());
+            String type = existing.isEmpty() ? "ADD_PART_TO_DRAFT" : "REPLACE_DRAFT_PART";
+            int quantity = defaultQuantity(candidate.category());
+            actions.add(actionMap(
+                    type,
+                    categoryLabel(candidate.category()) + " " + (existing.isEmpty() ? "추가" : "교체"),
+                    candidate.name() + "을(를) 견적에 " + (existing.isEmpty() ? "추가합니다." : "반영합니다."),
+                    MockData.map(
+                            "partId", candidate.partId(),
+                            "category", candidate.category(),
+                            "quantity", quantity,
+                            "source", "AI_BUILD_CHAT",
+                            "currentPartId", text(existing.get("partId"))
+                    )
+            ));
+        }
+        return actions;
+    }
+
+    private Map<String, Object> removeAction(Map<String, Object> item) {
+        String category = text(item.get("category"));
+        String name = firstText(text(item.get("name")), categoryLabel(category));
+        return actionMap(
+                "REMOVE_DRAFT_PART",
+                categoryLabel(category) + " 빼기",
+                name + "을(를) 견적에서 제거합니다. 필수 부품을 제거하면 조합 검증에서 경고가 발생할 수 있습니다.",
+                MockData.map(
+                        "partId", text(item.get("partId")),
+                        "category", category,
+                        "source", "AI_BUILD_CHAT"
+                )
+        );
+    }
+
+    private Map<String, Object> quantityAction(Map<String, Object> item, String message) {
+        String category = text(item.get("category"));
+        if (!"RAM".equals(category) && !"STORAGE".equals(category)) {
+            return askFollowUpAction("수량 변경은 RAM/SSD에 우선 적용됩니다.", categoryLabel(category) + "은 보통 1개 구성이라 교체할 제품을 알려주세요.");
+        }
+        int currentQuantity = Math.max(1, number(item.get("quantity"), 1));
+        int nextQuantity = parseQuantity(message);
+        Integer targetCapacityGb = parseCapacityGb(message);
+        if (nextQuantity <= 0 && targetCapacityGb != null) {
+            int perUnitGb = Math.max(1, capacityPerUnitGb(item));
+            nextQuantity = Math.max(1, (int) Math.ceil(targetCapacityGb / (double) perUnitGb));
+        }
+        if (nextQuantity <= 0) {
+            nextQuantity = currentQuantity + 1;
+        }
+        nextQuantity = Math.max(1, Math.min(9, nextQuantity));
+        String name = firstText(text(item.get("name")), categoryLabel(category));
+        return actionMap(
+                "UPDATE_DRAFT_QUANTITY",
+                categoryLabel(category) + " 수량 " + nextQuantity + "개로 변경",
+                name + " 수량을 " + currentQuantity + "개에서 " + nextQuantity + "개로 변경합니다.",
+                MockData.map(
+                        "partId", text(item.get("partId")),
+                        "category", category,
+                        "quantity", nextQuantity,
+                        "source", "AI_BUILD_CHAT"
+                )
+        );
+    }
+
+    private Map<String, Object> askFollowUpAction(String label, String description) {
+        return actionMap(
+                "ASK_FOLLOW_UP",
+                label,
+                description,
+                MockData.map("source", "AI_BUILD_CHAT")
+        );
+    }
+
+    private Map<String, Object> actionMap(String type, String label, String description, Map<String, Object> payload) {
+        String suffix = firstText(text(payload.get("partId")), firstText(text(payload.get("category")), label));
+        return MockData.map(
+                "id", "draft-action-" + type.toLowerCase(Locale.ROOT).replace('_', '-') + "-" + slug(suffix),
+                "type", type,
+                "label", label,
+                "description", description,
+                "payload", payload,
+                "requiresConfirmation", true
+        );
+    }
+
+    private Map<String, Object> findDraftItem(List<Map<String, Object>> draftItems, String category, String message) {
+        if (category != null) {
+            return draftItems.stream()
+                    .filter(item -> category.equals(text(item.get("category"))))
+                    .findFirst()
+                    .orElse(Map.of());
+        }
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return draftItems.stream()
+                .filter(item -> normalized.contains(String.valueOf(item.get("name")).toLowerCase(Locale.ROOT))
+                        || normalized.contains(String.valueOf(item.get("manufacturer")).toLowerCase(Locale.ROOT)))
+                .findFirst()
+                .orElse(Map.of());
+    }
+
+    private String firstRecommendedCategory(AiChatEngineResponse engineResponse) {
+        if (engineResponse.partRecommendations() == null || engineResponse.partRecommendations().isEmpty()) {
+            return null;
+        }
+        return engineResponse.partRecommendations().get(0).category();
+    }
+
+    private boolean isRemoveIntent(String message) {
+        return containsAny(message, "빼", "삭제", "제거", "remove", "delete");
+    }
+
+    private boolean isQuantityIntent(String message) {
+        return containsAny(message, "수량", "개로", "개", "장", "늘려", "줄여");
+    }
+
+    private boolean isBudgetIntent(String message) {
+        return containsAny(message, "예산", "낮춰", "줄여", "안으로", "이하", "초과", "비싸");
+    }
+
+    private static boolean containsAny(String message, String... keywords) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        for (String keyword : keywords) {
+            if (normalized.contains(keyword.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int parseQuantity(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        Matcher matcher = QUANTITY_PATTERN.matcher(normalized);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+    }
+
+    private static Integer parseCapacityGb(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        Matcher matcher = CAPACITY_GB_PATTERN.matcher(normalized);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
+    private static int capacityPerUnitGb(Map<String, Object> item) {
+        Map<String, Object> attributes = objectMap(item.get("attributes"));
+        Integer capacity = numberValue(attributes.get("capacityGb"));
+        if (capacity == null) {
+            capacity = numberValue(attributes.get("kitCapacityGb"));
+        }
+        if (capacity == null) {
+            capacity = numberValue(attributes.get("memoryGb"));
+        }
+        if (capacity != null && capacity > 0) {
+            return capacity;
+        }
+        Integer nameCapacity = parseCapacityGb(firstText(text(item.get("name")), ""));
+        return nameCapacity == null || nameCapacity <= 0 ? 32 : nameCapacity;
     }
 
     private List<AiBuildCandidate> currentBuilds(Object value, List<String> warnings) {
@@ -196,11 +451,9 @@ public class BuildChatService {
                 List<PartCandidate> parts = objectMaps(rawBuild.get("items")).stream()
                         .map(item -> partByPublicId(text(item.get("partId"))))
                         .toList();
-                if (parts.size() < BUILD_CATEGORIES.size()) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "currentBuilds의 부품 구성이 부족합니다.");
-                }
+                String budgetLabel = text(rawBuild.get("budgetLabel"));
                 int budgetWon = number(rawBuild.get("budgetWon"), totalPrice(parts));
-                candidates.add(new AiBuildCandidate(tier, budgetWon, parts, stringList(rawBuild.get("appliedPartCategories"))));
+                candidates.add(new AiBuildCandidate(tier, budgetWon, budgetLabel, parts, stringList(rawBuild.get("appliedPartCategories"))));
             }
             return candidates;
         } catch (RuntimeException error) {
@@ -214,20 +467,21 @@ public class BuildChatService {
         List<Map<String, Object>> items = build.parts().stream()
                 .map(part -> partItem(part, "DB 현재가 기준"))
                 .toList();
-        int totalPrice = build.parts().stream().mapToInt(part -> part.price() == null ? 0 : part.price()).sum();
-        List<Map<String, Object>> toolResults = toolResults(build.parts(), build.budgetWon(), warnings);
+        int totalPrice = totalPrice(build.parts());
+        boolean unspecifiedBudget = "예산 미지정".equals(build.budgetLabel());
+        int toolBudget = build.budgetWon() <= 0 || unspecifiedBudget ? totalPrice : build.budgetWon();
+        List<Map<String, Object>> toolResults = toolResults(build.parts(), toolBudget, warnings);
         warnings.addAll(toolWarnings(toolResults));
-        String budgetLabel = formatBudgetLabel(build.budgetWon());
-        String id = "ai-" + build.budgetWon() + "-" + build.tier().id() + appliedSuffix(build.appliedPartCategories());
+        String budgetLabel = firstText(build.budgetLabel(), build.budgetWon() <= 0 ? "예산 미지정" : formatBudgetLabel(build.budgetWon()));
         return MockData.map(
-                "id", id,
+                "id", "ai-engine-current-" + build.tier().id() + "-" + appliedSuffix(build.appliedPartCategories()),
                 "tier", build.tier().id(),
                 "label", build.tier().label(),
-                "title", budgetLabel + " " + build.tier().title(),
-                "summary", budgetLabel + " 예산을 실제 부품 DB와 룰 기반 선택 기준으로 계산한 " + build.tier().title() + " 조합입니다.",
+                "title", build.tier().title() + " 추천 조합",
+                "summary", "AI 엔진 추천 부품을 기존 추천 조합에 반영했습니다.",
                 "totalPrice", totalPrice,
-                "badges", badges(budgetLabel, build.tier().title(), build.appliedPartCategories()),
-                "budgetWon", build.budgetWon(),
+                "badges", badges(build.tier().title(), Map.of()),
+                "budgetWon", toolBudget,
                 "budgetLabel", budgetLabel,
                 "tierLabel", build.tier().title(),
                 "appliedPartCategories", build.appliedPartCategories(),
@@ -240,7 +494,7 @@ public class BuildChatService {
 
     private List<Map<String, Object>> toolResults(List<PartCandidate> parts, int budgetWon, List<String> warnings) {
         try {
-            return toolCheckService.checkBuild(parts.stream().map(this::toolPart).toList(), budgetWon);
+            return toolCheckService.checkBuild(parts.stream().map(BuildChatService::toolPart).toList(), budgetWon);
         } catch (RuntimeException error) {
             warnings.add("Tool 검증을 완료하지 못했습니다: " + error.getMessage());
             return List.of();
@@ -271,66 +525,6 @@ public class BuildChatService {
         return distinct(builds.stream()
                 .flatMap(build -> stringList(build.get("warnings")).stream())
                 .toList());
-    }
-
-    private List<PartCandidate> partRecommendationOptions(String category) {
-        List<PartCandidate> candidates = partCandidates(category);
-        List<PartCandidate> picks = new ArrayList<>();
-        for (int index : List.of(0, candidates.size() / 2, candidates.size() - 1)) {
-            PartCandidate candidate = candidates.get(Math.max(0, Math.min(index, candidates.size() - 1)));
-            if (picks.stream().noneMatch(pick -> pick.publicId().equals(candidate.publicId()))) {
-                picks.add(candidate);
-            }
-        }
-        for (PartCandidate candidate : candidates) {
-            if (picks.size() >= 3) {
-                break;
-            }
-            if (picks.stream().noneMatch(pick -> pick.publicId().equals(candidate.publicId()))) {
-                picks.add(candidate);
-            }
-        }
-        if (picks.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, categoryLabel(category) + " 추천 후보가 없습니다.");
-        }
-        return picks;
-    }
-
-    private PartCandidate choosePart(String category, int targetPrice) {
-        return partCandidates(category).stream()
-                .min(Comparator.comparingInt(part -> Math.abs((part.price() == null ? 0 : part.price()) - targetPrice)))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, categoryLabel(category) + " 추천 가능한 ACTIVE 부품이 없습니다."));
-    }
-
-    private List<PartCandidate> partCandidates(String category) {
-        List<PartCandidate> toolReady = partCandidates(category, true);
-        List<PartCandidate> candidates = toolReady.isEmpty() ? partCandidates(category, false) : toolReady;
-        if (candidates.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, categoryLabel(category) + " 추천 가능한 ACTIVE 부품이 없습니다.");
-        }
-        return candidates;
-    }
-
-    private List<PartCandidate> partCandidates(String category, boolean toolReadyOnly) {
-        String toolReadyWhere = toolReadyOnly ? " AND coalesce((attributes->>'toolReady')::boolean, false) = true\n" : "";
-        return jdbcTemplate.queryForList("""
-                        SELECT id AS internal_id,
-                               public_id::text AS id,
-                               category,
-                               name,
-                               manufacturer,
-                               price,
-                               attributes
-                        FROM parts
-                        WHERE category = ?
-                          AND status = 'ACTIVE'
-                          AND deleted_at IS NULL
-                        """ + toolReadyWhere + """
-                        ORDER BY price ASC, id ASC
-                        """, category)
-                .stream()
-                .map(this::partCandidate)
-                .toList();
     }
 
     private PartCandidate partByPublicId(String publicId) {
@@ -368,19 +562,31 @@ public class BuildChatService {
         );
     }
 
+    private PartCandidate partCandidate(AiChatEngineResponse.PartRecommendation part) {
+        return new PartCandidate(
+                null,
+                part.partId(),
+                part.category(),
+                part.name(),
+                part.manufacturer(),
+                part.price(),
+                part.attributes() == null ? Map.of() : part.attributes()
+        );
+    }
+
     private Map<String, Object> partItem(PartCandidate part, String fallbackNote) {
         return MockData.map(
                 "partId", part.publicId(),
                 "category", part.category(),
                 "name", part.name(),
                 "manufacturer", part.manufacturer(),
-                "quantity", 1,
+                "quantity", defaultQuantity(part.category()),
                 "price", part.price(),
                 "note", firstText(text(part.attributes().get("shortSpec")), fallbackNote)
         );
     }
 
-    private ToolBuildPart toolPart(PartCandidate part) {
+    private static ToolBuildPart toolPart(PartCandidate part) {
         return new ToolBuildPart(
                 part.internalId(),
                 part.publicId(),
@@ -390,6 +596,24 @@ public class BuildChatService {
                 part.price(),
                 part.attributes()
         );
+    }
+
+    private static String answerType(AiChatIntent intent) {
+        return switch (intent) {
+            case FULL_BUILD_RECOMMEND -> "BUDGET";
+            case PART_RECOMMEND, BUILD_MODIFY -> "PART";
+            case PRICE_ALERT_HELP, EXPLAIN, ASK_FOLLOW_UP -> "GENERAL";
+        };
+    }
+
+    private static int defaultQuantity(String category) {
+        return "RAM".equals(category) ? 2 : 1;
+    }
+
+    private static boolean hasHardConstraint(Map<String, Object> parsedContext) {
+        return "MUST_INCLUDE".equals(text(parsedContext.get("hardConstraintPolicy")))
+                || !stringList(parsedContext.get("requiredGpuClasses")).isEmpty()
+                || !stringList(parsedContext.get("requiredPartKeywords")).isEmpty();
     }
 
     private static Tier tier(String tierId, int index) {
@@ -404,19 +628,22 @@ public class BuildChatService {
         return TIERS.get(Math.max(0, Math.min(index, TIERS.size() - 1)));
     }
 
-    private static List<String> badges(String budgetLabel, String tierTitle, List<String> appliedPartCategories) {
+    private static List<String> badges(String tierTitle, Map<String, Object> parsedContext) {
         List<String> badges = new ArrayList<>();
-        badges.add(budgetLabel);
         badges.add(tierTitle);
-        appliedPartCategories.forEach(category -> badges.add(categoryLabel(category) + " 반영됨"));
-        return badges;
+        String budgetPolicy = text(parsedContext.get("budgetPolicy"));
+        if (budgetPolicy != null) {
+            badges.add(budgetPolicy);
+        }
+        stringList(parsedContext.get("requiredGpuClasses")).forEach(badges::add);
+        return distinct(badges);
     }
 
     private static String appliedSuffix(List<String> appliedPartCategories) {
         if (appliedPartCategories == null || appliedPartCategories.isEmpty()) {
-            return "";
+            return "base";
         }
-        return "-" + String.join("-", appliedPartCategories).toLowerCase(Locale.ROOT);
+        return String.join("-", appliedPartCategories).toLowerCase(Locale.ROOT);
     }
 
     private static String formatBudgetLabel(int budgetWon) {
@@ -424,11 +651,22 @@ public class BuildChatService {
     }
 
     private static int totalPrice(List<PartCandidate> parts) {
-        return parts.stream().mapToInt(part -> part.price() == null ? 0 : part.price()).sum();
+        return parts.stream()
+                .mapToInt(part -> (part.price() == null ? 0 : part.price()) * defaultQuantity(part.category()))
+                .sum();
     }
 
     private static String categoryLabel(String category) {
         return CATEGORY_LABELS.getOrDefault(category, category);
+    }
+
+    private static String slug(String value) {
+        String normalized = text(value);
+        if (normalized == null) {
+            return "build";
+        }
+        String slug = normalized.toLowerCase(Locale.ROOT).replaceAll("[^0-9a-z가-힣]+", "-");
+        return slug.replaceAll("(^-+|-+$)", "");
     }
 
     private static List<String> distinct(List<String> values) {
@@ -440,12 +678,20 @@ public class BuildChatService {
                 .toList();
     }
 
+    private static String requireText(Object value, String message) {
+        String text = text(value);
+        if (text == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+        }
+        return text;
+    }
+
     private static String text(Object value) {
         if (value == null) {
             return null;
         }
         String text = value.toString().trim();
-        return text.isBlank() ? null : text;
+        return text.isBlank() || "null".equalsIgnoreCase(text) ? null : text;
     }
 
     private static String firstText(String value, String fallback) {
@@ -453,13 +699,19 @@ public class BuildChatService {
     }
 
     private static int number(Object value, int fallback) {
+        Integer number = numberValue(value);
+        return number == null ? fallback : number;
+    }
+
+    private static Integer numberValue(Object value) {
         if (value instanceof Number number) {
             return number.intValue();
         }
-        if (value == null || value.toString().isBlank()) {
-            return fallback;
+        String text = text(value);
+        if (text == null) {
+            return null;
         }
-        return Integer.parseInt(value.toString());
+        return Integer.parseInt(text.replace(",", ""));
     }
 
     private static Long longValue(Object value) {
@@ -493,18 +745,20 @@ public class BuildChatService {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> objectMap(Object value) {
         if (value instanceof Map<?, ?> map) {
-            return (Map<String, Object>) map;
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, mapValue) -> result.put(String.valueOf(key), mapValue));
+            return result;
         }
         return Map.of();
     }
 
-    private record Tier(String id, String label, String title, double factor) {
+    private record Tier(String id, String label, String title) {
     }
 
     private record CategoryKeywords(String category, List<String> keywords) {
     }
 
-    private record AiBuildCandidate(Tier tier, int budgetWon, List<PartCandidate> parts, List<String> appliedPartCategories) {
+    private record AiBuildCandidate(Tier tier, int budgetWon, String budgetLabel, List<PartCandidate> parts, List<String> appliedPartCategories) {
     }
 
     private record PartCandidate(
