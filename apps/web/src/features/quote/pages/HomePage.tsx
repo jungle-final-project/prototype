@@ -66,7 +66,6 @@ type PopularPart = {
   searchQuery: string;
   sale: string;
   detail: string;
-  to: string;
   icon: LucideIcon;
 };
 
@@ -156,10 +155,10 @@ const featuredBuilds: FeaturedBuild[] = [
 ];
 
 const popularPartDeals: PopularPart[] = [
-  { rank: 1, label: 'RTX 5070 QHD 그래픽카드', category: 'GPU', searchQuery: 'RTX 5070', sale: 'SALE', detail: 'QHD 고주사율 후보', to: '/self-quote?category=GPU', icon: Monitor },
-  { rank: 2, label: 'Ryzen 7 작업용 CPU', category: 'CPU', searchQuery: 'Ryzen 7', sale: 'BEST', detail: '게임/개발 균형형', to: '/self-quote?category=CPU', icon: Cpu },
-  { rank: 3, label: 'DDR5 32GB 메모리', category: 'RAM', searchQuery: 'DDR5 32GB', sale: 'LOW', detail: '멀티태스킹 표준', to: '/self-quote?category=RAM', icon: Database },
-  { rank: 4, label: 'ATX 3.1 850W 파워', category: 'PSU', searchQuery: 'ATX 3.1 850W', sale: 'PASS', detail: '전력 여유 확보', to: '/self-quote?category=PSU', icon: Zap }
+  { rank: 1, label: 'RTX 5070 QHD 그래픽카드', category: 'GPU', searchQuery: 'RTX 5070', sale: 'SALE', detail: 'QHD 고주사율 후보', icon: Monitor },
+  { rank: 2, label: 'Ryzen 7 작업용 CPU', category: 'CPU', searchQuery: 'Ryzen 7', sale: 'BEST', detail: '게임/개발 균형형', icon: Cpu },
+  { rank: 3, label: 'DDR5 32GB 메모리', category: 'RAM', searchQuery: 'DDR5 32GB', sale: 'LOW', detail: '멀티태스킹 표준', icon: Database },
+  { rank: 4, label: 'ATX 3.1 850W 파워', category: 'PSU', searchQuery: 'ATX 3.1 850W', sale: 'PASS', detail: '전력 여유 확보', icon: Zap }
 ];
 
 export function HomePage() {
@@ -563,9 +562,16 @@ function PopularPartsSection() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {popularPartDeals.map((part, index) => {
           const matchedPart = popularPartQueries[index]?.data?.items[0];
+          const partDetailPath = matchedPart ? `/parts/${matchedPart.id}` : '.';
 
           return (
-            <Link key={part.label} to={part.to} aria-label={`인기 부품 ${part.rank}번 보기`} className="group rounded-lg border border-commerce-line bg-white p-4 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100">
+            <Link
+              key={part.label}
+              to={partDetailPath}
+              aria-label={`인기 부품 ${part.rank}번 보기`}
+              aria-disabled={matchedPart ? undefined : true}
+              className={`group rounded-lg border border-commerce-line bg-white p-4 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 ${matchedPart ? '' : 'pointer-events-none cursor-wait opacity-70'}`}
+            >
               <div className="mb-3 flex items-center justify-between">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-commerce-ink text-xs font-black text-white">{part.rank}</span>
                 <span className={`rounded px-2 py-1 text-[11px] font-black ${part.sale === 'SALE' ? 'bg-commerce-sale text-white' : 'bg-slate-100 text-slate-700'}`}>{part.sale}</span>
