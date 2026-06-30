@@ -729,6 +729,32 @@ AdminShell nav 분석 결과:
 - [x] 2026-06-30 구매 컨설팅 개선 기준 `POST /api/ai/build-chat`, `PUT /api/quote-drafts/current/apply-ai-build`, 홈 AI 추천상품 탭, 챗봇 대화 세션, 셀프 견적 batch 적용, 구매 컨설팅 아이콘 자산, 관련 backend/frontend 테스트와 OpenAPI 계약 변경 범위를 확인했다.
 - [x] 2026-06-30 구매 상담 추천의 toolReady 부품 조회 SQL에서 `trueORDER BY`가 붙지 않도록 공백을 보정하고, 예산 추천 호출 시 SQL 조합 공백 회귀 테스트가 추가된 범위를 확인했다.
 
+#### 2026-06-30 공동계약서 위반 감사 기록
+
+- [x] 현재 브랜치 `feat/aiChatImprove`가 `main` 대비 21개 파일을 변경하는 것을 확인했다. 주요 변경은 `POST /api/ai/build-chat`, `PUT /api/quote-drafts/current/apply-ai-build`, 홈 AI 추천 UI, 셀프 견적 batch 적용, 구매 컨설팅 아이콘 자산이다.
+- [x] 계약 문서 동기화 여부를 확인했다. `docs/API_CONTRACT.md`, `docs/ROUTE_OWNERSHIP.md`, `docs/openapi.yaml`에는 새 API와 route owner 변경이 반영되어 있다.
+- [x] 공동계약서 위반 가능성이 있는 항목을 구분했다.
+  - [ ] 5번 단독 PR이라면 owner 범위 위반 가능성이 있다. 이 브랜치는 1번 owner 영역인 `build`, `features/quote`, 홈 화면과 2번 owner 영역인 `quote`, `features/parts`, 셀프 견적 화면을 직접 수정한다. 1번/2번 작업 또는 명시적 리뷰가 있으면 허용 가능하고, 5번 단독 작업이면 계약 위반이다.
+  - [ ] 새 API 2개가 `docs/openapi.yaml`에는 들어갔지만 `tools/validate_openapi.py`의 `REQUIRED_PATHS`와 request schema 검사 목록에는 포함되지 않았다. CI의 OpenAPI 검증이 새 API 누락을 잡지 못하므로 검증 계약 보강이 필요하다.
+  - [ ] `HomePage.tsx` 안에 `featuredBuilds`, `popularPartDeals` 같은 domain mock/static 데이터가 직접 들어 있다. 유지하려면 "홈 마케팅용 정적 데이터"로 합의해야 하고, mock 데이터라면 `features/quote/mocks`로 옮기는 것이 계약에 맞다.
+- [x] 위반으로 보지 않는 항목을 확인했다.
+  - [x] 페이지 컴포넌트가 공통 `api()`를 직접 호출하지 않고 `quoteApi.ts`, `partsApi.ts` wrapper를 사용한다.
+  - [x] `POST /api/ai/build-chat`는 계약상 LLM/RAG 없이 DB/룰 기반으로 동작하므로 3번 Agent/RAG owner 영역을 직접 침범하지 않는다. 단, Tool 계산은 2번 owner review가 필요하다.
+  - [x] `PUT /api/quote-drafts/current/apply-ai-build`는 `conflictPolicy=REPLACE`와 transaction 적용 흐름을 갖고 있어 새 계약 방향과 대체로 맞다.
+  - [x] 구매 컨설팅 아이콘 자산은 `docs/hosoek/assets` 문서 자산이므로 route/API/DB owner 계약 위반은 아니다.
+- [x] 검증 결과를 기록했다.
+  - [x] `git diff --check main...HEAD` 통과.
+  - [x] `cd apps/api && ./gradlew test --no-daemon` 통과.
+  - [x] `cd apps/web && npm run test` 통과. Playwright 60개 통과.
+  - [x] Ruby YAML 기반 OpenAPI 보조 검증 통과. 51 paths 확인.
+  - [ ] 공식 `python tools/validate_openapi.py`는 로컬 `python` 명령 없음, `python3` PyYAML 없음, system pip 외부 관리 환경 제한 때문에 직접 실행하지 못했다. CI 또는 `.venv`에서 공식 스크립트 재확인이 필요하다.
+
+#### 2026-07-01 커밋 메시지 요청 전 점검 기록
+
+- [x] `origin/main` 병합 후 현재 브랜치가 `feat/aiChatImprove`이고, 마지막 커밋이 `fix: 로그인 후 헤더 사용자 표시를 유지`임을 확인했다.
+- [x] 현재 unstaged 변경은 `docs/hosoek/owner5-work-analysis-checklist.md` 1개뿐이며, 코드/API/OpenAPI 추가 변경은 없다.
+- [x] 이번 커밋 메시지는 구매 상담 기능 구현이 아니라 공동계약서 감사와 커밋 메시지 요청 전 점검 기록을 남기는 문서 커밋으로 분리한다.
+
 ## 우선순위
 
 ### P0
