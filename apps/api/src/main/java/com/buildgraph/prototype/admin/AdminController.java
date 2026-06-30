@@ -2,6 +2,7 @@ package com.buildgraph.prototype.admin;
 
 import com.buildgraph.prototype.agent.AgentQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
+import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -23,6 +24,7 @@ public class AdminController {
     private final AdminQueryService adminQueryService;
     private final AgentQueryService agentQueryService;
     private final RagQueryService ragQueryService;
+    private final RagEmbeddingService ragEmbeddingService;
     private final TicketQueryService ticketQueryService;
     private final PriceQueryService priceQueryService;
     private final CurrentUserService currentUserService;
@@ -31,6 +33,7 @@ public class AdminController {
             AdminQueryService adminQueryService,
             AgentQueryService agentQueryService,
             RagQueryService ragQueryService,
+            RagEmbeddingService ragEmbeddingService,
             TicketQueryService ticketQueryService,
             PriceQueryService priceQueryService,
             CurrentUserService currentUserService
@@ -38,6 +41,7 @@ public class AdminController {
         this.adminQueryService = adminQueryService;
         this.agentQueryService = agentQueryService;
         this.ragQueryService = ragQueryService;
+        this.ragEmbeddingService = ragEmbeddingService;
         this.ticketQueryService = ticketQueryService;
         this.priceQueryService = priceQueryService;
         this.currentUserService = currentUserService;
@@ -83,6 +87,16 @@ public class AdminController {
     Map<String, Object> ragEvidence(@PathVariable String id, @RequestHeader(value = "Authorization", required = false) String authorization) {
         currentUserService.requireAdmin(authorization);
         return ragQueryService.adminEvidence(id);
+    }
+
+    @PostMapping("/rag-embeddings/backfill")
+    Map<String, Object> backfillRagEmbeddings(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        Integer limit = request == null || request.get("limit") == null ? null : Integer.valueOf(String.valueOf(request.get("limit")));
+        return ragEmbeddingService.backfillReusableEmbeddings(limit);
     }
 
     @GetMapping("/as-tickets")

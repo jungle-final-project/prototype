@@ -30,7 +30,7 @@ class RagControllerTest {
 
     @Test
     void searchPassesQueryAndPaginationToService() throws Exception {
-        when(ragQueryService.search("gpu", 1, 5)).thenReturn(Map.of(
+        when(ragQueryService.search("gpu", "BUILD_RECOMMEND", "PART_SPEC", 1, 5)).thenReturn(Map.of(
                 "items", List.of(Map.of(
                         "id", "00000000-0000-4000-8000-000000014002",
                         "sourceId", "part-catalog-rtx50-tool-ready-dimensions",
@@ -46,6 +46,8 @@ class RagControllerTest {
         mockMvc.perform(get("/api/rag/search")
                         .header("Authorization", USER_TOKEN)
                         .param("q", "gpu")
+                        .param("purpose", "BUILD_RECOMMEND")
+                        .param("sourceType", "PART_SPEC")
                         .param("page", "1")
                         .param("size", "5"))
                 .andExpect(status().isOk())
@@ -56,12 +58,12 @@ class RagControllerTest {
                 .andExpect(jsonPath("$.total").value(1));
 
         verify(currentUserService).requireUser(USER_TOKEN);
-        verify(ragQueryService).search("gpu", 1, 5);
+        verify(ragQueryService).search("gpu", "BUILD_RECOMMEND", "PART_SPEC", 1, 5);
     }
 
     @Test
     void searchReturnsBadRequestWhenSizeIsTooLarge() throws Exception {
-        when(ragQueryService.search("gpu", 0, 101))
+        when(ragQueryService.search("gpu", null, null, 0, 101))
                 .thenThrow(new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.BAD_REQUEST,
                         "size는 1 이상 100 이하이어야 합니다."
@@ -75,6 +77,27 @@ class RagControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(currentUserService).requireUser(USER_TOKEN);
-        verify(ragQueryService).search("gpu", 0, 101);
+        verify(ragQueryService).search("gpu", null, null, 0, 101);
+    }
+
+    @Test
+    void searchUsesLimitAsSizeAliasWhenSizeIsMissing() throws Exception {
+        when(ragQueryService.search("5090", "REQUIREMENT_PARSE", null, null, 3)).thenReturn(Map.of(
+                "items", List.of(),
+                "page", 0,
+                "size", 3,
+                "total", 0
+        ));
+
+        mockMvc.perform(get("/api/rag/search")
+                        .header("Authorization", USER_TOKEN)
+                        .param("q", "5090")
+                        .param("purpose", "REQUIREMENT_PARSE")
+                        .param("limit", "3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.size").value(3));
+
+        verify(currentUserService).requireUser(USER_TOKEN);
+        verify(ragQueryService).search("5090", "REQUIREMENT_PARSE", null, null, 3);
     }
 }

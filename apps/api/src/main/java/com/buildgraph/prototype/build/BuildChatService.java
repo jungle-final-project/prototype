@@ -21,7 +21,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class BuildChatService {
-    private static final int DEFAULT_BUDGET = 2_000_000;
     private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(?:만원|만)");
     private static final Pattern BUDGET_WON = Pattern.compile("(\\d{6,})\\s*원?");
     private static final List<String> BUILD_CATEGORIES = List.of("CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER");
@@ -83,10 +82,9 @@ public class BuildChatService {
             List<String> warnings = new ArrayList<>();
             List<PartCandidate> options = partRecommendationOptions(category);
             List<AiBuildCandidate> baseBuilds = currentBuilds(body.get("currentBuilds"), warnings);
-            if (baseBuilds.isEmpty()) {
-                baseBuilds = buildCandidatesForBudget(DEFAULT_BUDGET, Set.of());
-            }
-            List<Map<String, Object>> updatedBuilds = applyPartOptions(baseBuilds, category, options);
+            List<Map<String, Object>> updatedBuilds = baseBuilds.isEmpty()
+                    ? List.of()
+                    : applyPartOptions(baseBuilds, category, options);
             Map<String, Object> partRecommendation = MockData.map(
                     "category", category,
                     "label", categoryLabel(category),
@@ -98,7 +96,9 @@ public class BuildChatService {
             warnings.addAll(buildWarnings(updatedBuilds));
             return MockData.map(
                     "answerType", "PART",
-                    "message", categoryLabel(category) + " 추천 후보 3개를 정리했고 최신 AI 추천 컴퓨터 3개에도 반영했습니다.",
+                    "message", baseBuilds.isEmpty()
+                            ? categoryLabel(category) + " 추천 후보 3개를 실제 부품 DB 현재가 기준으로 정리했습니다."
+                            : categoryLabel(category) + " 추천 후보 3개를 정리했고 최신 AI 추천 컴퓨터 3개에도 반영했습니다.",
                     "builds", updatedBuilds,
                     "partRecommendation", partRecommendation,
                     "warnings", distinct(warnings)
@@ -193,18 +193,18 @@ public class BuildChatService {
             for (int index = 0; index < rawBuilds.size(); index += 1) {
                 Map<String, Object> rawBuild = rawBuilds.get(index);
                 Tier tier = tier(text(rawBuild.get("tier")), index);
-                int budgetWon = number(rawBuild.get("budgetWon"), DEFAULT_BUDGET);
                 List<PartCandidate> parts = objectMaps(rawBuild.get("items")).stream()
                         .map(item -> partByPublicId(text(item.get("partId"))))
                         .toList();
                 if (parts.size() < BUILD_CATEGORIES.size()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "currentBuilds의 부품 구성이 부족합니다.");
                 }
+                int budgetWon = number(rawBuild.get("budgetWon"), totalPrice(parts));
                 candidates.add(new AiBuildCandidate(tier, budgetWon, parts, stringList(rawBuild.get("appliedPartCategories"))));
             }
             return candidates;
         } catch (RuntimeException error) {
-            warnings.add("이전 AI 추천 조합을 최신 DB 가격으로 복원하지 못해 기본 200만원 조합에서 다시 계산했습니다.");
+            warnings.add("이전 AI 추천 조합을 최신 DB 가격으로 복원하지 못해 부품 후보만 표시합니다.");
             return List.of();
         }
     }
@@ -421,6 +421,10 @@ public class BuildChatService {
 
     private static String formatBudgetLabel(int budgetWon) {
         return budgetWon % 10_000 == 0 ? (budgetWon / 10_000) + "만원" : String.format("%,d원", budgetWon);
+    }
+
+    private static int totalPrice(List<PartCandidate> parts) {
+        return parts.stream().mapToInt(part -> part.price() == null ? 0 : part.price()).sum();
     }
 
     private static String categoryLabel(String category) {

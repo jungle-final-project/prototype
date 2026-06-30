@@ -1,0 +1,526 @@
+[
+  {
+    "id": "full-build-001",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "200만원 QHD 게임용 PC 추천해줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-002",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "개발이랑 게임 같이 할 컴퓨터 맞춰줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-003",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "영상편집용 본체 견적 내줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-004",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "AI CUDA 실험용 PC 추천",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-005",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "4K 게임용 컴퓨터 추천해줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-006",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "180만원으로 사무랑 학습용 PC 견적",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-007",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "QHD 배그용 추천",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-008",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "조용한 게임 컴퓨터 맞춰줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-009",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "오래 쓸 업그레이드 여유 있는 본체 추천",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-010",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "프리미어랑 게임 둘 다 하는 PC 맞춰줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-011",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "인텔 선호 개발용 컴퓨터 견적",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-012",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "라데온 그래픽카드로 게임용 PC 맞춰줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-013",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "300만원 안에서 고성능 컴퓨터 추천",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-013a",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "300만원 이상으로 게임용 PC 맞춰줘",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-013b",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "최소 300만원 넘게 개발용 컴퓨터 추천",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-014",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "FHD 240hz FPS 게임용 추천",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "full-build-015",
+    "group": "FULL_BUILD_RECOMMEND",
+    "message": "블렌더 3D 작업용 PC 견적",
+    "surface": "HOME",
+    "expectedIntent": "FULL_BUILD_RECOMMEND",
+    "expectedActions": ["OPEN_SELF_QUOTE", "ADD_BUILD_TO_DRAFT"]
+  },
+  {
+    "id": "part-001",
+    "group": "PART_RECOMMEND",
+    "message": "RTX 5070 중에 뭐가 좋아?",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "GPU"
+  },
+  {
+    "id": "part-002",
+    "group": "PART_RECOMMEND",
+    "message": "그래픽카드 추천해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "GPU"
+  },
+  {
+    "id": "part-003",
+    "group": "PART_RECOMMEND",
+    "message": "라이젠 CPU 뭐가 괜찮아?",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "CPU"
+  },
+  {
+    "id": "part-004",
+    "group": "PART_RECOMMEND",
+    "message": "메인보드 추천",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "MOTHERBOARD"
+  },
+  {
+    "id": "part-005",
+    "group": "PART_RECOMMEND",
+    "message": "DDR5 램 추천해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "RAM"
+  },
+  {
+    "id": "part-006",
+    "group": "PART_RECOMMEND",
+    "message": "SSD 뭐 담으면 좋을까",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "STORAGE"
+  },
+  {
+    "id": "part-007",
+    "group": "PART_RECOMMEND",
+    "message": "파워 추천",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "PSU"
+  },
+  {
+    "id": "part-008",
+    "group": "PART_RECOMMEND",
+    "message": "케이스 뭐가 좋아?",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "CASE"
+  },
+  {
+    "id": "part-009",
+    "group": "PART_RECOMMEND",
+    "message": "수랭 쿨러 후보 보여줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "COOLER"
+  },
+  {
+    "id": "part-010",
+    "group": "PART_RECOMMEND",
+    "message": "엔비디아 GPU 후보 골라줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "GPU"
+  },
+  {
+    "id": "part-011",
+    "group": "PART_RECOMMEND",
+    "message": "인텔 프로세서 추천",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "CPU"
+  },
+  {
+    "id": "part-012",
+    "group": "PART_RECOMMEND",
+    "message": "저장장치 추천해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "PART_RECOMMEND",
+    "expectedActions": ["ADD_PART_TO_DRAFT"],
+    "expectedCategory": "STORAGE"
+  },
+  {
+    "id": "modify-001",
+    "group": "BUILD_MODIFY",
+    "message": "이 견적에서 램 64기가로 바꿔줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "RAM"
+  },
+  {
+    "id": "modify-002",
+    "group": "BUILD_MODIFY",
+    "message": "GPU를 더 좋은 걸로 교체해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "GPU"
+  },
+  {
+    "id": "modify-003",
+    "group": "BUILD_MODIFY",
+    "message": "CPU 업그레이드 해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "CPU"
+  },
+  {
+    "id": "modify-004",
+    "group": "BUILD_MODIFY",
+    "message": "파워를 850W로 변경",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "PSU"
+  },
+  {
+    "id": "modify-005",
+    "group": "BUILD_MODIFY",
+    "message": "SSD 하나 추가해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "STORAGE"
+  },
+  {
+    "id": "modify-006",
+    "group": "BUILD_MODIFY",
+    "message": "메인보드 더 좋은 걸로 바꿔",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "MOTHERBOARD"
+  },
+  {
+    "id": "modify-007",
+    "group": "BUILD_MODIFY",
+    "message": "케이스를 작은 걸로 교체",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "CASE"
+  },
+  {
+    "id": "modify-008",
+    "group": "BUILD_MODIFY",
+    "message": "쿨러를 수랭으로 바꿔줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"],
+    "expectedCategory": "COOLER"
+  },
+  {
+    "id": "modify-009",
+    "group": "BUILD_MODIFY",
+    "message": "예산 낮춰서 구성 변경해줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"]
+  },
+  {
+    "id": "modify-010",
+    "group": "BUILD_MODIFY",
+    "message": "성능 올려서 견적 바꿔줘",
+    "surface": "SELF_QUOTE",
+    "expectedIntent": "BUILD_MODIFY",
+    "expectedActions": ["REPLACE_DRAFT_PART"]
+  },
+  {
+    "id": "price-001",
+    "group": "PRICE_ALERT_HELP",
+    "message": "이 GPU 80만원 되면 알려줘",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "GPU",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-002",
+    "group": "PRICE_ALERT_HELP",
+    "message": "CPU 50만원 아래로 떨어지면 알림",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "CPU",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-003",
+    "group": "PRICE_ALERT_HELP",
+    "message": "램 가격 20만원 되면 알려줘",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "RAM",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-004",
+    "group": "PRICE_ALERT_HELP",
+    "message": "SSD 목표가 15만원",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "STORAGE",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-005",
+    "group": "PRICE_ALERT_HELP",
+    "message": "케이스 10만원 밑으로 떨어지면 알려줘",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "CASE",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-006",
+    "group": "PRICE_ALERT_HELP",
+    "message": "파워 가격 12만원 되면 알림",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "PSU",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-007",
+    "group": "PRICE_ALERT_HELP",
+    "message": "쿨러가 9만원 되면 알려줘",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "COOLER",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "price-008",
+    "group": "PRICE_ALERT_HELP",
+    "message": "메인보드 30만원 가격 알림",
+    "surface": "PART_DETAIL",
+    "selectedCategory": "MOTHERBOARD",
+    "expectedIntent": "PRICE_ALERT_HELP",
+    "expectedActions": ["CREATE_PRICE_ALERT"]
+  },
+  {
+    "id": "explain-001",
+    "group": "EXPLAIN",
+    "message": "왜 이 조합을 추천했어?",
+    "surface": "BUILD_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "explain-002",
+    "group": "EXPLAIN",
+    "message": "이 GPU 선택 이유 설명해줘",
+    "surface": "PART_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "explain-003",
+    "group": "EXPLAIN",
+    "message": "근거가 뭐야?",
+    "surface": "BUILD_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "explain-004",
+    "group": "EXPLAIN",
+    "message": "이 견적 이유 알려줘",
+    "surface": "BUILD_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "explain-005",
+    "group": "EXPLAIN",
+    "message": "왜 램을 32기가로 골랐어?",
+    "surface": "BUILD_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "explain-006",
+    "group": "EXPLAIN",
+    "message": "파워 용량 판단 근거 설명",
+    "surface": "BUILD_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "explain-007",
+    "group": "EXPLAIN",
+    "message": "가격 차이가 나는 이유 설명해줘",
+    "surface": "BUILD_DETAIL",
+    "expectedIntent": "EXPLAIN",
+    "expectedActions": ["OPEN_SELF_QUOTE"]
+  },
+  {
+    "id": "follow-up-001",
+    "group": "ASK_FOLLOW_UP",
+    "message": "추천해줘",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-002",
+    "group": "ASK_FOLLOW_UP",
+    "message": "뭐가 좋아?",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-003",
+    "group": "ASK_FOLLOW_UP",
+    "message": "알아서 해줘",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-004",
+    "group": "ASK_FOLLOW_UP",
+    "message": "좋은 거",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-005",
+    "group": "ASK_FOLLOW_UP",
+    "message": "적당한 걸로",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-006",
+    "group": "ASK_FOLLOW_UP",
+    "message": "잘 모르겠어",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-007",
+    "group": "ASK_FOLLOW_UP",
+    "message": "그냥 무난하게",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  },
+  {
+    "id": "follow-up-008",
+    "group": "ASK_FOLLOW_UP",
+    "message": "처음이라 모르겠음",
+    "surface": "HOME",
+    "expectedIntent": "ASK_FOLLOW_UP",
+    "expectedActions": ["ASK_FOLLOW_UP"]
+  }
+]

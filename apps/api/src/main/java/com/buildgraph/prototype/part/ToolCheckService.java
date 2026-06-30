@@ -140,13 +140,37 @@ public class ToolCheckService {
     private Map<String, Object> performance(Map<String, ToolBuildPart> byCategory, Map<String, Object> context) {
         ToolBuildPart cpu = byCategory.get("CPU");
         ToolBuildPart gpu = byCategory.get("GPU");
+        Map<Long, Map<String, Object>> benchmarkRows = latestBenchmarks(new ArrayList<>(byCategory.values()));
+        Double cpuScore = benchmarkScore(benchmarkRows, cpu);
+        Double gpuScore = benchmarkScore(benchmarkRows, gpu);
         int vramGb = intAttr(gpu, "vramGb", 0);
-        boolean pass = vramGb >= 12;
+        boolean benchmarkBacked = cpuScore != null || gpuScore != null;
+        boolean pass = benchmarkBacked
+                ? (gpuScore == null || gpuScore >= 70.0) && (cpuScore == null || cpuScore >= 60.0)
+                : vramGb >= 12;
+        List<Map<String, Object>> gameFpsEvidence = gameFpsEvidence(cpu, gpu, context);
+        String gameFpsEvidenceStatus = gameFpsEvidenceStatus(context, gameFpsEvidence);
+        Map<String, Object> details = MockData.map(
+                "gpu", name(gpu),
+                "vramGb", vramGb,
+                "gpuBenchmarkScore", gpuScore,
+                "gpuBenchmarkSummary", benchmarkSummary(benchmarkRows, gpu),
+                "cpu", name(cpu),
+                "cpuBenchmarkScore", cpuScore,
+                "cpuBenchmarkSummary", benchmarkSummary(benchmarkRows, cpu),
+                "usageTags", context.getOrDefault("usageTags", List.of()),
+                "gameFpsEvidence", gameFpsEvidence,
+                "benchmarkSource", benchmarkBacked ? "benchmark_summaries" : "attributes_fallback",
+                "guaranteePolicy", "NO_EXACT_FPS_OR_RENDER_TIME_GUARANTEE"
+        );
+        if (!gameFpsEvidence.isEmpty()) {
+            details.put("gameFpsEvidenceStatus", gameFpsEvidenceStatus);
+        }
         return tool("performance",
                 pass ? "PASS" : "WARN",
-                "MEDIUM",
-                pass ? "QHD 게임과 개발 병행에 적합한 GPU 등급입니다." : "VRAM 여유가 작아 고해상도 작업에서 한계가 있을 수 있습니다.",
-                MockData.map("gpu", name(gpu), "vramGb", vramGb, "cpu", name(cpu), "usageTags", context.getOrDefault("usageTags", List.of())));
+                benchmarkBacked ? "HIGH" : "MEDIUM",
+                pass ? "공개 벤치마크/공식 스펙 기반 적합도 점수상 요구 작업에 무리가 적은 조합입니다." : "성능 또는 작업 적합도 여유가 낮아 상위 부품을 검토해야 합니다.",
+                details);
     }
 
     /** Evaluates saved current prices against the selected budget. */
@@ -264,6 +288,106 @@ public class ToolCheckService {
                 .toList();
     }
 
+    /** Loads the latest category-local benchmark/fit score for selected parts. */
+    private Map<Long, Map<String, Object>> latestBenchmarks(List<ToolBuildPart> parts) {
+        List<Long> partIds = parts.stream()
+                .filter(part -> part != null && part.internalId() != null)
+                .map(ToolBuildPart::internalId)
+                .distinct()
+                .toList();
+        if (partIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(partIds.size(), "?"));
+        Map<Long, Map<String, Object>> result = new LinkedHashMap<>();
+        jdbcTemplate.queryForList("""
+                        SELECT DISTINCT ON (part_id)
+                               part_id,
+                               summary,
+                               score
+                        FROM benchmark_summaries
+                        WHERE part_id IN (
+                        """ + placeholders + """
+                        )
+                          AND deleted_at IS NULL
+                        ORDER BY part_id, created_at DESC, id DESC
+                        """, partIds.toArray())
+                .forEach(row -> result.put(numberLong(row.get("part_id")), row));
+        return result;
+    }
+
+    /** Loads game-specific public FPS evidence for selected CPU/GPU context. */
+    private List<Map<String, Object>> gameFpsEvidence(ToolBuildPart cpu, ToolBuildPart gpu, Map<String, Object> context) {
+        if (gpu == null || gpu.internalId() == null) {
+            return List.of();
+        }
+        String gameKey = gameKey(context);
+        String resolution = resolution(context);
+        String gpuClass = hardwareClass(gpu);
+        String cpuClass = hardwareClass(cpu);
+        if (gameKey == null && !gamingContext(context)) {
+            return List.of();
+        }
+
+        List<Object> params = new ArrayList<>();
+        params.add(gpu.internalId());
+        params.add(gpuClass);
+        params.add(cpu == null ? -1L : cpu.internalId());
+        params.add(cpu == null ? -1L : cpu.internalId());
+        params.add(cpuClass);
+        params.add(resolution);
+        String gameFilter = "";
+        if (gameKey != null) {
+            gameFilter = " AND game_key = ?\n";
+            params.add(gameKey);
+        }
+
+        return jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id,
+                               game_title,
+                               game_key,
+                               resolution,
+                               graphics_preset,
+                               avg_fps,
+                               one_percent_low_fps,
+                               source_name,
+                               source_url,
+                               source_checked_at,
+                               confidence,
+                               metadata,
+                               CASE
+                                 WHEN gpu_part_id = ? THEN 0
+                                 WHEN metadata->>'gpuClass' = ? THEN 1
+                                 ELSE 2
+                               END AS gpu_match_rank,
+                               CASE
+                                 WHEN cpu_part_id = ? THEN 0
+                                 WHEN ? = -1 THEN 2
+                                 WHEN metadata->>'cpuClass' = ? THEN 1
+                                 ELSE 2
+                               END AS cpu_match_rank,
+                               CASE
+                                 WHEN ? IS NOT NULL AND resolution = ? THEN 0
+                                 WHEN ? IS NULL THEN 0
+                                 ELSE 1
+                               END AS resolution_rank
+                        FROM game_fps_benchmarks
+                        WHERE deleted_at IS NULL
+                          AND (gpu_part_id = ? OR metadata->>'gpuClass' = ?)
+                        """ + gameFilter + """
+                        ORDER BY gpu_match_rank,
+                                 cpu_match_rank,
+                                 resolution_rank,
+                                 CASE confidence WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END,
+                                 source_checked_at DESC,
+                                 id DESC
+                        LIMIT 3
+                        """, fpsParams(params, gpu.internalId(), gpuClass, gameKey).toArray())
+                .stream()
+                .map(row -> gameFpsEvidenceMap(row, gpuClass, cpuClass, gameKey, resolution))
+                .toList();
+    }
+
     /** Keeps legacy direct Tool calls useful when no concrete parts are supplied. */
     private Map<String, Object> seedBackedToolResult(String tool) {
         Map<String, Object> rule = ruleFor(tool);
@@ -276,6 +400,25 @@ public class ToolCheckService {
                 "source", "db-seed",
                 "toolName", tool
         ));
+    }
+
+    /** Expands FPS query parameters while keeping optional game filter readable. */
+    private static List<Object> fpsParams(List<Object> base, Long gpuId, String gpuClass, String gameKey) {
+        List<Object> result = new ArrayList<>();
+        result.add(base.get(0));
+        result.add(base.get(1));
+        result.add(base.get(2));
+        result.add(base.get(3));
+        result.add(base.get(4));
+        result.add(base.get(5));
+        result.add(base.get(5));
+        result.add(base.get(5));
+        result.add(gpuId);
+        result.add(gpuClass);
+        if (gameKey != null) {
+            result.add(gameKey);
+        }
+        return result;
     }
 
     /** Reads the first active compatibility rule for a Tool seed fallback. */
@@ -325,6 +468,87 @@ public class ToolCheckService {
         return MockData.map("tool", tool, "status", status, "confidence", confidence, "summary", summary, "details", details);
     }
 
+    /** Reads the numeric benchmark score for a nullable part. */
+    private static Double benchmarkScore(Map<Long, Map<String, Object>> benchmarkRows, ToolBuildPart part) {
+        if (part == null || part.internalId() == null) {
+            return null;
+        }
+        Map<String, Object> row = benchmarkRows.get(part.internalId());
+        return row == null ? null : decimalValue(row.get("score"));
+    }
+
+    /** Reads the benchmark summary for a nullable part. */
+    private static String benchmarkSummary(Map<Long, Map<String, Object>> benchmarkRows, ToolBuildPart part) {
+        if (part == null || part.internalId() == null) {
+            return null;
+        }
+        Map<String, Object> row = benchmarkRows.get(part.internalId());
+        return row == null ? null : DbValueMapper.string(row, "summary");
+    }
+
+    /** Converts a public FPS benchmark row into Tool response details. */
+    private static Map<String, Object> gameFpsEvidenceMap(
+            Map<String, Object> row,
+            String selectedGpuClass,
+            String selectedCpuClass,
+            String requestedGameKey,
+            String requestedResolution
+    ) {
+        Map<String, Object> metadata = objectMap(DbValueMapper.json(row, "metadata", Map.of()));
+        String sourceGameKey = DbValueMapper.string(row, "game_key");
+        String sourceResolution = DbValueMapper.string(row, "resolution");
+        Object sourceCpuClass = metadata.get("cpuClass");
+        Object sourceGpuClass = metadata.get("gpuClass");
+        boolean gameMatched = requestedGameKey == null || requestedGameKey.equals(sourceGameKey);
+        boolean resolutionMatched = requestedResolution == null || requestedResolution.equals(sourceResolution);
+        boolean cpuClassMatched = selectedCpuClass != null && selectedCpuClass.equals(String.valueOf(sourceCpuClass));
+        boolean gpuClassMatched = selectedGpuClass != null && selectedGpuClass.equals(String.valueOf(sourceGpuClass));
+        boolean exactCpuPartMatched = intRank(row.get("cpu_match_rank")) == 0;
+        boolean exactGpuPartMatched = intRank(row.get("gpu_match_rank")) == 0;
+        return MockData.map(
+                "id", DbValueMapper.string(row, "id"),
+                "gameTitle", DbValueMapper.string(row, "game_title"),
+                "gameKey", sourceGameKey,
+                "resolution", sourceResolution,
+                "graphicsPreset", DbValueMapper.string(row, "graphics_preset"),
+                "avgFps", decimalValue(row.get("avg_fps")),
+                "onePercentLowFps", decimalValue(row.get("one_percent_low_fps")),
+                "sourceName", DbValueMapper.string(row, "source_name"),
+                "sourceUrl", DbValueMapper.string(row, "source_url"),
+                "sourceCheckedAt", DbValueMapper.string(row, "source_checked_at"),
+                "confidence", DbValueMapper.string(row, "confidence"),
+                "match", MockData.map(
+                        "requestedGameKey", requestedGameKey,
+                        "requestedResolution", requestedResolution,
+                        "selectedCpuClass", selectedCpuClass,
+                        "selectedGpuClass", selectedGpuClass,
+                        "sourceCpuClass", sourceCpuClass,
+                        "sourceGpuClass", sourceGpuClass,
+                        "hardwareScope", metadata.get("hardwareScope"),
+                        "gameMatched", gameMatched,
+                        "resolutionMatched", resolutionMatched,
+                        "cpuClassMatched", cpuClassMatched,
+                        "gpuClassMatched", gpuClassMatched,
+                        "exactCpuPartMatched", exactCpuPartMatched,
+                        "exactGpuPartMatched", exactGpuPartMatched,
+                        "evidenceExactness", evidenceExactness(gameMatched, resolutionMatched, cpuClassMatched, gpuClassMatched, exactCpuPartMatched, exactGpuPartMatched)
+                ),
+                "sourceContext", MockData.map(
+                        "sourceCpuName", metadata.get("sourceCpuName"),
+                        "sourceGpuName", metadata.get("sourceGpuName"),
+                        "sourceResolutionText", metadata.get("sourceResolutionText"),
+                        "sourcePresetText", metadata.get("sourcePresetText"),
+                        "gameVersion", metadata.get("gameVersion"),
+                        "driverVersion", metadata.get("driverVersion"),
+                        "upscaling", metadata.get("upscaling"),
+                        "frameGeneration", metadata.get("frameGeneration"),
+                        "rayTracing", metadata.get("rayTracing")
+                ),
+                "notes", metadata.get("notes"),
+                "guaranteePolicy", metadata.getOrDefault("guaranteePolicy", "NO_EXACT_FPS_OR_RENDER_TIME_GUARANTEE")
+        );
+    }
+
     /** Indexes selected parts by category. */
     private static Map<String, ToolBuildPart> byCategory(List<ToolBuildPart> parts) {
         Map<String, ToolBuildPart> result = new LinkedHashMap<>();
@@ -332,6 +556,137 @@ public class ToolCheckService {
             result.put(part.category(), part);
         }
         return result;
+    }
+
+    /** Determines whether a request is gaming-related enough to attach public FPS evidence. */
+    private static boolean gamingContext(Map<String, Object> context) {
+        String text = contextText(context);
+        return containsAny(text, "game", "gaming", "게임", "qhd", "fhd", "4k", "144hz", "fps");
+    }
+
+    /** Extracts a canonical game key from Tool request context. */
+    private static String gameKey(Map<String, Object> context) {
+        String text = contextText(context);
+        if (containsAny(text, "배그", "pubg", "battleground", "playerunknown")) return "pubg";
+        if (containsAny(text, "로아", "로스트아크", "lost ark")) return "lost-ark";
+        if (containsAny(text, "발로", "발로란트", "valorant")) return "valorant";
+        if (containsAny(text, "오버워치", "overwatch")) return "overwatch-2";
+        if (containsAny(text, "사이버펑크", "사펑", "cyberpunk")) return "cyberpunk-2077";
+        return null;
+    }
+
+    /** Extracts canonical resolution labels used by game_fps_benchmarks. */
+    private static String resolution(Map<String, Object> context) {
+        String text = contextText(context);
+        if (containsAny(text, "4k", "uhd", "2160")) return "4K";
+        if (containsAny(text, "qhd", "1440", "2560")) return "QHD";
+        if (containsAny(text, "fhd", "1080", "1920")) return "FHD";
+        return null;
+    }
+
+    /** Builds a compact searchable context string from request fields. */
+    private static String contextText(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return "";
+        }
+        List<String> keys = List.of("gameTitle", "game", "targetGame", "gameName", "resolution", "rawMessage", "message", "requirementsText", "usageTags");
+        StringBuilder builder = new StringBuilder();
+        for (String key : keys) {
+            Object value = context.get(key);
+            if (value != null) {
+                builder.append(' ').append(value);
+            }
+        }
+        return builder.toString().toLowerCase(Locale.ROOT);
+    }
+
+    /** Maps selected internal part names to the benchmark class labels stored in metadata. */
+    private static String hardwareClass(ToolBuildPart part) {
+        if (part == null) {
+            return null;
+        }
+        String attrClass = firstText(stringAttr(part, "hardwareClass"), stringAttr(part, "gpuClass"));
+        attrClass = firstText(attrClass, stringAttr(part, "cpuClass"));
+        if (attrClass != null && !attrClass.isBlank()) {
+            return attrClass;
+        }
+        String name = firstText(name(part), "").toLowerCase(Locale.ROOT);
+        if ("GPU".equals(part.category())) {
+            if (name.contains("5090")) return "RTX_5090";
+            if (name.contains("5080")) return "RTX_5080";
+            if (name.matches(".*5070\\s*ti.*") || name.contains("5070ti")) return "RTX_5070_TI";
+            if (name.contains("5070")) return "RTX_5070";
+            if (name.matches(".*5060\\s*ti.*") || name.contains("5060ti")) return "RTX_5060_TI";
+            if (name.contains("5060")) return "RTX_5060";
+        }
+        if ("CPU".equals(part.category())) {
+            if (name.contains("9950x3d")) return "RYZEN_9_9950X3D";
+            if (name.contains("9950x")) return "RYZEN_9_9950X";
+            if (name.contains("9900x3d")) return "RYZEN_9_9900X3D";
+            if (name.contains("9800x3d")) return "RYZEN_7_9800X3D";
+            if (name.contains("9700x")) return "RYZEN_7_9700X";
+            if (name.contains("9600x")) return "RYZEN_5_9600X";
+            if (name.contains("285k")) return "INTEL_CORE_ULTRA_9_285K";
+            if (name.contains("265k")) return "INTEL_CORE_ULTRA_7_265K";
+            if (name.contains("245k")) return "INTEL_CORE_ULTRA_5_245K";
+        }
+        return null;
+    }
+
+    /** Classifies the FPS evidence set so AI callers do not overstate fallback data. */
+    private static String gameFpsEvidenceStatus(Map<String, Object> context, List<Map<String, Object>> evidence) {
+        if (!gamingContext(context)) {
+            return "NOT_GAMING_CONTEXT";
+        }
+        if (evidence == null || evidence.isEmpty()) {
+            return "NO_MATCH";
+        }
+        String requestedGame = gameKey(context);
+        String requestedResolution = resolution(context);
+        if (requestedGame == null) {
+            return "GENERAL_GAME_REFERENCE";
+        }
+        boolean hasExactResolution = requestedResolution == null || evidence.stream()
+                .map(item -> objectMap(item.get("match")))
+                .anyMatch(match -> Boolean.TRUE.equals(match.get("resolutionMatched")));
+        return hasExactResolution ? "MATCHED" : "RESOLUTION_FALLBACK";
+    }
+
+    /** Grades whether an FPS row is exact evidence or only a nearby public reference. */
+    private static String evidenceExactness(
+            boolean gameMatched,
+            boolean resolutionMatched,
+            boolean cpuClassMatched,
+            boolean gpuClassMatched,
+            boolean exactCpuPartMatched,
+            boolean exactGpuPartMatched
+    ) {
+        if (gameMatched && resolutionMatched && exactCpuPartMatched && exactGpuPartMatched) {
+            return "EXACT_PART_AND_RESOLUTION";
+        }
+        if (gameMatched && resolutionMatched && cpuClassMatched && gpuClassMatched) {
+            return "SAME_CLASS_AND_RESOLUTION";
+        }
+        if (gameMatched && gpuClassMatched) {
+            return resolutionMatched ? "GPU_CLASS_REFERENCE" : "GPU_CLASS_RESOLUTION_FALLBACK";
+        }
+        if (gameMatched) {
+            return resolutionMatched ? "GAME_RESOLUTION_REFERENCE" : "GAME_REFERENCE_FALLBACK";
+        }
+        return "GENERAL_REFERENCE";
+    }
+
+    /** Case-insensitive substring matcher for compact context extraction. */
+    private static boolean containsAny(String value, String... needles) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        for (String needle : needles) {
+            if (value.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Sums current selected part prices. */
@@ -495,6 +850,24 @@ public class ToolCheckService {
             return null;
         }
         return Integer.valueOf(text.replace(",", ""));
+    }
+
+    /** Parses decimal-like DB values for benchmark scores. */
+    private static Double decimalValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        String text = text(value);
+        if (text == null) {
+            return null;
+        }
+        return Double.valueOf(text.replace(",", ""));
+    }
+
+    /** Reads match rank integers computed by SQL CASE expressions. */
+    private static int intRank(Object value) {
+        Integer parsed = numberValue(value);
+        return parsed == null ? 99 : parsed;
     }
 
     /** Parses a long-like value. */

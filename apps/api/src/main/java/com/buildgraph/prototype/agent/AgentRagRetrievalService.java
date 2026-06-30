@@ -13,17 +13,26 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import com.buildgraph.prototype.rag.RagEmbeddingService;
 
 @Service
 public class AgentRagRetrievalService {
     private static final Pattern TOKEN_SPLIT = Pattern.compile("[^0-9A-Za-z가-힣]+");
     private static final int DEFAULT_EVIDENCE_LIMIT = 3;
     private final JdbcTemplate jdbcTemplate;
+    private final RagEmbeddingService ragEmbeddingService;
 
-    public AgentRagRetrievalService(JdbcTemplate jdbcTemplate) {
+    @Autowired
+    public AgentRagRetrievalService(JdbcTemplate jdbcTemplate, RagEmbeddingService ragEmbeddingService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.ragEmbeddingService = ragEmbeddingService;
+    }
+
+    AgentRagRetrievalService(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, null);
     }
 
     public AgentRagEvidenceDraft retrieveEvidence(AgentSessionRoot root, AgentRunProfile profile) {
@@ -39,7 +48,8 @@ public class AgentRagRetrievalService {
     public List<AgentRagEvidenceDraft> retrieveEvidenceSet(AgentSessionRoot root, AgentRunProfile profile, String extraQuery, int limit) {
         RootContext context = withExtraQuery(rootContext(root), extraQuery);
         List<String> queryTokens = tokens(context.queryText());
-        List<RetrievalCandidate> ranked = reusableEvidenceRows().stream()
+        List<Map<String, Object>> rows = retrievalRows(context, safeLimit(limit));
+        List<RetrievalCandidate> ranked = rows.stream()
                 .map(row -> candidate(row, root, profile, context, queryTokens))
                 .filter(candidate -> candidate.allowed())
                 .sorted(Comparator.comparingDouble(RetrievalCandidate::rank).reversed())
@@ -69,11 +79,43 @@ public class AgentRagRetrievalService {
                        chunk_text,
                        summary,
                        score,
-                       metadata
+                       metadata,
+                       NULL::double precision AS vector_score,
+                       'KEYWORD_FALLBACK' AS retrieval_mode
                 FROM rag_evidence
                 WHERE agent_session_id IS NULL
                 ORDER BY score DESC NULLS LAST, id
                 """);
+    }
+
+    private List<Map<String, Object>> retrievalRows(RootContext context, int limit) {
+        if (ragEmbeddingService == null || !ragEmbeddingService.canVectorSearch() || safe(context.queryText()).isBlank()) {
+            return reusableEvidenceRows();
+        }
+        try {
+            List<Double> embedding = ragEmbeddingService.embedQuery(context.queryText());
+            String vector = RagEmbeddingService.vectorLiteral(embedding);
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                    SELECT public_id::text AS id,
+                           source_id,
+                           chunk_text,
+                           summary,
+                           score,
+                           metadata,
+                           (1 - (embedding <=> ?::vector))::double precision AS vector_score,
+                           'VECTOR' AS retrieval_mode
+                    FROM rag_evidence
+                    WHERE agent_session_id IS NULL
+                      AND embedding IS NOT NULL
+                    ORDER BY embedding <=> ?::vector,
+                             score DESC NULLS LAST,
+                             id
+                    LIMIT ?
+                    """, vector, vector, Math.max(20, limit * 8));
+            return rows.isEmpty() ? reusableEvidenceRows() : rows;
+        } catch (RuntimeException ignored) {
+            return reusableEvidenceRows();
+        }
     }
 
     private RetrievalCandidate candidate(
@@ -112,11 +154,20 @@ public class AgentRagRetrievalService {
         double tokenScore = queryTokens.isEmpty() ? 0.0 : matchedTokens / (double) queryTokens.size();
         double metadataScore = queryTokens.isEmpty() ? 0.0 : matchedMetadataTokens / (double) queryTokens.size();
         double baseScore = score(row);
-        double rank = (baseScore * 0.50)
+        Double vectorScore = vectorScore(row);
+        double keywordRank = (baseScore * 0.50)
                 + (purpose != null && purpose.equals(profile.purpose().name()) ? 0.25 : 0.0)
                 + (sourceTypeAllowed ? 0.10 : 0.0)
                 + tokenScore
                 + (metadataScore * 0.35);
+        double rank = vectorScore == null
+                ? keywordRank
+                : (vectorScore * 0.65)
+                + (baseScore * 0.15)
+                + (purpose != null && purpose.equals(profile.purpose().name()) ? 0.10 : 0.0)
+                + (sourceTypeAllowed ? 0.05 : 0.0)
+                + (tokenScore * 0.15)
+                + (metadataScore * 0.05);
 
         Map<String, Object> metadata = new LinkedHashMap<>(sourceMetadata);
         metadata.put("sourceEvidenceId", DbValueMapper.string(row, "id"));
@@ -129,6 +180,9 @@ public class AgentRagRetrievalService {
         metadata.put("matchedMetadataTokenCount", matchedMetadataTokens);
         metadata.put("queryTokenCount", queryTokens.size());
         metadata.put("retrievalRank", rounded(rank));
+        metadata.put("retrievalMode", firstText(DbValueMapper.string(row, "retrieval_mode"), vectorScore == null ? "KEYWORD_FALLBACK" : "VECTOR"));
+        metadata.put("vectorScore", vectorScore == null ? null : rounded(vectorScore));
+        metadata.put("keywordScore", rounded(keywordRank));
         metadata.put("retrievedAt", MockData.now());
 
         AgentRagEvidenceDraft draft = new AgentRagEvidenceDraft(
@@ -321,12 +375,27 @@ public class AgentRagRetrievalService {
         return Double.parseDouble(score.toString());
     }
 
+    private static Double vectorScore(Map<String, Object> row) {
+        Object score = row.get("vector_score");
+        if (score instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (score == null) {
+            return null;
+        }
+        return Double.parseDouble(score.toString());
+    }
+
     private static String stringValue(Object value) {
         return value == null ? null : value.toString();
     }
 
     private static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private static String firstText(String first, String fallback) {
+        return first == null || first.isBlank() ? fallback : first;
     }
 
     private static double rounded(double value) {

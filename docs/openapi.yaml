@@ -221,7 +221,7 @@ paths:
   /api/ai/build-chat:
     post:
       summary: AI 챗봇 DB/룰 기반 Build 추천
-      description: LLM/RAG 없이 message를 예산/부품/일반 질문으로 분류하고 ACTIVE parts DB와 Tool 검증 결과로 최신 AI 추천 조합을 반환한다.
+      description: LLM/RAG 없이 message를 예산/부품/일반 질문으로 분류하고 ACTIVE parts DB와 Tool 검증 결과로 최신 AI 추천 조합을 반환한다. 부품 질문에 currentBuilds가 없으면 기본 예산 build를 만들지 않고 partRecommendation과 빈 builds를 반환한다.
       security:
         - bearerAuth: []
       requestBody:
@@ -674,8 +674,27 @@ paths:
           name: q
           schema:
             type: string
+        - in: query
+          name: purpose
+          schema:
+            type: string
+            enum: [REQUIREMENT_PARSE, BUILD_RECOMMEND, BUILD_EXPLAIN, AS_ANALYZE]
+          description: 재사용 RAG 청크 목적 필터
+        - in: query
+          name: sourceType
+          schema:
+            type: string
+            enum: [GUIDE, INTERNAL_RULE, BENCHMARK, PART_SPEC, TROUBLESHOOTING]
+          description: 재사용 RAG 청크 출처 유형 필터
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          description: size 별칭. size가 있으면 size가 우선한다.
       responses:
         "200":
           description: RAG 근거 후보
@@ -942,6 +961,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdminRagEvidenceDto"
+  /api/admin/rag-embeddings/backfill:
+    post:
+      summary: reusable RAG chunk embedding 백필
+      description: Flyway가 아닌 관리자 수동 작업으로 agent_session_id가 없는 rag_evidence row의 pgvector embedding을 생성하거나 갱신한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 500
+                  default: 200
+      responses:
+        "200":
+          description: RAG embedding 백필 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagEmbeddingBackfillResponse"
+        "428":
+          description: OPENAI_API_KEY 등 embedding 선행 설정 누락
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/as-tickets:
     get:
       summary: 관리자 AS 티켓 목록
@@ -1047,7 +1097,91 @@ components:
           type: string
         details:
           type: object
+          description: >
+            Tool-specific detail object. For performance Tool responses this may include
+            cpuBenchmarkScore, gpuBenchmarkScore, and gameFpsEvidence items shaped
+            like GameFpsEvidenceDto. gameFpsEvidenceStatus is included only when
+            gameFpsEvidence has at least one row.
           additionalProperties: true
+    GameFpsEvidenceDto:
+      type: object
+      required: [id, gameTitle, gameKey, resolution, graphicsPreset, avgFps, sourceName, sourceUrl, confidence, match]
+      properties:
+        id:
+          type: string
+          format: uuid
+        gameTitle:
+          type: string
+        gameKey:
+          type: string
+        resolution:
+          type: string
+          enum: [FHD, QHD, 4K]
+        graphicsPreset:
+          type: string
+        avgFps:
+          type: number
+          format: double
+        onePercentLowFps:
+          type: number
+          format: double
+          nullable: true
+        sourceName:
+          type: string
+        sourceUrl:
+          type: string
+        sourceCheckedAt:
+          type: string
+          format: date
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        match:
+          type: object
+          required: [gameMatched, resolutionMatched, gpuClassMatched, cpuClassMatched, exactGpuPartMatched, exactCpuPartMatched, evidenceExactness]
+          properties:
+            requestedGameKey:
+              type: string
+              nullable: true
+            requestedResolution:
+              type: string
+              nullable: true
+            selectedCpuClass:
+              type: string
+              nullable: true
+            selectedGpuClass:
+              type: string
+              nullable: true
+            sourceCpuClass:
+              type: string
+              nullable: true
+            sourceGpuClass:
+              type: string
+              nullable: true
+            hardwareScope:
+              type: string
+              nullable: true
+            gameMatched:
+              type: boolean
+            resolutionMatched:
+              type: boolean
+            cpuClassMatched:
+              type: boolean
+            gpuClassMatched:
+              type: boolean
+            exactCpuPartMatched:
+              type: boolean
+            exactGpuPartMatched:
+              type: boolean
+            evidenceExactness:
+              type: string
+        sourceContext:
+          type: object
+          additionalProperties: true
+        notes:
+          type: string
+          nullable: true
+        guaranteePolicy:
+          type: string
     HealthResponse:
       type: object
       required: [status]
@@ -1358,6 +1492,7 @@ components:
           type: string
         builds:
           type: array
+          description: 예산 질문은 추천 build 3개를 반환한다. 부품 질문에서 currentBuilds가 없으면 빈 배열이다.
           items:
             $ref: "#/components/schemas/AiBuildRecommendationDto"
         partRecommendation:
@@ -2027,6 +2162,26 @@ components:
               format: uuid
             chunkText:
               type: string
+    RagEmbeddingBackfillResponse:
+      type: object
+      required: [scanned, updated, skipped, reusableTotal, embeddedTotal, embeddingModel, embeddingDimensions]
+      properties:
+        scanned:
+          type: integer
+        updated:
+          type: integer
+        skipped:
+          type: integer
+        reusableTotal:
+          type: integer
+        embeddedTotal:
+          type: integer
+        embeddingModel:
+          type: string
+          example: text-embedding-3-small
+        embeddingDimensions:
+          type: integer
+          example: 1536
     ToolInvocationDto:
       type: object
       required: [id, agentSessionId, toolName, status, confidence, summary]

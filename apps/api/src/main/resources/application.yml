@@ -41,6 +41,14 @@ openai:
   api-key: ${OPENAI_API_KEY:}
   model: ${OPENAI_MODEL:gpt-5.5}
   reasoning-effort: ${OPENAI_REASONING_EFFORT:medium}
+  embedding-model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+  embedding-dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:1536}
+
+rag:
+  vector:
+    enabled: ${RAG_VECTOR_ENABLED:true}
+  embedding:
+    backfill-on-startup: ${RAG_EMBEDDING_BACKFILL_ON_STARTUP:false}
 
 ai:
   as-chat:

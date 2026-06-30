@@ -23,12 +23,15 @@ public class RagController {
     @GetMapping("/rag/search")
     Map<String, Object> search(
             @RequestParam(value = "q", required = false) String query,
+            @RequestParam(value = "purpose", required = false) String purpose,
+            @RequestParam(value = "sourceType", required = false) String sourceType,
             @RequestParam(value = "page", required = false) Integer page,
             @RequestParam(value = "size", required = false) Integer size,
+            @RequestParam(value = "limit", required = false) Integer limit,
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         currentUserService.requireUser(authorization);
-        return ragQueryService.search(query, page, size);
+        return ragQueryService.search(query, purpose, sourceType, page, size == null ? limit : size);
     }
 
     @GetMapping("/rag/evidence/{id}")

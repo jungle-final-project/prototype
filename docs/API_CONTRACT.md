@@ -167,7 +167,9 @@ Google OAuth 정책:
 | `GET` | `/api/builds/history` | USER | 1번 | `?page=0&size=20` | `{ "items": [{ "id": "3ff6d7a2-1c51-4c9d-9720-94b7ef1d62bd", "name": "QHD Gaming Build", "totalPrice": 1450000, "confidence": "HIGH", "createdAt": "2026-06-29T10:20:00Z" }], "page": 0, "size": 20, "total": 1 }` | `requirements`, `builds` |
 | `POST` | `/api/builds/{id}/change-part` | USER | 1번 | `{ "category": "GPU", "partId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11" }` | `{ "buildId": "3ff6d7a2-1c51-4c9d-9720-94b7ef1d62bd", "category": "GPU", "previousPartId": "0bb1f994-5e1f-4dc4-b55c-c615130e1bb4", "selectedPartId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "totalPrice": 1500000, "diff": { "price": 50000 }, "beforeBuild": {}, "afterBuild": { "id": "3ff6d7a2-1c51-4c9d-9720-94b7ef1d62bd", "name": "QHD Gaming Build", "totalPrice": 1500000, "items": [] }, "diffRows": [{ "label": "GPU", "before": "RTX 5060", "after": "RTX 5070", "diff": "+50,000원", "status": "PASS" }], "toolResults": [], "agentSummary": "변경 비교 요약", "warnings": [] }` | `builds`, `build_items`, `parts` |
 
-`RequirementDto.parsedContext`는 추천 품질을 위해 내부 해석 필드를 포함할 수 있다. `performanceTier`는 `ENTHUSIAST | PERFORMANCE | STANDARD`, `budgetPolicy`는 `USER_BUDGET | OPEN_BUDGET | DEFAULT_BUDGET` 중 하나다. `ragSourceIds`와 `parseEvidenceSummary`는 요구사항 파싱에 사용된 RAG 근거 묶음을 추적하기 위한 내부 필드다. 예산 없는 최고급 의도는 RAG 정책 근거를 사용해 `performanceTier=ENTHUSIAST`, `budgetPolicy=OPEN_BUDGET`으로 저장할 수 있고, 추천 결과는 첫 카드부터 끝판왕/하이엔드 체급으로 정렬한다. 사용자가 예산을 명시한 경우에는 예산을 우선한다.
+`RequirementDto.parsedContext`는 추천 품질을 위해 내부 해석 필드를 포함할 수 있다. `performanceTier`는 `ENTHUSIAST | PERFORMANCE | STANDARD`, `budgetPolicy`는 `USER_BUDGET | OPEN_BUDGET | UNSPECIFIED` 중 하나다. `ragSourceIds`와 `parseEvidenceSummary`는 요구사항 파싱에 사용된 RAG 근거 묶음을 추적하기 위한 내부 필드다. 예산 없는 최고급 의도는 RAG 정책 근거를 사용해 `performanceTier=ENTHUSIAST`, `budgetPolicy=OPEN_BUDGET`으로 저장할 수 있고, 추천 결과는 첫 카드부터 끝판왕/하이엔드 체급으로 정렬한다. 사용자가 예산을 명시한 경우에는 예산을 우선한다. 예산이 없는 일반/성능 목표 요청은 기본 예산으로 저장하지 않고 `budget=null`, `budgetPolicy=UNSPECIFIED`로 둔다.
+
+명시 부품 조건은 별도 하드 제약으로 보존한다. 예를 들어 “RTX 5090 글카 들어간 PC”는 `parsedContext.requiredGpuClasses=["RTX_5090"]`, `parsedContext.hardConstraintPolicy="MUST_INCLUDE"`로 저장한다. 예산이 없으면 `OPEN_BUDGET` 추천으로 처리하고, 예산이 있으면 `USER_BUDGET`을 유지하되 추천기는 RTX 5090을 임의로 RTX 5080/5070으로 낮추지 않는다. 이 경우 총액이 예산을 넘으면 `warnings[].code="HARD_CONSTRAINT_OVER_BUDGET"`로 표시한다.
 
 `POST /api/builds/recommend` transaction 경계:
 
@@ -184,6 +186,7 @@ Google OAuth 정책:
 - LLM/RAG를 호출하지 않는다. `message`를 예산 질문, 부품 질문, 일반 질문으로 deterministic 분류한다.
 - 예산 질문은 `parts.status=ACTIVE`인 실제 부품만 사용해 `실속형`, `균형형`, `성능형` 3개 AI build를 반환한다.
 - 부품 질문은 감지된 카테고리에서 `가성비`, `균형`, `고성능` 후보 3개를 실제 `parts.price` 기준으로 반환하고, `currentBuilds`의 해당 카테고리를 서버가 다시 조회한 partId 가격으로 교체한다.
+- 부품 질문에 `currentBuilds`가 없거나 복원할 수 없으면 기본 예산 build를 새로 만들지 않는다. 이 경우 `builds=[]`와 `partRecommendation`만 반환하고, 프론트는 기존 세션 build를 유지한다.
 - 서버는 client가 보낸 part 이름/가격을 신뢰하지 않는다. `currentBuilds[].items[].partId`를 기준으로 DB에서 현재 `parts.price`와 attributes를 다시 읽는다.
 - 각 AI build에는 기존 Tool 검증 결과를 `toolResults`로 포함한다. Tool 실패 시 build 자체는 반환하되 `warnings`에 실패 사유를 넣는다.
 - AI build는 대화용 DTO이며 `builds/build_items`에 저장하지 않는다. 대화 이력 저장은 프론트 `sessionStorage` 범위다.
@@ -217,7 +220,7 @@ Google OAuth 정책:
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `GET` | `/api/parts` | USER | 2번 | `?category=GPU&q=5070&manufacturer=NVIDIA&status=ACTIVE&minPrice=500000&maxPrice=1300000&page=0&size=20&sort=price_desc` | `{ "items": [{ "id": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "category": "GPU", "name": "GeForce RTX 5070", "manufacturer": "NVIDIA", "price": 960000, "status": "ACTIVE", "attributes": { "wattage": 250 }, "latestPriceSource": "MANUAL_CURRENT_LINEUP", "externalOffer": { "imageUrl": "https://...", "supplierName": "Naver Store", "offerUrl": "https://...", "lowPrice": 950000, "source": "NAVER_SHOPPING_SEARCH", "refreshedAt": "2026-06-29T10:25:00Z" } }], "page": 0, "size": 20, "total": 1 }` | `parts`, `price_snapshots`, `benchmark_summaries`, `part_external_offers` |
-| `GET` | `/api/parts/{id}` | USER | 2번 | - | `{ "id": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "category": "GPU", "name": "GeForce RTX 5070", "manufacturer": "NVIDIA", "price": 960000, "status": "ACTIVE", "attributes": { "wattage": 250, "lengthMm": 304 }, "benchmarkSummary": { "summary": "QHD gaming candidate", "score": 84.0 }, "latestPriceSource": "MANUAL_CURRENT_LINEUP", "externalOffer": null }` | `parts`, `price_snapshots`, `benchmark_summaries`, `part_external_offers` |
+| `GET` | `/api/parts/{id}` | USER | 2번 | - | `{ "id": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "category": "GPU", "name": "GeForce RTX 5070", "manufacturer": "NVIDIA", "price": 960000, "status": "ACTIVE", "attributes": { "wattage": 250, "lengthMm": 304 }, "benchmarkSummary": { "summary": "GPU category-local normalized score 78.0 for gaming_ai_creator. Use as recommendation evidence, not exact FPS or render-time guarantee.", "score": 78.0 }, "latestPriceSource": "MANUAL_CURRENT_LINEUP", "externalOffer": null }` | `parts`, `price_snapshots`, `benchmark_summaries`, `part_external_offers` |
 | `GET` | `/api/parts/{id}/price-history` | USER | 2번 | `?days=3650&source=NAVER_SHOPPING_SEARCH&limit=120` | `{ "partId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "partName": "GeForce RTX 5070", "currentPrice": 960000, "days": 3650, "source": "NAVER_SHOPPING_SEARCH", "items": [{ "price": 950000, "source": "NAVER_SHOPPING_SEARCH", "collectedAt": "2026-06-29T10:25:00Z" }], "summary": { "sampleCount": 1, "currentPrice": 960000, "minPrice": 950000, "maxPrice": 950000, "changeAmount": 0, "changeRatePercent": 0.0 } }` | `parts`, `price_snapshots` |
 | `GET` | `/api/price-alerts` | USER | 2번 | `?page=0&size=20` | `{ "items": [{ "partId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "partName": "RTX 4070", "targetPrice": 700000, "currentPrice": 850000, "status": "ACTIVE", "createdAt": "2026-06-29T10:25:00Z" }], "page": 0, "size": 20, "total": 1 }` | `price_alerts`, `parts`, `users` |
 | `POST` | `/api/price-alerts` | USER | 2번 | `{ "partId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "targetPrice": 700000 }` | `{ "partId": "0e9f3b8b-8c83-4d9a-9f7d-1f2b4dfb8a11", "partName": "RTX 4070", "targetPrice": 700000, "currentPrice": 850000, "status": "ACTIVE", "createdAt": "2026-06-29T10:25:00Z" }` | `price_alerts`, `parts`, `users` |
@@ -290,7 +293,7 @@ Tool별 `context`와 `details` shape:
 | `POST` | `/api/tools/compatibility/check` | USER | 2번 | 공통 wrapper | 공통 Tool response | `parts`, `compatibility_rules` |
 | `POST` | `/api/tools/power/check` | USER | 2번 | 공통 wrapper | 공통 Tool response | `parts`, `compatibility_rules` |
 | `POST` | `/api/tools/size/check` | USER | 2번 | 공통 wrapper | 공통 Tool response | `parts`, `compatibility_rules` |
-| `POST` | `/api/tools/performance/check` | USER | 2번 | 공통 wrapper | 공통 Tool response | `parts`, `benchmark_summaries` |
+| `POST` | `/api/tools/performance/check` | USER | 2번 | 공통 wrapper | 공통 Tool response. `details.cpuBenchmarkScore`, `details.gpuBenchmarkScore`, `details.gameFpsEvidence[]`, `details.benchmarkSource`는 저장된 근거가 있을 때 포함된다. `details.gameFpsEvidenceStatus`는 FPS evidence가 있을 때만 포함한다. `gameFpsEvidence[].match`에는 `gameMatched`, `resolutionMatched`, `gpuClassMatched`, `cpuClassMatched`, `exactGpuPartMatched`, `exactCpuPartMatched`, `evidenceExactness`가 포함된다. FPS 근거는 공개 데이터 기반 참고값이며 정확 FPS 보장이 아니다. 내부 seed 누락 대상은 API 응답이 아니라 `game_fps_coverage_gaps` view로 관리한다. | `parts`, `benchmark_summaries`, `game_fps_benchmarks`, `game_fps_coverage_targets` |
 | `POST` | `/api/tools/price/check` | USER | 2번 | 공통 wrapper | 공통 Tool response | `parts`, `price_snapshots` |
 
 ### Agent/RAG
@@ -300,21 +303,25 @@ Tool별 `context`와 `details` shape:
 | `POST` | `/api/agent/sessions` | USER | 3번 | `{ "requirementId": "2e0f8c9c-8e1c-4d75-94a2-5d6a4977de11", "buildId": null, "asTicketId": null }` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "QUEUED", "summary": null, "stateTimeline": [{ "from": null, "to": "QUEUED", "actor": "USER", "at": "2026-06-29T10:35:00Z" }] }` | `agent_sessions` |
 | `POST` | `/api/agent/sessions/{id}/run` | USER | 3번 | `{}` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "RUNNING", "summary": null, "stateTimeline": [{ "from": "QUEUED", "to": "RUNNING", "actor": "SYSTEM", "at": "2026-06-29T10:36:00Z" }] }` | `agent_sessions` |
 | `GET` | `/api/agent/sessions/{id}` | USER | 3번 | - | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "SUCCEEDED", "summary": "추천이 완료되었습니다.", "stateTimeline": [], "toolInvocationIds": ["4cf44761-e25b-4d5b-bd31-52c13dd9975c"], "evidenceIds": ["9ebf5278-68aa-42a5-96f4-8ec0f90f0f77"] }` | `agent_sessions`, `tool_invocations`, `rag_evidence` |
-| `GET` | `/api/rag/search` | USER | 3번 | `?q=gpu&page=0&size=20` | `{ "items": [{ "id": "9ebf5278-68aa-42a5-96f4-8ec0f90f0f77", "summary": "RTX 4070 QHD 성능 근거", "sourceId": "spec-rtx4070", "score": 0.92 }], "page": 0, "size": 20, "total": 1 }` | `rag_evidence` |
+| `GET` | `/api/rag/search` | USER | 3번 | `?q=5090&purpose=REQUIREMENT_PARSE&sourceType=INTERNAL_RULE&limit=3` | `{ "items": [{ "id": "9ebf5278-68aa-42a5-96f4-8ec0f90f0f77", "summary": "명시 GPU 조건은 하드 제약입니다.", "sourceId": "requirement-rule-explicit-gpu-class-hard-constraint", "score": 0.92 }], "page": 0, "size": 3, "total": 1 }` | `rag_evidence` |
 | `GET` | `/api/rag/evidence/{id}` | USER | 3번 | - | `{ "id": "9ebf5278-68aa-42a5-96f4-8ec0f90f0f77", "summary": "RTX 4070 QHD 성능 근거", "sourceId": "spec-rtx4070", "metadata": { "sourceType": "PART_SPEC", "title": "RTX 4070 Spec" } }` | `rag_evidence` |
 | `GET` | `/api/admin/agent-sessions` | ADMIN | 3번 | `?page=0&size=20` | `{ "items": [{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "RUNNING", "userId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "createdAt": "2026-06-29T10:35:00Z" }], "page": 0, "size": 20, "total": 1 }` | `agent_sessions` |
 | `GET` | `/api/admin/agent-sessions/{id}` | ADMIN | 3번 | - | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "SUCCEEDED", "summary": "추천이 완료되었습니다.", "stateTimeline": [], "toolInvocations": [], "evidenceIds": ["9ebf5278-68aa-42a5-96f4-8ec0f90f0f77"] }` | `agent_sessions`, `tool_invocations`, `rag_evidence` |
 | `GET` | `/api/admin/tool-invocations` | ADMIN | 3번 | `?page=0&size=20` | `{ "items": [{ "id": "4cf44761-e25b-4d5b-bd31-52c13dd9975c", "agentSessionId": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "toolName": "compatibility", "status": "PASS", "confidence": "HIGH", "createdAt": "2026-06-29T10:36:10Z" }], "page": 0, "size": 20, "total": 1 }` | `tool_invocations` |
 | `GET` | `/api/admin/tool-invocations/{id}` | ADMIN | 3번 | - | `{ "id": "4cf44761-e25b-4d5b-bd31-52c13dd9975c", "agentSessionId": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "toolName": "compatibility", "status": "PASS", "confidence": "HIGH", "summary": "호환됩니다.", "requestPayload": {}, "resultPayload": {}, "latencyMs": 120 }` | `tool_invocations` |
 | `GET` | `/api/admin/rag-evidence/{id}` | ADMIN | 3번 | - | `{ "id": "9ebf5278-68aa-42a5-96f4-8ec0f90f0f77", "agentSessionId": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "sourceId": "spec-rtx4070", "chunkText": "근거 chunk", "summary": "RTX 4070 QHD 성능 근거", "metadata": { "sourceType": "PART_SPEC" }, "score": 0.92 }` | `rag_evidence` |
+| `POST` | `/api/admin/rag-embeddings/backfill` | ADMIN | 3번 | `{ "limit": 200 }` | `{ "scanned": 28, "updated": 28, "skipped": 0, "reusableTotal": 28, "embeddedTotal": 28, "embeddingModel": "text-embedding-3-small", "embeddingDimensions": 1536 }` | `rag_evidence` |
 
 RAG 공개 범위:
 
 - 일반 RAG API는 요약 중심이다.
 - admin RAG API는 `chunkText`, `metadata`, `score`를 포함할 수 있다.
-- `GET /api/rag/search`는 `page=0`, `size=20`, `size<=100` pagination 기준을 따른다.
+- `GET /api/rag/search`는 `page=0`, `size=20`, `size<=100` pagination 기준을 따른다. `limit`은 `size` 별칭이며 둘 다 있으면 `size`가 우선한다.
+- `GET /api/rag/search`는 `purpose=REQUIREMENT_PARSE|BUILD_RECOMMEND|BUILD_EXPLAIN|AS_ANALYZE`, `sourceType=GUIDE|INTERNAL_RULE|BENCHMARK|PART_SPEC|TROUBLESHOOTING` 필터를 지원한다.
 - `agent_session_id`가 없는 `rag_evidence` row는 재사용 지식 청크로 검색 대상에 포함된다.
 - Agent 실행 중 선택된 RAG 청크는 세션별 `rag_evidence` row로 복사되어 `evidenceIds`에 노출된다.
+- `rag_evidence.embedding`이 있고 `OPENAI_API_KEY`가 설정된 환경에서는 `GET /api/rag/search`와 Agent 내부 검색이 pgvector semantic search를 우선 사용한다. 검색 실패, 키 미설정, embedding 미백필 상태에서는 기존 keyword fallback을 사용한다.
+- embedding 생성은 Flyway에서 수행하지 않는다. 데모 전 관리자가 `POST /api/admin/rag-embeddings/backfill`을 실행해 reusable RAG chunk를 백필한다.
 
 `POST /api/agent/sessions/{id}/run` 409 조건:
 

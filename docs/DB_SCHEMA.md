@@ -632,6 +632,17 @@ Index:
 
 Owner: 2번
 
+운영 규칙:
+
+- `score`는 카테고리 내부 비교용 normalized score다. CPU 90점과 PSU 90점을 서로 직접 비교하지 않는다.
+- CPU/GPU/RAM/STORAGE는 공개 벤치마크 또는 공개 성능 자료와 저장된 부품 스펙을 함께 참고한다.
+- MOTHERBOARD/PSU/CASE/COOLER는 성능 벤치마크가 아니라 공식 스펙 기반 적합도 점수로 기록한다.
+- 사용자에게 정확 FPS, 렌더링 개선율, 구매 결과 보장을 표현하지 않는다.
+- 최신 공용 seed는 `benchmark_key = normalized-fit-v1:{part_public_id}` 형식을 사용한다.
+- `metadata`에는 최소 `category`, `workload`, `sourceName`, `sourceUrl`, `rawScore`, `normalizedFormula`, `sourceCheckedAt`, `metadataVersion`, `scoreScope`, `guaranteePolicy`를 둔다.
+- CPU/GPU는 공개 원점수를 `metadata.rawBenchmarks`에 별도 저장한다. 예: `PassMark CPU Mark`, `PassMark Single Thread Rating`, `3DMark Steel Nomad DX12 Graphics Score`.
+- `metadata.rawBenchmarkCoverage = PUBLIC_RAW_BENCHMARK_SEEDED`는 해당 row가 공개 raw benchmark를 포함한다는 뜻이다.
+
 | 컬럼명 | 타입 | nullable | FK | 설명 |
 |---|---|---:|---|---|
 | `id` | `BIGINT` | no | - | 내부 PK |
@@ -649,6 +660,94 @@ Index:
 - unique: `benchmark_summaries.benchmark_key`
 - index: `benchmark_summaries.part_id`
 - index: `benchmark_summaries.deleted_at`
+
+### game_fps_benchmarks
+
+목적: 특정 게임에서 공개 확인된 CPU/GPU 조합별 FPS 참고값을 저장한다.
+
+Owner: 2번
+
+운영 규칙:
+
+- `avg_fps`, `one_percent_low_fps`는 공개 출처 기반 참고값이며 정확 FPS 보장이 아니다.
+- seed는 수동 확인만 허용한다. 외부 사이트 자동 크롤링/대량 추출 결과를 넣지 않는다.
+- `metadata.hardwareScope`로 `EXACT_PUBLIC_SESSION`, `GPU_COMPARISON_WITH_SELECTED_CPU` 같은 출처 범위를 표시한다.
+- `metadata.sourceCapturedText`, `sourceAccessMethod`, `driverVersion`, `gameVersion`, `upscaling`, `frameGeneration`, `evidenceExactness`를 보존한다. 출처가 제공하지 않는 값은 `UNKNOWN`으로 명시한다.
+- 3번 AI/RAG와 performance Tool은 이 테이블을 읽어 사용자에게 게임별 체감 근거를 설명할 수 있다.
+- Tool/AI는 `evidenceExactness`와 match flag를 확인해 정확 FPS처럼 단정하지 않는다.
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `game_title` | `VARCHAR(160)` | no | - | 표시 게임명 |
+| `game_key` | `VARCHAR(120)` | no | - | 검색/매칭용 게임 key |
+| `cpu_part_id` | `BIGINT` | yes | `parts.id` | 기준 CPU |
+| `gpu_part_id` | `BIGINT` | yes | `parts.id` | 기준 GPU |
+| `ram_gb` | `INTEGER` | yes | - | 기준 RAM 용량 |
+| `resolution` | `VARCHAR(30)` | no | - | FHD/QHD/4K |
+| `graphics_preset` | `VARCHAR(80)` | no | - | 옵션 프리셋 |
+| `avg_fps` | `NUMERIC(10,2)` | no | - | 평균 FPS |
+| `one_percent_low_fps` | `NUMERIC(10,2)` | yes | - | 1% Low FPS |
+| `source_name` | `VARCHAR(120)` | no | - | 출처명 |
+| `source_url` | `TEXT` | no | - | 출처 URL |
+| `source_checked_at` | `DATE` | no | - | 확인일 |
+| `confidence` | `VARCHAR(30)` | no | - | LOW/MEDIUM/HIGH |
+| `metadata` | `JSONB` | yes | - | 원 출처 하드웨어명, 별칭, 주의사항 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+Index:
+
+- unique: `game_fps_benchmarks.public_id`
+- unique partial: `game_key`, `cpu_part_id`, `gpu_part_id`, `ram_gb`, `resolution`, `graphics_preset`, `source_name`
+- index: `game_fps_benchmarks.game_key`, `resolution`
+- index: `game_fps_benchmarks.cpu_part_id`
+- index: `game_fps_benchmarks.gpu_part_id`
+- index: `game_fps_benchmarks.metadata->gpuClass`
+- index: `game_fps_benchmarks.metadata->cpuClass`
+
+Constraint:
+
+- `resolution IN ('FHD', 'QHD', '4K')`
+
+### game_fps_coverage_targets
+
+목적: `game_fps_benchmarks`에 실제 FPS 값을 임의로 만들지 않고, 내부 추천 품질에 필요한 coverage 목표와 누락 상태를 추적한다.
+
+Owner: 2번
+
+운영 규칙:
+
+- 이 테이블은 FPS 값 저장소가 아니다. 수집해야 할 대상 목록이다.
+- `status=NEEDS_SOURCE`는 공개 출처 확인 후 seed 보강이 필요하다는 뜻이다.
+- 실제 FPS row가 들어오면 `game_fps_coverage_status`, `game_fps_coverage_gaps` view에서 충족 여부가 자동 계산된다.
+- 누락 target은 사용자/API 응답으로 반환하지 않는다. 운영자는 `game_fps_coverage_gaps` view 또는 `tools/check_game_fps_seed_quality.sql`로 다음 수동 seed 대상을 확인한다.
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `target_type` | `VARCHAR(40)` | no | - | GAME_RESOLUTION/GPU_CLASS_GAME/CPU_CLASS_GAME |
+| `game_title` | `VARCHAR(160)` | no | - | 표시 게임명 |
+| `game_key` | `VARCHAR(120)` | no | - | 검색/매칭용 게임 key |
+| `resolution` | `VARCHAR(30)` | yes | - | FHD/QHD/4K |
+| `graphics_preset` | `VARCHAR(80)` | yes | - | 옵션 프리셋 |
+| `gpu_class` | `VARCHAR(80)` | yes | - | RTX_5090 등 내부 GPU class |
+| `cpu_class` | `VARCHAR(80)` | yes | - | RYZEN_9_9950X3D 등 내부 CPU class |
+| `priority` | `VARCHAR(20)` | no | - | P0/P1/P2 |
+| `status` | `VARCHAR(30)` | no | - | NEEDS_SOURCE/SEEDED/DEFERRED |
+| `reason` | `TEXT` | no | - | 수집 필요 이유 |
+| `metadata` | `JSONB` | yes | - | target policy, seed rule |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+View:
+
+- `game_fps_coverage_status`: target별 matched row 수, exact preset row 수, coverage status 계산
+- `game_fps_coverage_gaps`: `coverage_status='GAP'`만 노출
 
 ### agent_sessions
 
@@ -730,7 +829,7 @@ Owner: 3번
 | `summary` | `TEXT` | no | - | 근거 요약 |
 | `score` | `NUMERIC(8,5)` | yes | - | 검색 점수 |
 | `embedding` | `VECTOR(1536)` | yes | - | pgvector embedding |
-| `metadata` | `JSONB` | yes | - | source URL, chunk 위치 등 |
+| `metadata` | `JSONB` | yes | - | source URL, chunk 위치, embedding/retrieval metadata 등 |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
 
 Index:
@@ -739,7 +838,15 @@ Index:
 - index: `rag_evidence.agent_session_id`
 - index: `rag_evidence.source_id`
 - index: `rag_evidence.score`
-- vector index는 pgvector 준비 후 별도 Flyway에서 검토
+- hnsw vector index: `embedding vector_cosine_ops` where `agent_session_id IS NULL AND embedding IS NOT NULL`
+
+Embedding 정책:
+
+- reusable chunk는 `agent_session_id IS NULL`인 row다.
+- `embedding`은 Flyway가 아니라 관리자 백필 API가 생성한다.
+- 기본 모델은 `text-embedding-3-small`, 기본 차원은 `1536`이다.
+- `metadata.embeddingModel`, `metadata.embeddingDimensions`, `metadata.embeddingTextHash`, `metadata.embeddingUpdatedAt`으로 백필 상태를 추적한다.
+- Agent 실행 중 복사된 세션별 evidence에는 원본 chunk의 `source_id`, `summary`, `chunk_text`와 함께 `metadata.sourceEvidenceId`, `metadata.retrievalMode`, `metadata.vectorScore`, `metadata.keywordScore`를 남긴다.
 
 ### agent_log_uploads
 
