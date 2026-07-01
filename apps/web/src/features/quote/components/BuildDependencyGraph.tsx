@@ -48,7 +48,9 @@ const FLOATING_GRAPH_DEFAULT_SIZE = { width: 360, graphHeight: 240 };
 const FLOATING_GRAPH_MIN_SIZE = { width: 300, graphHeight: 200 };
 const FLOATING_GRAPH_MAX_SIZE = { width: 760, graphHeight: 560 };
 const FLOATING_GRAPH_VIEWPORT_MARGIN = 40;
-const FLOATING_GRAPH_CANDIDATE_WIDTH = 360;
+const FLOATING_GRAPH_HEADER_HEIGHT = 42;
+const FLOATING_GRAPH_CANDIDATE_MIN_HEIGHT = 260;
+const FLOATING_GRAPH_CANDIDATE_MAX_HEIGHT = 480;
 const FLOATING_GRAPH_PANEL_GAP = 12;
 const categoryPositions: Record<string, { x: number; y: number }> = {
   CPU: { x: 20, y: 170 },
@@ -458,7 +460,29 @@ function FloatingDependencyGraph({
   };
 
   return (
-    <div className="fixed bottom-5 left-5 z-[70] hidden max-w-[calc(100vw-2.5rem)] items-end gap-3 lg:flex">
+    <div className="fixed bottom-5 left-5 z-[70] hidden max-w-[calc(100vw-2.5rem)] flex-col items-start gap-3 lg:flex">
+      {activeNode ? (
+        <div
+          data-testid="floating-graph-candidate-panel"
+          className="shrink-0 overflow-y-auto"
+          style={{
+            width: size.width,
+            maxHeight: floatingCandidatePanelMaxHeight(size.graphHeight)
+          }}
+        >
+          <GraphNodeCandidatePanel
+            variant="floating"
+            activeNode={activeNode}
+            activeNodeCategory={activeNodeCategory}
+            candidateContext={candidateContext}
+            candidates={candidates}
+            isLoading={isLoading}
+            isError={isError}
+            rejectedCount={rejectedCount}
+            onClose={onCloseCandidatePanel}
+          />
+        </div>
+      ) : null}
       <div
         data-testid="floating-dependency-graph"
         className={`relative shrink-0 overflow-hidden rounded-xl border border-commerce-line bg-white shadow-2xl ${isResizing ? 'ring-2 ring-brand-blue/30' : ''}`}
@@ -513,21 +537,6 @@ function FloatingDependencyGraph({
           </ReactFlow>
         </div>
       </div>
-      {activeNode ? (
-        <div data-testid="floating-graph-candidate-panel" className="max-h-[72vh] w-[360px] shrink-0 overflow-y-auto">
-          <GraphNodeCandidatePanel
-            variant="floating"
-            activeNode={activeNode}
-            activeNodeCategory={activeNodeCategory}
-            candidateContext={candidateContext}
-            candidates={candidates}
-            isLoading={isLoading}
-            isError={isError}
-            rejectedCount={rejectedCount}
-            onClose={onCloseCandidatePanel}
-          />
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -539,19 +548,34 @@ function clamp(value: number, min: number, max: number) {
 function floatingGraphMaxSize(hasCandidatePanel: boolean) {
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
   const viewportHeight = typeof window === 'undefined' ? 720 : window.innerHeight;
-  const reservedWidth = FLOATING_GRAPH_VIEWPORT_MARGIN
-    + (hasCandidatePanel ? FLOATING_GRAPH_CANDIDATE_WIDTH + FLOATING_GRAPH_PANEL_GAP : 0);
+  const reservedHeight = hasCandidatePanel
+    ? FLOATING_GRAPH_VIEWPORT_MARGIN + FLOATING_GRAPH_HEADER_HEIGHT + FLOATING_GRAPH_PANEL_GAP + FLOATING_GRAPH_CANDIDATE_MIN_HEIGHT
+    : 120;
 
   return {
     width: Math.max(
       FLOATING_GRAPH_MIN_SIZE.width,
-      Math.min(FLOATING_GRAPH_MAX_SIZE.width, viewportWidth - reservedWidth)
+      Math.min(FLOATING_GRAPH_MAX_SIZE.width, viewportWidth - FLOATING_GRAPH_VIEWPORT_MARGIN)
     ),
     graphHeight: Math.max(
       FLOATING_GRAPH_MIN_SIZE.graphHeight,
-      Math.min(FLOATING_GRAPH_MAX_SIZE.graphHeight, viewportHeight - 120)
+      Math.min(FLOATING_GRAPH_MAX_SIZE.graphHeight, viewportHeight - reservedHeight)
     )
   };
+}
+
+function floatingCandidatePanelMaxHeight(graphHeight: number) {
+  const viewportHeight = typeof window === 'undefined' ? 720 : window.innerHeight;
+  const availableHeight = viewportHeight
+    - FLOATING_GRAPH_VIEWPORT_MARGIN
+    - FLOATING_GRAPH_HEADER_HEIGHT
+    - FLOATING_GRAPH_PANEL_GAP
+    - graphHeight;
+  return clamp(
+    availableHeight,
+    FLOATING_GRAPH_CANDIDATE_MIN_HEIGHT,
+    FLOATING_GRAPH_CANDIDATE_MAX_HEIGHT
+  );
 }
 
 function clampFloatingGraphSize(

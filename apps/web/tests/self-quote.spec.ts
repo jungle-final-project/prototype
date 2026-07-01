@@ -686,6 +686,13 @@ test('updates quote dependency graph after self quote cart changes', async ({ pa
   await floatingGraph.getByText('RTX 5070', { exact: true }).click();
   const floatingCandidatePanel = page.getByTestId('floating-graph-candidate-panel');
   await expect(floatingCandidatePanel).toContainText('RTX 5070 Ti 그래프 호환 후보');
+  const graphBoxWithCandidate = await floatingGraph.boundingBox();
+  const candidateBoxAboveGraph = await floatingCandidatePanel.boundingBox();
+  expect(graphBoxWithCandidate).not.toBeNull();
+  expect(candidateBoxAboveGraph).not.toBeNull();
+  expect((candidateBoxAboveGraph?.y ?? 0) + (candidateBoxAboveGraph?.height ?? 0)).toBeLessThanOrEqual((graphBoxWithCandidate?.y ?? 0) - 8);
+  expect(Math.abs((candidateBoxAboveGraph?.x ?? 0) - (graphBoxWithCandidate?.x ?? 0))).toBeLessThanOrEqual(2);
+  expect(Math.abs((candidateBoxAboveGraph?.width ?? 0) - (graphBoxWithCandidate?.width ?? 0))).toBeLessThanOrEqual(2);
 
   await floatingCandidatePanel.getByRole('button', { name: '선택한 부품 상세 닫기' }).click();
   await expect(page.getByTestId('floating-graph-candidate-panel')).toHaveCount(0);
