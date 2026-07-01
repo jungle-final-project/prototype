@@ -869,6 +869,21 @@ AdminShell nav 분석 결과:
 - [x] 검증: `cd apps/web && npm run test -- home.spec.ts` 통과.
 - [x] 추가 검증: `cd apps/web && npm run test`, `cd apps/web && npm run build`, `git diff --check` 통과.
 
+#### 2026-07-01 공통 API Client 인증/오류 처리 마감
+
+- [x] Playwright 회귀 테스트를 먼저 추가했다.
+  - [x] refresh token 없이 보호 API가 401을 반환하면 access token, refresh token, cached user를 정리한다.
+  - [x] `/api/auth/refresh`가 실패 응답을 반환하면 원래 보호 API를 재시도하지 않고 token/user를 정리한다.
+  - [x] refresh 응답 body에 `accessToken` 또는 `refreshToken`이 없으면 refresh 실패로 보고 token/user를 정리한다.
+  - [x] `ErrorResponse.details`가 있는 오류 응답을 `ApiError.details`에 보존한다.
+  - [x] logout API가 실패해도 프론트 token/user를 정리하고 `/login`으로 이동한다.
+- [x] `ApiError`가 `status`, `path`, `code`, `message`, `details`를 보존하도록 확장했다.
+- [x] access token 만료 401에서 refresh retry는 1회만 수행하고, refresh 성공 시 원래 요청을 1회 재시도하도록 정책을 고정했다.
+- [x] refresh token 없음, refresh 실패, refresh 응답 이상, refresh network 실패 시 `clearToken()`으로 로그인 상태를 정리하도록 수정했다.
+- [x] `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`, `/api/auth/exchange`, `/api/users`, `/api/auth/google/*`는 refresh retry 제외 대상으로 유지했다.
+- [x] 검증: `cd apps/web && npm run test -- auth.spec.ts` 통과.
+- [x] 추가 검증: `cd apps/web && npm run test`, `cd apps/web && npm run build`, `git diff --check` 통과.
+
 #### 2026-07-01 커밋 메시지 요청 전 점검 기록
 
 - [x] 현재 브랜치가 `main`이고, 마지막 커밋이 `Merge pull request #26 from jungle-final-project/feat/popular-part-detail-links`임을 확인했다.
@@ -887,7 +902,7 @@ AdminShell nav 분석 결과:
 - [x] 401/403 권한 분기 확인
 - [x] PR 전 기본 검증 명령 실행
 - [x] 1번 Auth/User 구현 후 `api.ts`, `RequireAdmin`, admin guard 기본 연동 검토
-- [ ] `api.ts` refresh retry, logout API 호출, `ErrorResponse` 보존 구현
+- [x] `api.ts` refresh retry, logout API 호출, `ErrorResponse` 보존 구현
 
 ### P1
 

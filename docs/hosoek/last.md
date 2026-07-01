@@ -43,9 +43,9 @@ MVP 완료 기준:
 
 | 영역 | 현재 상태 | 남은 작업 | 완료 기준 | 담당/협업 |
 | --- | --- | --- | --- | --- |
-| Auth/User | 부분완료 | 이메일 회원가입, 로그인, refresh/logout, `/auth/me`는 있으나 OAuth 계약과 공통 client 최종 정리가 남음 | 로그인/회원가입/refresh/logout/me가 실제 JWT와 refresh token 기준으로 통과하고, 401/403/ErrorResponse 테스트가 있음 | 1번, 5번 |
+| Auth/User | 부분완료 | 이메일 회원가입, 로그인, refresh/logout, `/auth/me`와 공통 client 인증/오류 처리는 정리됨. OAuth 계약과 사용자 소유권 기준 Quote/Auth 마무리가 남음 | 로그인/회원가입/refresh/logout/me가 실제 JWT와 refresh token 기준으로 통과하고, 401/403/ErrorResponse 테스트가 있음 | 1번, 5번 |
 | OAuth 계약 | 미확정 | Google OAuth를 MVP에 넣을지 결정. 넣으면 start/callback/exchange, Redis one-time code, account linking 구현. 빼면 OpenAPI/API_CONTRACT에서 MVP 범위 조정 | OAuth 포함 또는 제외가 문서와 코드에서 일치함 | 1번, 5번 |
-| 공통 API Client | 부분완료 | `api.ts`가 `ErrorResponse.code/message/details`를 보존하고, access token 만료 시 refresh retry 1회, 실패 시 `clearToken()`, logout API 호출 흐름을 고정 | Playwright에서 refresh 성공/실패/logout/error normalization 테스트 통과 | 5번 |
+| 공통 API Client | 완료 | `api.ts`가 `ErrorResponse.code/message/details`를 보존하고, access token 만료 시 refresh retry 1회, refresh 불가/실패 시 `clearToken()`, logout 실패 시 로컬 token 정리 흐름을 고정 | auth Playwright 회귀 테스트로 보호 API 401, refresh 실패, invalid refresh body, logout 실패 경로 검증 | 5번 |
 | Quote/Build 소유권 | 부분완료 | `requirements`, `builds`, `build_items` 저장/조회/변경을 현재 로그인 사용자 기준으로 수정 | 타인 requirement/build/history/detail/change-part 접근 시 404 contract test 통과 | 1번 |
 | 구매 상담/추천 | 부분완료 | 자연어 입력, 요구사항 저장, RAG/Tool 근거, 추천 2~3개, 추천 적용까지 실제 DB 기준 E2E 연결 | 로그인 사용자 기준으로 build-chat 또는 requirement flow가 추천 결과를 만들고 견적초안/Build로 이어짐 | 1번, 2번, 3번 |
 | 내 견적함 | 미완료 | `/my/quotes`의 `quoteMock` 제거, `GET /api/builds/history` 실제 API 연결, loading/error/empty/success 처리 | 로그인 사용자별 저장 Build 목록이 화면에 표시되고 테스트가 있음 | 1번, 2번 |
@@ -103,7 +103,6 @@ MVP 완료 기준:
 | --- | --- | --- |
 | 1 | 현재 사용자 소유권 정리 | 여러 사용자가 쓰는 서비스에서 가장 치명적인 계약 위반을 먼저 막아야 함 |
 | 2 | mock/static 화면 제거 | MVP 시연에서 실제 데이터 흐름을 보여주기 위한 필수 조건 |
-| 3 | 상태 전이/409/ErrorResponse 정리 | 실패 상황이 계약대로 동작해야 PR 이후 회귀를 막을 수 있음 |
+| 3 | 상태 전이/409/ErrorResponse 정리 | 공통 API client 오류 보존은 완료됐고, 도메인별 409/상태 전이 계약을 서버와 화면에서 닫아야 함 |
 | 4 | 가격 알림/AS/관리자 실제 API 연결 | MVP E2E의 후반부를 닫는 작업 |
 | 5 | 최종 E2E와 검증 명령 고정 | 프로젝트 완료 판정을 객관적으로 만들기 위한 마지막 단계 |
-
