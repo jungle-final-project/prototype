@@ -166,7 +166,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     setFailedBuild(null);
     setApplyingBuildId(normalizedBuild.id);
     try {
-      await applyAiBuildToQuoteDraft({
+      const appliedDraft = await applyAiBuildToQuoteDraft({
         buildId: normalizedBuild.id,
         conflictPolicy: 'REPLACE',
         items: normalizedBuild.items.map((item) => ({
@@ -175,6 +175,8 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
           quantity: item.quantity
         }))
       });
+      queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
+      void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       setOpen(false);
       navigate('/self-quote');
     } catch {

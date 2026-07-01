@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -168,6 +168,7 @@ const popularPartDeals: PopularPart[] = [
 
 export function HomePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [assistantSession, setAssistantSession] = useState<AiAssistantSession>(() => readAssistantSession());
   const [recommendationTab, setRecommendationTab] = useState<RecommendationTab>(() => readAssistantSession().latestBuilds.length > 0 ? 'ai' : 'popular');
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
@@ -261,7 +262,7 @@ export function HomePage() {
     setApplyError(null);
     setApplyingBuildId(normalizedBuild.id);
     try {
-      await applyAiBuildToQuoteDraft({
+      const appliedDraft = await applyAiBuildToQuoteDraft({
         buildId: normalizedBuild.id,
         conflictPolicy: 'REPLACE',
         items: normalizedBuild.items.map((item) => ({
@@ -270,6 +271,8 @@ export function HomePage() {
           quantity: item.quantity
         }))
       });
+      queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
+      void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       navigate('/self-quote');
     } catch {
       setApplyError('AI 추천 조합을 셀프 견적 장바구니에 적용하지 못했습니다.');
@@ -288,7 +291,7 @@ export function HomePage() {
 
     setApplyingFeaturedBuildId(build.id);
     try {
-      await applyAiBuildToQuoteDraft({
+      const appliedDraft = await applyAiBuildToQuoteDraft({
         buildId: build.id,
         conflictPolicy: 'REPLACE',
         items: buildParts.map(({ search, part }) => ({
@@ -297,6 +300,8 @@ export function HomePage() {
           quantity: 1
         }))
       });
+      queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
+      void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       navigate('/self-quote');
     } catch {
       setApplyError('추천상품 견적을 셀프견적 장바구니에 담지 못했습니다. 백엔드 실행 상태를 확인해 주세요.');
