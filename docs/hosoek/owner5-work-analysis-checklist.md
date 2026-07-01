@@ -906,6 +906,74 @@ AdminShell nav 분석 결과:
 - [x] 현재 변경은 구매 상담 AI 세션 사용자별 저장소 분리, 로그인 만료 오류 UX, 관련 Playwright 테스트, 남은 작업 최종 정리 문서, 오래된 hoseok/hosoek 문서 자산 삭제로 구분된다.
 - [x] 코드/테스트 변경과 문서 정리 변경은 성격이 달라 별도 커밋으로 나누는 것이 적절하다.
 
+#### 2026-07-01 Build 관계 그래프 커밋 메시지 요청 전 점검
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 5커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `676b7c9 docs: MVP 완료 상태와 인프라 연동 판단을 정리`다.
+- [x] 미커밋 변경은 `POST /api/build-graphs/resolve` 백엔드 API, OpenAPI/API 계약, React Flow 기반 견적 관계도 UI, Home/SelfQuote 연동, Playwright/JUnit 테스트로 구분된다.
+- [x] `@xyflow/react` 의존성은 견적 관계도 시각화를 위해 추가된 프론트 런타임 의존성이다.
+- [x] 백엔드 API/계약과 프론트 관계도 UI는 서로 연결되지만 리뷰 범위가 커서 별도 커밋으로 나누는 것이 적절하다.
+- [x] 5번 체크리스트 갱신은 커밋 메시지 요청 전 점검 기록으로 별도 문서 커밋에 포함한다.
+
+#### 2026-07-01 AI 추천 장바구니 즉시 반영 점검
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 7커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `a095198 feat: 견적 관계도를 홈과 셀프 견적에 표시`다.
+- [x] 미커밋 변경은 홈 추천 카드와 챗봇 추천 적용 후 `PUT /api/quote-drafts/current/apply-ai-build` 응답을 React Query `['quote-draft', 'current']` 캐시에 즉시 반영하는 프론트 수정이다.
+- [x] stale GET이 늦게 돌아오는 상황에서도 사용자가 별도 제거 동작을 하지 않아도 `/self-quote`에서 적용된 장바구니가 보이도록 Playwright 회귀 테스트를 추가했다.
+- [x] 이 변경은 build graph API가 아니라 AI 추천 적용 후 quote draft cache 동기화 문제를 고치는 fix 커밋으로 분리한다.
+
+#### 2026-07-01 Build 관계 그래프 판정 근거 구체화
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 8커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `ada4f7e fix: AI 추천 적용 후 견적 장바구니를 즉시 표시`다.
+- [x] `BuildGraphService`가 ToolCheckService details를 사용해 소켓, RAM 규격, 쿨러 소켓, 전력 여유, GPU 길이, 쿨러 높이를 관계별 `PASS/WARN/FAIL`로 다시 구분하도록 보강했다.
+- [x] 그래프 node detail에 CPU 소켓, 메인보드 소켓/메모리/Wi-Fi, RAM 용량/모듈 수, GPU 전력/길이, PSU 정격 출력, 케이스 GPU 허용 길이, 쿨러 높이를 표시하도록 정리했다.
+- [x] React Flow 그래프의 `PASS/WARN/FAIL` 문구를 사용자 친화적인 `여유 있음/간섭 주의/장착 불가` 라벨로 표시했다.
+- [x] JUnit 테스트에 정상 여유, warning 여유, socket/power/size 실패 케이스를 추가해 edge label과 summary를 검증했다.
+
+#### 2026-07-01 Build 관계 그래프 제약 노드 라벨 보정
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 9커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `fae7c2b feat: 빌드 관계 그래프 판정 근거를 구체화`다.
+- [x] 제약 노드가 `전력 여유`, `장착 규격`, `기본 호환성` 같은 generic label 대신 `정격 850W`, 실제 케이스명, 실제 메인보드명을 표시하도록 보정했다.
+- [x] `BuildGraphServiceTest`에서 `constraint-power`, `constraint-size`, `constraint-compatibility` label을 검증하도록 추가했다.
+- [x] 홈 Playwright fixture와 assertion도 실제 제약 노드 라벨 기준으로 맞추고 generic 문구가 노출되지 않는지 확인한다.
+
+#### 2026-07-01 그래프 노드 호환 후보 API와 패널 점검
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 10커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `647bfbd fix: 빌드 그래프 제약 노드 라벨을 실제 부품 기준으로 표시`다.
+- [x] `POST /api/parts/compatible-candidates` API를 추가해 AI 추천 조합 또는 현재 견적초안 기준으로 같은 카테고리 호환 후보를 계산한다.
+- [x] 후보 계산은 서버가 부품을 DB에서 다시 조회하고, 해당 카테고리 교체 후 `ToolCheckService.checkBuild` 결과의 관련 tool만 사용해 `PASS/WARN/FAIL`을 판단한다.
+- [x] 그래프 노드 클릭 시 선택 부품 상세와 호환 후보 패널을 표시하고, 홈 AI 추천에서는 읽기 전용, 셀프 견적에서는 `담기/교체` 동작으로 연결한다.
+- [x] OpenAPI/API 계약/route ownership과 controller/service/JUnit, Home/SelfQuote Playwright fixture를 함께 갱신했다.
+
+#### 2026-07-01 그래프 노드 호환 후보 프론트 분리 점검
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 11커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `dc91fcc feat: 현재 조합 기준 호환 부품 후보 API를 추가`다.
+- [x] 미커밋 변경은 API 계약이 아니라 `BuildDependencyGraph`에서 노드 선택 시 호환 후보 패널을 보여주는 프론트 연결 작업이다.
+- [x] 홈 AI 추천 그래프는 `AI_BUILD` source와 build items를 넘겨 읽기 전용 후보 목록을 표시한다.
+- [x] 셀프 견적 그래프는 `QUOTE_DRAFT_CURRENT` source와 현재 장바구니 선택 상태를 넘겨 후보의 `담기/교체` 버튼을 견적초안 담기 흐름에 연결한다.
+- [x] Home/SelfQuote Playwright fixture는 후보 API 요청, 선택 부품 상세 표시, 읽기 전용 표시, 후보 담기 동작을 검증한다.
+
+#### 2026-07-01 그래프 호환 후보 체크리스트 문서 커밋 점검
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 12커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `946625a feat: 그래프 노드에서 호환 부품 후보를 표시`다.
+- [x] 미커밋 변경은 `docs/hosoek/owner5-work-analysis-checklist.md`의 작업 점검 기록 1개 파일뿐이다.
+- [x] 기능 코드, API 계약, 테스트 변경은 이미 직전 커밋에 포함되어 있어 이번 커밋은 문서 기록 정리로 분리한다.
+
+#### 2026-07-01 그래프 호환 후보 패널 배치 보정 점검
+
+- [x] 현재 브랜치가 `main`이고, `origin/main`보다 12커밋 앞선 상태임을 확인했다.
+- [x] 마지막 커밋은 `946625a feat: 그래프 노드에서 호환 부품 후보를 표시`다.
+- [x] 미커밋 코드 변경은 `BuildDependencyGraph`의 선택 노드 상세와 호환 후보 목록을 그래프 캔버스 내부 패널로 분리하는 UI 보정이다.
+- [x] 기존 우측 aside는 관계 edge 선택 설명과 판정 근거 확인 영역으로 유지하고, node 선택 시 `graph-node-candidate-panel`에서 부품 상세와 후보 목록을 함께 보여준다.
+- [x] Home/SelfQuote Playwright 테스트는 새 패널 test id를 기준으로 선택 부품 상세, 읽기 전용 후보, 담기/교체 동작을 검증하도록 맞춘다.
+- [x] 모바일 홈 테스트는 챗봇 추천 후 관계도와 후보 패널을 열어도 가로 overflow가 생기지 않는지 확인한다.
+
 ## 우선순위
 
 ### P0
