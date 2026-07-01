@@ -54,17 +54,20 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private final AgentTraceService agentTraceService;
     private final AgentRagRetrievalService agentRagRetrievalService;
     private final OpenAiResponsesClient openAiResponsesClient;
+    private final AiProfileConfig aiProfileConfig;
 
     public DefaultAiChatEngine(
             JdbcTemplate jdbcTemplate,
             AgentTraceService agentTraceService,
             AgentRagRetrievalService agentRagRetrievalService,
-            OpenAiResponsesClient openAiResponsesClient
+            OpenAiResponsesClient openAiResponsesClient,
+            AiProfileConfig aiProfileConfig
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.agentTraceService = agentTraceService;
         this.agentRagRetrievalService = agentRagRetrievalService;
         this.openAiResponsesClient = openAiResponsesClient;
+        this.aiProfileConfig = aiProfileConfig;
     }
 
     @Override
@@ -86,10 +89,16 @@ public class DefaultAiChatEngine implements AiChatEngine {
 
     @Override
     public AiChatEngineResponse respondLlmRequired(AiChatEngineRequest request) {
+        return respondLlmRequired(request, null);
+    }
+
+    @Override
+    public AiChatEngineResponse respondLlmRequired(AiChatEngineRequest request, String requestedAiProfile) {
         String message = requireText(request == null ? null : request.message(), "챗봇 메시지가 필요합니다.");
         if (!openAiResponsesClient.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED, "OPENAI_API_KEY가 필요합니다.");
         }
+        AiProfileDefinition buildProfile = requireBuildChatProfile(requestedAiProfile);
         Map<String, Object> context = request == null || request.context() == null ? Map.of() : request.context();
         Map<String, Object> fallbackContext = deterministicParsedContext(context, message);
         AgentRunProfile profile = AgentRunProfiles.requirementParse();
@@ -97,7 +106,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 new AgentSessionRoot(AgentSessionRootType.REQUIREMENT, CHAT_RAG_ROOT_ID),
                 profile,
                 message,
-                3
+                buildProfile.ragTopK()
         );
         List<String> evidenceIds = evidenceSet.stream()
                 .map(DefaultAiChatEngine::sourceEvidenceId)
@@ -106,7 +115,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 .toList();
         Map<String, Object> plan;
         try {
-            plan = llmBuildChatPlan(message, request, context, fallbackContext, evidenceIds, evidenceSet);
+            plan = llmBuildChatPlan(message, request, context, fallbackContext, evidenceIds, evidenceSet, buildProfile);
         } catch (ResponseStatusException error) {
             throw error;
         } catch (RuntimeException error) {
@@ -591,11 +600,20 @@ public class DefaultAiChatEngine implements AiChatEngine {
             Map<String, Object> context,
             Map<String, Object> fallbackContext,
             List<String> evidenceIds,
-            List<AgentRagEvidenceDraft> evidenceSet
+            List<AgentRagEvidenceDraft> evidenceSet,
+            AiProfileDefinition buildProfile
     ) {
-        String output = openAiResponsesClient.createStructuredJson(
+        LlmResponseResult result = openAiResponsesClient.createStructuredJsonResult(
                 BUILD_CHAT_SYSTEM_PROMPT,
                 json(MockData.map(
+                        "aiProfile", buildProfile.profile().name(),
+                        "promptVersion", buildProfile.promptVersion(),
+                        "responseLimits", MockData.map(
+                                "assistantMessage", "Korean, concise",
+                                "recommendationCountMax", 3,
+                                "partRecommendationCountMax", 3,
+                                "actionCountMax", 3
+                        ),
                         "rawMessage", message,
                         "surface", request == null ? null : request.surface(),
                         "selectedCategory", request == null ? null : request.selectedCategory(),
@@ -606,9 +624,12 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         "ragEvidenceSet", evidenceItems(evidenceIds, evidenceSet)
                 )),
                 BUILD_CHAT_SCHEMA_NAME,
-                buildChatPlanSchema()
+                buildChatPlanSchema(),
+                buildProfile.model(),
+                buildProfile.reasoningEffort(),
+                buildProfile.maxOutputTokens()
         );
-        return parseJsonObject(output);
+        return parseJsonObject(result.text());
     }
 
     private static Map<String, Object> buildChatPlanSchema() {
@@ -1289,6 +1310,14 @@ public class DefaultAiChatEngine implements AiChatEngine {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
         }
         return text;
+    }
+
+    private AiProfileDefinition requireBuildChatProfile(String requestedAiProfile) {
+        try {
+            return aiProfileConfig.buildChatProfile(requestedAiProfile);
+        } catch (IllegalArgumentException error) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, error.getMessage(), error);
+        }
     }
 
     private static String text(Object value) {

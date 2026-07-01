@@ -1,12 +1,12 @@
 # 3번 AI 성능 및 고도화 검증 보고서
 
-작성 기준: 2026-06-30 로컬 `hyunjin` 저장소 기준
+작성 기준: 2026-07-02 `prototype/main` 07dbe62 기반 3번 AI 영역
 
 ## 결론
 
-AS AI Chat 고도화 변경은 로컬 빌드, 프론트 테스트, Docker 재빌드, 실제 OpenAI 호출까지 통과했다.
+AS AI Chat과 Build Chat의 성능 판단은 날짜별 benchmark 보고서를 기준으로 한다.
 
-이번 변경의 핵심은 AS Chat 답변을 단순 문자열 생성에서 Structured Outputs 기반 JSON 생성으로 바꾼 것이다. 이로 인해 프론트와 관리자 화면이 기대하는 `causeCandidates`, `nextActions`, `escalation`, `ticketDraft` 구조를 더 안정적으로 받을 수 있다.
+이번 문서는 구조와 검증 기준을 요약한다. 실제 profile별 수치의 source of truth는 `docs/reports/as-chat-profile-benchmark-YYYYMMDD.md`와 `docs/reports/build-chat-profile-benchmark-YYYYMMDD.md`다.
 
 ## 검증 결과
 
@@ -108,25 +108,29 @@ OPENAI_REASONING_EFFORT=medium
 5. 응답 지연 측정
    - AS Chat POST 응답 시간을 DB 또는 로그에 남겨 모델별 실제 비용 대비 품질을 비교한다.
 
-## Profile Benchmark 결과
+## Profile Benchmark 기준
 
-2026-06-30에 `tools/benchmark_as_chat_profiles.py`로 AS Chat profile을 실제 OpenAI 호출 기준으로 비교했다. 이 결과는 `POST /api/ai/as-chat/stream`, compact prompt, profile별 출력 제한 적용 후 측정한 값이다. 최신 세부 결과는 `docs/reports/as-chat-profile-benchmark-20260630.md`를 기준으로 본다.
+최신 profile 비교는 아래 파일을 기준으로 본다.
 
-| profile | successRate | avgFirstEventMs | avgFinalLatencyMs | p95FinalLatencyMs | avgTokens | schemaValidRate | avgUnsupportedClaims |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `AS_CHAT_FAST` | 100.0% | 17 | 9287 | 12838 | 1833 | 100.0% | 0.0 |
-| `AS_CHAT_NANO_FAST` | 33.3% | 9 | 5643 | 6237 | 1914 | 33.3% | 0.0 |
-| `AS_CHAT_BALANCED` | 100.0% | 16 | 11835 | 13784 | 2199 | 100.0% | 0.0 |
-| `AS_CHAT_HIGH_QUALITY` | 83.3% | 17 | 16870 | 21170 | 3001 | 100.0% | 0.2 |
+- AS Chat: `docs/reports/as-chat-profile-benchmark-YYYYMMDD.md`
+- Build Chat: `docs/reports/build-chat-profile-benchmark-YYYYMMDD.md`
 
-판단:
+AS Chat benchmark는 `AS_CHAT_FAST`, `AS_CHAT_54_FAST`, `AS_CHAT_54_MINI_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`를 같은 케이스로 비교한다. 보고서에는 `variant`, `firstEventMs`, `ragReadyMs`, `toolsReadyMs`, `llmOnlyMs`, `finalLatencyMs`, token, schema valid, grounded evidence, unsupported claim을 남긴다.
 
-- `AS_CHAT_FAST`와 `AS_CHAT_BALANCED`는 구조화 응답과 자동 품질 기준을 통과했다.
-- `AS_CHAT_NANO_FAST`는 평균 5.6초대로 가장 빠르지만 schema valid 33.3%라 기본값 전환 조건을 만족하지 못했다. nano는 실험 후보로 유지한다.
-- `AS_CHAT_FAST`가 평균 10초 이하와 p95 20초 이하 조건을 만족하므로 현재 사용자 기본 profile로 둔다.
-- 첫 진행 이벤트는 모든 profile이 평균 1초 이내라, 사용자는 요청 직후 처리 진행 상태를 볼 수 있다.
-- `AS_CHAT_BALANCED`와 `AS_CHAT_HIGH_QUALITY`는 관리자 검증 또는 고위험 분석 후보로 유지한다.
-- 현재 PR 범위의 AS Chat profile 비교는 OpenAI profile만 대상으로 한다. 다른 provider 비교는 별도 합의 후 추가한다.
+Build Chat benchmark는 `BUILD_CHAT_FAST`, `BUILD_CHAT_54_FAST`, `BUILD_CHAT_54_MINI_FAST`를 같은 케이스로 비교한다. “5090 포함”, “300만원 이하 5090”, “GPU 더 싼 걸로”, “RAM 64GB” 같은 최근 피드백 케이스를 포함한다.
+
+기본값 전환 기준:
+
+- schema valid 100%
+- success rate 95% 이상
+- grounded evidence 90% 이상
+- unsupported claim 0
+- p95 20초 이하
+- 기존 기본 profile보다 평균 latency가 유의미하게 개선
+
+위 기준을 통과하기 전까지 사용자 기본값은 `AS_CHAT_FAST`, `BUILD_CHAT_FAST`를 유지한다. `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`는 실험 후보이며 기본값 변경은 benchmark 결과로 판단한다.
+
+RAG vector on/off 비교는 같은 profile과 같은 case를 두 번 실행하고 `tools/benchmark_as_chat_profiles.py --variant-label vector-on|vector-off`로 라벨을 분리한다.
 
 ## 책임 경계
 

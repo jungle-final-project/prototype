@@ -21,6 +21,16 @@ public class LlmGenerationService {
             String schemaName,
             LlmResponseResult result
     ) {
+        return recordSuccess(agentSessionId, profile, schemaName, result, Map.of());
+    }
+
+    public String recordSuccess(
+            Long agentSessionId,
+            AiProfileDefinition profile,
+            String schemaName,
+            LlmResponseResult result,
+            Map<String, Object> stageTimings
+    ) {
         return record(
                 agentSessionId,
                 profile,
@@ -32,7 +42,8 @@ public class LlmGenerationService {
                 result.outputTokens(),
                 result.totalTokens(),
                 null,
-                null
+                null,
+                stageTimings
         );
     }
 
@@ -45,6 +56,19 @@ public class LlmGenerationService {
             String errorCode,
             String errorMessage
     ) {
+        return recordFailure(agentSessionId, profile, schemaName, schemaValid, latencyMs, errorCode, errorMessage, Map.of());
+    }
+
+    public String recordFailure(
+            Long agentSessionId,
+            AiProfileDefinition profile,
+            String schemaName,
+            boolean schemaValid,
+            Long latencyMs,
+            String errorCode,
+            String errorMessage,
+            Map<String, Object> stageTimings
+    ) {
         return record(
                 agentSessionId,
                 profile,
@@ -56,8 +80,21 @@ public class LlmGenerationService {
                 null,
                 null,
                 errorCode,
-                truncate(errorMessage, 500)
+                truncate(errorMessage, 500),
+                stageTimings
         );
+    }
+
+    public void updateStageTimings(String generationId, Map<String, Object> stageTimings) {
+        if (generationId == null || generationId.isBlank() || stageTimings == null || stageTimings.isEmpty()) {
+            return;
+        }
+        jdbcTemplate.update("""
+                UPDATE llm_generations
+                SET request_metadata = coalesce(request_metadata, '{}'::jsonb)
+                    || jsonb_build_object('stageTimings', ?::jsonb)
+                WHERE public_id = ?::uuid
+                """, AgentTraceService.json(stageTimings), generationId);
     }
 
     public List<Map<String, Object>> generationsBySession(String sessionId) {
@@ -76,6 +113,7 @@ public class LlmGenerationService {
                                g.total_tokens,
                                g.schema_valid,
                                g.error_code,
+                               g.request_metadata,
                                g.created_at
                         FROM llm_generations g
                         JOIN agent_sessions s ON s.id = g.agent_session_id
@@ -98,7 +136,8 @@ public class LlmGenerationService {
             Integer outputTokens,
             Integer totalTokens,
             String errorCode,
-            String errorMessage
+            String errorMessage,
+            Map<String, Object> stageTimings
     ) {
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO llm_generations (
@@ -140,7 +179,12 @@ public class LlmGenerationService {
                 schemaValid,
                 errorCode,
                 errorMessage,
-                AgentTraceService.json(MockData.map(
+                AgentTraceService.json(requestMetadata(profile, stageTimings)));
+        return DbValueMapper.string(row, "id");
+    }
+
+    private static Map<String, Object> requestMetadata(AiProfileDefinition profile, Map<String, Object> stageTimings) {
+        java.util.LinkedHashMap<String, Object> metadata = new java.util.LinkedHashMap<>(MockData.map(
                         "ragTopK", profile.ragTopK(),
                         "promptVersion", profile.promptVersion(),
                         "maxOutputTokens", profile.maxOutputTokens(),
@@ -148,8 +192,11 @@ public class LlmGenerationService {
                         "includeEvidenceChunkText", profile.includeEvidenceChunkText(),
                         "includeToolResultPayload", profile.includeToolResultPayload(),
                         "useCompactPrompt", profile.useCompactPrompt()
-                )));
-        return DbValueMapper.string(row, "id");
+                ));
+        if (stageTimings != null && !stageTimings.isEmpty()) {
+            metadata.put("stageTimings", stageTimings);
+        }
+        return metadata;
     }
 
     private Map<String, Object> generationMap(Map<String, Object> row) {
@@ -168,6 +215,7 @@ public class LlmGenerationService {
                 "totalTokens", DbValueMapper.integer(row, "total_tokens"),
                 "schemaValid", row.get("schema_valid"),
                 "errorCode", DbValueMapper.string(row, "error_code"),
+                "requestMetadata", DbValueMapper.json(row, "request_metadata", Map.of()),
                 "createdAt", DbValueMapper.timestamp(row, "created_at")
         );
     }

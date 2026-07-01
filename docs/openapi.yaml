@@ -236,6 +236,14 @@ paths:
       description: LLM/RAG로 message의 intent와 구조화 조건을 분석하고, 실제 ACTIVE parts DB와 Tool 검증 결과로 AI 추천 조합을 반환한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 428을 반환한다.
       security:
         - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-BuildGraph-AI-Profile
+          required: false
+          description: 내부 live benchmark용 Build Chat profile override. 사용자 화면은 보내지 않는다.
+          schema:
+            type: string
+            enum: [BUILD_CHAT_FAST, BUILD_CHAT_54_FAST, BUILD_CHAT_54_MINI_FAST]
       requestBody:
         required: true
         content:
@@ -1551,7 +1559,7 @@ paths:
           description: 내부 benchmark용 profile override. 사용자 화면은 보내지 않는다.
           schema:
             type: string
-            enum: [AS_CHAT_FAST, AS_CHAT_NANO_FAST, AS_CHAT_BALANCED, AS_CHAT_HIGH_QUALITY]
+            enum: [AS_CHAT_FAST, AS_CHAT_54_FAST, AS_CHAT_54_MINI_FAST, AS_CHAT_NANO_FAST, AS_CHAT_BALANCED, AS_CHAT_HIGH_QUALITY]
       requestBody:
         required: true
         content:
@@ -1590,7 +1598,7 @@ paths:
           description: 내부 benchmark용 profile override. 사용자 화면은 보내지 않는다.
           schema:
             type: string
-            enum: [AS_CHAT_FAST, AS_CHAT_NANO_FAST, AS_CHAT_BALANCED, AS_CHAT_HIGH_QUALITY]
+            enum: [AS_CHAT_FAST, AS_CHAT_54_FAST, AS_CHAT_54_MINI_FAST, AS_CHAT_NANO_FAST, AS_CHAT_BALANCED, AS_CHAT_HIGH_QUALITY]
       requestBody:
         required: true
         content:
@@ -3592,7 +3600,7 @@ components:
           format: uuid
         aiProfile:
           type: string
-          enum: [AS_CHAT_FAST, AS_CHAT_NANO_FAST, AS_CHAT_BALANCED, AS_CHAT_HIGH_QUALITY]
+          enum: [AS_CHAT_FAST, AS_CHAT_54_FAST, AS_CHAT_54_MINI_FAST, AS_CHAT_NANO_FAST, AS_CHAT_BALANCED, AS_CHAT_HIGH_QUALITY]
         provider:
           type: string
         model:
@@ -3626,6 +3634,10 @@ components:
         errorCode:
           type: string
           nullable: true
+        requestMetadata:
+          type: object
+          additionalProperties: true
+          description: profile 설정과 stageTimings(firstEventMs, ragReadyMs, toolsReadyMs, llmRunningMs, llmOnlyLatencyMs, doneMs)을 담는다.
         createdAt:
           type: string
           format: date-time

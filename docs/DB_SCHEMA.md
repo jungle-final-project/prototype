@@ -1095,7 +1095,7 @@ Owner: 3번
 | `id` | `BIGINT` | no | - | 내부 PK |
 | `public_id` | `UUID` | no | - | 외부 ID |
 | `agent_session_id` | `BIGINT` | no | `agent_sessions.id` | LLM 호출이 속한 Agent 세션 |
-| `ai_profile` | `VARCHAR(60)` | no | - | `AS_CHAT_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY` |
+| `ai_profile` | `VARCHAR(60)` | no | - | `AS_CHAT_FAST`, `AS_CHAT_54_FAST`, `AS_CHAT_54_MINI_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY` |
 | `provider` | `VARCHAR(40)` | no | - | `openai` |
 | `model` | `VARCHAR(120)` | no | - | 실제 호출 모델 |
 | `reasoning_effort` | `VARCHAR(30)` | yes | - | reasoning effort |
@@ -1111,7 +1111,7 @@ Owner: 3번
 | `schema_valid` | `BOOLEAN` | no | - | 응답 schema 검증 성공 여부 |
 | `error_code` | `VARCHAR(80)` | yes | - | 실패 코드 |
 | `error_message` | `TEXT` | yes | - | 실패 요약 |
-| `request_metadata` | `JSONB` | no | - | promptVersion, ragTopK, maxOutputTokens, recentMessageLimit 등 비민감 메타데이터 |
+| `request_metadata` | `JSONB` | no | - | promptVersion, ragTopK, maxOutputTokens, recentMessageLimit, `stageTimings` 등 비민감 메타데이터 |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
 
 Index:
@@ -1127,6 +1127,7 @@ MVP 기준 결정값:
 - prompt 원문, API key, 원본 로그 전문은 저장하지 않는다.
 - AS Chat 사용자 요청 1회에는 기본적으로 profile 1개만 실행한다.
 - profile별 비교는 `tools/benchmark_as_chat_profiles.py`가 내부 검증 목적으로 순차 실행한다.
+- `request_metadata.stageTimings`에는 `firstEventMs`, `ragReadyMs`, `toolsReadyMs`, `llmRunningMs`, `llmOnlyLatencyMs`, `doneMs`를 저장한다. 별도 컬럼으로 분리하지 않는다.
 - 사용자 화면에는 `ai_profile`, token, latency를 표시하지 않는다. 관리자 상세와 보고서에서만 확인한다.
 
 ### admin_audit_logs
@@ -1618,6 +1619,7 @@ V30__auth_seed_password_hashes.sql
 V31__as_chat_sessions.sql
 V32__llm_generations.sql
 V34__llm_generations_nano_profile.sql
+V55__llm_generations_ai_profile_ladder.sql
 V35__correct_corsair_ram_offer_seed.sql
 ```
 

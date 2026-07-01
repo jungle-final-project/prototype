@@ -184,6 +184,8 @@ Google OAuth 정책:
 `POST /api/ai/build-chat` v1 정책:
 
 - LLM/RAG 필수 API다. `OPENAI_API_KEY`가 없으면 `428 PRECONDITION_REQUIRED`를 반환하고 deterministic fallback을 만들지 않는다.
+- 내부 live benchmark는 optional `X-BuildGraph-AI-Profile` header를 사용할 수 있다. 지원값은 `BUILD_CHAT_FAST`, `BUILD_CHAT_54_FAST`, `BUILD_CHAT_54_MINI_FAST`이며, 사용자 화면은 이 header를 보내지 않는다.
+- 기본 Build Chat profile은 `BUILD_CHAT_DEFAULT_PROFILE`이며 기본값은 `BUILD_CHAT_FAST`다. `gpt-5.4`, `gpt-5.4-mini` 후보는 실측 비교용이고 응답 shape를 바꾸지 않는다.
 - LLM은 intent, 예산, 용도, 해상도, 부품 카테고리, 하드 제약만 구조화한다. 부품 ID, 가격, FPS, 상품명은 서버가 내부 DB에서만 선택한다.
 - 전체 견적 요청은 `parts.status=ACTIVE`인 실제 부품만 사용해 AI build 후보 3개를 반환한다.
 - 부품 질문은 LLM이 판단한 카테고리에서 후보 3개를 실제 `parts.price`와 내부 자산 기준으로 반환하고, `currentBuilds`의 해당 카테고리를 서버가 다시 조회한 partId 가격으로 교체한다.
@@ -418,16 +420,17 @@ AS AI Chat 규칙:
 - `POST /api/ai/as-chat`은 LLM 필수 기능이다. `OPENAI_API_KEY`가 없으면 대화 저장 전에 `428 PRECONDITION_REQUIRED`를 반환한다.
 - 사용자 화면은 `POST /api/ai/as-chat/stream`을 우선 사용해 `STARTED`, `RAG_READY`, `TOOLS_READY`, `LLM_RUNNING` 진행 상태를 표시한다. 기존 `POST /api/ai/as-chat`은 호환과 fallback을 위해 유지한다.
 - AS Chat LLM 호출은 OpenAI Responses API structured output 기능을 사용하며, 단순 prompt 지시만으로 JSON을 생성하지 않는다.
-- 기본 사용자 profile은 체감 속도를 위해 `AS_CHAT_FAST`다. `AS_CHAT_NANO_FAST`는 더 빠른 기본값 후보로 벤치마크에서 먼저 검증한다.
+- 기본 사용자 profile은 체감 속도를 위해 `AS_CHAT_FAST`다. `AS_CHAT_54_FAST`, `AS_CHAT_54_MINI_FAST`, `AS_CHAT_NANO_FAST`는 더 빠르거나 품질이 나은 기본값 후보로 benchmark에서 검증한다.
 - AS Chat은 `AS_CHAT_DEFAULT_PROFILE` 기준 profile 1개만 실행한다. 내부 검증용 `X-BuildGraph-AI-Profile` header가 있으면 해당 profile 1개만 실행한다.
 - 일반 요청에서 전원 꺼짐, 재부팅, 과열 같은 고위험 문맥이면 서버가 balanced profile로 승격할 수 있다.
-- 지원 profile은 `AS_CHAT_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY`다.
+- 지원 profile은 `AS_CHAT_FAST`, `AS_CHAT_54_FAST`, `AS_CHAT_54_MINI_FAST`, `AS_CHAT_NANO_FAST`, `AS_CHAT_BALANCED`, `AS_CHAT_HIGH_QUALITY`다.
 - 각 profile은 model, reasoning effort, RAG topK, prompt version, max output tokens, 최근 대화 개수, RAG 원문/Tool payload 포함 여부를 가진다.
 - LLM 필수 필드는 `assistantMessage`, `causeCandidates`, `nextActions`, `escalation`, `ticketDraft`다.
 - `causeCandidates[]`, `nextActions[]`는 `evidenceIds`, `toolInvocationIds`를 포함하며, 현재 응답에서 제공된 RAG/Tool id만 참조한다.
 - LLM JSON 계약을 지키지 못하면 assistant message를 저장하지 않고 `502 UPSTREAM_ERROR`를 반환한다.
 - `as_chat_messages.agent_session_id`는 해당 assistant 답변 턴의 `agent_sessions` 추적을 위한 연결점이다.
 - LLM 호출 성능과 실패 기록은 `llm_generations`에 저장한다. prompt 원문과 API key는 저장하지 않는다.
+- AS Chat stage latency는 `llm_generations.request_metadata.stageTimings`에 저장한다. 주요 키는 `firstEventMs`, `ragReadyMs`, `toolsReadyMs`, `llmRunningMs`, `llmOnlyLatencyMs`, `doneMs`다.
 - 원본 RAG/Tool 근거는 `agentSessionId`로 `rag_evidence`, `tool_invocations`에서 조회한다.
 - AS 티켓의 `cause_candidates`, `upgrade_candidates` 저장은 4번 담당 API가 결정한다. 이 API는 챗봇 결과를 반환만 한다.
 

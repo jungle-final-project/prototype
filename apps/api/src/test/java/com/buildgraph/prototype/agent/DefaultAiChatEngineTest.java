@@ -38,7 +38,8 @@ class DefaultAiChatEngineTest {
                 jdbcTemplate,
                 agentTraceService,
                 agentRagRetrievalService,
-                openAiResponsesClient
+                openAiResponsesClient,
+                AiProfileConfigTest.config("AS_CHAT_FAST", "BUILD_CHAT_FAST")
         );
 
         doAnswer(invocation -> {
@@ -304,8 +305,16 @@ class DefaultAiChatEngineTest {
                         BigDecimal.valueOf(0.99),
                         Map.of("sourceEvidenceId", "evidence-5090", "purpose", "REQUIREMENT_PARSE")
                 )));
-        when(openAiResponsesClient.createStructuredJson(anyString(), anyString(), eq("buildgraph_ai_build_chat_plan"), any()))
-                .thenReturn("""
+        when(openAiResponsesClient.createStructuredJsonResult(
+                anyString(),
+                anyString(),
+                eq("buildgraph_ai_build_chat_plan"),
+                any(),
+                eq("gpt-5.5"),
+                eq("low"),
+                eq(900)
+        ))
+                .thenReturn(new LlmResponseResult("""
                         {
                           "intent": "FULL_BUILD_RECOMMEND",
                           "assistantMessage": "RTX 5090 조건을 유지해 추천 조합을 만들겠습니다.",
@@ -339,7 +348,7 @@ class DefaultAiChatEngineTest {
                             "reason": null
                           }
                         }
-                        """);
+                        """, LlmProvider.OPENAI, "gpt-5.5", "low", 1234, 100, 80, 180));
 
         AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
                 "5090 글카가 들어간 PC 추천해줘",

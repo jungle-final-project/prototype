@@ -43,7 +43,8 @@ class DefaultAiChatEngineEvaluationTest {
                 jdbcTemplate,
                 agentTraceService,
                 agentRagRetrievalService,
-                openAiResponsesClient
+                openAiResponsesClient,
+                AiProfileConfigTest.config("AS_CHAT_FAST", "BUILD_CHAT_FAST")
         );
 
         doAnswer(invocation -> {

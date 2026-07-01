@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,7 +45,7 @@ class BuildChatServiceTest {
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine);
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class))).thenReturn(buildResponse());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(buildResponse());
         when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of(Map.of(
                 "tool", "price",
                 "status", "PASS",
@@ -62,7 +64,7 @@ class BuildChatServiceTest {
         assertThat(build).containsEntry("totalPrice", 1_900_000);
         assertThat(build.get("items")).asList().hasSize(3);
         assertThat(build.get("toolResults")).asList().hasSize(1);
-        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class));
+        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
     }
 
     @Test
@@ -71,7 +73,7 @@ class BuildChatServiceTest {
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine);
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class))).thenReturn(partResponse());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(partResponse());
 
         Map<String, Object> response = service.chat(Map.of(
                 "message", "GPU 빼줘",
@@ -89,12 +91,26 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void buildChatPassesRequestedAiProfileToEngine() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine);
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST"))).thenReturn(buildResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+
+        service.chat(Map.of("message", "5090 글카 들어간 PC 추천해줘"), "BUILD_CHAT_54_MINI_FAST");
+
+        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST"));
+    }
+
+    @Test
     void buildChatReturnsDraftQuantityActionForRamCapacityRequest() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine);
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class))).thenReturn(partResponse());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(partResponse());
 
         Map<String, Object> response = service.chat(Map.of(
                 "message", "RAM 64GB로 바꿔줘",
@@ -116,7 +132,7 @@ class BuildChatServiceTest {
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine);
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class))).thenReturn(partResponse());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(partResponse());
 
         Map<String, Object> response = service.chat(Map.of("message", "GPU 추천해줘"));
 
@@ -131,7 +147,7 @@ class BuildChatServiceTest {
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine);
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class)))
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
                 .thenThrow(new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED, "OPENAI_API_KEY가 필요합니다."));
 
         assertThatThrownBy(() -> service.chat(Map.of("message", "200만원 PC 추천")))

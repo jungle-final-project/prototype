@@ -1,0 +1,72 @@
+[
+  {
+    "id": "qhd-gaming-budget",
+    "message": "200만원 QHD 게임용 PC 추천해줘",
+    "expectedAnswerType": "BUDGET",
+    "expectedMinBuilds": 3,
+    "expectedIntent": "FULL_BUILD_RECOMMEND"
+  },
+  {
+    "id": "rtx-5090-hard-constraint",
+    "message": "5090 글카 들어간 PC 추천해줘",
+    "expectedAnswerType": "BUDGET",
+    "expectedMinBuilds": 3,
+    "requiredGpuClass": "5090"
+  },
+  {
+    "id": "rtx-5090-under-budget",
+    "message": "300만원 이하 RTX 5090 PC로 맞춰줘",
+    "expectedAnswerType": "BUDGET",
+    "expectedMinBuilds": 3,
+    "requiredGpuClass": "5090",
+    "expectWarning": true
+  },
+  {
+    "id": "cheaper-gpu-draft-edit",
+    "message": "그래픽카드 너무 비싼데 더 싼 걸로 추천해줘",
+    "expectedAnswerType": "PART",
+    "expectedActionType": "REPLACE_DRAFT_PART",
+    "currentQuoteDraft": {
+      "id": "benchmark-draft",
+      "status": "ACTIVE",
+      "name": "벤치마크 견적",
+      "items": [
+        {
+          "id": "draft-gpu",
+          "partId": "00000000-0000-5000-8000-000000000501",
+          "category": "GPU",
+          "name": "RTX 5090 benchmark placeholder",
+          "manufacturer": "NVIDIA",
+          "quantity": 1,
+          "currentPrice": 3000000,
+          "lineTotal": 3000000,
+          "attributes": { "gpuClass": "RTX_5090" }
+        }
+      ]
+    }
+  },
+  {
+    "id": "ram-64gb-draft-edit",
+    "message": "RAM 64GB로 바꿔줘",
+    "expectedAnswerType": "PART",
+    "expectedActionType": "UPDATE_DRAFT_QUANTITY",
+    "currentQuoteDraft": {
+      "id": "benchmark-draft",
+      "status": "ACTIVE",
+      "name": "벤치마크 견적",
+      "items": [
+        {
+          "id": "draft-ram",
+          "partId": "00000000-0000-5000-8000-000000000301",
+          "category": "RAM",
+          "name": "DDR5 32GB Kit benchmark placeholder",
+          "manufacturer": "BuildGraph",
+          "quantity": 1,
+          "currentPrice": 120000,
+          "lineTotal": 120000,
+          "attributes": { "capacityGb": 32 }
+        }
+      ]
+    }
+  }
+]

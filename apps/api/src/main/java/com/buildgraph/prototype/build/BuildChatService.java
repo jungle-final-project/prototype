@@ -55,6 +55,10 @@ public class BuildChatService {
     }
 
     public Map<String, Object> chat(Map<String, Object> request) {
+        return chat(request, null);
+    }
+
+    public Map<String, Object> chat(Map<String, Object> request, String requestedAiProfile) {
         Map<String, Object> body = request == null ? Map.of() : request;
         String message = requireText(body.get("message"), "message는 필수입니다.");
         AiChatEngineResponse engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
@@ -65,7 +69,7 @@ public class BuildChatService {
                 text(body.get("draftId")),
                 body,
                 null
-        ));
+        ), requestedAiProfile);
         return responseMap(engineResponse, body);
     }
 
