@@ -103,7 +103,9 @@ function buildGraphResponse(mode = 'BUILD_OVERVIEW') {
       { id: 'part-GPU', type: 'PART', category: 'GPU', label: 'RTX 5070', status: 'PASS', detail: '250W · 길이 304mm' },
       { id: 'part-PSU', type: 'PART', category: 'PSU', label: '850W 파워', status: 'WARN', detail: '정격 850W' },
       { id: 'part-CASE', type: 'PART', category: 'CASE', label: '미들타워 케이스', status: 'PASS', detail: 'GPU 최대 320mm' },
-      { id: 'constraint-power', type: 'CONSTRAINT', category: 'PSU', label: '전력 여유', status: 'WARN', detail: '권장 출력 750W / 현재 파워 850W' }
+      { id: 'constraint-power', type: 'CONSTRAINT', category: 'PSU', label: '정격 850W', status: 'WARN', detail: '권장 출력 750W / 현재 파워 850W' },
+      { id: 'constraint-size', type: 'CONSTRAINT', category: 'CASE', label: '미들타워 케이스', status: 'PASS', detail: 'GPU 길이와 쿨러 높이가 케이스 제약 안에 있습니다.' },
+      { id: 'constraint-compatibility', type: 'CONSTRAINT', category: 'MOTHERBOARD', label: 'B650 Board', status: 'PASS', detail: '소켓과 메모리 규격을 확인합니다.' }
     ],
     edges: [
       {
@@ -552,6 +554,10 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(main.getByTestId('build-dependency-graph')).toContainText('간섭 주의');
   await expect(main.getByTestId('build-dependency-graph')).toContainText('250W · 길이 304mm');
   await expect(main.getByTestId('build-dependency-graph')).toContainText('정격 850W');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('B650 Board');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('미들타워 케이스');
+  await expect(main.getByTestId('build-dependency-graph')).not.toContainText('기본 호환성');
+  await expect(main.getByTestId('build-dependency-graph')).not.toContainText('장착 규격');
   await expect(main.getByTestId('build-dependency-graph')).not.toContainText('PASS');
   await expect(main.getByTestId('build-dependency-graph')).not.toContainText('WARN');
   await expect.poll(() => buildGraphRequests.length).toBeGreaterThan(0);

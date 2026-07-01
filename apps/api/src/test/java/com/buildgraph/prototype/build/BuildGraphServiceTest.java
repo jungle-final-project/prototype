@@ -95,6 +95,18 @@ class BuildGraphServiceTest {
             assertThat(node.get("id")).isEqualTo("part-COOLER");
             assertThat(node.get("detail")).isEqualTo("높이 155mm");
         });
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("constraint-compatibility");
+            assertThat(node.get("label")).isEqualTo("B650 Board");
+        });
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("constraint-power");
+            assertThat(node.get("label")).isEqualTo("정격 850W");
+        });
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("constraint-size");
+            assertThat(node.get("label")).isEqualTo("Compact Case");
+        });
         List<Map<String, Object>> edges = castList(graph.get("edges"));
         assertThat(edges).anySatisfy(edge -> {
             assertThat(edge.get("id")).isEqualTo("edge-gpu-psu-power");

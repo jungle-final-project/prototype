@@ -197,13 +197,13 @@ public class BuildGraphService {
 
     private void addConstraintNodes(List<Map<String, Object>> nodes, Map<String, ToolBuildPart> byCategory, Map<String, Map<String, Object>> toolByName, int budget, int total) {
         if (byCategory.containsKey("GPU") || byCategory.containsKey("PSU")) {
-            nodes.add(constraintNode("constraint-power", "PSU", "전력 여유", toolStatus(toolByName, "power"), powerSummary(toolByName)));
+            nodes.add(constraintNode("constraint-power", "PSU", powerConstraintLabel(byCategory), toolStatus(toolByName, "power"), powerSummary(toolByName)));
         }
         if (byCategory.containsKey("GPU") || byCategory.containsKey("CASE") || byCategory.containsKey("COOLER")) {
-            nodes.add(constraintNode("constraint-size", "CASE", "장착 규격", toolStatus(toolByName, "size"), toolSummary(toolByName, "size", "케이스와 부품 치수 제약을 확인합니다.")));
+            nodes.add(constraintNode("constraint-size", "CASE", partNameOrFallback(byCategory, "CASE", "장착 규격"), toolStatus(toolByName, "size"), toolSummary(toolByName, "size", "케이스와 부품 치수 제약을 확인합니다.")));
         }
         if (byCategory.containsKey("CPU") || byCategory.containsKey("MOTHERBOARD") || byCategory.containsKey("RAM") || byCategory.containsKey("COOLER")) {
-            nodes.add(constraintNode("constraint-compatibility", "MOTHERBOARD", "기본 호환성", toolStatus(toolByName, "compatibility"), toolSummary(toolByName, "compatibility", "소켓과 메모리 규격을 확인합니다.")));
+            nodes.add(constraintNode("constraint-compatibility", "MOTHERBOARD", partNameOrFallback(byCategory, "MOTHERBOARD", "기본 호환성"), toolStatus(toolByName, "compatibility"), toolSummary(toolByName, "compatibility", "소켓과 메모리 규격을 확인합니다.")));
         }
         if (!byCategory.isEmpty()) {
             nodes.add(constraintNode("constraint-budget", "PRICE", "예산", toolStatus(toolByName, "price"), budget > 0 ? formatWon(budget) : "예산 미지정"));
@@ -233,6 +233,20 @@ public class BuildGraphService {
                 "status", status,
                 "detail", detail
         );
+    }
+
+    private static String partNameOrFallback(Map<String, ToolBuildPart> byCategory, String category, String fallback) {
+        ToolBuildPart part = byCategory.get(category);
+        return part == null || part.name() == null || part.name().isBlank() ? fallback : part.name();
+    }
+
+    private static String powerConstraintLabel(Map<String, ToolBuildPart> byCategory) {
+        ToolBuildPart psu = byCategory.get("PSU");
+        if (psu == null) {
+            return "전력 조건";
+        }
+        Integer capacity = firstAvailableNumber(psu, "capacityW", "ratedCapacityW");
+        return capacity == null ? partNameOrFallback(byCategory, "PSU", "전력 조건") : "정격 " + capacity + "W";
     }
 
     private static void addEdgeIfPossible(
