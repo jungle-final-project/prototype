@@ -1,6 +1,9 @@
 package com.buildgraph.prototype.part;
 
 import com.buildgraph.prototype.user.CurrentUserService;
+
+import lombok.RequiredArgsConstructor;
+
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,23 +16,12 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api")
+@RequiredArgsConstructor
 public class PartController {
     private final PartQueryService partQueryService;
     private final ToolCheckService toolCheckService;
     private final NaverShoppingOfferService naverShoppingOfferService;
     private final CurrentUserService currentUserService;
-
-    public PartController(
-            PartQueryService partQueryService,
-            ToolCheckService toolCheckService,
-            NaverShoppingOfferService naverShoppingOfferService,
-            CurrentUserService currentUserService
-    ) {
-        this.partQueryService = partQueryService;
-        this.toolCheckService = toolCheckService;
-        this.naverShoppingOfferService = naverShoppingOfferService;
-        this.currentUserService = currentUserService;
-    }
 
     @GetMapping("/parts")
     Map<String, Object> parts(
