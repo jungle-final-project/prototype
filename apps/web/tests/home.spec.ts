@@ -95,6 +95,66 @@ function partDetail(partId: string) {
   };
 }
 
+function buildGraphResponse(mode = 'BUILD_OVERVIEW') {
+  return {
+    mode,
+    summary: 'RTX 5070 선택으로 PSU와 케이스 조건을 함께 확인해야 합니다.',
+    nodes: [
+      { id: 'part-GPU', type: 'PART', category: 'GPU', label: 'RTX 5070', status: 'PASS', detail: '그래픽카드' },
+      { id: 'part-PSU', type: 'PART', category: 'PSU', label: '750W 파워', status: 'WARN', detail: '권장 정격 출력 확인' },
+      { id: 'part-CASE', type: 'PART', category: 'CASE', label: '미들타워 케이스', status: 'PASS', detail: 'GPU 길이 수용' },
+      { id: 'constraint-power', type: 'CONSTRAINT', category: 'PSU', label: '전력 여유', status: 'WARN', detail: '750W 이상 권장' }
+    ],
+    edges: [
+      {
+        id: 'edge-gpu-psu-power',
+        source: 'part-GPU',
+        target: 'part-PSU',
+        type: 'AFFECTS',
+        status: 'WARN',
+        label: '전력 여유',
+        summary: 'GPU 권장 정격 파워를 기준으로 PSU 여유를 확인합니다.'
+      },
+      {
+        id: 'edge-gpu-case-length',
+        source: 'part-GPU',
+        target: 'part-CASE',
+        type: 'REQUIRES',
+        status: 'PASS',
+        label: '장착 길이',
+        summary: 'GPU 길이가 케이스 허용 길이 안에 있습니다.'
+      }
+    ],
+    focusNodeIds: ['part-GPU', 'part-PSU'],
+    insights: [
+      {
+        id: 'insight-power',
+        status: 'WARN',
+        title: '파워 여유 확인',
+        description: 'GPU 선택 때문에 750W 이상 파워를 먼저 확인해야 합니다.',
+        relatedNodeIds: ['part-GPU', 'part-PSU']
+      }
+    ],
+    toolResults: [
+      { tool: 'power', status: 'WARN', confidence: 'MEDIUM', summary: 'PSU 정격 출력 여유를 확인해야 합니다.' }
+    ]
+  };
+}
+
+async function mockBuildGraphApi(page: Page) {
+  const requests: unknown[] = [];
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    requests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildGraphResponse(body.focus?.mode ?? 'BUILD_OVERVIEW'))
+    });
+  });
+  return requests;
+}
+
 function budgetBuilds(budgetWon: number, appliedPartCategories: PartCategory[] = []) {
   return (['budget', 'balanced', 'performance'] as AiTier[]).map((tier) => build(tier, budgetWon, appliedPartCategories));
 }
@@ -450,6 +510,7 @@ test('selects a featured recommendation and applies every build part to self quo
 });
 
 test('chatbot uses build-chat API and updates latest home AI recommendations', async ({ page }) => {
+  const buildGraphRequests = await mockBuildGraphApi(page);
   const buildChatRequests = await mockAiBuildChatApi(page);
   await openHomeAsUser(page);
   const main = page.getByRole('main');
@@ -468,6 +529,12 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('AI 추천');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('호환성 통과');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('견적 관계도');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('파워 여유 확인');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('GPU 선택 때문에 750W 이상 파워');
+  await expect.poll(() => buildGraphRequests.length).toBeGreaterThan(0);
+  expect((buildGraphRequests[0] as { source?: string; items?: unknown[] }).source).toBe('AI_BUILD');
+  expect((buildGraphRequests[0] as { items?: unknown[] }).items?.length).toBe(8);
   await expect(page.getByTestId('ai-chat-messages')).toContainText('200만원 예산 기준');
 
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('300만원 PC 추천');
@@ -482,6 +549,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
 });
 
 test('chatbot part questions show backend parts and apply them to home AI builds', async ({ page }) => {
+  const buildGraphRequests = await mockBuildGraphApi(page);
   const buildChatRequests = await mockAiBuildChatApi(page);
   await openHomeAsUser(page);
   const main = page.getByRole('main');
@@ -500,6 +568,12 @@ test('chatbot part questions show backend parts and apply them to home AI builds
   await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('AI 추천');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('호환성 통과');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('견적 관계도');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('전력 여유');
+  await expect.poll(() => buildGraphRequests.length).toBeGreaterThan(1);
+  const latestGraphRequest = buildGraphRequests[buildGraphRequests.length - 1] as { focus?: { mode?: string; category?: string } };
+  expect(latestGraphRequest.focus?.mode).toBe('PART_IMPACT');
+  expect(latestGraphRequest.focus?.category).toBe('GPU');
 });
 
 test('chatbot only shows the current user scoped assistant session', async ({ page }) => {
@@ -596,6 +670,7 @@ test('chatbot maps build-chat 401 to login required instead of generic failure',
 });
 
 test('selects a home AI recommendation through batch API and shows applied cart in self quote', async ({ page }) => {
+  await mockBuildGraphApi(page);
   await mockAiBuildChatApi(page);
   const { applyRequests } = await mockSelfQuoteApis(page);
   await openHomeAsUser(page);

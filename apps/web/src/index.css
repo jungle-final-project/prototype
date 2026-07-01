@@ -40,3 +40,19 @@ background:
   background: white;
   box-shadow: 0 10px 26px rgba(17, 24, 39, 0.05);
 }
+
+.buildgraph-flow-node {
+  overflow: hidden;
+  font-family: inherit;
+}
+
+.buildgraph-flow-node--focus {
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14), 0 14px 32px rgba(15, 23, 42, 0.14) !important;
+}
+
+.react-flow__handle {
+  width: 7px;
+  height: 7px;
+  border: 2px solid #ffffff;
+  background: #2563eb;
+}

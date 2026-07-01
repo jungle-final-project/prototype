@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -23,6 +23,7 @@ import { partImageUrl } from '../../parts/partDisplay';
 import { applyAiBuildToQuoteDraft, getPart, listParts } from '../../parts/partsApi';
 import type { PartRow } from '../../parts/types';
 import { AiBuildAssistant } from '../components/AiBuildAssistant';
+import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   clearLegacyAiStorage,
@@ -31,8 +32,10 @@ import {
   saveSelectedAiBuild,
   type AiAssistantSession,
   type AiRecommendedBuild,
+  type BuildGraphFocus,
   type PartCategory
 } from '../aiSelection';
+import { resolveBuildGraph } from '../quoteApi';
 
 type QuickCategory = {
   label: string;
@@ -203,6 +206,31 @@ export function HomePage() {
       };
     })
   });
+  const activeAiBuild = activeGraphBuild(assistantSession);
+  const activeGraphFocus = assistantSession.latestGraphFocus ?? defaultGraphFocus(activeAiBuild);
+  const graphQuery = useQuery({
+    queryKey: [
+      'build-graph',
+      'home-ai-build',
+      activeAiBuild?.id,
+      activeGraphFocus.mode,
+      activeGraphFocus.category,
+      activeGraphFocus.tool,
+      activeAiBuild?.items.map((item) => item.partId).join(',')
+    ],
+    queryFn: () => resolveBuildGraph({
+      source: 'AI_BUILD',
+      view: 'FOCUSED',
+      items: activeAiBuild?.items.map((item) => ({
+        partId: item.partId,
+        category: item.category,
+        quantity: item.quantity
+      })),
+      budgetWon: activeAiBuild?.budgetWon,
+      focus: activeGraphFocus
+    }),
+    enabled: Boolean(activeAiBuild)
+  });
 
   useEffect(() => {
     const syncAssistantSession = () => {
@@ -355,6 +383,15 @@ export function HomePage() {
                       />
                     ))}
                   </div>
+                  <div className="mt-4">
+                    <BuildDependencyGraph
+                      graph={graphQuery.data}
+                      isLoading={graphQuery.isLoading}
+                      isError={graphQuery.isError}
+                      title="견적 관계도"
+                      subtitle="최신 AI 추천 조합에서 영향을 받는 부품과 제약을 먼저 보여줍니다."
+                    />
+                  </div>
                 </>
               ) : (
                 <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/60 p-6 text-center">
@@ -379,6 +416,21 @@ export function HomePage() {
       <AiBuildAssistant surface="home" />
     </Screen>
   );
+}
+
+function activeGraphBuild(session: AiAssistantSession) {
+  if (session.latestBuilds.length === 0) {
+    return null;
+  }
+  const storedActiveBuild = session.latestBuilds.find((build) => build.id === session.latestActiveBuildId);
+  return storedActiveBuild ?? session.latestBuilds.find((build) => build.tier === 'balanced') ?? session.latestBuilds[0];
+}
+
+function defaultGraphFocus(build: AiRecommendedBuild | null): BuildGraphFocus {
+  return {
+    mode: build ? 'BUILD_OVERVIEW' : 'ISSUE_PATH',
+    tool: 'price'
+  };
 }
 
 function AiRecommendationCard({

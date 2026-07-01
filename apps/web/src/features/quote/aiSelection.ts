@@ -9,6 +9,12 @@ export const AI_ASSISTANT_SESSION_CHANGED_EVENT = 'buildgraph.ai.assistantSessio
 export type AiBuildTier = 'budget' | 'balanced' | 'performance';
 export type PartCategory = 'CPU' | 'MOTHERBOARD' | 'RAM' | 'GPU' | 'STORAGE' | 'PSU' | 'CASE' | 'COOLER';
 export type AiChatAnswerType = 'BUDGET' | 'PART' | 'GENERAL';
+export type BuildGraphSource = 'AI_BUILD' | 'QUOTE_DRAFT_CURRENT';
+export type BuildGraphView = 'FOCUSED' | 'FULL';
+export type BuildGraphMode = 'BUILD_OVERVIEW' | 'PART_IMPACT' | 'ISSUE_PATH' | 'DRAFT_ACTION';
+export type BuildGraphNodeType = 'PART' | 'CONSTRAINT' | 'ISSUE' | 'ACTION';
+export type BuildGraphEdgeType = 'REQUIRES' | 'AFFECTS' | 'BLOCKS' | 'SUGGESTS';
+export type BuildGraphStatus = 'PASS' | 'WARN' | 'FAIL';
 export type AiDraftActionType =
   | 'ADD_PART_TO_DRAFT'
   | 'REPLACE_DRAFT_PART'
@@ -87,6 +93,60 @@ export type AiAppliedPartPreference = {
   options: AiBuildItem[];
 };
 
+export type BuildGraphFocus = {
+  mode: BuildGraphMode;
+  category?: PartCategory;
+  partId?: string;
+  tool?: 'compatibility' | 'power' | 'size' | 'performance' | 'price';
+};
+
+export type BuildGraphNode = {
+  id: string;
+  type: BuildGraphNodeType;
+  category?: PartCategory | 'PRICE' | string;
+  label: string;
+  status: BuildGraphStatus;
+  detail?: string;
+  partId?: string;
+  price?: number;
+};
+
+export type BuildGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  type: BuildGraphEdgeType;
+  status: BuildGraphStatus;
+  label: string;
+  summary: string;
+};
+
+export type BuildGraphInsight = {
+  id: string;
+  status: BuildGraphStatus;
+  title: string;
+  description: string;
+  relatedNodeIds: string[];
+};
+
+export type BuildGraphResolveRequest = {
+  source: BuildGraphSource;
+  view?: BuildGraphView;
+  items?: Array<Pick<AiBuildItem, 'partId' | 'category' | 'quantity'>>;
+  budgetWon?: number;
+  focus?: BuildGraphFocus;
+};
+
+export type BuildGraphResolveResponse = {
+  mode: BuildGraphMode;
+  summary: string;
+  nodes: BuildGraphNode[];
+  edges: BuildGraphEdge[];
+  focusNodeIds: string[];
+  insights: BuildGraphInsight[];
+  toolResults: AiToolResult[];
+};
+
 export type AiChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -104,6 +164,8 @@ export type AiAssistantSession = {
   messages: AiChatMessage[];
   latestBuilds: AiRecommendedBuild[];
   appliedPartPreferences: AiAppliedPartPreference[];
+  latestGraphFocus?: BuildGraphFocus;
+  latestActiveBuildId?: string;
   updatedAt: string;
 };
 
@@ -147,6 +209,8 @@ export function emptyAssistantSession(): AiAssistantSession {
     messages: [initialAssistantMessage],
     latestBuilds: [],
     appliedPartPreferences: [],
+    latestGraphFocus: undefined,
+    latestActiveBuildId: undefined,
     updatedAt: initialAssistantMessage.createdAt
   };
 }
@@ -240,6 +304,8 @@ export function readAssistantSession(ownerKey: string | null = getAiStorageOwner
       messages: normalizeAssistantMessages(parsed.messages.length > 0 ? parsed.messages : [initialAssistantMessage]),
       latestBuilds: normalizeAiBuilds(parsed.latestBuilds ?? []),
       appliedPartPreferences: parsed.appliedPartPreferences ?? [],
+      latestGraphFocus: parsed.latestGraphFocus,
+      latestActiveBuildId: parsed.latestActiveBuildId,
       updatedAt: parsed.updatedAt ?? initialAssistantMessage.createdAt
     };
   } catch {
@@ -292,7 +358,9 @@ function normalizeAssistantSession(session: AiAssistantSession): AiAssistantSess
   return {
     ...session,
     messages: normalizeAssistantMessages(session.messages),
-    latestBuilds: normalizeAiBuilds(session.latestBuilds)
+    latestBuilds: normalizeAiBuilds(session.latestBuilds),
+    latestGraphFocus: session.latestGraphFocus,
+    latestActiveBuildId: session.latestActiveBuildId
   };
 }
 

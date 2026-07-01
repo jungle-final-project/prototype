@@ -5,13 +5,17 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { CategorySidebar, DataTable, MetricCard, Panel, Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
 import { AiBuildAssistant } from '../../quote/components/AiBuildAssistant';
+import { BuildDependencyGraph } from '../../quote/components/BuildDependencyGraph';
 import {
   AI_SELECTED_BUILD_CHANGED_EVENT,
   PART_CATEGORY_LABELS,
   clearSelectedAiBuild,
   readSelectedAiBuild,
+  type BuildGraphFocus,
+  type PartCategory,
   type AiSelectedBuild
 } from '../../quote/aiSelection';
+import { resolveBuildGraph } from '../../quote/quoteApi';
 import { partImageUrl, partShortSpec } from '../partDisplay';
 import { deleteQuoteDraftItem, getCurrentQuoteDraft, getPartPriceHistory, listParts, patchQuoteDraftItem, putQuoteDraftItem } from '../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../types';
@@ -73,6 +77,16 @@ export function SelfQuotePage() {
   const draftItems = quoteDraft?.items ?? [];
   const selectedTotal = quoteDraft?.totalPrice ?? 0;
   const selectedPartIds = new Set(draftItems.map((part) => part.partId));
+  const graphFocus = quoteGraphFocus(category);
+  const graphQuery = useQuery({
+    queryKey: ['build-graph', 'quote-draft-current', quoteGraphSignature(quoteDraft?.items ?? []), graphFocus.mode, graphFocus.category],
+    queryFn: () => resolveBuildGraph({
+      source: 'QUOTE_DRAFT_CURRENT',
+      view: 'FOCUSED',
+      focus: graphFocus
+    }),
+    enabled: hasToken && !isQuoteDraftLoading
+  });
 
   useEffect(() => {
     const nextCategory = normalizeCategory(searchParams.get('category'));
@@ -223,6 +237,15 @@ export function SelfQuotePage() {
             }}
           />
         ) : null}
+
+        <BuildDependencyGraph
+          graph={graphQuery.data}
+          isLoading={graphQuery.isLoading}
+          isError={graphQuery.isError}
+          title="견적 관계도"
+          subtitle="장바구니에 담긴 부품이 서로 어떤 조건으로 연결되는지 확인합니다."
+          onCategorySelect={selectCategory}
+        />
 
         <div className="grid gap-5 xl:grid-cols-[216px_minmax(0,1fr)_320px]">
           <CategorySidebar items={selfQuoteCategories} activeValue={category} onSelect={selectCategory} />
@@ -501,6 +524,40 @@ function DraftQuantityStepper({ item, onChange, disabled }: { item: QuoteDraftIt
 
 function allowsQuantity(category: string) {
   return category === 'RAM' || category === 'STORAGE';
+}
+
+function quoteGraphFocus(category: string): BuildGraphFocus {
+  if (isPartCategory(category)) {
+    return {
+      mode: 'PART_IMPACT',
+      category,
+      tool: graphToolForCategory(category)
+    };
+  }
+  return {
+    mode: 'ISSUE_PATH'
+  };
+}
+
+function quoteGraphSignature(items: QuoteDraftItem[]) {
+  if (items.length === 0) {
+    return 'empty';
+  }
+  return items
+    .map((item) => `${item.partId}:${item.quantity}:${item.lineTotal}`)
+    .sort()
+    .join('|');
+}
+
+function isPartCategory(category: string): category is PartCategory {
+  return Object.keys(PART_CATEGORY_LABELS).includes(category);
+}
+
+function graphToolForCategory(category: PartCategory): BuildGraphFocus['tool'] {
+  if (category === 'GPU' || category === 'PSU') return 'power';
+  if (category === 'CASE' || category === 'COOLER') return 'size';
+  if (category === 'CPU' || category === 'MOTHERBOARD' || category === 'RAM') return 'compatibility';
+  return undefined;
 }
 
 function PartProductCell({ part }: { part: PartRow }) {

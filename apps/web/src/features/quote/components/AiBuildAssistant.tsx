@@ -20,7 +20,8 @@ import {
   type AiChatMessage,
   type AiDraftAction,
   type AiDraftActionStatus,
-  type AiRecommendedBuild
+  type AiRecommendedBuild,
+  type BuildGraphFocus
 } from '../aiSelection';
 import { buildChat } from '../quoteApi';
 
@@ -113,6 +114,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       const responseTime = new Date().toISOString();
       const responseBuilds = response.builds?.length ? normalizeAiBuilds(response.builds) : undefined;
       const latestBuilds = responseBuilds ?? baseSession.latestBuilds;
+      const latestGraphFocus = graphFocusFromResponse(response, nextPrompt);
       const appliedPartPreferences = response.partRecommendation
         ? replaceAppliedPartPreference(baseSession.appliedPartPreferences, {
             category: response.partRecommendation.category,
@@ -136,6 +138,8 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
         messages: [...optimisticSession.messages, assistantMessage],
         latestBuilds,
         appliedPartPreferences,
+        latestGraphFocus,
+        latestActiveBuildId: latestBuilds[1]?.id ?? latestBuilds[0]?.id,
         updatedAt: responseTime
       };
       setSession(nextSession);
@@ -369,6 +373,58 @@ function replaceAppliedPartPreference(preferences: AiAppliedPartPreference[], ne
     ...preferences.filter((preference) => preference.category !== nextPreference.category),
     nextPreference
   ];
+}
+
+function graphFocusFromResponse(
+  response: {
+    answerType: 'BUDGET' | 'PART' | 'GENERAL';
+    partRecommendation?: { category?: BuildGraphFocus['category'] } | null;
+    actions?: AiDraftAction[];
+    warnings?: string[];
+  },
+  prompt: string
+): BuildGraphFocus {
+  if (response.actions?.length) {
+    const actionCategory = response.actions.find((action) => typeof action.payload.category === 'string')?.payload.category;
+    return {
+      mode: 'DRAFT_ACTION',
+      category: actionCategory,
+      tool: toolFromPrompt(prompt)
+    };
+  }
+  if (response.answerType === 'PART' && response.partRecommendation?.category) {
+    return {
+      mode: 'PART_IMPACT',
+      category: response.partRecommendation.category,
+      tool: toolFromCategory(response.partRecommendation.category)
+    };
+  }
+  if (response.answerType === 'BUDGET') {
+    return {
+      mode: 'BUILD_OVERVIEW',
+      tool: toolFromPrompt(prompt)
+    };
+  }
+  return {
+    mode: response.warnings?.length || /왜|안돼|안 돼|호환|전력|파워|크기|장착/.test(prompt) ? 'ISSUE_PATH' : 'BUILD_OVERVIEW',
+    tool: toolFromPrompt(prompt)
+  };
+}
+
+function toolFromCategory(category?: BuildGraphFocus['category']): BuildGraphFocus['tool'] {
+  if (category === 'GPU' || category === 'PSU') return 'power';
+  if (category === 'CASE' || category === 'COOLER') return 'size';
+  if (category === 'CPU' || category === 'MOTHERBOARD' || category === 'RAM') return 'compatibility';
+  return undefined;
+}
+
+function toolFromPrompt(prompt: string): BuildGraphFocus['tool'] {
+  if (/파워|전력|w\b|W\b|psu/i.test(prompt)) return 'power';
+  if (/케이스|크기|장착|길이|쿨러|높이/.test(prompt)) return 'size';
+  if (/호환|소켓|메인보드|보드|ram|DDR/i.test(prompt)) return 'compatibility';
+  if (/성능|게임|QHD|FPS|개발|AI|CUDA/i.test(prompt)) return 'performance';
+  if (/가격|예산|만원|원/.test(prompt)) return 'price';
+  return undefined;
 }
 
 function ChatMessage({

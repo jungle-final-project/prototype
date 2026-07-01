@@ -48,6 +48,62 @@ const checkoutDraft = {
   itemCount: 2
 };
 
+function buildGraphResponse(mode = 'ISSUE_PATH') {
+  return {
+    mode,
+    summary: '현재 장바구니 기준으로 GPU, 파워, 케이스 영향 관계를 확인했습니다.',
+    nodes: [
+      { id: 'part-GPU', type: 'PART', category: 'GPU', label: 'RTX 5070', status: 'PASS', detail: '선택한 그래픽카드' },
+      { id: 'part-PSU', type: 'PART', category: 'PSU', label: '750W 파워', status: 'WARN', detail: '전력 여유 확인' },
+      { id: 'part-CASE', type: 'PART', category: 'CASE', label: 'Airflow Case', status: 'PASS', detail: '장착 길이 확인' }
+    ],
+    edges: [
+      {
+        id: 'edge-gpu-psu-power',
+        source: 'part-GPU',
+        target: 'part-PSU',
+        type: 'AFFECTS',
+        status: 'WARN',
+        label: '전력 여유',
+        summary: 'GPU 권장 정격 파워를 기준으로 PSU 여유를 확인합니다.'
+      },
+      {
+        id: 'edge-gpu-case-length',
+        source: 'part-GPU',
+        target: 'part-CASE',
+        type: 'REQUIRES',
+        status: 'PASS',
+        label: '장착 길이',
+        summary: 'GPU 길이가 케이스 허용 길이 안에 있습니다.'
+      }
+    ],
+    focusNodeIds: ['part-GPU', 'part-PSU'],
+    insights: [
+      {
+        id: 'insight-power',
+        status: 'WARN',
+        title: '파워 여유 확인',
+        description: '현재 GPU 선택은 PSU 용량과 케이스 장착 조건을 같이 제한합니다.',
+        relatedNodeIds: ['part-GPU', 'part-PSU']
+      }
+    ],
+    toolResults: [
+      { tool: 'power', status: 'WARN', confidence: 'MEDIUM', summary: 'PSU 정격 출력 여유를 확인해야 합니다.' }
+    ]
+  };
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildGraphResponse(body.focus?.mode ?? 'ISSUE_PATH'))
+    });
+  });
+});
+
 test('filters internal assets by sidebar category on self quote page', async ({ page }) => {
   const requestedCategories: string[] = [];
   const emptyDraft = {
@@ -212,6 +268,135 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
 
   await page.getByRole('button', { name: 'RTX 4070 SUPER 테스트 견적에서 제거' }).click();
   await expect(page.getByText('왼쪽 목록에서 부품을 담으면 이곳에 내 견적이 쌓입니다.')).toBeVisible();
+});
+
+test('updates quote dependency graph after self quote cart changes', async ({ page }) => {
+  const graphRequests: unknown[] = [];
+  const emptyDraft = {
+    id: 'draft-graph-test',
+    status: 'ACTIVE',
+    name: '셀프 견적',
+    items: [],
+    totalPrice: 0,
+    itemCount: 0
+  };
+  const gpuDraft = {
+    id: 'draft-graph-test',
+    status: 'ACTIVE',
+    name: '셀프 견적',
+    items: [
+      {
+        id: 'draft-item-graph-gpu',
+        partId: 'part-gpu-graph',
+        category: 'GPU',
+        name: 'RTX 5070 그래프 테스트',
+        manufacturer: 'NVIDIA',
+        quantity: 1,
+        unitPriceAtAdd: 890000,
+        currentPrice: 890000,
+        lineTotal: 890000,
+        attributes: {}
+      }
+    ],
+    totalPrice: 890000,
+    itemCount: 1
+  };
+  let draft: unknown = emptyDraft;
+
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    graphRequests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildGraphResponse(body.focus?.mode ?? 'ISSUE_PATH'))
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PUT') {
+      draft = gpuDraft;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(draft)
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes('/price-history')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          partId: 'part-gpu-graph',
+          partName: 'RTX 5070 그래프 테스트',
+          currentPrice: 890000,
+          days: 3650,
+          source: 'NAVER_SHOPPING_SEARCH',
+          items: [],
+          summary: {
+            sampleCount: 0,
+            currentPrice: 890000,
+            minPrice: 890000,
+            maxPrice: 890000,
+            firstPrice: 890000,
+            lastPrice: 890000,
+            changeAmount: 0,
+            changeRatePercent: 0
+          }
+        })
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'part-gpu-graph',
+            category: 'GPU',
+            name: 'RTX 5070 그래프 테스트',
+            manufacturer: 'NVIDIA',
+            price: 890000,
+            status: 'ACTIVE',
+            externalOffer: {
+              imageUrl: 'https://example.test/graph-gpu.png',
+              supplierName: '그래프테스트몰',
+              offerUrl: 'https://example.test/graph-gpu',
+              lowPrice: 890000,
+              source: 'NAVER_SHOPPING_SEARCH'
+            }
+          }
+        ],
+        page: 0,
+        size: 50,
+        total: 1
+      })
+    });
+  });
+
+  await page.goto('/self-quote?category=GPU');
+
+  await expect(page.getByTestId('build-dependency-graph')).toContainText('견적 관계도');
+  await expect(page.getByTestId('build-dependency-graph')).toContainText('파워 여유 확인');
+  const initialGraphCalls = graphRequests.length;
+
+  await page.getByRole('button', { name: 'RTX 5070 그래프 테스트 견적 담기' }).click();
+
+  await expect.poll(() => graphRequests.length).toBeGreaterThan(initialGraphCalls);
+  await expect(page.getByRole('link', { name: 'RTX 5070 그래프 테스트', exact: true })).toBeVisible();
+  await expect(page.getByTestId('build-dependency-graph')).toContainText('현재 GPU 선택은 PSU 용량과 케이스 장착 조건');
+  expect((graphRequests[graphRequests.length - 1] as { source?: string }).source).toBe('QUOTE_DRAFT_CURRENT');
 });
 
 test('opens checkout from self quote purchase CTA without using the build result route', async ({ page }) => {
