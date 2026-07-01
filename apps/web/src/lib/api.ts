@@ -38,7 +38,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401 && shouldAttemptTokenRefresh(path) && await refreshAuthTokens()) {
       const retryResponse = await fetchApi(path, init);
       if (retryResponse.ok) {
-        return retryResponse.json() as Promise<T>;
+        return parseSuccessResponse<T>(retryResponse);
       }
       const retryErrorBody = await readErrorResponse(retryResponse);
       throw new ApiError(retryResponse.status, path, retryErrorBody.code, retryErrorBody.message);
@@ -48,7 +48,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(response.status, path, errorBody.code, errorBody.message);
   }
 
-  return response.json() as Promise<T>;
+  return parseSuccessResponse<T>(response);
 }
 
 async function fetchApi(path: string, init?: RequestInit) {
@@ -78,7 +78,7 @@ function shouldAttemptTokenRefresh(path: string) {
   ].includes(path) && !path.startsWith('/api/auth/google/');
 }
 
-async function refreshAuthTokens() {
+export async function refreshAuthTokens() {
   refreshPromise ??= requestTokenRefresh().finally(() => {
     refreshPromise = null;
   });
@@ -115,6 +115,17 @@ async function requestTokenRefresh() {
   } catch {
     return false;
   }
+}
+
+async function parseSuccessResponse<T>(response: Response): Promise<T> {
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 async function readErrorResponse(response: Response) {
@@ -170,6 +181,7 @@ export function getCachedAuthUser() {
     const raw = localStorage.getItem(AUTH_USER_KEY);
     return raw ? JSON.parse(raw) as unknown : null;
   } catch {
+    localStorage.removeItem(AUTH_USER_KEY);
     return null;
   }
 }

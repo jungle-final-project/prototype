@@ -1,17 +1,23 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Bot, CheckCircle2, Cpu, PackageCheck, Send, ShoppingCart, Sparkles, X, Zap } from 'lucide-react';
-import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
+import { getToken } from '../../../lib/api';
+import { applyAiBuildToQuoteDraft, deleteQuoteDraftItem, getCurrentQuoteDraft, patchQuoteDraftItem, putQuoteDraftItem } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   PART_CATEGORY_LABELS,
   createAiMessageId,
+  normalizeAiBuilds,
+  normalizeAiRecommendedBuild,
   readAssistantSession,
   saveAssistantSession,
   saveSelectedAiBuild,
   type AiAppliedPartPreference,
   type AiBuildItem,
   type AiChatMessage,
+  type AiDraftAction,
+  type AiDraftActionStatus,
   type AiRecommendedBuild
 } from '../aiSelection';
 import { buildChat } from '../quoteApi';
@@ -22,6 +28,7 @@ type AiBuildAssistantProps = {
 
 export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
@@ -31,6 +38,13 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const [applyError, setApplyError] = useState<string | null>(null);
   const [failedBuild, setFailedBuild] = useState<AiRecommendedBuild | null>(null);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
+  const [applyingActionId, setApplyingActionId] = useState<string | null>(null);
+  const hasToken = Boolean(getToken());
+  const quoteDraftQuery = useQuery({
+    queryKey: ['quote-draft', 'current'],
+    queryFn: getCurrentQuoteDraft,
+    enabled: surface === 'self-quote' && hasToken
+  });
 
   useEffect(() => {
     const syncSession = () => setSession(readAssistantSession());
@@ -75,10 +89,12 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       const response = await buildChat({
         message: nextPrompt,
         currentBuilds: session.latestBuilds,
-        appliedPartPreferences: session.appliedPartPreferences
+        appliedPartPreferences: session.appliedPartPreferences,
+        currentQuoteDraft: surface === 'self-quote' ? quoteDraftQuery.data : undefined
       });
       const responseTime = new Date().toISOString();
-      const latestBuilds = response.builds?.length ? response.builds : session.latestBuilds;
+      const responseBuilds = response.builds?.length ? normalizeAiBuilds(response.builds) : undefined;
+      const latestBuilds = responseBuilds ?? session.latestBuilds;
       const appliedPartPreferences = response.partRecommendation
         ? replaceAppliedPartPreference(session.appliedPartPreferences, {
             category: response.partRecommendation.category,
@@ -93,8 +109,9 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
         text: response.message,
         createdAt: responseTime,
         kind: messageKind(response.answerType),
-        builds: response.builds?.length ? response.builds : undefined,
+        builds: responseBuilds,
         partRecommendation: response.partRecommendation ?? undefined,
+        actions: response.actions?.length ? response.actions.map((action) => ({ ...action, status: 'PENDING' })) : undefined,
         warnings: response.warnings ?? []
       };
       const nextSession = {
@@ -114,15 +131,16 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
 
   async function selectBuild(build: AiRecommendedBuild) {
     if (applyingBuildId) return;
-    saveSelectedAiBuild(build);
+    const normalizedBuild = normalizeAiRecommendedBuild(build);
+    saveSelectedAiBuild(normalizedBuild);
     setApplyError(null);
     setFailedBuild(null);
-    setApplyingBuildId(build.id);
+    setApplyingBuildId(normalizedBuild.id);
     try {
       await applyAiBuildToQuoteDraft({
-        buildId: build.id,
+        buildId: normalizedBuild.id,
         conflictPolicy: 'REPLACE',
-        items: build.items.map((item) => ({
+        items: normalizedBuild.items.map((item) => ({
           partId: item.partId,
           category: item.category,
           quantity: item.quantity
@@ -131,11 +149,61 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       setOpen(false);
       navigate('/self-quote');
     } catch {
-      setFailedBuild(build);
+      setFailedBuild(normalizedBuild);
       setApplyError('AI 조합을 셀프 견적 장바구니에 적용하지 못했습니다.');
     } finally {
       setApplyingBuildId(null);
     }
+  }
+
+  async function applyDraftAction(action: AiDraftAction, messageId: string) {
+    if (applyingActionId || action.status === 'APPLIED') return;
+    setApplyError(null);
+    setApplyingActionId(action.id);
+    markDraftActionStatus(messageId, action.id, 'APPLYING');
+    try {
+      const partId = typeof action.payload.partId === 'string' ? action.payload.partId : null;
+      const quantity = typeof action.payload.quantity === 'number' ? action.payload.quantity : 1;
+      if (action.type === 'ASK_FOLLOW_UP') {
+        markDraftActionStatus(messageId, action.id, 'APPLIED');
+        return;
+      }
+      if (!partId) {
+        throw new Error('partId is required for draft action');
+      }
+      if (action.type === 'REMOVE_DRAFT_PART') {
+        await deleteQuoteDraftItem(partId);
+      } else if (action.type === 'UPDATE_DRAFT_QUANTITY') {
+        await patchQuoteDraftItem(partId, quantity);
+      } else {
+        await putQuoteDraftItem(partId, quantity);
+      }
+      await queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+      markDraftActionStatus(messageId, action.id, 'APPLIED');
+    } catch {
+      markDraftActionStatus(messageId, action.id, 'FAILED');
+      setApplyError('AI 변경안을 견적 장바구니에 적용하지 못했습니다.');
+    } finally {
+      setApplyingActionId(null);
+    }
+  }
+
+  function markDraftActionStatus(messageId: string, actionId: string, status: AiDraftActionStatus) {
+    setSession((current) => {
+      const nextSession = {
+        ...current,
+        messages: current.messages.map((message) => {
+          if (message.id !== messageId || !message.actions) return message;
+          return {
+            ...message,
+            actions: message.actions.map((action) => action.id === actionId ? { ...action, status } : action)
+          };
+        }),
+        updatedAt: new Date().toISOString()
+      };
+      saveAssistantSession(nextSession);
+      return nextSession;
+    });
   }
 
   if (!open) {
@@ -200,7 +268,13 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
 
         <div data-testid="ai-chat-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
           {session.messages.map((message) => (
-            <ChatMessage key={message.id} message={message} onSelectBuild={selectBuild} />
+            <ChatMessage
+              key={message.id}
+              message={message}
+              onSelectBuild={selectBuild}
+              onApplyDraftAction={applyDraftAction}
+              applyingActionId={applyingActionId}
+            />
           ))}
           {isSending ? (
             <div className="rounded-xl border border-commerce-line bg-white px-3 py-2 text-sm font-bold text-slate-500">
@@ -274,10 +348,14 @@ function replaceAppliedPartPreference(preferences: AiAppliedPartPreference[], ne
 
 function ChatMessage({
   message,
-  onSelectBuild
+  onSelectBuild,
+  onApplyDraftAction,
+  applyingActionId
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
+  onApplyDraftAction: (action: AiDraftAction, messageId: string) => void;
+  applyingActionId: string | null;
 }) {
   const isUser = message.role === 'user';
 
@@ -304,6 +382,15 @@ function ChatMessage({
 
         {message.partRecommendation ? (
           <PartRecommendationCards options={message.partRecommendation.options} label={message.partRecommendation.label} />
+        ) : null}
+
+        {message.actions?.length ? (
+          <DraftActionCards
+            messageId={message.id}
+            actions={message.actions}
+            applyingActionId={applyingActionId}
+            onApplyDraftAction={onApplyDraftAction}
+          />
         ) : null}
       </div>
     </div>
@@ -382,6 +469,63 @@ function PartRecommendationCards({ options, label }: { options: AiBuildItem[]; l
         <Cpu size={13} />
         최신 AI 추천상품 3개에 바로 반영됨
         <Zap size={13} />
+      </div>
+    </div>
+  );
+}
+
+function DraftActionCards({
+  messageId,
+  actions,
+  applyingActionId,
+  onApplyDraftAction
+}: {
+  messageId: string;
+  actions: AiDraftAction[];
+  applyingActionId: string | null;
+  onApplyDraftAction: (action: AiDraftAction, messageId: string) => void;
+}) {
+  return (
+    <div className="mt-2 rounded-lg border border-emerald-100 bg-emerald-50 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-black text-emerald-700">
+        <ShoppingCart size={14} />
+        견적 장바구니 변경안
+      </div>
+      <div className="grid gap-2">
+        {actions.map((action) => {
+          const applied = action.status === 'APPLIED';
+          const failed = action.status === 'FAILED';
+          const applying = action.status === 'APPLYING' || applyingActionId === action.id;
+          const informational = action.type === 'ASK_FOLLOW_UP';
+          return (
+            <div key={action.id} className="rounded-lg border border-commerce-line bg-white p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-black text-commerce-ink">{action.label}</div>
+                  {action.description ? (
+                    <p className="mt-1 break-keep text-xs leading-5 text-slate-500">{action.description}</p>
+                  ) : null}
+                  {failed ? (
+                    <p className="mt-1 text-xs font-black text-red-600">적용 실패. 다시 시도해 주세요.</p>
+                  ) : null}
+                  {applied ? (
+                    <p className="mt-1 text-xs font-black text-emerald-700">견적 장바구니에 적용됨</p>
+                  ) : null}
+                </div>
+                {!informational ? (
+                  <button
+                    type="button"
+                    disabled={applying || applied || Boolean(applyingActionId)}
+                    onClick={() => onApplyDraftAction(action, messageId)}
+                    className="min-h-9 shrink-0 rounded-md bg-commerce-ink px-3 text-xs font-black text-white transition hover:bg-slate-700 disabled:bg-slate-300"
+                  >
+                    {applied ? '완료' : applying ? '적용 중' : '적용'}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

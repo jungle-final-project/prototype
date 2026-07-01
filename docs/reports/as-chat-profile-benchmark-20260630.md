@@ -1,45 +1,45 @@
 # AS Chat AI Profile Benchmark
 
-- generatedAt: 2026-06-30T06:29:16
+- generatedAt: 2026-06-30T21:42:43
 - totalCases: 24
 
 ## Summary
 
 | profile | provider | successRate | avgFirstEventMs | avgFinalLatencyMs | p95FinalLatencyMs | avgInputTokens | avgOutputTokens | avgTokens | schemaValidRate | avgGroundedEvidenceRate | avgUnsupportedClaims |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| AS_CHAT_FAST | openai | 100.0% | 17 | 9287 | 12838 | 1248 | 585 | 1833 | 100.0% | 100.0% | 0.0 |
-| AS_CHAT_NANO_FAST | openai | 33.3% | 9 | 5643 | 6237 | 1239 | 676 | 1914 | 33.3% | 33.3% | 0.0 |
-| AS_CHAT_BALANCED | openai | 100.0% | 16 | 11835 | 13784 | 1363 | 836 | 2199 | 100.0% | 100.0% | 0.0 |
-| AS_CHAT_HIGH_QUALITY | openai | 83.3% | 17 | 16870 | 21170 | 1874 | 1127 | 3001 | 100.0% | 100.0% | 0.2 |
+| AS_CHAT_FAST | openai | 83.3% | 20 | 9664 | 11377 | 1242 | 601 | 1843 | 100.0% | 100.0% | 0.2 |
+| AS_CHAT_NANO_FAST | openai | 33.3% | 9 | 6469 | 8041 | 1241 | 668 | 1909 | 33.3% | 33.3% | 0.0 |
+| AS_CHAT_BALANCED | openai | 100.0% | 15 | 10998 | 12936 | 1350 | 833 | 2183 | 100.0% | 100.0% | 0.0 |
+| AS_CHAT_HIGH_QUALITY | openai | 83.3% | 6 | 15168 | 17212 | 1874 | 1144 | 3018 | 100.0% | 100.0% | 0.2 |
 
 ## Cases
 
 | profile | provider | case | risk | ok | firstEventMs | finalLatencyMs | model | inTok | outTok | tokens | evidence | tools | actions | keywords | grounded | unsupported | failureType | error |
 |---|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
-| AS_CHAT_FAST | openai | gpu-thermal-frame-drop | medium | yes | 28 | 11485 | gpt-5.5 | 1252 | 538 | 1790 | 2 | 3 | 2 | 2/3 | 100% | 0 | - |  |
-| AS_CHAT_FAST | openai | driver-crash-event-log | medium | yes | 13 | 8333 | gpt-5.5 | 1265 | 630 | 1895 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_FAST | openai | memory-pressure | low | yes | 27 | 12838 | gpt-5.5 | 1239 | 585 | 1824 | 2 | 3 | 2 | 2/3 | 100% | 0 | - |  |
-| AS_CHAT_FAST | openai | storage-bottleneck | low | yes | 4 | 7434 | gpt-5.5 | 1231 | 538 | 1769 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_FAST | openai | power-instability | high | yes | 5 | 7212 | gpt-5.5 | 1250 | 587 | 1837 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_FAST | openai | mixed-thermal-driver | high | yes | 25 | 8420 | gpt-5.5 | 1251 | 634 | 1885 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_NANO_FAST | openai | gpu-thermal-frame-drop | medium | no | - | 5803 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."', 'type': 'ResponseStatusException'} |
-| AS_CHAT_NANO_FAST | openai | driver-crash-event-log | medium | yes | 14 | 5150 | gpt-5.4-nano | 1243 | 694 | 1937 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_NANO_FAST | openai | memory-pressure | low | no | - | 5601 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."', 'type': 'ResponseStatusException'} |
-| AS_CHAT_NANO_FAST | openai | storage-bottleneck | low | yes | 4 | 5018 | gpt-5.4-nano | 1235 | 657 | 1892 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_NANO_FAST | openai | power-instability | high | no | - | 6048 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."', 'type': 'ResponseStatusException'} |
-| AS_CHAT_NANO_FAST | openai | mixed-thermal-driver | high | no | - | 6237 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."', 'type': 'ResponseStatusException'} |
-| AS_CHAT_BALANCED | openai | gpu-thermal-frame-drop | medium | yes | 4 | 11708 | gpt-5.5 | 1351 | 821 | 2172 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_BALANCED | openai | driver-crash-event-log | medium | yes | 4 | 11795 | gpt-5.5 | 1382 | 878 | 2260 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_BALANCED | openai | memory-pressure | low | yes | 26 | 10036 | gpt-5.5 | 1387 | 765 | 2152 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_BALANCED | openai | storage-bottleneck | low | yes | 24 | 11182 | gpt-5.5 | 1366 | 728 | 2094 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_BALANCED | openai | power-instability | high | yes | 25 | 13784 | gpt-5.5 | 1350 | 934 | 2284 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_BALANCED | openai | mixed-thermal-driver | high | yes | 16 | 12505 | gpt-5.5 | 1340 | 893 | 2233 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_HIGH_QUALITY | openai | gpu-thermal-frame-drop | medium | yes | 13 | 14198 | gpt-5.5 | 1857 | 1091 | 2948 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_HIGH_QUALITY | openai | driver-crash-event-log | medium | yes | 24 | 21170 | gpt-5.5 | 1874 | 1346 | 3220 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_HIGH_QUALITY | openai | memory-pressure | low | no | 3 | 18715 | gpt-5.5 | 1905 | 992 | 2897 | 5 | 3 | 3 | 3/3 | 100% | 1 | - |  |
-| AS_CHAT_HIGH_QUALITY | openai | storage-bottleneck | low | yes | 15 | 11898 | gpt-5.5 | 1854 | 990 | 2844 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_HIGH_QUALITY | openai | power-instability | high | yes | 25 | 21168 | gpt-5.5 | 1889 | 1150 | 3039 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
-| AS_CHAT_HIGH_QUALITY | openai | mixed-thermal-driver | high | yes | 20 | 14070 | gpt-5.5 | 1864 | 1192 | 3056 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_FAST | openai | gpu-thermal-frame-drop | medium | yes | 18 | 9946 | gpt-5.5 | 1248 | 597 | 1845 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_FAST | openai | driver-crash-event-log | medium | yes | 29 | 11377 | gpt-5.5 | 1252 | 619 | 1871 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_FAST | openai | memory-pressure | low | no | 26 | 10591 | gpt-5.5 | 1249 | 609 | 1858 | 2 | 3 | 2 | 3/3 | 100% | 1 | - |  |
+| AS_CHAT_FAST | openai | storage-bottleneck | low | yes | 21 | 7839 | gpt-5.5 | 1243 | 545 | 1788 | 2 | 3 | 2 | 2/3 | 100% | 0 | - |  |
+| AS_CHAT_FAST | openai | power-instability | high | yes | 4 | 8433 | gpt-5.5 | 1237 | 591 | 1828 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_FAST | openai | mixed-thermal-driver | high | yes | 20 | 9797 | gpt-5.5 | 1224 | 643 | 1867 | 2 | 3 | 2 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_NANO_FAST | openai | gpu-thermal-frame-drop | medium | yes | 14 | 5935 | gpt-5.4-nano | 1256 | 680 | 1936 | 2 | 3 | 2 | 2/3 | 100% | 0 | - |  |
+| AS_CHAT_NANO_FAST | openai | driver-crash-event-log | medium | no | - | 5454 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'type': 'ResponseStatusException', 'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."'} |
+| AS_CHAT_NANO_FAST | openai | memory-pressure | low | no | - | 6250 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'type': 'ResponseStatusException', 'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."'} |
+| AS_CHAT_NANO_FAST | openai | storage-bottleneck | low | yes | 4 | 6268 | gpt-5.4-nano | 1226 | 656 | 1882 | 2 | 3 | 2 | 2/3 | 100% | 0 | - |  |
+| AS_CHAT_NANO_FAST | openai | power-instability | high | no | - | 8041 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'type': 'ResponseStatusException', 'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."'} |
+| AS_CHAT_NANO_FAST | openai | mixed-thermal-driver | high | no | - | 6864 | - | - | - | - | 0 | 0 | 0 | 0/3 | 0% | 0 | schema | POST /api/ai/as-chat/stream failed: {'type': 'ResponseStatusException', 'message': '502 BAD_GATEWAY "LLM이 JSON 계약을 지키지 않았습니다."'} |
+| AS_CHAT_BALANCED | openai | gpu-thermal-frame-drop | medium | yes | 3 | 12518 | gpt-5.5 | 1342 | 989 | 2331 | 3 | 3 | 3 | 2/3 | 100% | 0 | - |  |
+| AS_CHAT_BALANCED | openai | driver-crash-event-log | medium | yes | 21 | 9846 | gpt-5.5 | 1335 | 780 | 2115 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_BALANCED | openai | memory-pressure | low | yes | 4 | 9759 | gpt-5.5 | 1355 | 763 | 2118 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_BALANCED | openai | storage-bottleneck | low | yes | 14 | 8407 | gpt-5.5 | 1358 | 700 | 2058 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_BALANCED | openai | power-instability | high | yes | 28 | 12525 | gpt-5.5 | 1353 | 834 | 2187 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_BALANCED | openai | mixed-thermal-driver | high | yes | 21 | 12936 | gpt-5.5 | 1355 | 934 | 2289 | 3 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_HIGH_QUALITY | openai | gpu-thermal-frame-drop | medium | yes | 3 | 17212 | gpt-5.5 | 1859 | 1345 | 3204 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_HIGH_QUALITY | openai | driver-crash-event-log | medium | yes | 3 | 17208 | gpt-5.5 | 1869 | 1207 | 3076 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_HIGH_QUALITY | openai | memory-pressure | low | no | 23 | 14116 | gpt-5.5 | 1899 | 1030 | 2929 | 5 | 3 | 3 | 3/3 | 100% | 1 | - |  |
+| AS_CHAT_HIGH_QUALITY | openai | storage-bottleneck | low | yes | 3 | 11975 | gpt-5.5 | 1877 | 910 | 2787 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_HIGH_QUALITY | openai | power-instability | high | yes | 3 | 16630 | gpt-5.5 | 1893 | 1230 | 3123 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
+| AS_CHAT_HIGH_QUALITY | openai | mixed-thermal-driver | high | yes | 3 | 13870 | gpt-5.5 | 1847 | 1145 | 2992 | 5 | 3 | 3 | 3/3 | 100% | 0 | - |  |
 
 ## Selection Notes
 

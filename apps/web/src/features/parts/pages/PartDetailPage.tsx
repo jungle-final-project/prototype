@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { getToken } from '../../../lib/api';
-import { fullSpecLine, partImageUrl, partShortSpec, specRows } from '../partDisplay';
-import { getPart, putQuoteDraftItem } from '../partsApi';
+import { partImageUrl, partShortSpec, specRows } from '../partDisplay';
+import { getPart, getPartPriceHistory, putQuoteDraftItem } from '../partsApi';
+import type { PartPriceHistory, PartPriceHistoryPoint } from '../types';
 
 export function PartDetailPage() {
   const { partId = '' } = useParams();
@@ -17,6 +18,11 @@ export function PartDetailPage() {
   const { data: part, isLoading, isError } = useQuery({
     queryKey: ['parts', partId],
     queryFn: () => getPart(partId),
+    enabled: Boolean(partId)
+  });
+  const { data: priceHistory, isLoading: isPriceHistoryLoading, isError: isPriceHistoryError } = useQuery({
+    queryKey: ['parts', partId, 'price-history', 'NAVER_SHOPPING_SEARCH'],
+    queryFn: () => getPartPriceHistory(partId, { days: 3650, source: 'NAVER_SHOPPING_SEARCH', limit: 120 }),
     enabled: Boolean(partId)
   });
   const maxQuantity = part ? maxDraftQuantity(part.category) : 9;
@@ -134,12 +140,12 @@ export function PartDetailPage() {
         </section>
       </div>
 
-      <div className="mt-6 grid grid-cols-[1fr_420px] gap-6">
+      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(280px,420px)_minmax(0,1fr)]">
         <Panel title="주요 스펙" subtitle="내부 자산 attributes 기준">
           {rows.length === 0 ? (
             <div className="rounded border border-dashed border-slate-300 p-5 text-sm text-slate-500">표시할 세부 스펙이 없습니다.</div>
           ) : (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
               {rows.map((row) => (
                 <div key={row.label} className="rounded border border-slate-200 bg-slate-50 p-3">
                   <div className="text-xs font-bold text-slate-500">{row.label}</div>
@@ -150,27 +156,16 @@ export function PartDetailPage() {
           )}
         </Panel>
 
-        <Panel title="가격 정보">
-          <div className="space-y-3 text-sm">
-            <div className="flex justify-between">
-              <span className="text-slate-500">저장 현재가</span>
-              <span className="font-bold text-slate-900">{part.price.toLocaleString()}원</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">공급처 가격</span>
-              <span className="font-bold text-slate-900">{part.externalOffer?.lowPrice ? `${part.externalOffer.lowPrice.toLocaleString()}원` : '-'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">공급처</span>
-              <span className="font-bold text-slate-900">{part.externalOffer?.supplierName ?? '-'}</span>
-            </div>
-          </div>
+        <Panel title="가격 변동 추이" subtitle="저장된 네이버 쇼핑 가격 이력 기준">
+          <PriceHistoryPanel
+            history={priceHistory}
+            currentPrice={part.price}
+            supplierName={part.externalOffer?.supplierName}
+            isLoading={isPriceHistoryLoading}
+            isError={isPriceHistoryError}
+          />
         </Panel>
       </div>
-
-      <Panel title="전체 내부 스펙" className="mt-6">
-        <p className="text-sm leading-7 text-slate-700">{fullSpecLine(part)}</p>
-      </Panel>
     </Screen>
   );
 }
@@ -185,4 +180,96 @@ function formatDate(value: string) {
 
 function maxDraftQuantity(category: string) {
   return category === 'RAM' || category === 'STORAGE' ? 9 : 1;
+}
+
+function PriceHistoryPanel({
+  history,
+  currentPrice,
+  supplierName,
+  isLoading,
+  isError
+}: {
+  history?: PartPriceHistory;
+  currentPrice: number;
+  supplierName?: string | null;
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  if (isLoading) {
+    return <div className="rounded border border-dashed border-slate-300 p-5 text-sm text-slate-500">가격 이력을 불러오는 중입니다.</div>;
+  }
+
+  if (isError || !history) {
+    return <div className="rounded border border-dashed border-slate-300 p-5 text-sm text-slate-500">가격 이력을 확인하지 못했습니다.</div>;
+  }
+
+  const points = history.items.length > 0 ? history.items : [{ price: currentPrice, source: history.source ?? 'NAVER_SHOPPING_SEARCH', collectedAt: new Date().toISOString() }];
+  const summary = history.summary;
+  const changeTone = summary.changeAmount > 0 ? 'text-orange-700' : summary.changeAmount < 0 ? 'text-emerald-700' : 'text-slate-600';
+  const sign = summary.changeAmount > 0 ? '+' : '';
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-4">
+        <PriceSummary label="현재가" value={`${history.currentPrice.toLocaleString()}원`} />
+        <PriceSummary label="최저가" value={`${summary.minPrice.toLocaleString()}원`} />
+        <PriceSummary label="최고가" value={`${summary.maxPrice.toLocaleString()}원`} />
+        <PriceSummary label="기록 수" value={`${summary.sampleCount}회`} />
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <PriceTrendChart points={points} minPrice={summary.minPrice} maxPrice={summary.maxPrice} />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="font-bold text-slate-500">{supplierName ?? '저장된 공급처 없음'}</span>
+          <span className={`font-black ${changeTone}`}>
+            {sign}{summary.changeAmount.toLocaleString()}원 ({sign}{summary.changeRatePercent.toFixed(2)}%)
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PriceSummary({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="text-[11px] font-bold text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-black text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function PriceTrendChart({ points, minPrice, maxPrice }: { points: PartPriceHistoryPoint[]; minPrice: number; maxPrice: number }) {
+  const width = 640;
+  const height = 220;
+  const padding = 22;
+  const prices = points.map((point) => point.price);
+  const safeMin = Math.min(minPrice, ...prices);
+  const safeMax = Math.max(maxPrice, ...prices);
+  const range = Math.max(1, safeMax - safeMin);
+  const coordinates = points.map((point, index) => {
+    const x = points.length === 1 ? width / 2 : padding + (index / (points.length - 1)) * (width - padding * 2);
+    const y = padding + ((safeMax - point.price) / range) * (height - padding * 2);
+    return { x, y };
+  });
+  const path = coordinates.map((point) => `${point.x},${point.y}`).join(' ');
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="가격 변동 추이 그래프" className="h-56 w-full overflow-visible">
+        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#cbd5e1" strokeWidth="1" />
+        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#cbd5e1" strokeWidth="1" />
+        <polyline points={path} fill="none" stroke="#2563eb" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        {coordinates.map((point, index) => (
+          <circle key={`${points[index].collectedAt}-${index}`} cx={point.x} cy={point.y} r="4" fill="#ffffff" stroke="#2563eb" strokeWidth="3">
+            <title>{`${formatDate(points[index].collectedAt)} · ${points[index].price.toLocaleString()}원`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="mt-2 flex justify-between text-[11px] font-bold text-slate-500">
+        <span>{formatDate(points[0].collectedAt)}</span>
+        <span>{formatDate(points[points.length - 1].collectedAt)}</span>
+      </div>
+    </div>
+  );
 }

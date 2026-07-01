@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.buildgraph.prototype.agent.AgentQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
+import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -39,6 +40,9 @@ class AdminControllerTest {
 
     @MockitoBean
     private RagQueryService ragQueryService;
+
+    @MockitoBean
+    private RagEmbeddingService ragEmbeddingService;
 
     @MockitoBean
     private TicketQueryService ticketQueryService;

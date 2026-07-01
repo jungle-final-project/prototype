@@ -13,9 +13,11 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class RagQueryService {
     private final JdbcTemplate jdbcTemplate;
+    private final RagEmbeddingService ragEmbeddingService;
 
-    public RagQueryService(JdbcTemplate jdbcTemplate) {
+    public RagQueryService(JdbcTemplate jdbcTemplate, RagEmbeddingService ragEmbeddingService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.ragEmbeddingService = ragEmbeddingService;
     }
 
     public Map<String, Object> search(String query) {
@@ -23,15 +25,126 @@ public class RagQueryService {
     }
 
     public Map<String, Object> search(String query, Integer page, Integer size) {
+        return search(query, null, null, page, size);
+    }
+
+    public Map<String, Object> search(String query, String purpose, String sourceType, Integer page, Integer size) {
         String normalizedQuery = blankToNull(query);
+        String normalizedPurpose = blankToNull(purpose);
+        String normalizedSourceType = blankToNull(sourceType);
         int safePage = validatePage(page);
         int safeSize = validateSize(size);
+        if (normalizedQuery != null && ragEmbeddingService.canVectorSearch()) {
+            try {
+                return vectorSearch(normalizedQuery, normalizedPurpose, normalizedSourceType, safePage, safeSize);
+            } catch (RuntimeException ignored) {
+                // Keep the public search endpoint available even when live embedding lookup fails.
+            }
+        }
+        return keywordSearch(normalizedQuery, normalizedPurpose, normalizedSourceType, safePage, safeSize);
+    }
+
+    private Map<String, Object> vectorSearch(
+            String normalizedQuery,
+            String normalizedPurpose,
+            String normalizedSourceType,
+            int safePage,
+            int safeSize
+    ) {
+        int offset = safePage * safeSize;
+        String vector = RagEmbeddingService.vectorLiteral(ragEmbeddingService.embedQuery(normalizedQuery));
+        List<Map<String, Object>> items = jdbcTemplate.queryForList("""
+                        WITH input AS (
+                          SELECT ?::vector AS query_embedding,
+                                 ?::text AS query_text,
+                                 ?::text AS purpose,
+                                 ?::text AS source_type
+                        ),
+                        ranked AS (
+                        SELECT re.public_id::text AS id,
+                               s.public_id::text AS agent_session_id,
+                               re.source_id,
+                               re.chunk_text,
+                               re.summary,
+                               (1 - (re.embedding <=> input.query_embedding))::double precision AS vector_score,
+                               (
+                                 CASE WHEN lower(re.source_id) LIKE lower(concat('%', input.query_text, '%')) THEN 0.30 ELSE 0 END +
+                                 CASE WHEN lower(re.summary) LIKE lower(concat('%', input.query_text, '%')) THEN 0.20 ELSE 0 END +
+                                 CASE WHEN lower(re.chunk_text) LIKE lower(concat('%', input.query_text, '%')) THEN 0.30 ELSE 0 END +
+                                 CASE WHEN lower(coalesce(re.metadata->>'title', '')) LIKE lower(concat('%', input.query_text, '%')) THEN 0.20 ELSE 0 END
+                               )::double precision AS keyword_score,
+                               re.score AS stored_score,
+                               coalesce(re.metadata, '{}'::jsonb) || jsonb_build_object(
+                                 'retrievalMode', 'VECTOR',
+                                 'vectorScore', (1 - (re.embedding <=> input.query_embedding)),
+                                 'keywordScore',
+                                 (
+                                   CASE WHEN lower(re.source_id) LIKE lower(concat('%', input.query_text, '%')) THEN 0.30 ELSE 0 END +
+                                   CASE WHEN lower(re.summary) LIKE lower(concat('%', input.query_text, '%')) THEN 0.20 ELSE 0 END +
+                                   CASE WHEN lower(re.chunk_text) LIKE lower(concat('%', input.query_text, '%')) THEN 0.30 ELSE 0 END +
+                                   CASE WHEN lower(coalesce(re.metadata->>'title', '')) LIKE lower(concat('%', input.query_text, '%')) THEN 0.20 ELSE 0 END
+                                 )
+                               ) AS metadata
+                        FROM rag_evidence re
+                        CROSS JOIN input
+                        LEFT JOIN agent_sessions s ON s.id = re.agent_session_id
+                        WHERE re.agent_session_id IS NULL
+                          AND re.embedding IS NOT NULL
+                          AND (input.purpose IS NULL OR re.metadata->>'purpose' = input.purpose)
+                          AND (input.source_type IS NULL OR re.metadata->>'sourceType' = input.source_type)
+                        )
+                        SELECT id,
+                               agent_session_id,
+                               source_id,
+                               chunk_text,
+                               summary,
+                               (vector_score + keyword_score)::double precision AS score,
+                               metadata
+                        FROM ranked
+                        ORDER BY (vector_score + keyword_score) DESC,
+                                 vector_score DESC,
+                                 stored_score DESC NULLS LAST,
+                                 id
+                        LIMIT ?
+                        OFFSET ?
+                        """,
+                        vector,
+                        normalizedQuery,
+                        normalizedPurpose,
+                        normalizedSourceType,
+                        safeSize,
+                        offset)
+                .stream()
+                .map(this::publicEvidenceMap)
+                .toList();
+        Integer total = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM rag_evidence re
+                WHERE re.agent_session_id IS NULL
+                  AND re.embedding IS NOT NULL
+                  AND (?::text IS NULL OR re.metadata->>'purpose' = ?::text)
+                  AND (?::text IS NULL OR re.metadata->>'sourceType' = ?::text)
+                """, Integer.class, normalizedPurpose, normalizedPurpose, normalizedSourceType, normalizedSourceType);
+        return MockData.map("items", items, "page", safePage, "size", safeSize, "total", total == null ? 0 : total);
+    }
+
+    private Map<String, Object> keywordSearch(
+            String normalizedQuery,
+            String normalizedPurpose,
+            String normalizedSourceType,
+            int safePage,
+            int safeSize
+    ) {
         int offset = safePage * safeSize;
         List<Object> params = new ArrayList<>();
         params.add(normalizedQuery);
         params.add(normalizedQuery);
         params.add(normalizedQuery);
         params.add(normalizedQuery);
+        params.add(normalizedPurpose);
+        params.add(normalizedPurpose);
+        params.add(normalizedSourceType);
+        params.add(normalizedSourceType);
         params.add(safeSize);
         params.add(offset);
         List<Map<String, Object>> items = jdbcTemplate.queryForList("""
@@ -45,11 +158,13 @@ public class RagQueryService {
                         FROM rag_evidence re
                         LEFT JOIN agent_sessions s ON s.id = re.agent_session_id
                         WHERE (
-                          ? IS NULL
+                          ?::text IS NULL
                           OR lower(re.source_id) LIKE lower(concat('%', ?, '%'))
                           OR lower(re.summary) LIKE lower(concat('%', ?, '%'))
                           OR lower(re.chunk_text) LIKE lower(concat('%', ?, '%'))
                         )
+                        AND (?::text IS NULL OR re.metadata->>'purpose' = ?::text)
+                        AND (?::text IS NULL OR re.metadata->>'sourceType' = ?::text)
                         ORDER BY CASE WHEN re.agent_session_id IS NULL THEN 0 ELSE 1 END,
                                  re.score DESC NULLS LAST,
                                  re.id
@@ -63,12 +178,23 @@ public class RagQueryService {
                 SELECT count(*)
                 FROM rag_evidence re
                 WHERE (
-                  ? IS NULL
+                  ?::text IS NULL
                   OR lower(re.source_id) LIKE lower(concat('%', ?, '%'))
                   OR lower(re.summary) LIKE lower(concat('%', ?, '%'))
                   OR lower(re.chunk_text) LIKE lower(concat('%', ?, '%'))
                 )
-                """, Integer.class, normalizedQuery, normalizedQuery, normalizedQuery, normalizedQuery);
+                AND (?::text IS NULL OR re.metadata->>'purpose' = ?::text)
+                AND (?::text IS NULL OR re.metadata->>'sourceType' = ?::text)
+                """,
+                Integer.class,
+                normalizedQuery,
+                normalizedQuery,
+                normalizedQuery,
+                normalizedQuery,
+                normalizedPurpose,
+                normalizedPurpose,
+                normalizedSourceType,
+                normalizedSourceType);
         return MockData.map("items", items, "page", safePage, "size", safeSize, "total", total == null ? 0 : total);
     }
 

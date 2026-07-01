@@ -1,3 +1,5 @@
+import type { QuoteDraft } from '../parts/types';
+
 export const AI_SELECTED_BUILD_STORAGE_KEY = 'buildgraph.ai.selectedBuild';
 export const AI_SELECTED_BUILD_CHANGED_EVENT = 'buildgraph.ai.selectedBuildChanged';
 export const AI_ASSISTANT_SESSION_STORAGE_KEY = 'buildgraph.ai.assistantSession';
@@ -6,6 +8,13 @@ export const AI_ASSISTANT_SESSION_CHANGED_EVENT = 'buildgraph.ai.assistantSessio
 export type AiBuildTier = 'budget' | 'balanced' | 'performance';
 export type PartCategory = 'CPU' | 'MOTHERBOARD' | 'RAM' | 'GPU' | 'STORAGE' | 'PSU' | 'CASE' | 'COOLER';
 export type AiChatAnswerType = 'BUDGET' | 'PART' | 'GENERAL';
+export type AiDraftActionType =
+  | 'ADD_PART_TO_DRAFT'
+  | 'REPLACE_DRAFT_PART'
+  | 'REMOVE_DRAFT_PART'
+  | 'UPDATE_DRAFT_QUANTITY'
+  | 'ASK_FOLLOW_UP';
+export type AiDraftActionStatus = 'PENDING' | 'APPLYING' | 'APPLIED' | 'FAILED';
 
 export type AiToolResult = {
   tool: string;
@@ -54,6 +63,22 @@ export type AiPartRecommendation = {
   options: AiBuildItem[];
 };
 
+export type AiDraftAction = {
+  id: string;
+  type: AiDraftActionType;
+  label: string;
+  description?: string;
+  payload: {
+    partId?: string;
+    category?: PartCategory;
+    quantity?: number;
+    source?: string;
+    [key: string]: unknown;
+  };
+  requiresConfirmation?: boolean;
+  status?: AiDraftActionStatus;
+};
+
 export type AiAppliedPartPreference = {
   category: PartCategory;
   label: string;
@@ -70,6 +95,7 @@ export type AiChatMessage = {
   budgetWon?: number;
   builds?: AiRecommendedBuild[];
   partRecommendation?: AiPartRecommendation | null;
+  actions?: AiDraftAction[];
   warnings?: string[];
 };
 
@@ -84,6 +110,7 @@ export type AiBuildChatRequest = {
   message: string;
   currentBuilds?: AiRecommendedBuild[];
   appliedPartPreferences?: AiAppliedPartPreference[];
+  currentQuoteDraft?: QuoteDraft;
 };
 
 export type AiBuildChatResponse = {
@@ -91,6 +118,7 @@ export type AiBuildChatResponse = {
   message: string;
   builds: AiRecommendedBuild[];
   partRecommendation?: AiPartRecommendation | null;
+  actions?: AiDraftAction[];
   warnings?: string[];
 };
 
@@ -127,7 +155,7 @@ export function createAiMessageId(prefix: string) {
 }
 
 export function toSelectedAiBuild(build: AiRecommendedBuild): AiSelectedBuild {
-  const { label: _label, badges: _badges, ...selectedBuild } = build;
+  const { label: _label, badges: _badges, ...selectedBuild } = normalizeAiRecommendedBuild(build);
   return {
     ...selectedBuild,
     selectedAt: new Date().toISOString()
@@ -136,7 +164,7 @@ export function toSelectedAiBuild(build: AiRecommendedBuild): AiSelectedBuild {
 
 export function saveSelectedAiBuild(build: AiRecommendedBuild) {
   if (typeof window === 'undefined') return;
-  const selectedBuild = toSelectedAiBuild(build);
+  const selectedBuild = toSelectedAiBuild(normalizeAiRecommendedBuild(build));
   window.sessionStorage.setItem(AI_SELECTED_BUILD_STORAGE_KEY, JSON.stringify(selectedBuild));
   window.dispatchEvent(new Event(AI_SELECTED_BUILD_CHANGED_EVENT));
 }
@@ -145,7 +173,18 @@ export function readSelectedAiBuild(): AiSelectedBuild | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.sessionStorage.getItem(AI_SELECTED_BUILD_STORAGE_KEY);
-    return raw ? JSON.parse(raw) as AiSelectedBuild : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AiSelectedBuild;
+    const normalized = normalizeAiRecommendedBuild({
+      ...parsed,
+      label: parsed.tierLabel,
+      badges: []
+    });
+    return {
+      ...parsed,
+      items: normalized.items,
+      totalPrice: normalized.totalPrice
+    };
   } catch {
     return null;
   }
@@ -167,8 +206,8 @@ export function readAssistantSession(): AiAssistantSession {
       return emptyAssistantSession();
     }
     return {
-      messages: parsed.messages.length > 0 ? parsed.messages : [initialAssistantMessage],
-      latestBuilds: parsed.latestBuilds ?? [],
+      messages: normalizeAssistantMessages(parsed.messages.length > 0 ? parsed.messages : [initialAssistantMessage]),
+      latestBuilds: normalizeAiBuilds(parsed.latestBuilds ?? []),
       appliedPartPreferences: parsed.appliedPartPreferences ?? [],
       updatedAt: parsed.updatedAt ?? initialAssistantMessage.createdAt
     };
@@ -179,6 +218,50 @@ export function readAssistantSession(): AiAssistantSession {
 
 export function saveAssistantSession(session: AiAssistantSession) {
   if (typeof window === 'undefined') return;
-  window.sessionStorage.setItem(AI_ASSISTANT_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.sessionStorage.setItem(AI_ASSISTANT_SESSION_STORAGE_KEY, JSON.stringify(normalizeAssistantSession(session)));
   window.dispatchEvent(new Event(AI_ASSISTANT_SESSION_CHANGED_EVENT));
+}
+
+export function normalizeAiRecommendedBuild(build: AiRecommendedBuild): AiRecommendedBuild {
+  const items = build.items.map((item) => ({
+    ...item,
+    quantity: Math.max(item.quantity ?? 1, defaultAiBuildQuantity(item.category))
+  }));
+  const titleMatch = build.title.trim().match(/^([\d,]+원)\s+(.+)$/);
+  const normalizedTitle = titleMatch
+    ? `${titleMatch[2].includes('추천') ? titleMatch[2] : `${titleMatch[2]} 추천 조합`}`
+    : build.title;
+  const normalizedBudgetLabel = titleMatch && build.budgetLabel === titleMatch[1]
+    ? '예산 미지정'
+    : build.budgetLabel;
+  return {
+    ...build,
+    title: normalizedTitle,
+    budgetLabel: normalizedBudgetLabel,
+    items,
+    totalPrice: items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  };
+}
+
+export function normalizeAiBuilds(builds: AiRecommendedBuild[]) {
+  return builds.map(normalizeAiRecommendedBuild);
+}
+
+function normalizeAssistantSession(session: AiAssistantSession): AiAssistantSession {
+  return {
+    ...session,
+    messages: normalizeAssistantMessages(session.messages),
+    latestBuilds: normalizeAiBuilds(session.latestBuilds)
+  };
+}
+
+function normalizeAssistantMessages(messages: AiChatMessage[]) {
+  return messages.map((message) => ({
+    ...message,
+    builds: message.builds ? normalizeAiBuilds(message.builds) : undefined
+  }));
+}
+
+function defaultAiBuildQuantity(category: PartCategory) {
+  return category === 'RAM' ? 2 : 1;
 }

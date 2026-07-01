@@ -2,14 +2,14 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.agent.AgentRunProfile;
 import com.buildgraph.prototype.agent.AgentRunProfiles;
-import com.buildgraph.prototype.agent.AgentRagEvidenceDraft;
-import com.buildgraph.prototype.agent.AgentRagRetrievalService;
 import com.buildgraph.prototype.agent.AgentRunner;
 import com.buildgraph.prototype.agent.AgentSessionRoot;
 import com.buildgraph.prototype.agent.AgentSessionRootType;
 import com.buildgraph.prototype.agent.AgentStatus;
 import com.buildgraph.prototype.agent.AgentTraceService;
-import com.buildgraph.prototype.agent.OpenAiResponsesClient;
+import com.buildgraph.prototype.agent.AiChatEngine;
+import com.buildgraph.prototype.agent.QuoteRequirementAnalysisRequest;
+import com.buildgraph.prototype.agent.QuoteRequirementAnalysisResult;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.part.ToolBuildPart;
@@ -35,19 +35,9 @@ public class BuildQueryService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern BUDGET_MANWON = Pattern.compile("([0-9]{2,4})\\s*만\\s*원?");
     private static final Pattern BUDGET_NUMBER = Pattern.compile("([0-9][0-9,]{5,})\\s*원?");
-    private static final String REQUIREMENT_PARSE_SYSTEM_PROMPT = """
-            당신은 BuildGraph AI의 PC 요구사항 파싱 Agent입니다.
-            RAG 근거와 사용자 입력만 사용해 추천 전에 필요한 구조화 JSON을 만드십시오.
-            확인되지 않은 예산, 해상도, 제조사, 용도는 지어내지 말고 null 또는 빈 배열로 두십시오.
-            usageTags는 GAMING, DEVELOPMENT, VIDEO_EDIT, AI_DEV, GENERAL 중에서만 고르십시오.
-            performanceTier는 ENTHUSIAST, PERFORMANCE, STANDARD 중 하나를 고르십시오.
-            budgetPolicy는 USER_BUDGET, OPEN_BUDGET, DEFAULT_BUDGET 중 하나를 고르십시오.
-            performanceTier와 budgetPolicy는 RAG 근거와 사용자 입력으로 판단하고, 근거가 부족하면 STANDARD와 DEFAULT_BUDGET을 사용하십시오.
-            mustHave는 WIFI, LOW_NOISE 중 확인된 조건만 넣으십시오.
-            confidence 값은 LOW, MEDIUM, HIGH 중 하나만 쓰십시오.
-            응답은 설명 문장 없이 JSON object 하나만 반환하십시오.
-            """;
-    private static final int DEFAULT_BUDGET = 2_000_000;
+    private static final Pattern RTX_CLASS = Pattern.compile("(?i)(?:rtx|geforce|지포스)?\\s*(40[6-9]0|50[6-9]0)");
+    private static final int STANDARD_UNSPECIFIED_BUDGET = 3_000_000;
+    private static final int PERFORMANCE_UNSPECIFIED_BUDGET = 5_000_000;
     private static final int ENTHUSIAST_OPEN_BUDGET = 12_000_000;
     private static final List<String> BUILD_CATEGORIES = List.of(
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
@@ -56,6 +46,11 @@ public class BuildQueryService {
             new BuildPlan("가성비형 추천 Build", "예산 안에서 핵심 성능을 먼저 확보", 0, 0.78, "MEDIUM"),
             new BuildPlan("균형형 추천 Build", "게임, 개발, 안정성을 균형 있게 반영", 1, 0.96, "HIGH"),
             new BuildPlan("고성능형 추천 Build", "성능 우선 조건과 업그레이드 여유 확보", 2, 1.14, "MEDIUM")
+    );
+    private static final List<BuildPlan> MINIMUM_BUDGET_BUILD_PLANS = List.of(
+            new BuildPlan("기준 이상 추천 Build", "요청 금액 이상에서 성능 기준을 맞춤", 1, 1.35, "HIGH"),
+            new BuildPlan("상위 균형 Build", "요청 금액보다 여유 있게 성능과 안정성을 확보", 2, 1.50, "HIGH"),
+            new BuildPlan("프리미엄 확장 Build", "요청 금액 이상에서 업그레이드 여유까지 확보", 3, 1.70, "MEDIUM")
     );
     private static final List<BuildPlan> ENTHUSIAST_BUILD_PLANS = List.of(
             new BuildPlan("끝판왕 추천 Build", "예산 제한 없이 내부 자산의 최상위 성능을 우선", 3, 1.14, "HIGH"),
@@ -66,23 +61,20 @@ public class BuildQueryService {
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
     private final AgentRunner agentRunner;
-    private final AgentRagRetrievalService agentRagRetrievalService;
-    private final OpenAiResponsesClient openAiResponsesClient;
+    private final AiChatEngine aiChatEngine;
     private final ToolCheckService toolCheckService;
 
     public BuildQueryService(
             JdbcTemplate jdbcTemplate,
             AgentTraceService agentTraceService,
             AgentRunner agentRunner,
-            AgentRagRetrievalService agentRagRetrievalService,
-            OpenAiResponsesClient openAiResponsesClient,
+            AiChatEngine aiChatEngine,
             ToolCheckService toolCheckService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.agentTraceService = agentTraceService;
         this.agentRunner = agentRunner;
-        this.agentRagRetrievalService = agentRagRetrievalService;
-        this.openAiResponsesClient = openAiResponsesClient;
+        this.aiChatEngine = aiChatEngine;
         this.toolCheckService = toolCheckService;
     }
 
@@ -111,7 +103,9 @@ public class BuildQueryService {
                 RETURNING public_id::text
                 """, String.class, message, fallbackBudget, String.join(",", fallbackUsageTags), json(pendingContext));
 
-        RequirementParseResult parseResult = runRequirementParseAgent(id, message, body, fallbackContext);
+        QuoteRequirementAnalysisResult parseResult = aiChatEngine.analyzeQuoteRequirement(
+                new QuoteRequirementAnalysisRequest(id, message, body, fallbackContext)
+        );
         Map<String, Object> parsedContext = parseResult.parsedContext();
         Integer budget = numberValue(parsedContext.get("budget"));
         List<String> usageTags = stringList(parsedContext.get("usageTags"));
@@ -144,12 +138,14 @@ public class BuildQueryService {
         RequirementRow requirement = requirement(requirementId);
         Map<String, Object> answers = objectMap(request == null ? null : request.get("answers"));
         int budget = effectiveBudget(requirement, answers);
+        Integer userBudget = userBudget(requirement);
         List<BuildPlan> buildPlans = buildPlansFor(requirement);
         List<String> createdBuildIds = new ArrayList<>();
         for (BuildPlan plan : buildPlans) {
             List<PartCandidate> parts = selectBuildParts(requirement, answers, plan, budget);
-            List<Map<String, Object>> toolResults = evaluateTools(parts, budget);
-            List<Map<String, Object>> warnings = warningsFor(toolResults, total(parts), budget);
+            int validationBudget = userBudget == null ? total(parts) : budget;
+            List<Map<String, Object>> toolResults = evaluateTools(parts, validationBudget);
+            List<Map<String, Object>> warnings = warningsFor(toolResults, total(parts), userBudget == null ? 0 : budget, requirement, parts);
             createdBuildIds.add(insertBuild(requirement.internalId(), plan, parts, warnings));
         }
 
@@ -299,7 +295,7 @@ public class BuildQueryService {
         List<PartCandidate> ramCandidates = filter(partCandidates("RAM"),
                 part -> memoryType.equalsIgnoreCase(firstText(stringAttr(part, "memoryType"), memoryType)));
         PartCandidate ram = chooseByTarget(orFallback(ramCandidates, partCandidates("RAM")), target(budget, plan, 0.07));
-        PartCandidate gpu = chooseByTarget(partCandidates("GPU"), target(budget, plan, 0.39));
+        PartCandidate gpu = chooseGpu(requirement, plan, budget);
         PartCandidate storage = chooseByTarget(partCandidates("STORAGE"), target(budget, plan, 0.07));
         int recommendedPsu = Math.max(intAttr(gpu, "requiredSystemPowerW", 650), estimatedWattage(List.of(cpu, gpu)) + 180);
         List<PartCandidate> psuCandidates = filter(partCandidates("PSU"), part -> intAttr(part, "capacityW", 0) >= recommendedPsu);
@@ -315,6 +311,18 @@ public class BuildQueryService {
         );
         PartCandidate cooler = chooseByTarget(orFallback(coolerCandidates, partCandidates("COOLER")), target(budget, plan, 0.05));
         return List.of(cpu, motherboard, ram, gpu, storage, psu, pcCase, cooler);
+    }
+
+    private PartCandidate chooseGpu(RequirementRow requirement, BuildPlan plan, int budget) {
+        List<PartCandidate> gpuCandidates = partCandidates("GPU");
+        List<String> requiredGpuClasses = requiredGpuClasses(requirement);
+        if (!requiredGpuClasses.isEmpty()) {
+            List<PartCandidate> matching = filter(gpuCandidates, part -> requiredGpuClasses.contains(gpuClass(part)));
+            if (!matching.isEmpty()) {
+                return chooseByTarget(matching, target(budget, plan, 0.39));
+            }
+        }
+        return chooseByTarget(gpuCandidates, target(budget, plan, 0.39));
     }
 
     private List<Map<String, Object>> evaluateTools(List<PartCandidate> parts, int budget) {
@@ -471,124 +479,6 @@ public class BuildQueryService {
         }
     }
 
-    private RequirementParseResult runRequirementParseAgent(
-            String requirementId,
-            String message,
-            Map<String, Object> request,
-            Map<String, Object> fallbackContext
-    ) {
-        AgentSessionRoot root = new AgentSessionRoot(AgentSessionRootType.REQUIREMENT, requirementId);
-        AgentRunProfile profile = AgentRunProfiles.requirementParse();
-        String sessionId = null;
-        try {
-            sessionId = agentTraceService.createQueuedSession(root, "SYSTEM", profile.purpose());
-            String activeSessionId = sessionId;
-            agentTraceService.advanceStatus(sessionId, AgentStatus.RUNNING, "SYSTEM", "requirement parse agent requested");
-            List<AgentRagEvidenceDraft> evidenceSet = agentRagRetrievalService.retrieveEvidenceSet(root, profile);
-            List<String> evidenceIds = evidenceSet.stream()
-                    .map(evidence -> agentTraceService.recordRagEvidence(activeSessionId, evidence))
-                    .toList();
-            agentTraceService.advanceStatus(sessionId, AgentStatus.RAG_SEARCHED, "SYSTEM", "requirement parse RAG evidence set retrieved");
-
-            if (openAiResponsesClient.isConfigured()) {
-                try {
-                    Map<String, Object> llmContext = llmParsedContext(message, request, fallbackContext, evidenceIds, evidenceSet);
-                    Map<String, Object> parsedContext = withAgentParseMetadata(
-                            normalizeParsedContext(llmContext, fallbackContext),
-                            "AGENT_RAG_LLM",
-                            sessionId,
-                            evidenceIds,
-                            evidenceSet,
-                            text(llmContext.get("parseNotes")),
-                            null
-                    );
-                    String summary = firstText(
-                            text(parsedContext.get("parseNotes")),
-                            "LLM structured parser generated requirement context from RAG evidence."
-                    );
-                    agentTraceService.advanceStatus(sessionId, AgentStatus.TOOLS_CALLED, "SYSTEM", "requirement parse does not require hardware tools");
-                    agentTraceService.updateSummary(sessionId, summary);
-                    agentTraceService.advanceStatus(sessionId, AgentStatus.SUMMARY_READY, "SYSTEM", "requirement parse context generated");
-                    agentTraceService.advanceStatus(sessionId, AgentStatus.SUCCEEDED, "SYSTEM", "requirement parse agent completed");
-                    return new RequirementParseResult(parsedContext, sessionId, summary, evidenceIds);
-                } catch (RuntimeException llmError) {
-                    Map<String, Object> parsedContext = withAgentParseMetadata(
-                            fallbackContext,
-                            "AGENT_RAG_FALLBACK",
-                            sessionId,
-                            evidenceIds,
-                            evidenceSet,
-                            "LLM structured parse failed; deterministic normalizer kept the request usable.",
-                            safeReason(llmError)
-                    );
-                    String summary = "RAG evidence retrieved, but LLM structured parse failed. Deterministic normalized context was used.";
-                    agentTraceService.updateSummary(sessionId, summary);
-                    agentTraceService.advanceStatus(sessionId, AgentStatus.FALLBACK_READY, "SYSTEM", "requirement parse LLM failed");
-                    agentTraceService.advanceStatus(sessionId, AgentStatus.SUCCEEDED, "SYSTEM", "requirement parse fallback completed");
-                    return new RequirementParseResult(parsedContext, sessionId, summary, evidenceIds);
-                }
-            }
-
-            Map<String, Object> parsedContext = withAgentParseMetadata(
-                    fallbackContext,
-                    "AGENT_RAG_DETERMINISTIC",
-                    sessionId,
-                    evidenceIds,
-                    evidenceSet,
-                    "RAG evidence retrieved; deterministic normalizer produced the structured context because OpenAI is not configured.",
-                    null
-            );
-            String summary = "RAG evidence retrieved; deterministic normalizer generated the requirement context.";
-            agentTraceService.advanceStatus(sessionId, AgentStatus.TOOLS_CALLED, "SYSTEM", "requirement parse does not require hardware tools");
-            agentTraceService.updateSummary(sessionId, summary);
-            agentTraceService.advanceStatus(sessionId, AgentStatus.SUMMARY_READY, "SYSTEM", "requirement parse context generated");
-            agentTraceService.advanceStatus(sessionId, AgentStatus.SUCCEEDED, "SYSTEM", "requirement parse agent completed");
-            return new RequirementParseResult(parsedContext, sessionId, summary, evidenceIds);
-        } catch (RuntimeException error) {
-            Map<String, Object> parsedContext = withAgentParseMetadata(
-                    fallbackContext,
-                    "DETERMINISTIC_FALLBACK",
-                    sessionId,
-                    List.of(),
-                    List.of(),
-                    "Requirement parse Agent failed before RAG evidence could be attached; deterministic normalizer was used.",
-                    safeReason(error)
-            );
-            return new RequirementParseResult(parsedContext, sessionId, null, List.of());
-        }
-    }
-
-    private Map<String, Object> llmParsedContext(
-            String message,
-            Map<String, Object> request,
-            Map<String, Object> fallbackContext,
-            List<String> evidenceIds,
-            List<AgentRagEvidenceDraft> evidenceSet
-    ) {
-        String output = openAiResponsesClient.createSummary(
-                REQUIREMENT_PARSE_SYSTEM_PROMPT,
-                json(MockData.map(
-                        "rawMessage", message,
-                        "optionalInputs", request,
-                        "fallbackNormalizer", fallbackContext,
-                        "ragEvidenceSet", evidenceItems(evidenceIds, evidenceSet),
-                        "requiredJsonShape", MockData.map(
-                                "budget", "integer or null",
-                                "usageTags", List.of("GAMING", "DEVELOPMENT", "VIDEO_EDIT", "AI_DEV", "GENERAL"),
-                                "resolution", "FHD | QHD | 4K | null",
-                                "preferredVendors", List.of("NVIDIA", "AMD", "INTEL"),
-                                "priority", "string or null",
-                                "performanceTier", "ENTHUSIAST | PERFORMANCE | STANDARD",
-                                "budgetPolicy", "USER_BUDGET | OPEN_BUDGET | DEFAULT_BUDGET",
-                                "mustHave", List.of("WIFI", "LOW_NOISE"),
-                                "confidence", MockData.map("budget", "LOW|MEDIUM|HIGH", "usageTags", "LOW|MEDIUM|HIGH", "resolution", "LOW|MEDIUM|HIGH", "preferredVendors", "LOW|MEDIUM|HIGH"),
-                                "parseNotes", "short Korean sentence"
-                        )
-                ))
-        );
-        return parseJsonObject(output);
-    }
-
     private static Map<String, Object> deterministicParsedContext(Map<String, Object> body, String message) {
         Integer budget = numberValue(body.get("budget"));
         if (budget == null) {
@@ -599,119 +489,31 @@ public class BuildQueryService {
         List<String> preferredVendors = preferredVendors(body.get("preferredVendors"), message);
         String priority = text(body.get("priority"));
         List<String> mustHave = mustHave(message);
+        List<String> requiredGpuClasses = inferRequiredGpuClasses(message);
+        String performanceTier = inferPerformanceTier(message, resolution, usageTags, requiredGpuClasses);
+        String budgetPolicy = budget == null
+                ? ("ENTHUSIAST".equals(performanceTier) || !requiredGpuClasses.isEmpty() ? "OPEN_BUDGET" : "UNSPECIFIED")
+                : "USER_BUDGET";
         return MockData.map(
                 "usageTags", usageTags,
                 "budget", budget,
                 "resolution", resolution,
                 "preferredVendors", preferredVendors,
                 "priority", priority,
-                "performanceTier", "STANDARD",
-                "budgetPolicy", budget == null ? "DEFAULT_BUDGET" : "USER_BUDGET",
+                "performanceTier", performanceTier,
+                "budgetPolicy", budgetPolicy,
                 "mustHave", mustHave,
+                "requiredGpuClasses", requiredGpuClasses,
+                "requiredPartKeywords", requiredGpuClasses.stream().map(value -> value.replace("_", " ")).toList(),
+                "hardConstraintPolicy", requiredGpuClasses.isEmpty() ? "NONE" : "MUST_INCLUDE",
                 "confidence", MockData.map(
                         "usageTags", usageTags.isEmpty() ? "LOW" : "HIGH",
                         "budget", budget == null ? "LOW" : "HIGH",
                         "resolution", resolution == null ? "LOW" : "MEDIUM",
-                        "preferredVendors", preferredVendors.isEmpty() ? "LOW" : "MEDIUM"
+                        "preferredVendors", preferredVendors.isEmpty() ? "LOW" : "MEDIUM",
+                        "hardConstraints", requiredGpuClasses.isEmpty() ? "LOW" : "HIGH"
                 )
         );
-    }
-
-    private static Map<String, Object> withAgentParseMetadata(
-            Map<String, Object> context,
-            String parseMode,
-            String sessionId,
-            List<String> evidenceIds,
-            List<AgentRagEvidenceDraft> evidenceSet,
-            String parseNotes,
-            String fallbackReason
-    ) {
-        AgentRagEvidenceDraft primaryEvidence = primaryEvidence(evidenceSet);
-        Map<String, Object> result = new LinkedHashMap<>(normalizeParsedContext(context, context));
-        result.put("parseMode", parseMode);
-        result.put("parser", "requirement-parse-agent-v1");
-        result.put("agentSessionId", sessionId);
-        result.put("evidenceIds", evidenceIds);
-        result.put("ragGuidance", primaryEvidence == null ? null : primaryEvidence.summary());
-        result.put("ragSourceId", primaryEvidence == null ? null : primaryEvidence.sourceId());
-        result.put("ragSourceIds", evidenceSet.stream().map(AgentRagEvidenceDraft::sourceId).toList());
-        result.put("parseEvidenceSummary", evidenceSummary(evidenceSet));
-        result.put("parseNotes", parseNotes);
-        if (fallbackReason != null) {
-            result.put("fallbackReason", fallbackReason);
-        }
-        return result;
-    }
-
-    private static AgentRagEvidenceDraft primaryEvidence(List<AgentRagEvidenceDraft> evidenceSet) {
-        return evidenceSet == null || evidenceSet.isEmpty() ? null : evidenceSet.get(0);
-    }
-
-    private static String evidenceSummary(List<AgentRagEvidenceDraft> evidenceSet) {
-        if (evidenceSet == null || evidenceSet.isEmpty()) {
-            return null;
-        }
-        return evidenceSet.stream()
-                .map(AgentRagEvidenceDraft::summary)
-                .filter(summary -> summary != null && !summary.isBlank())
-                .limit(3)
-                .reduce((left, right) -> left + " | " + right)
-                .orElse(null);
-    }
-
-    private static List<Map<String, Object>> evidenceItems(List<String> ids, List<AgentRagEvidenceDraft> evidenceSet) {
-        return java.util.stream.IntStream.range(0, evidenceSet.size())
-                .mapToObj(index -> {
-                    AgentRagEvidenceDraft evidence = evidenceSet.get(index);
-                    return MockData.map(
-                            "id", ids.get(index),
-                            "sourceId", evidence.sourceId(),
-                            "summary", evidence.summary(),
-                            "chunkText", evidence.chunkText(),
-                            "score", evidence.score(),
-                            "metadata", evidence.metadata()
-                    );
-                })
-                .toList();
-    }
-
-    private static Map<String, Object> normalizeParsedContext(Map<String, Object> source, Map<String, Object> fallback) {
-        Integer budget = firstNumber(source.get("budget"), fallback.get("budget"));
-        List<String> usageTags = normalizeUsageTags(stringList(source.get("usageTags")));
-        if (usageTags.isEmpty()) {
-            usageTags = normalizeUsageTags(stringList(fallback.get("usageTags")));
-        }
-        String resolution = normalizeResolution(firstText(text(source.get("resolution")), text(fallback.get("resolution"))));
-        List<String> preferredVendors = normalizeVendors(stringList(source.get("preferredVendors")));
-        if (preferredVendors.isEmpty()) {
-            preferredVendors = normalizeVendors(stringList(fallback.get("preferredVendors")));
-        }
-        String priority = firstText(text(source.get("priority")), text(fallback.get("priority")));
-        String performanceTier = normalizePerformanceTier(firstText(text(source.get("performanceTier")), text(fallback.get("performanceTier"))));
-        String budgetPolicy = normalizeBudgetPolicy(firstText(text(source.get("budgetPolicy")), text(fallback.get("budgetPolicy"))));
-        List<String> mustHave = normalizeMustHave(stringList(source.get("mustHave")));
-        if (mustHave.isEmpty()) {
-            mustHave = normalizeMustHave(stringList(fallback.get("mustHave")));
-        }
-        Map<String, Object> confidence = normalizeConfidence(
-                objectMap(source.get("confidence")),
-                objectMap(fallback.get("confidence"))
-        );
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("usageTags", usageTags.isEmpty() ? List.of("GENERAL") : usageTags);
-        result.put("budget", budget);
-        result.put("resolution", resolution);
-        result.put("preferredVendors", preferredVendors);
-        result.put("priority", priority);
-        result.put("performanceTier", performanceTier);
-        result.put("budgetPolicy", budgetPolicy);
-        result.put("mustHave", mustHave);
-        result.put("confidence", confidence);
-        String parseNotes = firstText(text(source.get("parseNotes")), text(fallback.get("parseNotes")));
-        if (parseNotes != null) {
-            result.put("parseNotes", parseNotes);
-        }
-        return result;
     }
 
     private Map<String, Object> agentSession(String id) {
@@ -826,6 +628,20 @@ public class BuildQueryService {
     }
 
     private static List<Map<String, Object>> warningsFor(List<Map<String, Object>> toolResults, int totalPrice, int budget) {
+        return warningsFor(toolResults, totalPrice, budget, null);
+    }
+
+    private static List<Map<String, Object>> warningsFor(List<Map<String, Object>> toolResults, int totalPrice, int budget, RequirementRow requirement) {
+        return warningsFor(toolResults, totalPrice, budget, requirement, List.of());
+    }
+
+    private static List<Map<String, Object>> warningsFor(
+            List<Map<String, Object>> toolResults,
+            int totalPrice,
+            int budget,
+            RequirementRow requirement,
+            List<PartCandidate> parts
+    ) {
         List<Map<String, Object>> warnings = new ArrayList<>();
         for (Map<String, Object> result : toolResults) {
             String status = String.valueOf(result.get("status"));
@@ -838,10 +654,20 @@ public class BuildQueryService {
             }
         }
         if (budget > 0 && totalPrice > budget) {
+            boolean hardConstraint = requirement != null && hasHardGpuConstraint(requirement);
             warnings.add(MockData.map(
-                    "code", "OVER_BUDGET",
-                    "message", "예산보다 " + (totalPrice - budget) + "원 높습니다.",
+                    "code", hardConstraint ? "HARD_CONSTRAINT_OVER_BUDGET" : "OVER_BUDGET",
+                    "message", hardConstraint
+                            ? "명시한 부품 조건을 유지하면 예산보다 " + (totalPrice - budget) + "원 높습니다."
+                            : "예산보다 " + (totalPrice - budget) + "원 높습니다.",
                     "severity", totalPrice <= Math.round(budget * 1.08) ? "WARN" : "FAIL"
+            ));
+        }
+        if (requirement != null && missingHardGpuConstraint(requirement, parts)) {
+            warnings.add(MockData.map(
+                    "code", "HARD_CONSTRAINT_UNAVAILABLE",
+                    "message", "명시한 GPU 조건을 만족하는 활성 내부 자산을 찾지 못해 대체 GPU를 사용했습니다.",
+                    "severity", "FAIL"
             ));
         }
         return warnings;
@@ -904,13 +730,9 @@ public class BuildQueryService {
     }
 
     private static int effectiveBudget(RequirementRow requirement, Map<String, Object> answers) {
-        Integer budget = requirement.budget();
-        if (budget == null) {
-            Object parsedBudget = requirement.parsedContext().get("budget");
-            budget = numberValue(parsedBudget);
-        }
+        Integer budget = userBudget(requirement);
         if (budget == null || budget <= 0) {
-            budget = isOpenBudgetEnthusiast(requirement) ? ENTHUSIAST_OPEN_BUDGET : DEFAULT_BUDGET;
+            budget = inferredBudgetFor(requirement);
         }
         if ("넉넉하게".equals(answers.get("upgradePlan"))) {
             budget = (int) Math.round(budget * 1.06);
@@ -918,17 +740,97 @@ public class BuildQueryService {
         return budget;
     }
 
+    private static Integer userBudget(RequirementRow requirement) {
+        if (requirement == null) {
+            return null;
+        }
+        Integer budget = requirement.budget();
+        if (budget == null) {
+            budget = numberValue(requirement.parsedContext().get("budget"));
+        }
+        return budget == null || budget <= 0 ? null : budget;
+    }
+
+    private static int inferredBudgetFor(RequirementRow requirement) {
+        if (isOpenBudgetEnthusiast(requirement)) {
+            return ENTHUSIAST_OPEN_BUDGET;
+        }
+        if (isPerformanceTarget(requirement)) {
+            return PERFORMANCE_UNSPECIFIED_BUDGET;
+        }
+        return STANDARD_UNSPECIFIED_BUDGET;
+    }
+
     private static List<BuildPlan> buildPlansFor(RequirementRow requirement) {
-        return isOpenBudgetEnthusiast(requirement) ? ENTHUSIAST_BUILD_PLANS : DEFAULT_BUILD_PLANS;
+        if (isOpenBudgetEnthusiast(requirement)) {
+            return ENTHUSIAST_BUILD_PLANS;
+        }
+        if (isMinimumBudgetRequest(requirement)) {
+            return MINIMUM_BUDGET_BUILD_PLANS;
+        }
+        return DEFAULT_BUILD_PLANS;
     }
 
     private static boolean isOpenBudgetEnthusiast(RequirementRow requirement) {
         Map<String, Object> context = requirement.parsedContext();
         String performanceTier = normalizePerformanceTier(text(context.get("performanceTier")));
         String budgetPolicy = normalizeBudgetPolicy(text(context.get("budgetPolicy")));
-        return ("ENTHUSIAST".equals(performanceTier) || "OPEN_BUDGET".equals(budgetPolicy))
+        return ("ENTHUSIAST".equals(performanceTier) || "OPEN_BUDGET".equals(budgetPolicy) || hasHardGpuConstraint(requirement))
                 && requirement.budget() == null
                 && numberValue(context.get("budget")) == null;
+    }
+
+    private static boolean isPerformanceTarget(RequirementRow requirement) {
+        if (requirement == null) {
+            return false;
+        }
+        Map<String, Object> context = requirement.parsedContext();
+        String performanceTier = normalizePerformanceTier(text(context.get("performanceTier")));
+        if ("PERFORMANCE".equals(performanceTier)) {
+            return true;
+        }
+        String resolution = text(context.get("resolution"));
+        if ("QHD".equalsIgnoreCase(resolution) || "4K".equalsIgnoreCase(resolution)) {
+            return true;
+        }
+        List<String> usageTags = stringList(context.get("usageTags"));
+        return usageTags.contains("AI_DEV") || usageTags.contains("VIDEO_EDIT");
+    }
+
+    private static boolean hasHardGpuConstraint(RequirementRow requirement) {
+        return !requiredGpuClasses(requirement).isEmpty()
+                && "MUST_INCLUDE".equalsIgnoreCase(text(requirement.parsedContext().get("hardConstraintPolicy")));
+    }
+
+    private static boolean missingHardGpuConstraint(RequirementRow requirement, List<PartCandidate> parts) {
+        List<String> required = requiredGpuClasses(requirement);
+        if (required.isEmpty() || parts.isEmpty()) {
+            return false;
+        }
+        return parts.stream()
+                .filter(part -> "GPU".equals(part.category()))
+                .map(BuildQueryService::gpuClass)
+                .noneMatch(required::contains);
+    }
+
+    private static List<String> requiredGpuClasses(RequirementRow requirement) {
+        if (requirement == null) {
+            return List.of();
+        }
+        return normalizeGpuClasses(stringList(requirement.parsedContext().get("requiredGpuClasses")));
+    }
+
+    private static boolean isMinimumBudgetRequest(RequirementRow requirement) {
+        String rawMessage = text(requirement.rawMessage()).toLowerCase(Locale.ROOT);
+        return rawMessage.contains("이상")
+                || rawMessage.contains("최소")
+                || rawMessage.contains("넘게")
+                || rawMessage.contains("넘는")
+                || rawMessage.contains("보다 높")
+                || rawMessage.contains("보다 비싸")
+                || rawMessage.contains("부터")
+                || rawMessage.contains("이하 말고")
+                || rawMessage.contains("아래 말고");
     }
 
     private static int target(int budget, BuildPlan plan, double allocation) {
@@ -1039,6 +941,18 @@ public class BuildQueryService {
 
     private static String shortSpec(PartCandidate part) {
         return firstText(stringAttr(part, "shortSpec"), part.name());
+    }
+
+    private static String gpuClass(PartCandidate part) {
+        if (part == null) {
+            return null;
+        }
+        String gpuClass = firstText(stringAttr(part, "gpuClass"), stringAttr(part, "hardwareClass"));
+        if (gpuClass == null) {
+            gpuClass = part.name();
+        }
+        List<String> normalized = normalizeGpuClasses(List.of(gpuClass));
+        return normalized.isEmpty() ? null : normalized.get(0);
     }
 
     private static String recommendedFor(String name) {
@@ -1157,120 +1071,44 @@ public class BuildQueryService {
         return result;
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> parseJsonObject(String output) {
-        try {
-            Object parsed = OBJECT_MAPPER.readValue(extractJsonObject(output), Object.class);
-            if (parsed instanceof Map<?, ?> map) {
-                Map<String, Object> result = new LinkedHashMap<>();
-                map.forEach((key, value) -> result.put(String.valueOf(key), value));
-                return result;
-            }
-            throw new IllegalArgumentException("JSON object가 아닙니다.");
-        } catch (Exception e) {
-            throw new IllegalArgumentException("LLM structured parse JSON을 해석할 수 없습니다.", e);
+    private static List<String> inferRequiredGpuClasses(String message) {
+        Matcher matcher = RTX_CLASS.matcher(message == null ? "" : message);
+        List<String> result = new ArrayList<>();
+        while (matcher.find()) {
+            result.add("RTX_" + matcher.group(1));
         }
+        return result.stream().distinct().toList();
     }
 
-    private static String extractJsonObject(String output) {
-        String text = text(output);
-        if (text == null) {
-            throw new IllegalArgumentException("LLM 응답이 비어 있습니다.");
+    private static String inferPerformanceTier(
+            String message,
+            String resolution,
+            List<String> usageTags,
+            List<String> requiredGpuClasses
+    ) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        if (requiredGpuClasses.contains("RTX_5090")
+                || containsAny(normalized, "끝판왕", "최고급", "최상급", "하이엔드", "플래그십", "제일 좋은", "가장 좋은", "예산 무관", "예산 상관", "돈 상관")) {
+            return "ENTHUSIAST";
         }
-        if (text.startsWith("```")) {
-            text = text.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceFirst("\\s*```$", "").trim();
+        if ("4K".equalsIgnoreCase(resolution)
+                || "QHD".equalsIgnoreCase(resolution)
+                || containsAny(normalized, "144hz", "240hz", "144프레임", "240프레임", "고주사율", "울트라", "풀옵", "상옵", "고사양")
+                || usageTags.contains("AI_DEV")
+                || usageTags.contains("VIDEO_EDIT")) {
+            return "PERFORMANCE";
         }
-        int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start < 0 || end <= start) {
-            throw new IllegalArgumentException("LLM 응답에서 JSON object를 찾을 수 없습니다.");
-        }
-        return text.substring(start, end + 1);
+        return "STANDARD";
     }
 
-    private static Integer firstNumber(Object first, Object fallback) {
-        Integer value = safeNumberValue(first);
-        return value == null ? safeNumberValue(fallback) : value;
-    }
-
-    private static Integer safeNumberValue(Object value) {
-        try {
-            Integer parsed = numberValue(value);
-            if (parsed != null) {
-                return parsed;
-            }
-        } catch (RuntimeException ignored) {
-            // Try Korean budget patterns below.
-        }
-        String text = text(value);
-        return text == null ? null : inferBudget(text);
-    }
-
-    private static List<String> normalizeUsageTags(List<String> values) {
-        Set<String> result = new LinkedHashSet<>();
-        for (String value : values) {
-            String normalized = value.toUpperCase(Locale.ROOT);
-            if (normalized.contains("GAME") || normalized.contains("GAMING") || value.contains("게임") || value.contains("배그")) {
-                result.add("GAMING");
-            } else if (normalized.contains("DEV") || value.contains("개발") || value.contains("IDE")) {
-                result.add("DEVELOPMENT");
-            } else if (normalized.contains("VIDEO") || value.contains("영상") || value.contains("편집")) {
-                result.add("VIDEO_EDIT");
-            } else if (normalized.contains("AI")) {
-                result.add("AI_DEV");
-            } else if (normalized.contains("GENERAL") || value.contains("일반") || value.contains("사무")) {
-                result.add("GENERAL");
+    private static boolean containsAny(String value, String... needles) {
+        String normalized = value == null ? "" : value;
+        for (String needle : needles) {
+            if (normalized.contains(needle)) {
+                return true;
             }
         }
-        return new ArrayList<>(result);
-    }
-
-    private static String normalizeResolution(String value) {
-        String upper = value == null ? null : value.toUpperCase(Locale.ROOT);
-        if (upper == null) {
-            return null;
-        }
-        if (upper.contains("4K") || upper.contains("UHD")) {
-            return "4K";
-        }
-        if (upper.contains("QHD")) {
-            return "QHD";
-        }
-        if (upper.contains("FHD")) {
-            return "FHD";
-        }
-        return null;
-    }
-
-    private static List<String> normalizeVendors(List<String> values) {
-        Set<String> result = new LinkedHashSet<>();
-        for (String value : values) {
-            String upper = value.toUpperCase(Locale.ROOT);
-            if (upper.contains("NVIDIA") || upper.contains("RTX")) {
-                result.add("NVIDIA");
-            }
-            if (upper.contains("AMD") || upper.contains("RADEON") || upper.contains("RYZEN")) {
-                result.add("AMD");
-            }
-            if (upper.contains("INTEL")) {
-                result.add("INTEL");
-            }
-        }
-        return new ArrayList<>(result);
-    }
-
-    private static List<String> normalizeMustHave(List<String> values) {
-        Set<String> result = new LinkedHashSet<>();
-        for (String value : values) {
-            String lower = value.toLowerCase(Locale.ROOT);
-            if (lower.contains("wifi") || lower.contains("wi-fi") || value.contains("와이파이")) {
-                result.add("WIFI");
-            }
-            if (lower.contains("noise") || value.contains("저소음") || value.contains("조용") || "LOW_NOISE".equalsIgnoreCase(value)) {
-                result.add("LOW_NOISE");
-            }
-        }
-        return new ArrayList<>(result);
+        return false;
     }
 
     private static String normalizePerformanceTier(String value) {
@@ -1283,36 +1121,10 @@ public class BuildQueryService {
 
     private static String normalizeBudgetPolicy(String value) {
         String upper = value == null ? null : value.toUpperCase(Locale.ROOT);
-        if ("USER_BUDGET".equals(upper) || "OPEN_BUDGET".equals(upper) || "DEFAULT_BUDGET".equals(upper)) {
+        if ("USER_BUDGET".equals(upper) || "OPEN_BUDGET".equals(upper) || "UNSPECIFIED".equals(upper)) {
             return upper;
         }
-        return "DEFAULT_BUDGET";
-    }
-
-    private static Map<String, Object> normalizeConfidence(Map<String, Object> source, Map<String, Object> fallback) {
-        return MockData.map(
-                "usageTags", confidenceValue(source.get("usageTags"), fallback.get("usageTags"), "MEDIUM"),
-                "budget", confidenceValue(source.get("budget"), fallback.get("budget"), "LOW"),
-                "resolution", confidenceValue(source.get("resolution"), fallback.get("resolution"), "LOW"),
-                "preferredVendors", confidenceValue(source.get("preferredVendors"), fallback.get("preferredVendors"), "LOW")
-        );
-    }
-
-    private static String confidenceValue(Object value, Object fallback, String defaultValue) {
-        String text = firstText(text(value), text(fallback));
-        if (text == null) {
-            return defaultValue;
-        }
-        String upper = text.toUpperCase(Locale.ROOT);
-        if ("HIGH".equals(upper) || "MEDIUM".equals(upper) || "LOW".equals(upper)) {
-            return upper;
-        }
-        return defaultValue;
-    }
-
-    private static String safeReason(RuntimeException error) {
-        String message = error.getMessage();
-        return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
+        return "UNSPECIFIED";
     }
 
     private static List<String> stringList(Object value) {
@@ -1324,6 +1136,15 @@ public class BuildQueryService {
             return List.of();
         }
         return List.of(text.split(",")).stream().map(String::trim).filter(item -> !item.isBlank()).toList();
+    }
+
+    private static List<String> normalizeGpuClasses(List<String> values) {
+        return values.stream()
+                .map(value -> value.toUpperCase(Locale.ROOT).replace(" ", "_").replace("-", "_"))
+                .map(value -> value.startsWith("RTX_") ? value : ("RTX_" + value.replace("RTX", "").replace("_", "")))
+                .filter(value -> value.matches("RTX_[0-9]{4}"))
+                .distinct()
+                .toList();
     }
 
     private static List<String> csv(String value) {
@@ -1401,14 +1222,6 @@ public class BuildQueryService {
             Integer budget,
             List<String> usageTags,
             Map<String, Object> parsedContext
-    ) {
-    }
-
-    private record RequirementParseResult(
-            Map<String, Object> parsedContext,
-            String agentSessionId,
-            String agentSummary,
-            List<String> evidenceIds
     ) {
     }
 

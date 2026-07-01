@@ -53,6 +53,10 @@ docker compose up --build
 | `NAVER_SEARCH_CLIENT_SECRET` | 가격/상품 갱신 시 필요 | 관리자 부품 offer 갱신, 내부 자산 후보 수집 | 네이버 검색 API secret입니다. 커밋 금지입니다. |
 | `AGENT_RUNNER_MODE` | 선택 | Agent 실행 방식 | 기본값은 `deterministic`입니다. 실제 LLM summary를 보려면 `llm`으로 바꿉니다. |
 | `AS_CHAT_DEFAULT_PROFILE` | 선택 | AS Chat 기본 profile | 기본값은 `AS_CHAT_FAST`입니다. |
+| `OPENAI_EMBEDDING_MODEL` | 선택 | RAG vector 검색 | 기본값은 `text-embedding-3-small`입니다. |
+| `OPENAI_EMBEDDING_DIMENSIONS` | 선택 | RAG vector 검색 | 기본값은 `1536`입니다. |
+| `RAG_VECTOR_ENABLED` | 선택 | RAG 검색 방식 | 기본값은 `true`입니다. 키/embedding이 없으면 keyword fallback을 사용합니다. |
+| `RAG_EMBEDDING_BACKFILL_ON_STARTUP` | 선택 | RAG embedding 백필 | 기본값은 `false`입니다. 비용 통제를 위해 수동 실행을 권장합니다. |
 
 팀 공통 테스트 계정:
 
@@ -89,6 +93,48 @@ docker compose down -v
 `docker compose down -v`는 PostgreSQL volume까지 삭제하므로 seed 상태로 다시 시작할 때만 사용합니다.
 
 DB schema와 seed 데이터는 Spring SQL init이 아니라 Flyway migration으로 관리합니다.
+
+## RAG 임베딩 백필
+
+`rag_evidence` 재사용 지식 청크는 Flyway에서 생성하지만, 외부 API 호출이 필요한 embedding 값은 Flyway에서 만들지 않습니다. 실제 pgvector RAG 검색을 쓰려면 Docker 기동 후 한 번 백필합니다.
+
+Windows:
+
+```powershell
+.\scripts\backfill-rag-embeddings.ps1
+```
+
+macOS/Linux:
+
+```bash
+bash scripts/backfill-rag-embeddings.sh
+```
+
+기본 seed 관리자 계정(`admin@example.com` / `passw0rd!`)으로 로그인해 `POST /api/admin/rag-embeddings/backfill`을 호출합니다. 다른 환경에서는 아래처럼 바꿀 수 있습니다.
+
+```powershell
+.\scripts\backfill-rag-embeddings.ps1 -ApiBaseUrl "http://localhost:8080" -AdminEmail "admin@example.com" -AdminPassword "passw0rd!" -Limit 200
+```
+
+```bash
+API_BASE_URL=http://localhost:8080 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='passw0rd!' LIMIT=200 bash scripts/backfill-rag-embeddings.sh
+```
+
+성공 예시:
+
+```json
+{
+  "scanned": 28,
+  "updated": 28,
+  "skipped": 0,
+  "reusableTotal": 28,
+  "embeddedTotal": 28,
+  "embeddingModel": "text-embedding-3-small",
+  "embeddingDimensions": 1536
+}
+```
+
+이미 최신 embedding이 채워진 상태면 `updated`는 `0`, `skipped`는 기존 row 수로 표시됩니다.
 
 | 파일 | 역할 |
 | --- | --- |

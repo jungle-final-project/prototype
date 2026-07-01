@@ -81,7 +81,7 @@ MVP 기준 결정값:
 | frontend files | `features/quote/**`, `features/auth/pages/**` |
 | backend packages | `build`, `requirement`, `user`, `auth` |
 | DB tables | `requirements`, `builds`, `build_items`, `users`, `user_auth_providers`, `refresh_tokens` |
-| API endpoints | `POST /api/requirements/parse`, `POST /api/builds/recommend`, `POST /api/ai/build-chat`, `GET /api/builds/{id}`, `GET /api/builds/history`, `POST /api/builds/{id}/change-part`, `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange` |
+| API endpoints | `POST /api/requirements/parse`, `POST /api/builds/recommend`, `GET /api/builds/{id}`, `GET /api/builds/history`, `POST /api/builds/{id}/change-part`, `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange` |
 | 협업자 | Auth 공통/token/guard/security는 5번, Tool/RAG 근거는 3번, parts 데이터는 2번 |
 
 Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/src/lib/api.ts`, `RequireAdmin`, admin guard, security allowlist, migration 순서 관점에서 협업한다.
@@ -107,7 +107,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | frontend files | `features/support/**` 중 AS AI Chat 화면/API, `features/admin/agent/**`, `features/admin/evidence/**` |
 | backend packages | `agent`, `rag` |
 | DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages`, `llm_generations` |
-| API endpoints | `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence/{id}` |
+| API endpoints | `POST /api/ai/build-chat`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence/{id}` |
 | 협업자 | 추천 결과 UI는 1번, Tool 판정 로직은 2번, AS 원인 후보는 4번 |
 
 ### 4번: PC Agent/AS
@@ -175,7 +175,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | `POST /api/auth/exchange` | 1번 | 5번 |
 | `POST /api/requirements/parse` | 1번 | - |
 | `POST /api/builds/recommend` | 1번 | 2번, 3번 |
-| `POST /api/ai/build-chat` | 1번 | 2번 |
+| `POST /api/ai/build-chat` | 3번 | 1번, 2번 |
 | `GET /api/builds/{id}` | 1번 | 2번, 3번 |
 | `GET /api/builds/history` | 1번 | - |
 | `POST /api/builds/{id}/change-part` | 1번 | 2번 |

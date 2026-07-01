@@ -45,7 +45,7 @@ class QuoteDraftQueryServiceTest {
     }
 
     @Test
-    void applyAiBuildReplacesRequestedCategoriesAndReturnsQuoteDraft() {
+    void applyAiBuildReplacesWholeDraftAndReturnsQuoteDraft() {
         when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
         when(jdbcTemplate.queryForList(anyString(), eq("part-cpu-ai"))).thenReturn(List.of(part("part-cpu-ai", 101L, "CPU", "Ryzen AI CPU", 420000)));
         when(jdbcTemplate.queryForList(anyString(), eq("part-gpu-ai"))).thenReturn(List.of(part("part-gpu-ai", 201L, "GPU", "RTX AI GPU", 890000)));

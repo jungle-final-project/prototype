@@ -44,7 +44,7 @@ test('updates header from login response before auth me finishes', async ({ page
     });
   });
   await page.route('**/api/auth/me', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -57,13 +57,49 @@ test('updates header from login response before auth me finishes', async ({ page
     });
   });
 
-  await page.goto('/login');
+  await page.goto('/login?redirect=%2Fparts%2Fpart-gpu-detail-test');
   await page.getByLabel('이메일').fill('fast@example.com');
   await page.getByLabel('비밀번호').fill('passw0rd!');
   await page.getByRole('button', { name: '로그인' }).click();
 
-  await expect(page.getByText('로그인됨 · fast@example.com · USER')).toBeVisible({ timeout: 500 });
-  await expect(page.getByText('Fast User')).toBeVisible({ timeout: 500 });
+  await expect(page).toHaveURL('/');
+  await expect(page.getByText('로그인됨 · fast@example.com · USER')).toBeVisible({ timeout: 2_000 });
+  await expect(page.getByText('Fast User')).toBeVisible({ timeout: 2_000 });
+  await expect(page.getByRole('navigation').getByRole('link', { name: '관리자' })).toHaveCount(0);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('buildgraph.authUser') ?? '{}'))).toMatchObject({
+    email: 'fast@example.com',
+    name: 'Fast User',
+    role: 'USER'
+  });
+});
+
+test('shows admin navigation only for ADMIN role', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'admin-001',
+      email: 'admin@example.com',
+      name: 'Admin User',
+      role: 'ADMIN'
+    }));
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'admin-001',
+        email: 'admin@example.com',
+        name: 'Admin User',
+        role: 'ADMIN'
+      })
+    });
+  });
+
+  await page.goto('/login');
+
+  await expect(page.getByText('로그인됨 · admin@example.com · ADMIN')).toBeVisible();
+  await expect(page.getByRole('navigation').getByRole('link', { name: '관리자' })).toHaveAttribute('href', '/admin');
 });
 
 test('refreshes expired access token and retries current user request', async ({ page }) => {
@@ -126,6 +162,55 @@ test('refreshes expired access token and retries current user request', async ({
   expect(refreshCalls).toBe(1);
   expect(await page.evaluate(() => localStorage.getItem('buildgraph.token'))).toBe('refreshed-access-token');
   expect(await page.evaluate(() => localStorage.getItem('buildgraph.refreshToken'))).toBe('rotated-refresh-token');
+});
+
+test('calls logout API and clears stored auth tokens', async ({ page }) => {
+  let logoutCalled = false;
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'logout-access-token');
+    localStorage.setItem('buildgraph.refreshToken', 'logout-refresh-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: '00000000-0000-4000-8000-000000001066',
+      email: 'logout@example.com',
+      name: 'Logout User',
+      role: 'USER'
+    }));
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: '00000000-0000-4000-8000-000000001066',
+        email: 'logout@example.com',
+        name: 'Logout User',
+        role: 'USER'
+      })
+    });
+  });
+  await page.route('**/api/auth/logout', async (route) => {
+    logoutCalled = true;
+    expect(route.request().headers().authorization).toBe('Bearer logout-access-token');
+    expect(JSON.parse(route.request().postData() ?? '{}')).toEqual({
+      refreshToken: 'logout-refresh-token'
+    });
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto('/login');
+  await expect(page.getByText('Logout User')).toBeVisible();
+  await page.locator('header button').last().click();
+
+  expect(logoutCalled).toBe(true);
+  await page.waitForFunction(() =>
+    localStorage.getItem('buildgraph.token') === null &&
+    localStorage.getItem('buildgraph.refreshToken') === null &&
+    localStorage.getItem('buildgraph.authUser') === null
+  );
+  expect(await page.evaluate(() => localStorage.getItem('buildgraph.token'))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('buildgraph.refreshToken'))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('buildgraph.authUser'))).toBeNull();
+  await expect(page).toHaveURL('/login');
 });
 
 test('submits signup form with the OpenAPI user payload', async ({ page }) => {

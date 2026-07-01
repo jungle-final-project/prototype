@@ -1,14 +1,14 @@
 import { NavLink } from 'react-router-dom';
 
-export function PrimaryNav() {
-  const nav = [
+export function PrimaryNav({ isAdmin = false }: { isAdmin?: boolean }) {
+  const nav: Array<[string, string]> = [
     ['/', '홈'],
-    ['/requirements/new', 'AI 견적'],
+    // ['/requirements/new', 'AI 견적'],
     ['/self-quote', '셀프 견적'],
     ['/builds/00000000-0000-4000-8000-000000002001', '추천 결과'],
     ['/my/quotes', '목표가 알림'],
     ['/support/new', 'AS 접수'],
-    ['/admin', '관리자']
+    ...(isAdmin ? [['/admin', '관리자'] as [string, string]] : [])
   ];
   return (
     <nav className="border-b border-commerce-line bg-white text-sm text-commerce-ink">

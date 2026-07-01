@@ -27,7 +27,7 @@ const routes = [
 for (const route of routes) {
   test(`renders ${route}`, async ({ page }) => {
     await page.goto(route);
-    await expect(page.locator('body')).toContainText('BuildGraph');
+    await expect(page.locator('body')).toContainText('스펙업');
     await expect(page.getByRole('main')).toBeVisible();
   });
 }
