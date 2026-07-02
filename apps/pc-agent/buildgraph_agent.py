@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
+import mimetypes
 import random
 import sys
+import time
 import urllib.error
 import urllib.request
+import uuid
+import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +24,12 @@ except Exception:  # pragma: no cover - optional for prototype environments
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_CONFIG_PATH = Path("agent-config.json")
+DEFAULT_LOG_DIR = Path("out/logs")
+DEFAULT_LOG_FILE = "agent-metrics.jsonl"
+DEFAULT_RANGE_MINUTES = 30
+DEFAULT_SCHEMA_VERSION = 1
 REGISTER_PATH = "/api/agent/devices/register"
+LOG_UPLOAD_PATH = "/api/agent/log-uploads"
 REGISTERED_STATUS = "REGISTERED"
 UNREGISTERED_STATUS = "UNREGISTERED"
 
@@ -32,6 +42,14 @@ class RegisterError(RuntimeError):
     pass
 
 
+class AgentError(RuntimeError):
+    pass
+
+
+class UploadError(AgentError):
+    pass
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     api_base_url: str
@@ -41,17 +59,21 @@ class AgentConfig:
     agent_version: str
     policy_version: str
     agent_token: str | None = None
+    log_dir: Path = DEFAULT_LOG_DIR
+    schema_version: int = DEFAULT_SCHEMA_VERSION
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
         return cls(
-            api_base_url=required_config_text(data, "apiBaseUrl"),
+            api_base_url=required_config_text(data, "apiBaseUrl").rstrip("/"),
             activation_token=required_config_text(data, "activationToken"),
             device_fingerprint_hash=required_config_text(data, "deviceFingerprintHash"),
             os_version=required_config_text(data, "osVersion"),
             agent_version=required_config_text(data, "agentVersion"),
             policy_version=required_config_text(data, "policyVersion"),
             agent_token=optional_config_text(data, "agentToken"),
+            log_dir=optional_config_path(data, "logDir", DEFAULT_LOG_DIR),
+            schema_version=optional_config_int(data, "schemaVersion", DEFAULT_SCHEMA_VERSION),
         )
 
     def registration_status(self) -> str:
@@ -79,6 +101,20 @@ def optional_config_text(data: dict[str, Any], field: str) -> str | None:
     return value or None
 
 
+def optional_config_path(data: dict[str, Any], field: str, default: Path) -> Path:
+    value = optional_config_text(data, field)
+    return Path(value) if value else default
+
+
+def optional_config_int(data: dict[str, Any], field: str, default: int) -> int:
+    if field not in data or data[field] is None:
+        return default
+    value = data[field]
+    if not isinstance(value, int):
+        raise ConfigError(f"Config field must be an integer when provided: {field}")
+    return value
+
+
 def read_config_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ConfigError(f"Config file not found: {path}")
@@ -97,6 +133,10 @@ def load_config(path: Path) -> AgentConfig:
     return AgentConfig.from_dict(data)
 
 
+def log_file(config: AgentConfig) -> Path:
+    return config.log_dir / DEFAULT_LOG_FILE
+
+
 def print_status(config_path: Path) -> None:
     config = load_config(config_path)
     print(config.registration_status())
@@ -104,9 +144,20 @@ def print_status(config_path: Path) -> None:
 
 def print_doctor(config_path: Path) -> None:
     config = load_config(config_path)
+    path = log_file(config)
+    config.log_dir.mkdir(parents=True, exist_ok=True)
     print("config: ok")
     print(f"apiBaseUrl: {config.api_base_url}")
     print(f"registration: {config.registration_status()}")
+    print(f"logDir: {config.log_dir.resolve()}")
+    print(f"logFile: {path}")
+    print(f"logBytes: {path.stat().st_size if path.exists() else 0}")
+    print(f"agentVersion: {config.agent_version}")
+    print(f"policyVersion: {config.policy_version}")
+    if config.agent_token:
+        print("agentToken: present")
+    else:
+        print("agentToken: missing; run register first or wait for Goal 10 token storage.")
 
 
 def register_endpoint(api_base_url: str) -> str:
@@ -185,23 +236,28 @@ def register_agent(config_path: Path) -> None:
 def metric_snapshot(ts: datetime, index: int) -> dict:
     if psutil:
         cpu_usage = psutil.cpu_percent(interval=0.05)
-        ram_usage = psutil.virtual_memory().percent
+        memory_usage = psutil.virtual_memory().percent
         disk_usage = psutil.disk_usage("/").percent
     else:
         cpu_usage = 38 + index * 3 + random.random() * 8
-        ram_usage = 62 + index * 2 + random.random() * 6
+        memory_usage = 62 + index * 2 + random.random() * 6
         disk_usage = 49 + random.random()
 
+    event_type = "DISPLAY_DRIVER_WARNING" if index % 7 == 0 else "DEMO_METRIC"
+    message = "Display driver warning observed." if event_type != "DEMO_METRIC" else "Demo metric collected."
     return {
         "timestamp": ts.isoformat(),
         "cpuUsage": round(cpu_usage, 1),
-        "ramUsage": round(ram_usage, 1),
+        "memoryUsage": round(memory_usage, 1),
+        "ramUsage": round(memory_usage, 1),
+        "eventType": event_type,
+        "message": message,
         "gpuUsage": round(min(98, 64 + index * 4 + random.random() * 8), 1),
         "vramUsage": round(min(95, 58 + index * 3 + random.random() * 5), 1),
         "gpuTemp": round(min(91, 70 + index * 1.8 + random.random() * 3), 1),
         "cpuTemp": round(min(86, 62 + index * 1.2 + random.random() * 2), 1),
         "diskUsage": round(disk_usage, 1),
-        "osErrorEvent": None if index % 7 else "Display driver warning",
+        "osErrorEvent": None if event_type == "DEMO_METRIC" else "Display driver warning",
         "topCpuProcess": "game.exe" if index % 2 else "ide64.exe",
         "topRamProcess": "game.exe",
     }
@@ -216,7 +272,7 @@ def write_sample(out: Path, count: int, interval_seconds: int) -> None:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def export_recent(source: Path, out: Path, minutes: int) -> None:
+def read_recent_rows(source: Path, minutes: int) -> list[dict]:
     cutoff = datetime.now(KST) - timedelta(minutes=minutes)
     rows: list[dict] = []
     with source.open("r", encoding="utf-8") as file:
@@ -230,11 +286,154 @@ def export_recent(source: Path, out: Path, minutes: int) -> None:
                 continue
             if ts >= cutoff:
                 rows.append(row)
+    return rows
 
+
+def export_recent(source: Path, out: Path, minutes: int) -> None:
+    rows = read_recent_rows(source, minutes)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as file:
         for row in rows:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def append_metric(config: AgentConfig, index: int = 0) -> Path:
+    path = log_file(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = metric_snapshot(datetime.now(KST), index)
+    row["agentVersion"] = config.agent_version
+    row["policyVersion"] = config.policy_version
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path
+
+
+def gzip_recent(source: Path, out: Path, minutes: int = DEFAULT_RANGE_MINUTES) -> int:
+    rows = read_recent_rows(source, minutes)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(out, "wt", encoding="utf-8") as file:
+        for row in rows:
+            file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return out.stat().st_size
+
+
+def support_url(api_base_url: str, ticket_id: str) -> str:
+    base = api_base_url.rstrip("/")
+    if base.endswith(":8080"):
+        base = base[:-5] + ":5173"
+    return f"{base}/support/{ticket_id}"
+
+
+def build_multipart(fields: dict[str, str], file_field: str, file_path: Path) -> tuple[bytes, str]:
+    boundary = f"----buildgraph-agent-{uuid.uuid4().hex}"
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                f"{value}\r\n"
+            ).encode("utf-8")
+        )
+
+    content_type = mimetypes.guess_type(file_path.name)[0] or "application/gzip"
+    parts.append(
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{file_path.name}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+    )
+    parts.append(file_path.read_bytes())
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def upload_gzip(
+    config: AgentConfig,
+    gzip_path: Path,
+    idempotency_key: str,
+    symptom: str | None = None,
+) -> dict:
+    if not config.agent_token:
+        raise UploadError("agentToken is missing. Run register first or wait for Goal 10 token storage.")
+    if gzip_path.stat().st_size == 0:
+        raise UploadError(f"gzip file is empty: {gzip_path}")
+
+    fields = {
+        "rangeMinutes": str(DEFAULT_RANGE_MINUTES),
+        "schemaVersion": str(config.schema_version),
+    }
+    if symptom:
+        fields["symptom"] = symptom
+    body, content_type = build_multipart(fields, "file", gzip_path)
+    upload_url = config.api_base_url.rstrip("/") + LOG_UPLOAD_PATH
+    request = urllib.request.Request(
+        upload_url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.agent_token}",
+            "Idempotency-Key": idempotency_key,
+            "Content-Type": content_type,
+            "Content-Length": str(len(body)),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exception:
+        detail = exception.read().decode("utf-8", errors="replace")
+        raise UploadError(f"upload failed: HTTP {exception.code} {detail}") from exception
+    except urllib.error.URLError as exception:
+        raise UploadError(f"upload failed: {exception.reason}") from exception
+
+    try:
+        result = json.loads(payload)
+    except json.JSONDecodeError as exception:
+        raise UploadError(f"upload response is not JSON: {payload[:200]}") from exception
+
+    if not isinstance(result, dict) or not result.get("ticketId"):
+        raise UploadError(f"upload response did not include ticketId: {result}")
+    return result
+
+
+def collect_metrics(config: AgentConfig, iterations: int | None, interval_seconds: int) -> None:
+    index = 0
+    while iterations is None or index < iterations:
+        path = append_metric(config, index)
+        print(f"appended demo metric to {path}")
+        index += 1
+        if iterations is None or index < iterations:
+            time.sleep(interval_seconds)
+
+
+def upload_recent(
+    config: AgentConfig,
+    work_dir: Path,
+    symptom: str | None,
+    idempotency_key: str | None,
+    open_browser: bool,
+) -> None:
+    source = log_file(config)
+    if not source.exists():
+        raise AgentError(f"log file does not exist: {source}")
+    key = idempotency_key or f"agent-upload-{uuid.uuid4()}"
+    gzip_path = work_dir / "recent-30m.jsonl.gz"
+    size = gzip_recent(source, gzip_path, DEFAULT_RANGE_MINUTES)
+    print(f"created gzip: {gzip_path} ({size} bytes)")
+    print(f"upload path: {LOG_UPLOAD_PATH}")
+    print(f"rangeMinutes: {DEFAULT_RANGE_MINUTES}")
+    print(f"Idempotency-Key: {key}")
+    print("Replay the same command with this Idempotency-Key to verify duplicate ticket prevention.")
+    result = upload_gzip(config, gzip_path, key, symptom)
+    ticket_id = str(result["ticketId"])
+    url = support_url(config.api_base_url, ticket_id)
+    print(f"ticketId: {ticket_id}")
+    print(f"supportUrl: {url}")
+    if open_browser:
+        webbrowser.open(url)
+        print("opened support ticket in default browser")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -260,6 +459,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     register = sub.add_parser("register", help="register this device and save the returned agent token")
     register.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
 
+    collect = sub.add_parser("collect", help="append demo metrics every 5 seconds")
+    collect.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    collect.add_argument("--iterations", type=int, default=1, help="number of demo rows to append; use 0 for forever")
+    collect.add_argument("--interval-seconds", type=int, default=5)
+
+    upload = sub.add_parser("upload", help="gzip recent 30 minute JSONL rows and upload to Agent AS API")
+    upload.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    upload.add_argument("--work-dir", type=Path, default=Path("out"))
+    upload.add_argument("--symptom", default=None)
+    upload.add_argument("--idempotency-key", default=None)
+    upload.add_argument("--no-open", action="store_true", help="do not open /support/{ticketId} in the default browser")
+
     args = parser.parse_args(argv)
 
     try:
@@ -275,12 +486,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_doctor(args.config)
         elif args.command == "register":
             register_agent(args.config)
+        elif args.command == "collect":
+            config = load_config(args.config)
+            iterations = None if args.iterations == 0 else args.iterations
+            collect_metrics(config, iterations, args.interval_seconds)
+        elif args.command == "upload":
+            config = load_config(args.config)
+            upload_recent(config, args.work_dir, args.symptom, args.idempotency_key, not args.no_open)
     except ConfigError as exception:
         print(f"config error: {exception}", file=sys.stderr)
         return 2
     except RegisterError as exception:
         print(f"register error: {exception}", file=sys.stderr)
         return 3
+    except AgentError as exception:
+        print(f"agent error: {exception}", file=sys.stderr)
+        return 4
     return 0
 
 
