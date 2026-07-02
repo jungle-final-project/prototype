@@ -340,15 +340,31 @@ export function SupportNewPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-bold text-slate-600">최근 30분 로그 파일</label>
-              <button
-                type="button"
-                className="mb-2 rounded border border-slate-300 px-3 py-2 text-xs font-bold"
-                onClick={downloadSampleJsonl}
-              >
-                샘플 JSONL 다운로드
-              </button>
+              <div className="mb-2 flex flex-wrap gap-2">
+                <a
+                  className="rounded border border-brand-blue px-3 py-2 text-xs font-bold text-brand-blue"
+                  href="/downloads/pc-agent/agent.exe"
+                  download
+                >
+                  PC Agent 다운로드
+                </a>
+                <a
+                  className="rounded border border-slate-300 px-3 py-2 text-xs font-bold"
+                  href="/downloads/pc-agent/README.txt"
+                  download
+                >
+                  실행 안내
+                </a>
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 px-3 py-2 text-xs font-bold"
+                  onClick={downloadSampleJsonl}
+                >
+                  샘플 JSONL 다운로드
+                </button>
+              </div>
               <p className="mb-2 text-xs leading-5 text-slate-500">
-                JSON Lines 형식 예시입니다. 서버 검증 규칙을 확정하는 파일은 아닙니다.
+                PC Agent exe는 로컬 빌드 산출물이며, 샘플 JSONL은 업로드 테스트용 예시입니다.
               </p>
               <input
                 className="block w-full rounded border border-slate-300 p-3 text-sm file:mr-4 file:rounded file:border-0 file:bg-brand-blue file:px-4 file:py-2 file:text-sm file:font-bold file:text-white"

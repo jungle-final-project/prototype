@@ -46,19 +46,29 @@ python buildgraph_agent.py upload --config ./agent-config.json --symptom "게임
 python buildgraph_agent.py upload --config ./agent-config.json --idempotency-key agent-upload-demo-001 --no-open
 ```
 
+## Windows exe 빌드
+
+개발용 Windows 실행 파일은 PyInstaller로 생성합니다. 서명, installer, tray app, Windows Service, auto-update는 아직 포함하지 않습니다.
+
+```powershell
+cd apps/pc-agent
+build-agent-exe.cmd
+.\dist\agent.exe doctor --config agent-config.example.json
+```
+
+로컬 웹 데모에서 내려받는 파일은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다.
+
 ## 출력 예시
 
 `status` 예시:
 
 ```text
-BuildGraph PC Agent status
 REGISTERED
 ```
 
 `doctor` 예시:
 
 ```text
-BuildGraph PC Agent doctor
 config: ok
 apiBaseUrl: http://localhost:8080
 registration: REGISTERED
