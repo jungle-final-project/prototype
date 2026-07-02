@@ -74,6 +74,29 @@ public class TicketQueryService {
                     WHERE public_id = ?::uuid
                     """, adminNote, id);
         }
+        String supportDecision = request == null ? null : stringOrNull(request.get("supportDecision"));
+        String reviewStatus = request == null ? null : stringOrNull(request.get("reviewStatus"));
+        String riskLevel = request == null ? null : stringOrNull(request.get("riskLevel"));
+        Boolean autoResponseAllowed = request == null || request.get("autoResponseAllowed") == null
+                ? null
+                : Boolean.valueOf(request.get("autoResponseAllowed").toString());
+        if (supportDecision != null || reviewStatus != null || riskLevel != null || autoResponseAllowed != null) {
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET support_decision = COALESCE(?, support_decision),
+                        review_status = COALESCE(?, review_status),
+                        risk_level = COALESCE(?, risk_level),
+                        auto_response_allowed = COALESCE(?, auto_response_allowed),
+                        updated_at = now()
+                    WHERE public_id = ?::uuid
+                    """,
+                    supportDecision,
+                    reviewStatus == null && supportDecision != null ? "APPROVED" : reviewStatus,
+                    riskLevel,
+                    autoResponseAllowed,
+                    id
+            );
+        }
         return ticket(id);
     }
 
@@ -81,6 +104,11 @@ public class TicketQueryService {
         return """
                 SELECT t.public_id::text AS id,
                        t.status,
+                       t.analysis_status,
+                       t.review_status,
+                       t.support_decision,
+                       t.risk_level,
+                       t.auto_response_allowed,
                        t.symptom,
                        lu.public_id::text AS log_upload_id,
                        admin.public_id::text AS assigned_admin_id,
@@ -99,6 +127,11 @@ public class TicketQueryService {
         return MockData.map(
                 "id", DbValueMapper.string(row, "id"),
                 "status", DbValueMapper.string(row, "status"),
+                "analysisStatus", DbValueMapper.string(row, "analysis_status"),
+                "reviewStatus", DbValueMapper.string(row, "review_status"),
+                "supportDecision", DbValueMapper.string(row, "support_decision"),
+                "riskLevel", DbValueMapper.string(row, "risk_level"),
+                "autoResponseAllowed", row.get("auto_response_allowed"),
                 "symptom", DbValueMapper.string(row, "symptom"),
                 "logUploadId", DbValueMapper.string(row, "log_upload_id"),
                 "assignedAdminId", DbValueMapper.string(row, "assigned_admin_id"),

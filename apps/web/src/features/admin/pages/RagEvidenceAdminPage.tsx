@@ -5,15 +5,24 @@ import { getRagEvidence } from '../adminApi';
 import type { RagEvidenceDetail } from '../adminApi';
 
 export function RagEvidenceAdminPage() {
-  const { id = '00000000-0000-4000-8000-000000004001' } = useParams();
+  const { id } = useParams();
   const {
     data: evidence,
     isError,
     isLoading
   } = useQuery({
     queryKey: ['admin-rag-evidence', id],
-    queryFn: () => getRagEvidence(id)
+    queryFn: () => getRagEvidence(id ?? ''),
+    enabled: Boolean(id)
   });
+
+  if (!id) {
+    return (
+      <AdminShell title="RAG Evidence 상세">
+        <StateMessage type="info" title="RAG 근거를 선택하세요" body="Agent 세션 상세에서 RAG evidence 항목을 선택해야 합니다." />
+      </AdminShell>
+    );
+  }
 
   if (isLoading) {
     return (

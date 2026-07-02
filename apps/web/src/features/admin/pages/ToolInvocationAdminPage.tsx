@@ -5,15 +5,24 @@ import { getToolInvocation } from '../adminApi';
 import type { ToolInvocation } from '../adminApi';
 
 export function ToolInvocationAdminPage() {
-  const { id = '00000000-0000-4000-8000-000000005002' } = useParams();
+  const { id } = useParams();
   const {
     data: invocation,
     isError,
     isLoading
   } = useQuery({
     queryKey: ['admin-tool-invocation', id],
-    queryFn: () => getToolInvocation(id)
+    queryFn: () => getToolInvocation(id ?? ''),
+    enabled: Boolean(id)
   });
+
+  if (!id) {
+    return (
+      <AdminShell title="Tool Invocation 상세">
+        <StateMessage type="info" title="Tool 호출을 선택하세요" body="Agent 세션 상세에서 Tool invocation 항목을 선택해야 합니다." />
+      </AdminShell>
+    );
+  }
 
   if (isLoading) {
     return (

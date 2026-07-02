@@ -1,18 +1,22 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, MetricCard, Panel, StateMessage, StatusBadge } from '../../../components/ui';
-import { getAdminDashboard, getRecentAdminAuditLogs } from '../adminApi';
+import { getAdminAgentSessions, getAdminDashboard, getRecentAdminAuditLogs } from '../adminApi';
 
 function countLabel(value: number | null | undefined) {
   return `${value ?? 0}건`;
 }
 
-const agentSessionId = '00000000-0000-4000-8000-000000003001';
-
 export function AdminDashboardPage() {
   const { data: dashboard, isError, isLoading } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn: getAdminDashboard
+  });
+  const agentSessionsQuery = useQuery({
+    queryKey: ['admin-agent-sessions'],
+    queryFn: getAdminAgentSessions,
+    enabled: Boolean(dashboard),
+    retry: false
   });
   const auditLogsQuery = useQuery({
     queryKey: ['admin-audit-logs-recent'],
@@ -39,6 +43,14 @@ export function AdminDashboardPage() {
 
   const statusLabel = dashboard.degraded ? '주의' : '정상';
   const generatedAt = dashboard.generatedAt ?? '갱신 시간 없음';
+  const agentSessionRows = (agentSessionsQuery.data?.items ?? []).slice(0, 5).map((session) => ({
+    세션: session.id,
+    상태: <StatusBadge status={session.status} />,
+    사용자: session.userId ?? '-',
+    생성일: session.createdAt ?? '-',
+    이동: <Link className="font-bold text-brand-blue" to={`/admin/agent-sessions/${session.id}`}>상세</Link>
+  }));
+  const firstAgentSessionId = agentSessionsQuery.data?.items?.[0]?.id;
   const auditLogRows = (auditLogsQuery.data?.items ?? []).map((item) => ({
     action: item.action ?? 'UNKNOWN',
     targetType: item.targetType ?? 'unknown',
@@ -62,7 +74,9 @@ export function AdminDashboardPage() {
       작업: 'Mock Worker',
       상태: <StatusBadge status="READY" />,
       owner: '3번/5번',
-      이동: <Link className="font-bold text-brand-blue" to={`/admin/agent-sessions/${agentSessionId}`}>Agent/RAG</Link>
+      이동: firstAgentSessionId
+        ? <Link className="font-bold text-brand-blue" to={`/admin/agent-sessions/${firstAgentSessionId}`}>Agent/RAG</Link>
+        : '세션 없음'
     },
     {
       작업: 'k6 Smoke',
@@ -80,7 +94,9 @@ export function AdminDashboardPage() {
     {
       영역: 'Agent/RAG',
       owner: '3번',
-      처리: <Link className="font-bold text-brand-blue" to={`/admin/agent-sessions/${agentSessionId}`}>세션 확인</Link>
+      처리: firstAgentSessionId
+        ? <Link className="font-bold text-brand-blue" to={`/admin/agent-sessions/${firstAgentSessionId}`}>세션 확인</Link>
+        : '세션 없음'
     },
     {
       영역: 'AS 티켓',
@@ -113,20 +129,15 @@ export function AdminDashboardPage() {
       </div>
       <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_420px]">
         <Panel title="최근 Agent 세션 요약">
-          <DataTable columns={['세션', '상태', '요약', '이동']} rows={[
-            {
-              세션: agentSessionId,
-              상태: <StatusBadge status="PASS" />,
-              요약: '추천 근거 생성 완료',
-              이동: <Link className="font-bold text-brand-blue" to={`/admin/agent-sessions/${agentSessionId}`}>상세</Link>
-            },
-            {
-              세션: 'session-1002',
-              상태: <StatusBadge status="WARN" />,
-              요약: '도메인 owner 확인 필요',
-              이동: '대기'
-            }
-          ]} />
+          {agentSessionsQuery.isLoading ? (
+            <StateMessage type="info" title="Agent 세션 로딩 중" body="최근 Agent 세션을 불러오고 있습니다." />
+          ) : agentSessionsQuery.isError ? (
+            <StateMessage type="warn" title="Agent 세션 조회 실패" body="관리자 Agent 세션 목록 API 응답을 불러오지 못했습니다." />
+          ) : agentSessionRows.length > 0 ? (
+            <DataTable columns={['세션', '상태', '사용자', '생성일', '이동']} rows={agentSessionRows} />
+          ) : (
+            <StateMessage type="info" title="Agent 세션 없음" body="표시할 Agent 세션이 없습니다." />
+          )}
         </Panel>
         <Panel title="운영 상태">
           <StateMessage
