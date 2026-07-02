@@ -90,8 +90,10 @@ class PcAgentControllerSecurityTest {
                                 {
                                   "activationToken": "demo-agent-activation-token",
                                   "deviceFingerprintHash": "fingerprint-hash",
+                                  "registrationIdempotencyKey": "register-key",
                                   "osVersion": "Windows 11",
-                                  "agentVersion": "0.1.0"
+                                  "agentVersion": "0.1.0",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isCreated())
@@ -100,6 +102,28 @@ class PcAgentControllerSecurityTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
 
         verify(pcAgentAsService).register(anyMap());
+        verifyNoInteractions(agentTokenAuthenticationService);
+    }
+
+    @Test
+    void registerRejectsAuthorizationHeaderToAvoidJwtAgentTokenMixing() throws Exception {
+        mockMvc.perform(post("/api/agent/devices/register")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "activationToken": "demo-agent-activation-token",
+                                  "deviceFingerprintHash": "fingerprint-hash",
+                                  "registrationIdempotencyKey": "register-key",
+                                  "osVersion": "Windows 11",
+                                  "agentVersion": "0.1.0",
+                                  "policyVersion": "policy-v1"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(pcAgentAsService);
         verifyNoInteractions(agentTokenAuthenticationService);
     }
 
@@ -113,12 +137,70 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
                                   "accepted": true
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void authenticatedAgentHeartbeatRequiresIdempotencyKey() throws Exception {
+        authenticateAgent();
+
+        mockMvc.perform(post("/api/agent/heartbeat")
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "agentVersion": "0.1.0",
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void consentAndHeartbeatRejectInvalidAgentTokenBeforeIdempotency() throws Exception {
+        when(agentTokenAuthenticationService.authenticate("bad-agent-token"))
+                .thenReturn(AgentTokenAuthenticationResult.invalid());
+
+        mockMvc.perform(post("/api/agent/consents")
+                        .header("Authorization", "Bearer bad-agent-token")
+                        .header("Idempotency-Key", "consent-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
+                                  "accepted": true
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        mockMvc.perform(post("/api/agent/heartbeat")
+                        .header("Authorization", "Bearer bad-agent-token")
+                        .header("Idempotency-Key", "heartbeat-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "agentVersion": "0.1.0",
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentIdempotencyService);
         verifyNoInteractions(pcAgentAsService);
     }
 
@@ -152,6 +234,7 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
                                   "accepted": true
                                 }
                                 """))
@@ -166,7 +249,8 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "agentVersion": "0.1.0",
-                                  "serviceStatus": "RUNNING"
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -243,8 +327,10 @@ class PcAgentControllerSecurityTest {
                                 {
                                   "activationToken": "demo-agent-activation-token",
                                   "deviceFingerprintHash": "fingerprint-hash",
+                                  "registrationIdempotencyKey": "register-key",
                                   "osVersion": "Windows 11",
-                                  "agentVersion": "0.1.0"
+                                  "agentVersion": "0.1.0",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isCreated())
@@ -257,6 +343,7 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
                                   "accepted": true
                                 }
                                 """))
@@ -270,7 +357,8 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "agentVersion": "0.1.0",
-                                  "serviceStatus": "RUNNING"
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isOk());
