@@ -151,6 +151,45 @@ class TicketQueryServiceTest {
     }
 
     @Test
+    void updateAcceptsFinalScenarioSupportDecisionEnums() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN",
+                        "review_status", "REQUIRED",
+                        "support_decision", "NEEDS_MORE_INFO"
+                )))
+                .thenReturn(List.of(MockData.map(
+                        "id", "ticket-public-id",
+                        "status", "OPEN",
+                        "analysis_status", "RULE_READY",
+                        "review_status", "APPROVED",
+                        "support_decision", "REPAIR_OR_REPLACE",
+                        "risk_level", "HIGH",
+                        "auto_response_allowed", false,
+                        "symptom", "SMART critical error",
+                        "cause_candidates", "[]",
+                        "upgrade_candidates", "[]"
+                )));
+
+        Map<String, Object> response = service.update("ticket-public-id", MockData.map(
+                "supportDecision", "REPAIR_OR_REPLACE"
+        ), admin);
+
+        assertThat(response.get("supportDecision")).isEqualTo("REPAIR_OR_REPLACE");
+        verify(jdbcTemplate).update(
+                contains("support_decision"),
+                eq("REPAIR_OR_REPLACE"),
+                eq("APPROVED"),
+                isNull(),
+                isNull(),
+                eq("ticket-public-id")
+        );
+    }
+
+    @Test
     void updateStoresAssignedAdminPublicId() {
         String assignedAdminId = "00000000-0000-4000-8000-000000000001";
         when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))

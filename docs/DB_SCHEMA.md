@@ -991,8 +991,16 @@ Owner: 4번
 | `assigned_admin_id` | `BIGINT` | yes | `users.id` | 담당 관리자 |
 | `symptom` | `TEXT` | no | - | 증상 |
 | `status` | `VARCHAR(30)` | no | - | AS ticket status |
+| `analysis_status` | `VARCHAR(30)` | no | - | `NOT_STARTED`, `QUEUED`, `ANALYZING`, `RULE_READY`, `LLM_READY`, `FAILED` |
+| `review_status` | `VARCHAR(30)` | no | - | `NOT_REQUIRED`, `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` |
+| `support_decision` | `VARCHAR(50)` | yes | - | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `REPAIR_OR_REPLACE`, `NEEDS_MORE_INFO`, `MONITOR_ONLY`, `UNSUPPORTED` |
+| `risk_level` | `VARCHAR(30)` | yes | - | `LOW`, `MEDIUM`, `HIGH` |
+| `auto_response_allowed` | `BOOLEAN` | no | - | 자동 안내 가능 여부 |
 | `cause_candidates` | `JSONB` | yes | - | 원인 후보 배열 |
 | `upgrade_candidates` | `JSONB` | yes | - | 업그레이드 후보 배열 |
+| `incident_window` | `JSONB` | yes | - | `IncidentWindowDto` 계약 |
+| `log_summary` | `JSONB` | yes | - | `LogSummaryDto` 계약. rawSamples는 최대 20개 |
+| `support_routing` | `JSONB` | yes | - | `SupportRoutingDto` 계약 |
 | `admin_note` | `TEXT` | yes | - | 관리자 메모 |
 | `resolved_at` | `TIMESTAMPTZ` | yes | - | 해결 시각 |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
@@ -1006,6 +1014,10 @@ Index:
 - index: `as_tickets.log_upload_id`
 - index: `as_tickets.status`
 - index: `as_tickets.assigned_admin_id`
+- index: `as_tickets.analysis_status`
+- index: `as_tickets.review_status`
+- index: `as_tickets.support_decision`
+- index: `as_tickets.risk_level`
 - index: `as_tickets.created_at`
 - index: `as_tickets.deleted_at`
 

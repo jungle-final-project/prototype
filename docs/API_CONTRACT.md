@@ -469,7 +469,7 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `status` | `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `CANCELLED` | 위 상태 전이표를 따른다. |
 | `assignedAdminId` | admin user `public_id` UUID | ADMIN role 사용자만 허용한다. |
 | `reviewStatus` | `NOT_REQUIRED`, `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` | 관리자 검토 상태다. |
-| `supportDecision` | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO` | 사용자 `/support/{ticketId}` 화면에도 노출된다. |
+| `supportDecision` | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `REPAIR_OR_REPLACE`, `NEEDS_MORE_INFO`, `MONITOR_ONLY`, `UNSUPPORTED` | DB/API는 영어 enum만 사용하고, UI 라벨은 `SupportDecision` 계약의 한국어 라벨 매핑을 사용한다. 사용자 `/support/{ticketId}` 화면에도 노출된다. |
 | `riskLevel` | `LOW`, `MEDIUM`, `HIGH` | 데모 화면 표시용 위험도다. |
 | `autoResponseAllowed` | boolean | 자동 안내 가능 여부다. |
 | `adminNote` | string | 사용자와 관리자 화면에 표시되는 관리자 메모다. |
@@ -493,7 +493,81 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 }
 ```
 
-사용자 `GET /api/as-tickets/{id}`와 관리자 `GET /api/admin/as-tickets/{id}` 응답은 `analysisStatus`, `reviewStatus`, `supportDecision`, `riskLevel`, `autoResponseAllowed`, `adminNote`, `remoteSupportLink`, `remoteSupportStatus`, `visitSupportRequired`, `visitSupportStatus`, `visitPreferredDate`, `visitTimeSlot`을 포함할 수 있다.
+사용자 `GET /api/as-tickets/{id}`와 관리자 `GET /api/admin/as-tickets/{id}` 응답은 `analysisStatus`, `reviewStatus`, `supportDecision`, `riskLevel`, `autoResponseAllowed`, `incidentWindow`, `logSummary`, `supportRouting`, `adminNote`, `remoteSupportLink`, `remoteSupportStatus`, `visitSupportRequired`, `visitSupportStatus`, `visitPreferredDate`, `visitTimeSlot`을 포함할 수 있다.
+
+#### Agent AS 최종 지원 계약
+
+최종 PC Agent AS 시나리오의 구조 계약은 아래 DTO 이름으로 고정한다. A 범위에서는 구조와 validation만 고정하며, 실제 rule routing 생성 로직과 LLM 호출 로직은 다른 담당 범위다.
+
+`SupportDecision` 값과 UI 라벨:
+
+| enum | UI 라벨 |
+|---|---|
+| `SELF_SOLVABLE` | 자가 조치 가능 |
+| `REMOTE_POSSIBLE` | 원격지원 가능 |
+| `VISIT_REQUIRED` | 방문지원 필요 |
+| `REPAIR_OR_REPLACE` | 수리/교체 필요 |
+| `NEEDS_MORE_INFO` | 추가 정보 필요 |
+| `MONITOR_ONLY` | 관찰 필요 |
+| `UNSUPPORTED` | 지원 범위 밖 |
+
+`IncidentWindowDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `incidentId` | string | no | incident public id 또는 stable id |
+| `triggerType` | `USER_REQUEST`, `AGENT_ANOMALY` | no | 사용자 접수 또는 Agent 이상 감지 |
+| `symptomType` | support catalog enum | no | `REMOTE_DRIVER_OS`, `VISIT_DISK_FAILURE` 등 |
+| `detectedAt` | date-time | no | 감지 시각 |
+| `startedAt` | date-time | no | 선택 구간 시작 |
+| `endedAt` | date-time | no | `startedAt` 이후여야 한다. |
+| `preBufferSec` | number | no | 0 이상 |
+| `postBufferSec` | number | no | 0 이상 |
+| `selectedByUser` | boolean | no | 사용자가 확인/조정한 window 여부 |
+| `consentId` | string | no | 업로드 동의 public id |
+
+`LogSummaryDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `summaryVersion` | string | no | 계약 버전 |
+| `ticketId` | string | no | AS ticket public id |
+| `incidentWindow` | `IncidentWindowDto` | no | 증상별 window |
+| `deviceProfile` | object | no | 기기 요약 |
+| `userSymptom` | object | no | 사용자 증상 |
+| `baseline` | object | no | baseline 요약 |
+| `timeline` | object[] | no | 시간순 요약 |
+| `anomalies` | object[] | no | 이상 신호 |
+| `correlations` | object[] | no | 상관관계 |
+| `ruleSignals` | object[] | no | rule 근거 |
+| `dataQuality` | object | no | `level=ENOUGH/PARTIAL/INSUFFICIENT`, `missingSignals` |
+| `evidenceRefs` | object[] | no | raw sample 또는 rule 근거 참조 |
+| `rawSamples` | `RawLogSampleDto[]` | no | 최대 20개. 원본 전체 로그 전달 금지 |
+
+`SupportRoutingDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `recommendedDecision` | `SupportDecision` | no | 보수적으로 추천한다. 근거 부족 시 `NEEDS_MORE_INFO` |
+| `confidence` | `HIGH`, `MEDIUM`, `LOW` | no | 표시용 위험도/SLA 자동 배정 아님 |
+| `reasonCodes` | `SupportReasonCode[]` | no | 판정 근거 코드 |
+| `remoteActions` | `RemoteAction[]` | no | 가능한 원격 조치 후보 |
+| `visitReasons` | `VisitReason[]` | no | 방문 필요 근거 |
+| `blockingFactors` | `BlockingFactor[]` | no | 원격/방문 진행 차단 요인 |
+| `requiresAdminApproval` | boolean | no | 최종 결정은 관리자 승인 필요 |
+
+`AiDiagnosisRequestDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `requestId` | string | no | AI 요청 id |
+| `ticketId` | string | no | AS ticket public id |
+| `userSymptom` | object | no | 사용자 증상 |
+| `logSummary` | `LogSummaryDto` | no | 서버 요약 |
+| `rawSamples` | `RawLogSampleDto[]` | no | 최대 20개. raw log 전체 금지 |
+| `supportRouting` | `SupportRoutingDto` | no | LLM 전달 필수 |
+| `locale` | string | no | 예: `ko-KR` |
+| `outputContractVersion` | string | no | 출력 계약 버전 |
 
 ### Admin/Health
 
@@ -711,11 +785,18 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `AgentLogUploadDto` | `deleteAfter` | `string` | no | `2026-07-29T10:40:00Z` |
 | `AsTicketDto` | `id` | `string` | no | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |
 | `AsTicketDto` | `status` | `string` | no | `OPEN` |
+| `AsTicketDto` | `analysisStatus` | `string` | yes | `RULE_READY` |
+| `AsTicketDto` | `reviewStatus` | `string` | yes | `APPROVED` |
+| `AsTicketDto` | `supportDecision` | `SupportDecision` | yes | `REMOTE_POSSIBLE` |
+| `AsTicketDto` | `riskLevel` | `string` | yes | `MEDIUM` |
 | `AsTicketDto` | `symptom` | `string` | no | `화면이 멈춤` |
 | `AsTicketDto` | `logUploadId` | `string` | yes | `1b363bcb-42be-4428-b625-54a6b267d66f` |
 | `AsTicketDto` | `assignedAdminId` | `string` | yes | `c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd` |
 | `AsTicketDto` | `causeCandidates` | `object[]` | no | `[]` |
 | `AsTicketDto` | `upgradeCandidates` | `object[]` | no | `[]` |
+| `AsTicketDto` | `incidentWindow` | `IncidentWindowDto` | yes | `{ "symptomType": "REMOTE_DRIVER_OS" }` |
+| `AsTicketDto` | `logSummary` | `LogSummaryDto` | yes | `{ "summaryVersion": "1" }` |
+| `AsTicketDto` | `supportRouting` | `SupportRoutingDto` | yes | `{ "recommendedDecision": "REMOTE_POSSIBLE" }` |
 | `AsTicketDto` | `adminNote` | `string` | yes | `확인 중` |
 | `AsTicketDto` | `resolvedAt` | `string` | yes | `null` |
 | `AdminDashboardDto` | `agentRunning` | `number` | no | `1` |

@@ -89,7 +89,10 @@ enum AsSupportDecision {
     SELF_SOLVABLE,
     REMOTE_POSSIBLE,
     VISIT_REQUIRED,
-    NEEDS_MORE_INFO
+    REPAIR_OR_REPLACE,
+    NEEDS_MORE_INFO,
+    MONITOR_ONLY,
+    UNSUPPORTED
 }
 
 enum RiskLevel {

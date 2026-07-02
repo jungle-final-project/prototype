@@ -2,6 +2,7 @@ package com.buildgraph.prototype.ticket;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.ticket.contract.SupportDecision;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.net.URI;
 import java.time.LocalDate;
@@ -23,9 +24,7 @@ public class TicketQueryService {
     private static final Set<String> REVIEW_STATUSES = Set.of(
             "NOT_REQUIRED", "REQUIRED", "IN_REVIEW", "APPROVED", "REJECTED"
     );
-    private static final Set<String> SUPPORT_DECISIONS = Set.of(
-            "SELF_SOLVABLE", "REMOTE_POSSIBLE", "VISIT_REQUIRED", "NEEDS_MORE_INFO"
-    );
+    private static final Set<String> SUPPORT_DECISIONS = SupportDecision.names();
     private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH");
     private static final Set<String> VISIT_TIME_SLOTS = Set.of("MORNING", "AFTERNOON", "EVENING");
 
@@ -364,6 +363,9 @@ public class TicketQueryService {
                        admin.public_id::text AS assigned_admin_id,
                        t.cause_candidates,
                        t.upgrade_candidates,
+                       t.incident_window,
+                       t.log_summary,
+                       t.support_routing,
                        t.admin_note,
                        t.resolved_at,
                        t.created_at,
@@ -407,6 +409,9 @@ public class TicketQueryService {
                 "assignedAdminId", DbValueMapper.string(row, "assigned_admin_id"),
                 "causeCandidates", DbValueMapper.json(row, "cause_candidates", List.of()),
                 "upgradeCandidates", DbValueMapper.json(row, "upgrade_candidates", List.of()),
+                "incidentWindow", DbValueMapper.json(row, "incident_window", null),
+                "logSummary", DbValueMapper.json(row, "log_summary", null),
+                "supportRouting", DbValueMapper.json(row, "support_routing", null),
                 "adminNote", DbValueMapper.string(row, "admin_note"),
                 "remoteSupportLink", DbValueMapper.string(row, "remote_support_link"),
                 "remoteSupportStatus", DbValueMapper.string(row, "remote_support_status"),

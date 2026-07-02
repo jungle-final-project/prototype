@@ -68,7 +68,7 @@ class AgentAsJpaMappingTest {
         assertEnumValues(AsTicketStatus.class, "OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED", "CANCELLED");
         assertEnumValues(AsAnalysisStatus.class, "NOT_STARTED", "QUEUED", "ANALYZING", "RULE_READY", "LLM_READY", "FAILED");
         assertEnumValues(AsReviewStatus.class, "NOT_REQUIRED", "REQUIRED", "IN_REVIEW", "APPROVED", "REJECTED");
-        assertEnumValues(AsSupportDecision.class, "SELF_SOLVABLE", "REMOTE_POSSIBLE", "VISIT_REQUIRED", "NEEDS_MORE_INFO");
+        assertEnumValues(AsSupportDecision.class, "SELF_SOLVABLE", "REMOTE_POSSIBLE", "VISIT_REQUIRED", "REPAIR_OR_REPLACE", "NEEDS_MORE_INFO", "MONITOR_ONLY", "UNSUPPORTED");
         assertEnumValues(RiskLevel.class, "LOW", "MEDIUM", "HIGH");
         assertEnumValues(RemoteSupportProvider.class, "EXTERNAL_LINK", "ANYDESK", "TEAMVIEWER", "ZOOM", "GOOGLE_MEET");
         assertEnumValues(RemoteSupportStatus.class, "REQUESTED", "LINK_SENT", "IN_PROGRESS", "COMPLETED", "CANCELLED");

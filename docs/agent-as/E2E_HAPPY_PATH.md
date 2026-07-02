@@ -180,7 +180,7 @@ curl -X POST http://localhost:8080/api/agent/log-uploads \
 
 최소 구현 필드:
 
-- supportDecision: `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`
+- supportDecision: `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `REPAIR_OR_REPLACE`, `NEEDS_MORE_INFO`, `MONITOR_ONLY`, `UNSUPPORTED`
 - reviewStatus
 - adminNote
 

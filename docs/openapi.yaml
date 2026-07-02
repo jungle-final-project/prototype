@@ -1634,6 +1634,122 @@ components:
     AsTicketStatus:
       type: string
       enum: [OPEN, ASSIGNED, IN_PROGRESS, RESOLVED, CLOSED, CANCELLED]
+    SupportDecision:
+      type: string
+      enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, REPAIR_OR_REPLACE, NEEDS_MORE_INFO, MONITOR_ONLY, UNSUPPORTED]
+      x-ui-labels:
+        SELF_SOLVABLE: 자가 조치 가능
+        REMOTE_POSSIBLE: 원격지원 가능
+        VISIT_REQUIRED: 방문지원 필요
+        REPAIR_OR_REPLACE: 수리/교체 필요
+        NEEDS_MORE_INFO: 추가 정보 필요
+        MONITOR_ONLY: 관찰 필요
+        UNSUPPORTED: 지원 범위 밖
+    IncidentTriggerType:
+      type: string
+      enum: [USER_REQUEST, AGENT_ANOMALY]
+    SymptomType:
+      type: string
+      enum:
+        - REMOTE_AGENT
+        - REMOTE_DRIVER_OS
+        - REMOTE_APP_LAUNCHER
+        - REMOTE_STORAGE_MEMORY
+        - REMOTE_STARTUP_SERVICE
+        - REMOTE_LOCAL_NETWORK
+        - VISIT_BOOT_REMOTE_BLOCKED
+        - VISIT_DISK_FAILURE
+        - VISIT_WHEA_BSOD
+        - VISIT_POWER_SHUTDOWN
+        - VISIT_FAN_THERMAL
+        - UNSUPPORTED_GAME_FPS_TUNING
+        - UNSUPPORTED_OVERCLOCK_STABILITY
+        - UNSUPPORTED_ISP_ROUTER
+        - UNSUPPORTED_PERIPHERAL_PRINTER
+        - UNSUPPORTED_DATA_RECOVERY
+        - UNSUPPORTED_ILLEGAL_SOFTWARE
+        - UNSUPPORTED_PHYSICAL_DAMAGE
+    SupportReasonCode:
+      type: string
+      enum:
+        - AGENT_REGISTRATION_ERROR
+        - AGENT_UPLOAD_ERROR
+        - DRIVER_ERROR_REPEAT
+        - WINDOWS_UPDATE_FAILURE
+        - APP_CRASH
+        - RUNTIME_MISSING
+        - STORAGE_LOW
+        - MEMORY_PRESSURE
+        - STARTUP_LOAD
+        - SERVICE_CRASH_LOOP
+        - DNS_FAILURE
+        - ADAPTER_DISABLED
+        - BOOT_REMOTE_BLOCKED
+        - SMART_CRITICAL
+        - DISK_IO_ERROR_REPEAT
+        - WHEA_ERROR_REPEAT
+        - BSOD_REPEAT
+        - KERNEL_POWER_REPEAT
+        - THERMAL_SHUTDOWN
+        - FAN_RPM_ZERO
+        - UNSUPPORTED_SCOPE
+        - INSUFFICIENT_EVIDENCE
+    RemoteAction:
+      type: string
+      enum:
+        - AGENT_REREGISTER
+        - CONFIG_REPAIR
+        - PERMISSION_FIX
+        - AGENT_RESTART
+        - TOKEN_REISSUE
+        - DRIVER_ROLLBACK
+        - WINDOWS_UPDATE_CHECK
+        - OFFICIAL_DRIVER_INSTALL
+        - DEVICE_RESET
+        - APP_REPAIR
+        - RUNTIME_INSTALL
+        - PERMISSION_ADJUST
+        - CACHE_CLEAR
+        - APP_REINSTALL
+        - TEMP_FILE_CLEANUP
+        - STARTUP_APP_DISABLE
+        - PAGEFILE_CHECK
+        - SERVICE_RESET
+        - DNS_RESET
+        - ADAPTER_RESET
+        - NETWORK_DIAGNOSTIC
+    VisitReason:
+      type: string
+      enum:
+        - BOOT_UNAVAILABLE
+        - REMOTE_CONNECTION_UNAVAILABLE
+        - QUICK_ASSIST_UNAVAILABLE
+        - SMART_CRITICAL
+        - BAD_BLOCK
+        - DISK_IO_ERROR_REPEAT
+        - WHEA_HARDWARE_ERROR
+        - BSOD_REPEAT
+        - KERNEL_POWER_REPEAT
+        - POWER_SHUTDOWN_UNDER_LOAD
+        - FAN_NOT_WORKING
+        - THERMAL_SHUTDOWN
+        - HARDWARE_DEVICE_NOT_DETECTED
+    BlockingFactor:
+      type: string
+      enum:
+        - OS_NOT_BOOTING
+        - NETWORK_UNAVAILABLE
+        - QUICK_ASSIST_UNAVAILABLE
+        - USER_CONSENT_REQUIRED
+        - ADMIN_APPROVAL_REQUIRED
+        - DATA_QUALITY_LOW
+        - OUT_OF_SCOPE
+        - RAW_LOG_UNAVAILABLE
+        - BACKUP_REQUIRED
+        - RESTORE_POINT_REQUIRED
+    DataQualityLevel:
+      type: string
+      enum: [ENOUGH, PARTIAL, INSUFFICIENT]
     LogUploadStatus:
       type: string
       enum: [UPLOADED, PROCESSING, FAILED]
@@ -3090,8 +3206,7 @@ components:
           type: string
           enum: [NOT_REQUIRED, REQUIRED, IN_REVIEW, APPROVED, REJECTED]
         supportDecision:
-          type: string
-          enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO]
+          $ref: "#/components/schemas/SupportDecision"
         riskLevel:
           type: string
           enum: [LOW, MEDIUM, HIGH]
@@ -3219,6 +3334,181 @@ components:
         resultPayload:
           type: object
           additionalProperties: true
+    IncidentWindowDto:
+      type: object
+      required: [incidentId, triggerType, symptomType, detectedAt, startedAt, endedAt, preBufferSec, postBufferSec, selectedByUser, consentId]
+      properties:
+        incidentId:
+          type: string
+        triggerType:
+          $ref: "#/components/schemas/IncidentTriggerType"
+        symptomType:
+          $ref: "#/components/schemas/SymptomType"
+        detectedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+          description: Must be after startedAt.
+        preBufferSec:
+          type: integer
+          minimum: 0
+        postBufferSec:
+          type: integer
+          minimum: 0
+        selectedByUser:
+          type: boolean
+        consentId:
+          type: string
+    PrivacyFlagsDto:
+      type: object
+      required: [masked, containsRawPath]
+      properties:
+        masked:
+          type: boolean
+        containsRawPath:
+          type: boolean
+          enum: [false]
+    RawLogSampleDto:
+      type: object
+      required: [schemaVersion, collectedAt, agentId, deviceIdHash, sequence, kind, payload, privacyFlags]
+      properties:
+        schemaVersion:
+          type: string
+        collectedAt:
+          type: string
+          format: date-time
+        agentId:
+          type: string
+        deviceIdHash:
+          type: string
+        sequence:
+          type: integer
+          minimum: 0
+        kind:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        privacyFlags:
+          $ref: "#/components/schemas/PrivacyFlagsDto"
+    DataQualityDto:
+      type: object
+      required: [level, missingSignals]
+      properties:
+        level:
+          $ref: "#/components/schemas/DataQualityLevel"
+        missingSignals:
+          type: array
+          items:
+            type: string
+    LogSummaryDto:
+      type: object
+      required: [summaryVersion, ticketId, incidentWindow, deviceProfile, userSymptom, baseline, timeline, anomalies, correlations, ruleSignals, dataQuality, evidenceRefs, rawSamples]
+      properties:
+        summaryVersion:
+          type: string
+        ticketId:
+          type: string
+        incidentWindow:
+          $ref: "#/components/schemas/IncidentWindowDto"
+        deviceProfile:
+          type: object
+          additionalProperties: true
+        userSymptom:
+          type: object
+          additionalProperties: true
+        baseline:
+          type: object
+          additionalProperties: true
+        timeline:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        anomalies:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        correlations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        ruleSignals:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        dataQuality:
+          $ref: "#/components/schemas/DataQualityDto"
+        evidenceRefs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        rawSamples:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/RawLogSampleDto"
+    SupportRoutingDto:
+      type: object
+      required: [recommendedDecision, confidence, reasonCodes, remoteActions, visitReasons, blockingFactors, requiresAdminApproval]
+      properties:
+        recommendedDecision:
+          $ref: "#/components/schemas/SupportDecision"
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        reasonCodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupportReasonCode"
+        remoteActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RemoteAction"
+        visitReasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitReason"
+        blockingFactors:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockingFactor"
+        requiresAdminApproval:
+          type: boolean
+    AiDiagnosisRequestDto:
+      type: object
+      required: [requestId, ticketId, userSymptom, logSummary, rawSamples, supportRouting, locale, outputContractVersion]
+      properties:
+        requestId:
+          type: string
+        ticketId:
+          type: string
+        userSymptom:
+          type: object
+          additionalProperties: true
+        logSummary:
+          $ref: "#/components/schemas/LogSummaryDto"
+        rawSamples:
+          type: array
+          maxItems: 20
+          description: Must contain only limited evidence samples, never the full raw log.
+          items:
+            $ref: "#/components/schemas/RawLogSampleDto"
+        supportRouting:
+          $ref: "#/components/schemas/SupportRoutingDto"
+        locale:
+          type: string
+          example: ko-KR
+        outputContractVersion:
+          type: string
     PcAgentRegisterRequest:
       type: object
       required:
@@ -3353,8 +3643,7 @@ components:
           type: string
           enum: [REQUIRED, APPROVED]
         supportDecision:
-          type: string
-          enum: [NEEDS_MORE_INFO, REMOTE_POSSIBLE, VISIT_REQUIRED]
+          $ref: "#/components/schemas/SupportDecision"
     AgentLogUploadRequest:
       type: object
       required: [file, rangeMinutes, consentAccepted]
@@ -3414,8 +3703,7 @@ components:
           type: string
           enum: [NOT_REQUIRED, REQUIRED, IN_REVIEW, APPROVED, REJECTED]
         supportDecision:
-          type: string
-          enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO]
+          $ref: "#/components/schemas/SupportDecision"
         riskLevel:
           type: string
           enum: [LOW, MEDIUM, HIGH]
@@ -3439,6 +3727,18 @@ components:
           items:
             type: object
             additionalProperties: true
+        incidentWindow:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/IncidentWindowDto"
+        logSummary:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/LogSummaryDto"
+        supportRouting:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/SupportRoutingDto"
         adminNote:
           type: string
         remoteSupportLink:
@@ -3476,8 +3776,7 @@ components:
         adminNote:
           type: string
         supportDecision:
-          type: string
-          enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO]
+          $ref: "#/components/schemas/SupportDecision"
         reviewStatus:
           type: string
           enum: [NOT_REQUIRED, REQUIRED, IN_REVIEW, APPROVED, REJECTED]

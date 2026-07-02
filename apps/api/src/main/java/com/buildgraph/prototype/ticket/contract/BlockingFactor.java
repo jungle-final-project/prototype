@@ -1,0 +1,14 @@
+package com.buildgraph.prototype.ticket.contract;
+
+public enum BlockingFactor {
+    OS_NOT_BOOTING,
+    NETWORK_UNAVAILABLE,
+    QUICK_ASSIST_UNAVAILABLE,
+    USER_CONSENT_REQUIRED,
+    ADMIN_APPROVAL_REQUIRED,
+    DATA_QUALITY_LOW,
+    OUT_OF_SCOPE,
+    RAW_LOG_UNAVAILABLE,
+    BACKUP_REQUIRED,
+    RESTORE_POINT_REQUIRED
+}

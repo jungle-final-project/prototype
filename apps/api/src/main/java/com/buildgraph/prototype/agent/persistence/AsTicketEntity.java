@@ -51,6 +51,15 @@ public class AsTicketEntity extends PublicIdEntity {
     @Column(name = "upgrade_candidates", columnDefinition = "jsonb")
     private String upgradeCandidates;
 
+    @Column(name = "incident_window", columnDefinition = "jsonb")
+    private String incidentWindow;
+
+    @Column(name = "log_summary", columnDefinition = "jsonb")
+    private String logSummary;
+
+    @Column(name = "support_routing", columnDefinition = "jsonb")
+    private String supportRouting;
+
     @Column(name = "admin_note")
     private String adminNote;
 

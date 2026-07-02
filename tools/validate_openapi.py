@@ -94,6 +94,11 @@ REQUIRED_SCHEMAS = [
     "PcAgentHeartbeatResponse",
     "PcAgentLogUploadRequest",
     "PcAgentLogUploadResponse",
+    "SupportDecision",
+    "IncidentWindowDto",
+    "LogSummaryDto",
+    "SupportRoutingDto",
+    "AiDiagnosisRequestDto",
     "AsTicketDto",
     "AdminAsTicketUpdateRequest",
     "AgentSessionDto",
@@ -230,6 +235,43 @@ def main() -> None:
     ]:
         if field not in admin_ticket_update_properties:
             raise SystemExit(f"AdminAsTicketUpdateRequest missing {field}")
+
+    final_support_decisions = {
+        "SELF_SOLVABLE",
+        "REMOTE_POSSIBLE",
+        "VISIT_REQUIRED",
+        "REPAIR_OR_REPLACE",
+        "NEEDS_MORE_INFO",
+        "MONITOR_ONLY",
+        "UNSUPPORTED",
+    }
+    support_decision_enum = set(schemas["SupportDecision"].get("enum", []))
+    if support_decision_enum != final_support_decisions:
+        raise SystemExit("SupportDecision enum must match FINAL_SUPPORT_SCENARIOS")
+    ui_labels = schemas["SupportDecision"].get("x-ui-labels", {})
+    missing_ui_labels = final_support_decisions - set(ui_labels)
+    if missing_ui_labels:
+        raise SystemExit(f"SupportDecision missing UI labels: {', '.join(sorted(missing_ui_labels))}")
+    for schema_name in ["AsTicketDto", "AdminAsTicketUpdateRequest", "PcAgentLogUploadResponse"]:
+        support_decision_schema = schemas[schema_name].get("properties", {}).get("supportDecision", {})
+        if support_decision_schema.get("$ref") != "#/components/schemas/SupportDecision":
+            raise SystemExit(f"{schema_name}.supportDecision must reference SupportDecision")
+    for field, schema_name in [
+        ("incidentWindow", "IncidentWindowDto"),
+        ("logSummary", "LogSummaryDto"),
+        ("supportRouting", "SupportRoutingDto"),
+    ]:
+        as_ticket_field = as_ticket_properties.get(field, {})
+        refs = [item.get("$ref") for item in as_ticket_field.get("allOf", [])]
+        if f"#/components/schemas/{schema_name}" not in refs:
+            raise SystemExit(f"AsTicketDto.{field} must reference {schema_name}")
+    if schemas["LogSummaryDto"]["properties"]["rawSamples"].get("maxItems") != 20:
+        raise SystemExit("LogSummaryDto.rawSamples must be limited to 20")
+    if schemas["AiDiagnosisRequestDto"]["properties"]["rawSamples"].get("maxItems") != 20:
+        raise SystemExit("AiDiagnosisRequestDto.rawSamples must be limited to 20")
+    ai_required = set(schemas["AiDiagnosisRequestDto"].get("required", []))
+    if "supportRouting" not in ai_required:
+        raise SystemExit("AiDiagnosisRequestDto must require supportRouting")
 
     auth_properties = schemas["AuthResponse"].get("properties", {})
     for field in ["accessToken", "refreshToken", "user"]:
