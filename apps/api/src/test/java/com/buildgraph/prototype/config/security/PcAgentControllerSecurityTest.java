@@ -26,6 +26,7 @@ import com.buildgraph.prototype.ticket.TicketController;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Map;
@@ -38,6 +39,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 @WebMvcTest({PcAgentController.class, AdminController.class, TicketController.class})
 @Import({AgentSecurityConfig.class, SecurityErrorResponseWriter.class})
@@ -49,6 +51,9 @@ class PcAgentControllerSecurityTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @MockitoBean
     private PcAgentAsService pcAgentAsService;
@@ -393,7 +398,21 @@ class PcAgentControllerSecurityTest {
                 .thenReturn(
                         AgentIdempotencyDecision.proceed(201L),
                         AgentIdempotencyDecision.proceed(202L),
-                        AgentIdempotencyDecision.proceed(203L)
+                        AgentIdempotencyDecision.proceed(203L),
+                        AgentIdempotencyDecision.replay(
+                                201,
+                                """
+                                        {
+                                          "uploadJobId": "upload-job-public-id",
+                                          "logUploadId": "log-upload-public-id",
+                                          "ticketId": "ticket-public-id",
+                                          "analysisStatus": "RULE_READY",
+                                          "reviewStatus": "REQUIRED",
+                                          "supportDecision": "NEEDS_MORE_INFO"
+                                        }
+                                        """,
+                                MediaType.APPLICATION_JSON_VALUE
+                        )
                 );
         when(pcAgentAsService.register(anyMap())).thenReturn(Map.of(
                 "deviceId", "device-public-id",
@@ -434,7 +453,7 @@ class PcAgentControllerSecurityTest {
                 "supportDecision", "REMOTE_POSSIBLE"
         ));
 
-        mockMvc.perform(post("/api/agent/devices/register")
+        MvcResult registerResult = mockMvc.perform(post("/api/agent/devices/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -447,10 +466,14 @@ class PcAgentControllerSecurityTest {
                                 }
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.agentToken").value(AGENT_TOKEN));
+                .andExpect(jsonPath("$.agentToken").value(AGENT_TOKEN))
+                .andReturn();
+        String issuedAgentToken = objectMapper.readTree(registerResult.getResponse().getContentAsString())
+                .get("agentToken")
+                .asText();
 
         mockMvc.perform(post("/api/agent/consents")
-                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
                         .header("Idempotency-Key", "consent-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -464,7 +487,7 @@ class PcAgentControllerSecurityTest {
                 .andExpect(jsonPath("$.accepted").value(true));
 
         mockMvc.perform(post("/api/agent/heartbeat")
-                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
                         .header("Idempotency-Key", "heartbeat-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -484,7 +507,23 @@ class PcAgentControllerSecurityTest {
         );
         mockMvc.perform(multipart("/api/agent/log-uploads")
                         .file(file)
-                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30")
+                        .param("symptom", "GPU temperature spike"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("ticket-public-id"))
+                .andExpect(jsonPath("$.analysisStatus").value("RULE_READY"));
+
+        MockMultipartFile retryFile = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(retryFile)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
                         .header("Idempotency-Key", "upload-key")
                         .param("rangeMinutes", "30")
                         .param("symptom", "GPU temperature spike"))
@@ -510,6 +549,8 @@ class PcAgentControllerSecurityTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.analysisStatus").value("RULE_READY"))
                 .andExpect(jsonPath("$.supportDecision").value("REMOTE_POSSIBLE"));
+
+        verify(pcAgentAsService).uploadLogs(eq(principal), any(), any(), eq("upload-key"));
     }
 
     private static byte[] gzip(String content) {
