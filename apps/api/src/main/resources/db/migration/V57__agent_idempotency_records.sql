@@ -1,4 +1,4 @@
-CREATE TABLE agent_idempotency_records (
+CREATE TABLE IF NOT EXISTS agent_idempotency_records (
   id BIGSERIAL PRIMARY KEY,
   agent_device_id BIGINT NOT NULL REFERENCES agent_devices(id),
   idempotency_key VARCHAR(160) NOT NULL,
@@ -19,5 +19,5 @@ CREATE TABLE agent_idempotency_records (
     UNIQUE (agent_device_id, request_method, request_path, idempotency_key)
 );
 
-CREATE INDEX idx_agent_idempotency_expires_at
+CREATE INDEX IF NOT EXISTS idx_agent_idempotency_expires_at
   ON agent_idempotency_records (expires_at);

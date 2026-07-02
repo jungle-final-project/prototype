@@ -14,7 +14,7 @@ class AgentIdempotencyMigrationContractTest {
         String sql = normalizedSql();
 
         assertThat(sql)
-                .contains("CREATE TABLE agent_idempotency_records")
+                .contains("CREATE TABLE IF NOT EXISTS agent_idempotency_records")
                 .contains("agent_device_id BIGINT NOT NULL REFERENCES agent_devices(id)")
                 .contains("idempotency_key VARCHAR(160) NOT NULL")
                 .contains("request_method VARCHAR(10) NOT NULL")

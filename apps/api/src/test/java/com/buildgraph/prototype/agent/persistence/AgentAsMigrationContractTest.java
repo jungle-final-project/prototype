@@ -14,18 +14,18 @@ class AgentAsMigrationContractTest {
     void migrationCreatesGoldModeAgentTablesInParentChildOrder() throws Exception {
         String sql = normalizedSql();
         List<String> orderedFragments = List.of(
-                "CREATE TABLE agent_activation_tokens",
-                "CREATE TABLE agent_devices",
-                "CREATE TABLE agent_consents",
-                "CREATE TABLE agent_heartbeats",
-                "CREATE TABLE agent_update_policies",
-                "CREATE TABLE agent_update_rollouts",
-                "CREATE TABLE agent_upload_jobs",
-                "CREATE TABLE agent_log_bundles",
+                "CREATE TABLE IF NOT EXISTS agent_activation_tokens",
+                "CREATE TABLE IF NOT EXISTS agent_devices",
+                "CREATE TABLE IF NOT EXISTS agent_consents",
+                "CREATE TABLE IF NOT EXISTS agent_heartbeats",
+                "CREATE TABLE IF NOT EXISTS agent_update_policies",
+                "CREATE TABLE IF NOT EXISTS agent_update_rollouts",
+                "CREATE TABLE IF NOT EXISTS agent_upload_jobs",
+                "CREATE TABLE IF NOT EXISTS agent_log_bundles",
                 "ALTER TABLE agent_log_uploads",
                 "ALTER TABLE as_tickets",
-                "CREATE TABLE remote_support_sessions",
-                "CREATE TABLE visit_support_reservations"
+                "CREATE TABLE IF NOT EXISTS remote_support_sessions",
+                "CREATE TABLE IF NOT EXISTS visit_support_reservations"
         );
 
         assertThat(sql).contains(orderedFragments);
@@ -44,13 +44,13 @@ class AgentAsMigrationContractTest {
         String sql = normalizedSql();
 
         assertThat(sql)
-                .contains("ADD COLUMN device_id BIGINT REFERENCES agent_devices(id)")
-                .contains("ADD COLUMN upload_job_id BIGINT REFERENCES agent_upload_jobs(id)")
-                .contains("ADD COLUMN analysis_status VARCHAR(30) NOT NULL DEFAULT 'NOT_STARTED'")
-                .contains("ADD COLUMN review_status VARCHAR(30) NOT NULL DEFAULT 'NOT_REQUIRED'")
-                .contains("ADD COLUMN support_decision VARCHAR(50)")
-                .contains("ADD COLUMN risk_level VARCHAR(30)")
-                .contains("ADD COLUMN auto_response_allowed BOOLEAN NOT NULL DEFAULT false");
+                .contains("ADD COLUMN IF NOT EXISTS device_id BIGINT REFERENCES agent_devices(id)")
+                .contains("ADD COLUMN IF NOT EXISTS upload_job_id BIGINT REFERENCES agent_upload_jobs(id)")
+                .contains("ADD COLUMN IF NOT EXISTS analysis_status VARCHAR(30) NOT NULL DEFAULT 'NOT_STARTED'")
+                .contains("ADD COLUMN IF NOT EXISTS review_status VARCHAR(30) NOT NULL DEFAULT 'NOT_REQUIRED'")
+                .contains("ADD COLUMN IF NOT EXISTS support_decision VARCHAR(50)")
+                .contains("ADD COLUMN IF NOT EXISTS risk_level VARCHAR(30)")
+                .contains("ADD COLUMN IF NOT EXISTS auto_response_allowed BOOLEAN NOT NULL DEFAULT false");
     }
 
     @Test
