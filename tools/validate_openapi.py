@@ -67,7 +67,6 @@ POST_JSON_REQUEST_SCHEMAS = {
     "/api/builds/recommend": "BuildRecommendRequest",
     "/api/builds/{id}/change-part": "ChangePartRequest",
     "/api/price-alerts": "PriceAlertCreateRequest",
-    "/api/admin/price-jobs/run": "PriceJobRunRequest",
     "/api/agent/sessions": "AgentSessionCreateRequest",
     "/api/as-tickets": "AsTicketCreateRequest",
 }

@@ -13,7 +13,11 @@ export function AgentSessionAdminPage() {
   } = useQuery({
     queryKey: ['admin-agent-session', id],
     queryFn: () => getAgentSession(id ?? ''),
-    enabled: Boolean(id)
+    enabled: Boolean(id),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'QUEUED' || status === 'RUNNING' || status === 'RAG_SEARCHED' || status === 'TOOLS_CALLED' || status === 'SUMMARY_READY' ? 2000 : false;
+    }
   });
 
   const evidenceQueries = useQueries({

@@ -18,6 +18,14 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(TicketController.class)
 class TicketControllerTest {
     private static final String USER_TOKEN = "Bearer jwt-user-token";
+    private static final CurrentUserService.CurrentUser USER = new CurrentUserService.CurrentUser(
+            1L,
+            "00000000-0000-4000-8000-000000001001",
+            "user@example.com",
+            "Demo User",
+            "USER",
+            null
+    );
 
     @Autowired
     private MockMvc mockMvc;
@@ -30,7 +38,8 @@ class TicketControllerTest {
 
     @Test
     void userCanReadFinalAgentAsTicketStatus() throws Exception {
-        when(ticketQueryService.ticket("ticket-public-id")).thenReturn(MockData.map(
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
+        when(ticketQueryService.ticket("ticket-public-id", USER)).thenReturn(MockData.map(
                 "id", "ticket-public-id",
                 "status", "OPEN",
                 "symptom", "GPU temperature spike",
@@ -53,6 +62,6 @@ class TicketControllerTest {
                 .andExpect(jsonPath("$.supportDecision").value("REMOTE_POSSIBLE"));
 
         verify(currentUserService).requireUser(USER_TOKEN);
-        verify(ticketQueryService).ticket("ticket-public-id");
+        verify(ticketQueryService).ticket("ticket-public-id", USER);
     }
 }

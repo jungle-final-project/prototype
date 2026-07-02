@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,7 +62,11 @@ public class PcAgentAsService {
         String osVersion = string(request, "osVersion", "Windows");
         String agentVersion = string(request, "agentVersion", "0.1.0");
         String policyVersion = string(request, "policyVersion", "demo-policy-v1");
-        String userEmail = string(request, "userEmail", "user@example.com");
+        String userEmail = string(request, "userEmail", null);
+        if (userEmail == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent registration userEmail is required.");
+        }
+        Long userInternalId = userInternalIdByEmail(userEmail);
 
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_devices (
@@ -78,7 +83,7 @@ public class PcAgentAsService {
                   updated_at
                 )
                 VALUES (
-                  (SELECT id FROM users WHERE email = ?),
+                  ?,
                   NULL,
                   ?,
                   ?,
@@ -92,7 +97,7 @@ public class PcAgentAsService {
                 )
                 RETURNING id AS device_internal_id, public_id::text AS device_id, status
                 """,
-                userEmail,
+                userInternalId,
                 deviceFingerprintHash,
                 hostnameHash,
                 tokenHash,
@@ -108,6 +113,19 @@ public class PcAgentAsService {
                 "agentToken", rawAgentToken,
                 "tokenType", "Bearer"
         );
+    }
+
+    private Long userInternalIdByEmail(String email) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT id
+                FROM users
+                WHERE email = ?
+                  AND deleted_at IS NULL
+                """, email);
+        return rows.stream()
+                .findFirst()
+                .map(row -> longValue(row, "id"))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Agent registration user was not found."));
     }
 
     @Transactional

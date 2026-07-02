@@ -7,6 +7,13 @@ plugins {
 group = 'com.buildgraph'
 version = '0.1.0'
 
+def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+def hasNonAsciiProjectPath = !java.nio.charset.StandardCharsets.US_ASCII.newEncoder().canEncode(projectDir.absolutePath)
+if (isWindows && hasNonAsciiProjectPath) {
+    def projectPathHash = Integer.toHexString(projectDir.absolutePath.hashCode())
+    layout.buildDirectory = file("${System.getProperty('user.home')}/.gradle/buildgraph-api-build/${projectPathHash}")
+}
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)

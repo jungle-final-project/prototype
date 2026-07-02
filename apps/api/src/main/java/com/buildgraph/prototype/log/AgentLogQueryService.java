@@ -2,6 +2,7 @@ package com.buildgraph.prototype.log;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -17,12 +18,25 @@ public class AgentLogQueryService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public Map<String, Object> upload(MultipartFile file, Integer rangeMinutes, Boolean consentAccepted) {
+    public Map<String, Object> upload(
+            MultipartFile file,
+            Integer rangeMinutes,
+            Boolean consentAccepted,
+            CurrentUserService.CurrentUser user
+    ) {
         if (!Boolean.TRUE.equals(consentAccepted)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "로그 업로드 동의가 필요합니다.");
         }
-        String fileName = file == null ? "agent-log.jsonl" : file.getOriginalFilename();
-        long fileSize = file == null ? 0L : file.getSize();
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드할 로그 파일이 필요합니다.");
+        }
+        if (file.getSize() > 10L * 1024L * 1024L) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "로그 파일은 10MiB 이하만 업로드할 수 있습니다.");
+        }
+        String fileName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
+                ? "agent-log.jsonl"
+                : file.getOriginalFilename();
+        long fileSize = file.getSize();
         Integer minutes = rangeMinutes == null ? 30 : rangeMinutes;
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_log_uploads (
@@ -37,7 +51,7 @@ public class AgentLogQueryService {
                   delete_after
                 )
                 VALUES (
-                  (SELECT id FROM users WHERE email = 'user@example.com'),
+                  ?,
                   ?,
                   'UPLOADED',
                   ?,
@@ -48,16 +62,17 @@ public class AgentLogQueryService {
                   now() + interval '30 days'
                 )
                 RETURNING public_id::text AS id, status, file_name, file_size, range_minutes, summary, created_at, delete_after
-                """, minutes, fileName, fileSize, fileName);
+                """, user.internalId(), minutes, fileName, fileSize, fileName);
         return logMap(row);
     }
 
-    public Map<String, Object> detail(String id) {
+    public Map<String, Object> detail(String id, CurrentUserService.CurrentUser user) {
         return jdbcTemplate.queryForList("""
                         SELECT public_id::text AS id, status, file_name, file_size, range_minutes, summary, created_at, delete_after
                         FROM agent_log_uploads
                         WHERE public_id = ?::uuid
-                        """, id)
+                          AND user_id = ?
+                        """, id, user.internalId())
                 .stream()
                 .findFirst()
                 .map(this::logMap)

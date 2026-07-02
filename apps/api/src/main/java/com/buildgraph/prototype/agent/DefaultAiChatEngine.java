@@ -153,9 +153,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
 
         AgentSessionRoot root = new AgentSessionRoot(AgentSessionRootType.REQUIREMENT, requirementId);
         AgentRunProfile profile = AgentRunProfiles.requirementParse();
+        Long userInternalId = longValue(optionalInputs.get("_userInternalId"));
         String sessionId = null;
         try {
-            sessionId = agentTraceService.createQueuedSession(root, "SYSTEM", profile.purpose());
+            sessionId = agentTraceService.createQueuedSession(root, "SYSTEM", profile.purpose(), userInternalId);
             String activeSessionId = sessionId;
             agentTraceService.advanceStatus(sessionId, AgentStatus.RUNNING, "SYSTEM", "quote requirement AI engine requested");
             List<AgentRagEvidenceDraft> evidenceSet = agentRagRetrievalService.retrieveEvidenceSet(root, profile);
@@ -1302,6 +1303,15 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String text = text(value);
         if (text == null) return null;
         return Integer.valueOf(text.replace(",", ""));
+    }
+
+    private static Long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        String text = text(value);
+        if (text == null) return null;
+        return Long.valueOf(text.replace(",", ""));
     }
 
     private static String requireText(Object value, String message) {

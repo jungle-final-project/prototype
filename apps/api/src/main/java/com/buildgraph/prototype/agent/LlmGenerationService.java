@@ -31,9 +31,21 @@ public class LlmGenerationService {
             LlmResponseResult result,
             Map<String, Object> stageTimings
     ) {
+        return recordSuccess(agentSessionId, profile, "AS_CHAT", schemaName, result, stageTimings);
+    }
+
+    public String recordSuccess(
+            Long agentSessionId,
+            AiProfileDefinition profile,
+            String useCase,
+            String schemaName,
+            LlmResponseResult result,
+            Map<String, Object> stageTimings
+    ) {
         return record(
                 agentSessionId,
                 profile,
+                useCase,
                 "SUCCESS",
                 schemaName,
                 true,
@@ -69,9 +81,24 @@ public class LlmGenerationService {
             String errorMessage,
             Map<String, Object> stageTimings
     ) {
+        return recordFailure(agentSessionId, profile, "AS_CHAT", schemaName, schemaValid, latencyMs, errorCode, errorMessage, stageTimings);
+    }
+
+    public String recordFailure(
+            Long agentSessionId,
+            AiProfileDefinition profile,
+            String useCase,
+            String schemaName,
+            boolean schemaValid,
+            Long latencyMs,
+            String errorCode,
+            String errorMessage,
+            Map<String, Object> stageTimings
+    ) {
         return record(
                 agentSessionId,
                 profile,
+                useCase,
                 "FAILED",
                 schemaName,
                 schemaValid,
@@ -128,6 +155,7 @@ public class LlmGenerationService {
     private String record(
             Long agentSessionId,
             AiProfileDefinition profile,
+            String useCase,
             String status,
             String schemaName,
             boolean schemaValid,
@@ -160,7 +188,7 @@ public class LlmGenerationService {
                   error_message,
                   request_metadata
                 )
-                VALUES (?, ?, ?, ?, ?, 'AS_CHAT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
                 RETURNING public_id::text AS id
                 """,
                 agentSessionId,
@@ -168,6 +196,7 @@ public class LlmGenerationService {
                 profile.provider().storageValue(),
                 profile.model(),
                 profile.reasoningEffort(),
+                useCase,
                 status,
                 schemaName,
                 profile.ragTopK(),

@@ -30,6 +30,14 @@ import org.springframework.web.server.ResponseStatusException;
 class AdminControllerTest {
     private static final String ADMIN_TOKEN = "Bearer jwt-admin-token";
     private static final String USER_TOKEN = "Bearer jwt-user-token";
+    private static final CurrentUserService.CurrentUser ADMIN = new CurrentUserService.CurrentUser(
+            2L,
+            "00000000-0000-4000-8000-000000001002",
+            "admin@example.com",
+            "Admin User",
+            "ADMIN",
+            null
+    );
 
     @Autowired
     private MockMvc mockMvc;
@@ -61,6 +69,7 @@ class AdminControllerTest {
                 .thenThrow(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."));
         when(currentUserService.requireAdmin(USER_TOKEN))
                 .thenThrow(new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다."));
+        when(currentUserService.requireAdmin(ADMIN_TOKEN)).thenReturn(ADMIN);
     }
 
     @Test
@@ -161,7 +170,7 @@ class AdminControllerTest {
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ))).thenReturn(Map.of(
+        ), ADMIN)).thenReturn(Map.of(
                 "id", "ticket-public-id",
                 "status", "OPEN",
                 "analysisStatus", "RULE_READY",
@@ -191,6 +200,6 @@ class AdminControllerTest {
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ));
+        ), ADMIN);
     }
 }

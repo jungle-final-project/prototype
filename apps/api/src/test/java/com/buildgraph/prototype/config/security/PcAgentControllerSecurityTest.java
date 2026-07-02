@@ -42,6 +42,22 @@ class PcAgentControllerSecurityTest {
     private static final String IDEMPOTENCY_KEY = "demo-key-1";
     private static final String ADMIN_TOKEN = "Bearer jwt-admin-token";
     private static final String USER_TOKEN = "Bearer jwt-user-token";
+    private static final CurrentUserService.CurrentUser ADMIN = new CurrentUserService.CurrentUser(
+            2L,
+            "00000000-0000-4000-8000-000000001002",
+            "admin@example.com",
+            "Admin User",
+            "ADMIN",
+            null
+    );
+    private static final CurrentUserService.CurrentUser USER = new CurrentUserService.CurrentUser(
+            1L,
+            "00000000-0000-4000-8000-000000001001",
+            "user@example.com",
+            "Demo User",
+            "USER",
+            null
+    );
 
     @Autowired
     private MockMvc mockMvc;
@@ -192,6 +208,8 @@ class PcAgentControllerSecurityTest {
     @Test
     void minimalAgentAsHappyPathCanRunThroughHttpEndpoints() throws Exception {
         AgentPrincipal principal = authenticateAgent();
+        when(currentUserService.requireAdmin(ADMIN_TOKEN)).thenReturn(ADMIN);
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
         when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(
                         AgentIdempotencyDecision.proceed(201L),
@@ -223,13 +241,13 @@ class PcAgentControllerSecurityTest {
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ))).thenReturn(Map.of(
+        ), ADMIN)).thenReturn(Map.of(
                 "id", "ticket-public-id",
                 "analysisStatus", "RULE_READY",
                 "reviewStatus", "APPROVED",
                 "supportDecision", "REMOTE_POSSIBLE"
         ));
-        when(ticketQueryService.ticket("ticket-public-id")).thenReturn(Map.of(
+        when(ticketQueryService.ticket("ticket-public-id", USER)).thenReturn(Map.of(
                 "id", "ticket-public-id",
                 "status", "OPEN",
                 "analysisStatus", "RULE_READY",

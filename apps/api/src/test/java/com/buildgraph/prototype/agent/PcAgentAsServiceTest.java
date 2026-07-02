@@ -13,6 +13,7 @@ import com.buildgraph.prototype.config.security.AgentTokenHasher;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -47,9 +48,11 @@ class PcAgentAsServiceTest {
     @Test
     void registerStoresHashedAgentTokenAndReturnsRawTokenOnce() {
         String tokenHash = tokenHasher.sha256Hex("raw-agent-token");
+        when(jdbcTemplate.queryForList(contains("FROM users"), eq("user@example.com")))
+                .thenReturn(List.of(Map.of("id", 20L)));
         when(jdbcTemplate.queryForMap(
                 contains("INSERT INTO agent_devices"),
-                eq("user@example.com"),
+                eq(20L),
                 eq("fingerprint-hash"),
                 eq("host-hash"),
                 eq(tokenHash),
@@ -70,7 +73,8 @@ class PcAgentAsServiceTest {
                 "registrationIdempotencyKey", "register-1",
                 "osVersion", "Windows 11",
                 "agentVersion", "0.1.0",
-                "policyVersion", "policy-v1"
+                "policyVersion", "policy-v1",
+                "userEmail", "user@example.com"
         ));
 
         assertThat(response.get("agentToken")).isEqualTo("raw-agent-token");

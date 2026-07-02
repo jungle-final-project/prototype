@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -376,7 +377,7 @@ class DefaultAiChatEngineTest {
     @Test
     void analyzeQuoteRequirementRecordsRagTraceAndReturnsStructuredContext() {
         when(openAiResponsesClient.isConfigured()).thenReturn(false);
-        when(agentTraceService.createQueuedSession(any(), eq("SYSTEM"), eq(AgentPurpose.REQUIREMENT_PARSE)))
+        when(agentTraceService.createQueuedSession(any(), eq("SYSTEM"), eq(AgentPurpose.REQUIREMENT_PARSE), isNull()))
                 .thenReturn("agent-session-1");
         when(agentRagRetrievalService.retrieveEvidenceSet(any(), eq(AgentRunProfiles.requirementParse())))
                 .thenReturn(List.of(new AgentRagEvidenceDraft(
@@ -408,7 +409,7 @@ class DefaultAiChatEngineTest {
     @Test
     void analyzeQuoteRequirementExtractsExplicitRtx5090HardConstraintWithoutLlm() {
         when(openAiResponsesClient.isConfigured()).thenReturn(false);
-        when(agentTraceService.createQueuedSession(any(), eq("SYSTEM"), eq(AgentPurpose.REQUIREMENT_PARSE)))
+        when(agentTraceService.createQueuedSession(any(), eq("SYSTEM"), eq(AgentPurpose.REQUIREMENT_PARSE), isNull()))
                 .thenReturn("agent-session-1");
         when(agentRagRetrievalService.retrieveEvidenceSet(any(), eq(AgentRunProfiles.requirementParse())))
                 .thenReturn(List.of(new AgentRagEvidenceDraft(

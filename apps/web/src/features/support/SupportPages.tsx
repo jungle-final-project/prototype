@@ -321,8 +321,9 @@ export function SupportNewPage() {
         <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-xs font-bold text-slate-600">증상 제목</label>
+              <label htmlFor="support-symptom-title" className="mb-1 block text-xs font-bold text-slate-600">증상 제목</label>
               <input
+                id="support-symptom-title"
                 className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
                 placeholder="예: 게임 중 프레임 드랍"
                 value={symptomTitle}
@@ -330,8 +331,9 @@ export function SupportNewPage() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-bold text-slate-600">증상 상세</label>
+              <label htmlFor="support-symptom-detail" className="mb-1 block text-xs font-bold text-slate-600">증상 상세</label>
               <textarea
+                id="support-symptom-detail"
                 className="h-36 w-full rounded border border-slate-300 p-4 text-sm"
                 placeholder="언제부터 발생했는지, 어떤 작업 중 재현되는지 입력해 주세요."
                 value={symptomDetail}
@@ -339,7 +341,7 @@ export function SupportNewPage() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-bold text-slate-600">최근 30분 로그 파일</label>
+              <label htmlFor="support-log-file" className="mb-1 block text-xs font-bold text-slate-600">최근 30분 로그 파일</label>
               <button
                 type="button"
                 className="mb-2 rounded border border-slate-300 px-3 py-2 text-xs font-bold"
@@ -351,6 +353,7 @@ export function SupportNewPage() {
                 JSON Lines 형식 예시입니다. 서버 검증 규칙을 확정하는 파일은 아닙니다.
               </p>
               <input
+                id="support-log-file"
                 className="block w-full rounded border border-slate-300 p-3 text-sm file:mr-4 file:rounded file:border-0 file:bg-brand-blue file:px-4 file:py-2 file:text-sm file:font-bold file:text-white"
                 type="file"
                 accept=".jsonl,.ndjson,application/x-ndjson,application/json,text/plain"

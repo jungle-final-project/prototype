@@ -95,17 +95,25 @@ export type RagEvidenceDetail = {
 };
 
 export type AsTicketStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'CANCELLED';
+export type AsReviewStatus = 'NOT_REQUIRED' | 'REQUIRED' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED';
+export type AsSupportDecision = 'SELF_SOLVABLE' | 'REMOTE_POSSIBLE' | 'VISIT_REQUIRED' | 'NEEDS_MORE_INFO';
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export type AdminAsTicket = {
   id: string;
+  userId?: string | null;
   status: AsTicketStatus;
+  analysisStatus?: string | null;
+  reviewStatus?: AsReviewStatus | string | null;
+  supportDecision?: AsSupportDecision | string | null;
+  riskLevel?: RiskLevel | string | null;
+  autoResponseAllowed?: boolean | null;
   symptom: string;
   title?: string | null;
   description?: string | null;
   detailDescription?: string | null;
   logUploadId?: string | null;
   logSummary?: string | null;
-  userId?: string | null;
   userEmail?: string | null;
   userName?: string | null;
   assignedAdminId?: string | null;
@@ -117,17 +125,39 @@ export type AdminAsTicket = {
   updatedAt?: string;
 };
 
+export type AdminTicket = AdminAsTicket;
+
 export type AdminTicketsResponse = {
   items: AdminAsTicket[];
-  page?: number;
-  size?: number;
-  total?: number;
 };
 
 export type AdminAsTicketUpdateRequest = {
   status?: AsTicketStatus;
   assignedAdminId?: string | null;
   adminNote?: string | null;
+  reviewStatus?: AsReviewStatus | string | null;
+  supportDecision?: AsSupportDecision | string | null;
+  riskLevel?: RiskLevel | string | null;
+  autoResponseAllowed?: boolean | null;
+};
+
+export type AdminTicketPayload = AdminAsTicketUpdateRequest;
+
+export type PriceJob = {
+  id: string;
+  status: string;
+  requestedBy?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  errorSummary?: string | null;
+  createdAt?: string;
+};
+
+export type PriceJobsResponse = {
+  items: PriceJob[];
+  page?: number;
+  size?: number;
+  total?: number;
 };
 
 export type ManufacturerSource = {
@@ -452,15 +482,23 @@ export function getAdminTicket(ticketId: string) {
   return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`);
 }
 
-export function updateAdminTicket(ticketId: string, request: AdminAsTicketUpdateRequest) {
+export function listAdminTickets() {
+  return getAdminTickets();
+}
+
+export function updateAdminTicket(ticketId: string, payload: AdminAsTicketUpdateRequest) {
   return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`, {
     method: 'PATCH',
-    body: JSON.stringify(request)
+    body: JSON.stringify(payload)
   });
 }
 
+export function listPriceJobs() {
+  return api<PriceJobsResponse>('/api/admin/price-jobs');
+}
+
 export function runPriceJob() {
-  return api('/api/admin/price-jobs/run', { method: 'POST' });
+  return api<PriceJob>('/api/admin/price-jobs/run', { method: 'POST' });
 }
 
 export function listManufacturerSources(includeDeleted = false) {

@@ -8,6 +8,7 @@ import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.part.ToolBuildPart;
 import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -55,10 +56,18 @@ public class BuildChatService {
     }
 
     public Map<String, Object> chat(Map<String, Object> request) {
-        return chat(request, null);
+        return chat(request, (String) null);
     }
 
     public Map<String, Object> chat(Map<String, Object> request, String requestedAiProfile) {
+        return chat(request, requestedAiProfile, null);
+    }
+
+    public Map<String, Object> chat(Map<String, Object> request, CurrentUserService.CurrentUser user) {
+        return chat(request, null, user);
+    }
+
+    public Map<String, Object> chat(Map<String, Object> request, String requestedAiProfile, CurrentUserService.CurrentUser user) {
         Map<String, Object> body = request == null ? Map.of() : request;
         String message = requireText(body.get("message"), "message는 필수입니다.");
         AiChatEngineResponse engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
@@ -68,7 +77,7 @@ public class BuildChatService {
                 text(body.get("buildId")),
                 text(body.get("draftId")),
                 body,
-                null
+                user == null ? null : user.internalId()
         ), requestedAiProfile);
         return responseMap(engineResponse, body);
     }
