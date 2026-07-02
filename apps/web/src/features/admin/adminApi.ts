@@ -85,6 +85,11 @@ export type AsTicketStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 
 export type AdminAsTicket = {
   id: string;
   status: AsTicketStatus;
+  analysisStatus?: string | null;
+  reviewStatus?: string | null;
+  supportDecision?: string | null;
+  riskLevel?: string | null;
+  autoResponseAllowed?: boolean | null;
   symptom: string;
   title?: string | null;
   description?: string | null;
@@ -98,6 +103,12 @@ export type AdminAsTicket = {
   causeCandidates: Record<string, unknown>[];
   upgradeCandidates: Record<string, unknown>[];
   adminNote?: string | null;
+  remoteSupportLink?: string | null;
+  remoteSupportStatus?: string | null;
+  visitSupportRequired?: boolean | null;
+  visitSupportStatus?: string | null;
+  visitPreferredDate?: string | null;
+  visitTimeSlot?: string | null;
   resolvedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -114,6 +125,10 @@ export type AdminAsTicketUpdateRequest = {
   status?: AsTicketStatus;
   assignedAdminId?: string | null;
   adminNote?: string | null;
+  supportDecision?: string | null;
+  reviewStatus?: string | null;
+  riskLevel?: string | null;
+  autoResponseAllowed?: boolean | null;
 };
 
 export function getAdminDashboard() {

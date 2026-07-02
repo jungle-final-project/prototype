@@ -54,7 +54,7 @@ export function AdminTicketDetailPage() {
 
   return (
     <AdminShell title="AS 티켓 상세">
-      <div className="grid grid-cols-[1fr_440px] gap-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_440px]">
         <Panel title="AS 티켓 확인" subtitle={ticket.id}>
           <DataTable columns={['항목', '내용']} rows={ticketDetailRows(ticket)} />
         </Panel>
@@ -102,11 +102,17 @@ export function AdminTicketDetailPage() {
 function ticketDetailRows(ticket: AdminAsTicket) {
   return [
     { '항목': '상태', '내용': <StatusBadge status={ticket.status} /> },
+    { '항목': '진단 상태', '내용': ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : '-' },
+    { '항목': '검토 상태', '내용': ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
+    { '항목': '지원 결정', '내용': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
+    { '항목': '위험도', '내용': ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
     { '항목': '제목/증상', '내용': ticket.title ?? ticket.symptom },
     { '항목': '상세 설명', '내용': ticket.description ?? ticket.detailDescription ?? '상세 설명 응답 없음' },
     { '항목': '로그 요약', '내용': logSummary(ticket) },
     { '항목': '원인 후보', '내용': formatCandidates(ticket.causeCandidates) },
     { '항목': '업그레이드 후보', '내용': formatCandidates(ticket.upgradeCandidates) },
+    { '항목': '원격지원', '내용': ticket.remoteSupportLink ?? ticket.remoteSupportStatus ?? '-' },
+    { '항목': '방문지원', '내용': visitSupport(ticket) },
     { '항목': '담당자', '내용': ticket.assignedAdminId ?? '-' },
     { '항목': '관리자 메모', '내용': ticket.adminNote ?? '-' },
     { '항목': '생성일', '내용': formatDateTime(ticket.createdAt) },
@@ -119,6 +125,13 @@ function logSummary(ticket: AdminAsTicket) {
     return ticket.logSummary;
   }
   return ticket.logUploadId ? `업로드된 로그 있음: ${shortId(ticket.logUploadId)}` : '연결된 로그 없음';
+}
+
+function visitSupport(ticket: AdminAsTicket) {
+  if (!ticket.visitSupportRequired) {
+    return '-';
+  }
+  return `${ticket.visitSupportStatus ?? 'REQUESTED'} ${ticket.visitPreferredDate ?? ''} ${ticket.visitTimeSlot ?? ''}`.trim();
 }
 
 function formatCandidates(candidates: Record<string, unknown>[]) {

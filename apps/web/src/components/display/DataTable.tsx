@@ -14,7 +14,7 @@ export function DataTable({ columns, rows }: { columns: string[]; rows: Row[] })
         <tbody>
           {rows.map((row, index) => (
             <tr key={index} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/80">
-              {columns.map((column) => <td key={column} className="px-3 py-3 align-middle text-slate-700">{row[column]}</td>)}
+              {columns.map((column) => <td key={column} className="break-words px-3 py-3 align-middle text-slate-700">{row[column]}</td>)}
             </tr>
           ))}
         </tbody>

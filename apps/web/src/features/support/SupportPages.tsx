@@ -92,7 +92,7 @@ export function AsChatPage() {
 
   return (
     <Screen>
-      <div className="grid grid-cols-[minmax(0,1fr)_430px] gap-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
         <Panel title="AS AI 챗봇" subtitle="AS 접수 후 티켓 증상, RAG 근거, Tool 결과를 사용해 1차 상담 답변을 생성합니다.">
           <form onSubmit={submitTicket} className="mb-4 flex gap-3">
             <input
@@ -317,7 +317,7 @@ export function SupportNewPage() {
 
   return (
     <Screen>
-      <form onSubmit={submit} className="grid grid-cols-[minmax(0,1fr)_360px] gap-5">
+      <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
             <div>
@@ -420,15 +420,20 @@ export function SupportTicketPage() {
 
   return (
     <Screen>
-      <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px]">
         <Panel title={`AS 티켓 #${shortTicketId(ticket.id)}`} subtitle="접수 내용과 처리 상태를 확인할 수 있습니다.">
           <div className="mb-4 flex flex-wrap gap-2">
             <StatusBadge status={ticket.status} />
+            {ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : null}
+            {ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : null}
           </div>
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
         </Panel>
         <Panel title="담당자 확인 자료" subtitle="업로드한 로그를 바탕으로 담당자가 접수 내용을 확인합니다.">
           <DataTable columns={['확인 항목', '내용', '상태']} rows={causeRows(ticket.causeCandidates)} />
+          <div className="mt-5">
+            <DataTable columns={['항목', '값']} rows={ticketDecisionRows(ticket)} />
+          </div>
           <p className="mt-5 text-sm leading-6 text-slate-700">
             담당자가 증상과 로그를 확인한 뒤 필요한 경우 추가 정보를 요청할 수 있습니다.
           </p>
@@ -449,13 +454,25 @@ function ticketTimeline(ticket: AsTicketDto) {
     {
       시간: formatTime(ticket.createdAt),
       주체: '시스템',
-      내용: ticket.causeCandidates.length ? '로그 확인 자료 준비 완료' : '로그 확인 자료 준비 중'
+      내용: ticket.analysisStatus ? `진단 상태: ${ticket.analysisStatus}` : ticket.causeCandidates.length ? '로그 확인 자료 준비 완료' : '로그 확인 자료 준비 중'
     },
     {
       시간: '-',
       주체: '상담원',
-      내용: ticket.assignedAdminId ? '담당자 배정 완료' : '담당자 배정 대기'
+      내용: ticket.supportDecision ? `지원 결정: ${ticket.supportDecision}` : ticket.assignedAdminId ? '담당자 배정 완료' : '담당자 배정 대기'
     }
+  ];
+}
+
+function ticketDecisionRows(ticket: AsTicketDto) {
+  return [
+    { 항목: '진단 상태', 값: ticket.analysisStatus ?? '-' },
+    { 항목: '검토 상태', 값: ticket.reviewStatus ?? '-' },
+    { 항목: '지원 결정', 값: ticket.supportDecision ?? '-' },
+    { 항목: '위험도', 값: ticket.riskLevel ?? '-' },
+    { 항목: '관리자 메모', 값: ticket.adminNote ?? '-' },
+    { 항목: '원격지원', 값: ticket.remoteSupportLink ?? ticket.remoteSupportStatus ?? '-' },
+    { 항목: '방문지원', 값: ticket.visitSupportRequired ? `${ticket.visitSupportStatus ?? 'REQUESTED'} ${ticket.visitPreferredDate ?? ''} ${ticket.visitTimeSlot ?? ''}`.trim() : '-' }
   ];
 }
 
