@@ -116,6 +116,9 @@ ai:
       use-compact-prompt: ${AS_CHAT_HIGH_QUALITY_USE_COMPACT_PROMPT:true}
   build-chat:
     default-profile: ${BUILD_CHAT_DEFAULT_PROFILE:BUILD_CHAT_54_MINI_FAST}
+    cache:
+      enabled: ${BUILD_CHAT_CACHE_ENABLED:true}
+      ttl-seconds: ${BUILD_CHAT_CACHE_TTL_SECONDS:600}
     fast:
       model: ${BUILD_CHAT_FAST_MODEL:gpt-5.5}
       reasoning-effort: ${BUILD_CHAT_FAST_REASONING_EFFORT:low}

@@ -615,6 +615,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdminPartDto"
+  /api/admin/parts/quality-report:
+    get:
+      summary: 관리자 내부 자산 품질 리포트
+      description: ACTIVE 내부 자산 기준으로 Tool-ready 누락, 필수 스펙 누락, benchmark 누락, FPS coverage gap, alias 검수 큐를 읽기 전용으로 집계한다. 사용자 부품 API 응답은 바꾸지 않는다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 내부 자산 품질 리포트
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPartQualityReportResponse"
   /api/admin/parts/{id}:
     get:
       summary: 관리자 부품 상세 조회
@@ -1333,6 +1346,14 @@ paths:
           in: query
           schema:
             $ref: "#/components/schemas/PartCategory"
+        - name: targetField
+          in: query
+          schema:
+            type: string
+        - name: sourceType
+          in: query
+          schema:
+            type: string
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
@@ -1342,6 +1363,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PartAliasReviewItemListResponse"
+  /api/admin/part-alias-review-items/summary:
+    get:
+      summary: 부품 alias 및 스펙 검수 큐 요약
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: category, targetField, sourceType별 열린 검수 큐 요약
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartAliasReviewSummaryResponse"
   /api/admin/part-alias-review-items/{id}/resolve:
     post:
       summary: 검수 큐 항목 해결 및 alias rule 생성
@@ -2333,7 +2366,9 @@ components:
       required: [category, partId, name, price]
       properties:
         category:
-          $ref: "#/components/schemas/PartCategory"
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PartCategory"
         partId:
           type: string
           format: uuid
@@ -2462,7 +2497,9 @@ components:
           type: string
           format: uuid
         category:
-          $ref: "#/components/schemas/PartCategory"
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PartCategory"
         name:
           type: string
         manufacturer:
@@ -2778,6 +2815,92 @@ components:
           type: integer
         total:
           type: integer
+    AdminPartQualityReportResponse:
+      type: object
+      required: [categories, summary, actionItems]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPartQualityReportCategory"
+        summary:
+          $ref: "#/components/schemas/AdminPartQualityReportSummary"
+        actionItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPartQualityReportActionItem"
+        generatedAt:
+          type: string
+          format: date-time
+    AdminPartQualityReportCategory:
+      type: object
+      required: [category, activeParts, toolReadyMissing, requiredSpecMissing, benchmarkMissing, fpsCoverageGap, aliasReviewOpen]
+      properties:
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        activeParts:
+          type: integer
+        toolReadyMissing:
+          type: integer
+        requiredSpecMissing:
+          type: integer
+        benchmarkMissing:
+          type: integer
+        fpsCoverageGap:
+          type: integer
+        aliasReviewOpen:
+          type: integer
+    AdminPartQualityReportSummary:
+      type: object
+      required: [activeParts, toolReadyMissing, requiredSpecMissing, benchmarkMissing, fpsCoverageGap, aliasReviewOpen]
+      properties:
+        activeParts:
+          type: integer
+        toolReadyMissing:
+          type: integer
+        requiredSpecMissing:
+          type: integer
+        benchmarkMissing:
+          type: integer
+        fpsCoverageGap:
+          type: integer
+        aliasReviewOpen:
+          type: integer
+    AdminPartQualityReportActionItem:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [MISSING_REQUIRED_SPEC, MISSING_BENCHMARK, FPS_COVERAGE_GAP, ALIAS_REVIEW_OPEN]
+        category:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PartCategory"
+        partId:
+          type: string
+          format: uuid
+          nullable: true
+        id:
+          type: string
+          format: uuid
+          nullable: true
+        label:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        targetField:
+          type: string
+          nullable: true
+        sourceType:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          nullable: true
+      additionalProperties: true
     AdminPartUpsertRequest:
       type: object
       properties:
@@ -3626,6 +3749,26 @@ components:
           type: integer
         total:
           type: integer
+    PartAliasReviewSummaryResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                nullable: true
+                allOf:
+                  - $ref: "#/components/schemas/PartCategory"
+              targetField:
+                type: string
+                nullable: true
+              sourceType:
+                type: string
+                nullable: true
+              count:
+                type: integer
     PartAliasRuleDto:
       type: object
       properties:

@@ -15,6 +15,8 @@ import {
   deletePartCatalogCandidate,
   deleteAdminPart,
   getAdminPart,
+  getAdminPartsQualityReport,
+  getPartAliasReviewSummary,
   listAdminParts,
   listPartAliasReviewItems,
   listPartAliasRules,
@@ -47,16 +49,19 @@ import {
   type ManufacturerSourcePayload,
   type PartAliasReviewItem,
   type PartAliasRule,
-  type PartCatalogCandidate
+  type PartCatalogCandidate,
+  type PartQualityReportActionItem,
+  type PartQualityReportCategory
 } from '../adminApi';
 
 const CATEGORIES = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
 const STATUSES = ['ACTIVE', 'INACTIVE', 'DISCONTINUED', 'DELETED'];
 const TABS = ['기본 정보', '스펙', '가격/Offer', '이력'] as const;
-const INTAKE_TABS = ['추적 Source', '감지 게시글', '신제품 후보함', 'Alias/스펙 검수 큐'] as const;
+const INTAKE_TABS = ['추적 Source', '감지 게시글', '신제품 후보함', '자산 품질 점검', 'Alias/스펙 검수 큐'] as const;
 const SOURCE_TYPES = ['NEWS', 'PRODUCT_RELEASE', 'SUPPORT_NEWS', 'RSS', 'SITEMAP'];
 const SOURCE_STATUSES = ['ACTIVE', 'PAUSED', 'ERROR'];
 const POST_STATUSES = ['PENDING', 'PRODUCT_CANDIDATE', 'IGNORED', 'FAILED'];
+const ALIAS_REVIEW_STATUSES = ['OPEN', 'RESOLVED', 'IGNORED'];
 
 type AdminPartsFilter = {
   category: string;
@@ -127,6 +132,13 @@ type AliasReviewDraft = {
   targetField: string;
   canonicalValue: string;
   note: string;
+};
+
+type AliasReviewFilters = {
+  status: string;
+  category: string;
+  targetField: string;
+  sourceType: string;
 };
 
 type SpecField = {
@@ -204,6 +216,13 @@ const DEFAULT_ALIAS_REVIEW_DRAFT: AliasReviewDraft = {
   targetField: 'rank',
   canonicalValue: '',
   note: ''
+};
+
+const DEFAULT_ALIAS_REVIEW_FILTERS: AliasReviewFilters = {
+  status: 'OPEN',
+  category: '',
+  targetField: '',
+  sourceType: ''
 };
 
 const COMMON_SPEC_FIELDS: SpecField[] = [
@@ -319,6 +338,7 @@ export function AdminPartsPage() {
   const [candidateDraft, setCandidateDraft] = useState<CandidateDraft>(DEFAULT_CANDIDATE_DRAFT);
   const [selectedAliasReviewId, setSelectedAliasReviewId] = useState<string | null>(null);
   const [aliasReviewDraft, setAliasReviewDraft] = useState<AliasReviewDraft>(DEFAULT_ALIAS_REVIEW_DRAFT);
+  const [aliasReviewFilters, setAliasReviewFilters] = useState<AliasReviewFilters>(DEFAULT_ALIAS_REVIEW_FILTERS);
 
   const adminPartsQuery = useQuery({
     queryKey: ['admin-parts', filters],
@@ -352,9 +372,24 @@ export function AdminPartsPage() {
     queryKey: ['admin-manufacturer-release-candidates'],
     queryFn: listManufacturerReleaseCandidates
   });
+  const qualityReportQuery = useQuery({
+    queryKey: ['admin-parts-quality-report'],
+    queryFn: getAdminPartsQualityReport
+  });
   const aliasReviewQuery = useQuery({
-    queryKey: ['admin-part-alias-review-items'],
-    queryFn: listPartAliasReviewItems
+    queryKey: ['admin-part-alias-review-items', aliasReviewFilters],
+    queryFn: () => listPartAliasReviewItems({
+      status: aliasReviewFilters.status || undefined,
+      category: aliasReviewFilters.category || undefined,
+      targetField: aliasReviewFilters.targetField || undefined,
+      sourceType: aliasReviewFilters.sourceType || undefined,
+      page: 0,
+      size: 20
+    })
+  });
+  const aliasReviewSummaryQuery = useQuery({
+    queryKey: ['admin-part-alias-review-summary'],
+    queryFn: getPartAliasReviewSummary
   });
   const aliasRulesQuery = useQuery({
     queryKey: ['admin-part-alias-rules'],
@@ -366,7 +401,9 @@ export function AdminPartsPage() {
   const sources = sourcesQuery.data?.items ?? [];
   const posts = postsQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
+  const qualityReport = qualityReportQuery.data;
   const aliasReviewItems = aliasReviewQuery.data?.items ?? [];
+  const aliasReviewSummary = aliasReviewSummaryQuery.data?.items ?? [];
   const aliasRules = aliasRulesQuery.data?.items ?? [];
   const selectedSource = sources.find((source) => source.id === selectedSourceId);
   const selectedPost = posts.find((post) => post.id === selectedPostId);
@@ -428,6 +465,7 @@ export function AdminPartsPage() {
   const refreshPartQueries = async (partId?: string) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['admin-parts'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-parts-quality-report'] }),
       queryClient.invalidateQueries({ queryKey: ['parts'] }),
       partId ? queryClient.invalidateQueries({ queryKey: ['admin-part-detail', partId] }) : Promise.resolve()
     ]);
@@ -437,7 +475,9 @@ export function AdminPartsPage() {
       queryClient.invalidateQueries({ queryKey: ['admin-manufacturer-sources'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-manufacturer-posts'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-manufacturer-release-candidates'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-parts-quality-report'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-part-alias-review-items'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-part-alias-review-summary'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-part-alias-rules'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-parts'] })
     ]);
@@ -1179,10 +1219,66 @@ export function AdminPartsPage() {
             </div>
           ) : null}
 
+          {intakeTab === '자산 품질 점검' ? (
+            <div className="space-y-5">
+              {qualityReportQuery.isLoading ? <StateMessage type="info" title="품질 리포트 로딩 중" body="ACTIVE 내부 자산 기준으로 Tool-ready, 벤치마크, FPS gap, alias 검수 큐를 집계하고 있습니다." /> : null}
+              {qualityReportQuery.isError ? <StateMessage type="warn" title="품질 리포트 조회 실패" body="GET /api/admin/parts/quality-report 응답을 확인해야 합니다." /> : null}
+              {!qualityReportQuery.isLoading && !qualityReportQuery.isError && qualityReport ? (
+                <>
+                  <div className="grid grid-cols-6 gap-3">
+                    <MetricCard label="ACTIVE 자산" value={qualityReport.summary.activeParts} />
+                    <MetricCard label="Tool-ready 누락" value={qualityReport.summary.toolReadyMissing} tone={qualityReport.summary.toolReadyMissing ? 'warn' : 'ok'} />
+                    <MetricCard label="필수 스펙 누락" value={qualityReport.summary.requiredSpecMissing} tone={qualityReport.summary.requiredSpecMissing ? 'warn' : 'ok'} />
+                    <MetricCard label="벤치마크 누락" value={qualityReport.summary.benchmarkMissing} tone={qualityReport.summary.benchmarkMissing ? 'warn' : 'ok'} />
+                    <MetricCard label="FPS gap" value={qualityReport.summary.fpsCoverageGap} tone={qualityReport.summary.fpsCoverageGap ? 'warn' : 'ok'} />
+                    <MetricCard label="열린 검수 큐" value={qualityReport.summary.aliasReviewOpen} tone={qualityReport.summary.aliasReviewOpen ? 'warn' : 'ok'} />
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-sm font-black text-commerce-ink">카테고리별 품질 현황</div>
+                      <div className="text-xs font-bold text-slate-500">생성 시각: {qualityReport.generatedAt ? new Date(qualityReport.generatedAt).toLocaleString('ko-KR') : '-'}</div>
+                    </div>
+                    <DataTable
+                      columns={['category', 'active', 'tool', 'spec', 'benchmark', 'fps', 'alias']}
+                      rows={qualityReportCategoryRows(qualityReport.categories)}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-2 text-sm font-black text-commerce-ink">조치 필요 항목</div>
+                    {qualityReport.actionItems.length > 0
+                      ? <DataTable columns={['type', 'category', 'label', 'message', 'field/source']} rows={qualityReportActionRows(qualityReport.actionItems)} />
+                      : <StateMessage type="success" title="우선 조치 항목 없음" body="현재 품질 리포트 기준으로 즉시 조치할 누락 항목이 없습니다." />}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
           {intakeTab === 'Alias/스펙 검수 큐' ? (
             <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
               <div className="space-y-5">
                 <div>
+                  <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-sm font-black text-commerce-ink">검수 큐 필터</div>
+                      <div className="text-xs font-bold text-slate-500">열린 항목 {aliasReviewQuery.data?.total ?? 0}개</div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2">
+                      <FormSelect label="상태" value={aliasReviewFilters.status} options={ALIAS_REVIEW_STATUSES} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, status: value })} />
+                      <FormSelect label="카테고리" value={aliasReviewFilters.category} options={['', ...CATEGORIES]} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, category: value })} />
+                      <FormInput label="대상 필드" value={aliasReviewFilters.targetField} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, targetField: value })} />
+                      <FormInput label="Source Type" value={aliasReviewFilters.sourceType} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, sourceType: value })} />
+                    </div>
+                    {aliasReviewSummary.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {aliasReviewSummary.slice(0, 8).map((item, index) => (
+                          <span key={`${item.category}-${item.targetField}-${item.sourceType}-${index}`} className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-slate-600 ring-1 ring-slate-200">
+                            {item.category ?? '전체'} / {item.targetField ?? '-'} / {item.sourceType ?? '-'}: {item.count}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   {aliasReviewQuery.isLoading ? <StateMessage type="info" title="검수 큐 로딩 중" body="AI 추천 중 rank/alias 판단이 어려웠던 항목을 불러오고 있습니다." /> : null}
                   {aliasReviewQuery.isError ? <StateMessage type="warn" title="검수 큐 조회 실패" body="GET /api/admin/part-alias-review-items 응답을 확인해야 합니다." /> : null}
                   {!aliasReviewQuery.isLoading && !aliasReviewQuery.isError ? (
@@ -1259,6 +1355,46 @@ function SectionToggleButton({ expanded, label, onClick }: { expanded: boolean; 
       {expanded ? '접기' : '펼치기'}
     </button>
   );
+}
+
+function MetricCard({ label, value, tone = 'neutral' }: { label: string; value: number; tone?: 'neutral' | 'ok' | 'warn' }) {
+  const toneClass = tone === 'warn'
+    ? 'border-amber-200 bg-amber-50 text-amber-800'
+    : tone === 'ok'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : 'border-slate-200 bg-white text-commerce-ink';
+  return (
+    <div className={`rounded-md border px-4 py-3 ${toneClass}`}>
+      <div className="text-[11px] font-black text-slate-500">{label}</div>
+      <div className="mt-2 text-xl font-black">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+function qualityReportCategoryRows(categories: PartQualityReportCategory[]) {
+  return categories.map((category) => ({
+    category: category.category,
+    active: category.activeParts.toLocaleString(),
+    tool: qualityCount(category.toolReadyMissing),
+    spec: qualityCount(category.requiredSpecMissing),
+    benchmark: qualityCount(category.benchmarkMissing),
+    fps: qualityCount(category.fpsCoverageGap),
+    alias: qualityCount(category.aliasReviewOpen)
+  }));
+}
+
+function qualityReportActionRows(items: PartQualityReportActionItem[]) {
+  return items.map((item) => ({
+    type: <StatusBadge status={item.type} />,
+    category: item.category ?? '-',
+    label: item.label ?? item.partId ?? item.id ?? '-',
+    message: item.message ?? '-',
+    'field/source': [item.targetField, item.sourceType, item.priority].filter(Boolean).join(' / ') || '-'
+  }));
+}
+
+function qualityCount(value: number) {
+  return value > 0 ? <span className="font-black text-amber-700">{value.toLocaleString()}</span> : <span className="font-black text-emerald-700">0</span>;
 }
 
 function sourceRows(

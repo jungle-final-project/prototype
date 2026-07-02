@@ -261,6 +261,8 @@ AS Chat은 기본 요청에서 `AS_CHAT_DEFAULT_PROFILE` 하나만 실행한다.
 
 LLM 호출 결과는 `llm_generations`에 저장한다. 저장 대상은 provider, profile, model, reasoning, latency, token usage, schema validity, error 요약이다. prompt 원문, API key, 원본 로그 전문은 저장하지 않는다.
 
+Build Chat은 반복 상담 속도 개선을 위해 Redis cache를 사용할 수 있다. 기본 TTL은 `BUILD_CHAT_CACHE_TTL_SECONDS=600`초이며, cache key는 `user internal id + profile + normalized message + selectedCategory + currentQuoteDraft partId/quantity fingerprint + parts/benchmark/FPS/RAG/alias version`으로 만든다. Redis 장애, 미설정, 직렬화 실패가 있어도 사용자 응답 shape는 바뀌지 않고 기존 LLM/RAG 실행으로 우회한다. cache hit/miss는 내부 로그와 benchmark 보고서에서만 확인하고 프론트 계약에는 노출하지 않는다. cache payload는 이전 실행의 `agentSessionId`, `evidenceIds`, `toolInvocationIds`를 제거해 trace 식별자를 재사용하지 않는다.
+
 LLM mode에서도 외부 담당자가 보는 계약은 바뀌지 않는다.
 
 1. `POST /api/ai/agent-sessions`로 세션 생성

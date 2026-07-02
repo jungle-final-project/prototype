@@ -27,11 +27,11 @@ public class PartAliasReviewService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public Map<String, Object> listReviewItems(String status, String category, Integer page, Integer size) {
+    public Map<String, Object> listReviewItems(String status, String category, String targetField, String sourceType, Integer page, Integer size) {
         int safePage = page == null ? 0 : Math.max(0, page);
         int safeSize = size == null ? 20 : Math.max(1, Math.min(size, 100));
         List<Object> params = new ArrayList<>();
-        String where = reviewWhere(status, category, params);
+        String where = reviewWhere(status, category, targetField, sourceType, params);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT r.public_id::text AS id,
                        r.source_type,
@@ -66,6 +66,44 @@ public class PartAliasReviewService {
                 "page", safePage,
                 "size", safeSize,
                 "total", total == null ? 0 : total
+        );
+    }
+
+    public Map<String, Object> reviewSummary() {
+        List<Map<String, Object>> byCategory = jdbcTemplate.queryForList("""
+                SELECT coalesce(category, 'UNKNOWN') AS category,
+                       count(*) AS open_count
+                FROM part_alias_review_items
+                WHERE status = 'OPEN'
+                  AND deleted_at IS NULL
+                GROUP BY coalesce(category, 'UNKNOWN')
+                ORDER BY category
+                """);
+        List<Map<String, Object>> bySourceType = jdbcTemplate.queryForList("""
+                SELECT source_type,
+                       count(*) AS open_count
+                FROM part_alias_review_items
+                WHERE status = 'OPEN'
+                  AND deleted_at IS NULL
+                GROUP BY source_type
+                ORDER BY source_type
+                """);
+        Integer openTotal = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM part_alias_review_items
+                WHERE status = 'OPEN'
+                  AND deleted_at IS NULL
+                """, Integer.class);
+        return MockData.map(
+                "openTotal", openTotal == null ? 0 : openTotal,
+                "byCategory", byCategory.stream().map(row -> MockData.map(
+                        "category", DbValueMapper.string(row, "category"),
+                        "openCount", DbValueMapper.integer(row, "open_count")
+                )).toList(),
+                "bySourceType", bySourceType.stream().map(row -> MockData.map(
+                        "sourceType", DbValueMapper.string(row, "source_type"),
+                        "openCount", DbValueMapper.integer(row, "open_count")
+                )).toList()
         );
     }
 
@@ -222,7 +260,7 @@ public class PartAliasReviewService {
         return rows.isEmpty() ? null : DbValueMapper.string(rows.get(0), "canonical_value");
     }
 
-    private String reviewWhere(String status, String category, List<Object> params) {
+    private String reviewWhere(String status, String category, String targetField, String sourceType, List<Object> params) {
         List<String> clauses = new ArrayList<>();
         clauses.add("r.deleted_at IS NULL");
         if (normalize(status) != null) {
@@ -232,6 +270,14 @@ public class PartAliasReviewService {
         if (normalize(category) != null) {
             clauses.add("r.category = ?");
             params.add(category(normalize(category)));
+        }
+        if (normalize(targetField) != null) {
+            clauses.add("r.target_field = ?");
+            params.add(normalize(targetField));
+        }
+        if (normalize(sourceType) != null) {
+            clauses.add("r.source_type = ?");
+            params.add(normalize(sourceType));
         }
         return "WHERE " + String.join(" AND ", clauses);
     }

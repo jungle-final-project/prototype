@@ -889,6 +889,8 @@ Owner: 2번
 - `status=NEEDS_SOURCE`는 공개 출처 확인 후 seed 보강이 필요하다는 뜻이다.
 - 실제 FPS row가 들어오면 `game_fps_coverage_status`, `game_fps_coverage_gaps` view에서 충족 여부가 자동 계산된다.
 - 누락 target은 사용자/API 응답으로 반환하지 않는다. 운영자는 `game_fps_coverage_gaps` view 또는 `tools/check_game_fps_seed_quality.sql`로 다음 수동 seed 대상을 확인한다.
+- 관리자 `/api/admin/parts/quality-report`는 `parts.status=ACTIVE` 기준으로 `benchmark_summaries`, `game_fps_coverage_gaps`, `part_alias_review_items`를 읽어 누락 현황을 집계한다. 이 API는 읽기 전용이며 사용자 `/api/parts` 응답에 gap/누락 문구를 섞지 않는다.
+- quality report의 필수 스펙 누락 기준은 ToolCheckService 실제 판정 필드에 맞춘다. CPU는 `socket`, `wattage|tdpW`, MOTHERBOARD는 `socket`, `memoryType`, RAM은 `memoryType`, GPU는 `gpuClass`, `lengthMm`, `wattage`, `requiredSystemPowerW`, `vramGb`, PSU는 `capacityW`, CASE는 `maxGpuLengthMm`, `maxCpuCoolerHeightMm`, COOLER는 `socketSupport`, `heightMm|coolerHeightMm`를 본다. STORAGE는 ToolCheckService가 직접 요구하는 속성 필드가 없으므로 benchmark/FPS coverage 쪽에서 품질을 관리한다.
 
 | 컬럼명 | 타입 | nullable | FK | 설명 |
 |---|---|---:|---|---|
@@ -1701,6 +1703,7 @@ V60__part_alias_review_queue.sql
 |---|---|
 | `llm_cache` | Redis/runtime 처리 |
 | `rag_cache` | Redis/runtime 처리 |
+| `build_chat_cache` | `POST /api/ai/build-chat` 성공 응답은 Redis key-value와 TTL로 관리한다. DB row를 만들지 않는다. cache key에는 사용자 내부 id, profile, message, draft fingerprint, parts/benchmark/FPS/RAG/alias version을 포함하고, cache payload에는 이전 실행의 `agentSessionId`, `evidenceIds`, `toolInvocationIds`를 저장하지 않는다. |
 | `quota` | Redis/runtime 처리 |
 | OAuth one-time code 테이블 | Redis/runtime 처리 |
 | 부하 테스트 결과 테이블 | k6 리포트 파일로 관리 |

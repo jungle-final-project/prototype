@@ -260,6 +260,24 @@ export type PartAliasReviewItemsResponse = {
   total: number;
 };
 
+export type PartAliasReviewItemsParams = {
+  status?: string;
+  category?: string;
+  targetField?: string;
+  sourceType?: string;
+  page?: number;
+  size?: number;
+};
+
+export type PartAliasReviewSummaryResponse = {
+  items: Array<{
+    category?: string | null;
+    targetField?: string | null;
+    sourceType?: string | null;
+    count: number;
+  }>;
+};
+
 export type PartAliasRule = {
   id: string;
   category: string;
@@ -447,6 +465,39 @@ export type AdminExternalOfferPayload = {
   lowPrice?: number | null;
 };
 
+export type PartQualityReportCategory = {
+  category: string;
+  activeParts: number;
+  toolReadyMissing: number;
+  requiredSpecMissing: number;
+  benchmarkMissing: number;
+  fpsCoverageGap: number;
+  aliasReviewOpen: number;
+};
+
+export type PartQualityReportSummary = Omit<PartQualityReportCategory, 'category'>;
+
+export type PartQualityReportActionItem = {
+  type: string;
+  category?: string | null;
+  partId?: string | null;
+  id?: string | null;
+  label?: string | null;
+  message?: string | null;
+  targetField?: string | null;
+  sourceType?: string | null;
+  priority?: string | null;
+  createdAt?: string | null;
+  [key: string]: unknown;
+};
+
+export type PartQualityReportResponse = {
+  categories: PartQualityReportCategory[];
+  summary: PartQualityReportSummary;
+  actionItems: PartQualityReportActionItem[];
+  generatedAt?: string;
+};
+
 export function getAdminDashboard() {
   return api<AdminDashboard>('/api/admin/dashboard');
 }
@@ -468,6 +519,10 @@ export function listAdminParts(params: AdminPartsParams = {}) {
   });
   const suffix = query.toString() ? `?${query}` : '';
   return api<AdminPartsResponse>(`/api/admin/parts${suffix}`);
+}
+
+export function getAdminPartsQualityReport() {
+  return api<PartQualityReportResponse>('/api/admin/parts/quality-report');
 }
 
 export function createAdminPart(payload: AdminPartPayload) {
@@ -680,8 +735,18 @@ export function refreshPartCatalogCandidateOffers(candidateId: string) {
   });
 }
 
-export function listPartAliasReviewItems() {
-  return api<PartAliasReviewItemsResponse>('/api/admin/part-alias-review-items?status=OPEN&page=0&size=20');
+export function listPartAliasReviewItems(params: PartAliasReviewItemsParams = {}) {
+  const query = new URLSearchParams();
+  Object.entries({ status: 'OPEN', page: 0, size: 20, ...params }).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      query.set(key, String(value));
+    }
+  });
+  return api<PartAliasReviewItemsResponse>(`/api/admin/part-alias-review-items?${query}`);
+}
+
+export function getPartAliasReviewSummary() {
+  return api<PartAliasReviewSummaryResponse>('/api/admin/part-alias-review-items/summary');
 }
 
 export function resolvePartAliasReviewItem(itemId: string, payload: PartAliasResolvePayload) {

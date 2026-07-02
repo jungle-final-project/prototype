@@ -24,6 +24,7 @@ public class PartController {
     private final ManufacturerReleaseIntakeService manufacturerReleaseIntakeService;
     private final PartAdminService partAdminService;
     private final PartAliasReviewService partAliasReviewService;
+    private final PartQualityReportService partQualityReportService;
     private final CurrentUserService currentUserService;
 
     public PartController(
@@ -35,6 +36,7 @@ public class PartController {
             ManufacturerReleaseIntakeService manufacturerReleaseIntakeService,
             PartAdminService partAdminService,
             PartAliasReviewService partAliasReviewService,
+            PartQualityReportService partQualityReportService,
             CurrentUserService currentUserService
     ) {
         this.partQueryService = partQueryService;
@@ -45,6 +47,7 @@ public class PartController {
         this.manufacturerReleaseIntakeService = manufacturerReleaseIntakeService;
         this.partAdminService = partAdminService;
         this.partAliasReviewService = partAliasReviewService;
+        this.partQualityReportService = partQualityReportService;
         this.currentUserService = currentUserService;
     }
 
@@ -214,6 +217,14 @@ public class PartController {
     ) {
         currentUserService.requireAdmin(authorization);
         return naverShoppingOfferService.refreshCatalog(category, limitPerQuery, publish, query);
+    }
+
+    @GetMapping("/admin/parts/quality-report")
+    Map<String, Object> adminPartsQualityReport(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return partQualityReportService.qualityReport();
     }
 
     @GetMapping("/admin/manufacturer-sources")
@@ -458,12 +469,22 @@ public class PartController {
     Map<String, Object> partAliasReviewItems(
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "category", required = false) String category,
+            @RequestParam(value = "targetField", required = false) String targetField,
+            @RequestParam(value = "sourceType", required = false) String sourceType,
             @RequestParam(value = "page", required = false) Integer page,
             @RequestParam(value = "size", required = false) Integer size,
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         currentUserService.requireAdmin(authorization);
-        return partAliasReviewService.listReviewItems(status, category, page, size);
+        return partAliasReviewService.listReviewItems(status, category, targetField, sourceType, page, size);
+    }
+
+    @GetMapping("/admin/part-alias-review-items/summary")
+    Map<String, Object> partAliasReviewSummary(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return partAliasReviewService.reviewSummary();
     }
 
     @PostMapping("/admin/part-alias-review-items/{id}/resolve")

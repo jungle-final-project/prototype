@@ -3,12 +3,14 @@ package com.buildgraph.prototype.build;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.agent.AiChatAction;
@@ -17,8 +19,11 @@ import com.buildgraph.prototype.agent.AiChatEngineRequest;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
 import com.buildgraph.prototype.agent.AiChatIntent;
 import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.user.CurrentUserService;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -154,6 +159,34 @@ class BuildChatServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode())
                 .isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
+    }
+
+    @Test
+    void buildChatReturnsCachedResponseWithoutCallingLlmAndScopesCacheByUser() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+        CurrentUserService.CurrentUser user = new CurrentUserService.CurrentUser(42L, "user-id", "user@example.com", "사용자", "USER", null);
+        Map<String, Object> cached = new LinkedHashMap<>();
+        cached.put("answerType", "PART");
+        cached.put("message", "캐시된 응답");
+        cached.put("builds", List.of());
+        cached.put("partRecommendation", Map.of());
+        cached.put("actions", List.of());
+        cached.put("warnings", List.of());
+        cached.put("evidenceIds", List.of());
+        cached.put("agentSessionId", null);
+        when(cacheService.lookup(anyMap(), eq("BUILD_CHAT_54_MINI_FAST"), eq(42L))).thenReturn(Optional.of(cached));
+
+        Map<String, Object> response = service.chat(Map.of("message", "그래픽카드 더 싼 걸로 추천해줘"), "BUILD_CHAT_54_MINI_FAST", user);
+
+        assertThat(response).containsEntry("message", "캐시된 응답");
+        assertThat(response).containsEntry("agentSessionId", null);
+        assertThat(response.get("evidenceIds")).asList().isEmpty();
+        verify(cacheService).lookup(anyMap(), eq("BUILD_CHAT_54_MINI_FAST"), eq(42L));
+        verifyNoInteractions(aiChatEngine);
     }
 
     private static AiChatEngineResponse buildResponse() {

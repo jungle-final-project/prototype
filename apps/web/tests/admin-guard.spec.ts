@@ -308,6 +308,52 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
       })
     });
   });
+  await page.route('**/api/admin/part-alias-review-items/summary', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: []
+      })
+    });
+  });
+  await page.route('**/api/admin/parts/quality-report', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        summary: {
+          activeParts: 1,
+          toolReadyMissing: 1,
+          requiredSpecMissing: 1,
+          benchmarkMissing: 0,
+          fpsCoverageGap: 0,
+          aliasReviewOpen: 0
+        },
+        categories: [
+          {
+            category: 'GPU',
+            activeParts: 1,
+            toolReadyMissing: 1,
+            requiredSpecMissing: 1,
+            benchmarkMissing: 0,
+            fpsCoverageGap: 0,
+            aliasReviewOpen: 0
+          }
+        ],
+        actionItems: [
+          {
+            type: 'MISSING_REQUIRED_SPEC',
+            category: 'GPU',
+            partId: '00000000-0000-4000-8000-000000009701',
+            label: 'ASUS ROG Astral GeForce RTX 5090 OC 32GB',
+            message: '필수 스펙 누락: vramGb, lengthMm'
+          }
+        ],
+        generatedAt: '2026-07-02T09:00:00+09:00'
+      })
+    });
+  });
   await page.route('**/api/admin/part-alias-rules?**', async (route) => {
     await route.fulfill({
       status: 200,

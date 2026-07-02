@@ -54,6 +54,8 @@ docker compose up --build
 | `AGENT_RUNNER_MODE` | 선택 | Agent 실행 방식 | 기본값은 `deterministic`입니다. 실제 LLM summary를 보려면 `llm`으로 바꿉니다. |
 | `AS_CHAT_DEFAULT_PROFILE` | 선택 | AS Chat 기본 profile | 기본값은 실측 benchmark 기준 `AS_CHAT_54_MINI_FAST`입니다. |
 | `BUILD_CHAT_DEFAULT_PROFILE` | 선택 | Build Chat 기본 profile | 기본값은 실측 benchmark 기준 `BUILD_CHAT_54_MINI_FAST`입니다. |
+| `BUILD_CHAT_CACHE_ENABLED` | 선택 | Build Chat Redis cache | 기본값은 `true`입니다. Redis 장애 시 자동 우회하며 응답 body에는 cache 상태를 노출하지 않습니다. |
+| `BUILD_CHAT_CACHE_TTL_SECONDS` | 선택 | Build Chat Redis cache | 기본값은 `600`초입니다. 사용자/profile/draft와 parts/benchmark/FPS/RAG/alias version이 바뀌면 cache key도 달라집니다. cache hit 응답은 이전 실행의 agent trace id를 재사용하지 않습니다. |
 | `OPENAI_EMBEDDING_MODEL` | 선택 | RAG vector 검색 | 기본값은 `text-embedding-3-small`입니다. |
 | `OPENAI_EMBEDDING_DIMENSIONS` | 선택 | RAG vector 검색 | 기본값은 `1536`입니다. |
 | `RAG_VECTOR_ENABLED` | 선택 | RAG 검색 방식 | 기본값은 `true`입니다. 키/embedding이 없으면 keyword fallback을 사용합니다. |

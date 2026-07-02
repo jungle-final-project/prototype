@@ -58,6 +58,9 @@ class PartControllerTest {
     private PartAliasReviewService partAliasReviewService;
 
     @MockitoBean
+    private PartQualityReportService partQualityReportService;
+
+    @MockitoBean
     private CurrentUserService currentUserService;
 
     @BeforeEach
@@ -445,8 +448,10 @@ class PartControllerTest {
 
     @Test
     void partAliasReviewEndpointsDelegateForAdmin() throws Exception {
-        when(partAliasReviewService.listReviewItems(eq("OPEN"), eq("GPU"), eq(0), eq(20)))
+        when(partAliasReviewService.listReviewItems(eq("OPEN"), eq("GPU"), eq("gpuClass"), eq("AI_BUILD_CHAT"), eq(0), eq(20)))
                 .thenReturn(Map.of("items", java.util.List.of(), "page", 0, "size", 20, "total", 0));
+        when(partAliasReviewService.reviewSummary())
+                .thenReturn(Map.of("items", java.util.List.of(Map.of("category", "GPU", "targetField", "gpuClass", "sourceType", "AI_BUILD_CHAT", "count", 1))));
         when(partAliasReviewService.createRule(anyMap(), isNull()))
                 .thenReturn(Map.of("id", "rule-1", "aliasText", "5070티아이", "canonicalValue", "RTX_5070_TI"));
         when(partAliasReviewService.resolveReviewItem(eq("review-1"), anyMap(), isNull()))
@@ -458,10 +463,17 @@ class PartControllerTest {
                         .header("Authorization", ADMIN_TOKEN)
                         .param("status", "OPEN")
                         .param("category", "GPU")
+                        .param("targetField", "gpuClass")
+                        .param("sourceType", "AI_BUILD_CHAT")
                         .param("page", "0")
                         .param("size", "20"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(0));
+
+        mockMvc.perform(get("/api/admin/part-alias-review-items/summary")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].count").value(1));
 
         mockMvc.perform(post("/api/admin/part-alias-rules")
                         .header("Authorization", ADMIN_TOKEN)
@@ -484,9 +496,27 @@ class PartControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("IGNORED"));
 
-        verify(partAliasReviewService).listReviewItems(eq("OPEN"), eq("GPU"), eq(0), eq(20));
+        verify(partAliasReviewService).listReviewItems(eq("OPEN"), eq("GPU"), eq("gpuClass"), eq("AI_BUILD_CHAT"), eq(0), eq(20));
+        verify(partAliasReviewService).reviewSummary();
         verify(partAliasReviewService).createRule(anyMap(), isNull());
         verify(partAliasReviewService).resolveReviewItem(eq("review-1"), anyMap(), isNull());
         verify(partAliasReviewService).ignoreReviewItem(eq("review-1"), anyMap(), isNull());
+    }
+
+    @Test
+    void partQualityReportEndpointDelegatesForAdmin() throws Exception {
+        when(partQualityReportService.qualityReport())
+                .thenReturn(Map.of(
+                        "summary", Map.of("activeParts", 1, "toolReadyMissing", 0, "requiredSpecMissing", 0, "benchmarkMissing", 0, "fpsCoverageGap", 0, "aliasReviewOpen", 0),
+                        "categories", java.util.List.of(),
+                        "actionItems", java.util.List.of()
+                ));
+
+        mockMvc.perform(get("/api/admin/parts/quality-report")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary.activeParts").value(1));
+
+        verify(partQualityReportService).qualityReport();
     }
 }
