@@ -2,18 +2,25 @@ package com.buildgraph.prototype.agent;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.security.SecureRandom;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -28,6 +35,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class PcAgentAsService {
     private static final String DEMO_ACTIVATION_TOKEN = "demo-agent-activation-token";
     private static final Pattern IDEMPOTENCY_KEY_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,160}");
+    private static final long MAX_GZIP_BYTES = 10L * 1024L * 1024L;
+    private static final long MAX_UNCOMPRESSED_BYTES = 20L * 1024L * 1024L;
+    private static final int RECENT_LOG_RANGE_MINUTES = 30;
     private static final Set<String> CONSENT_TYPES = Set.of(
             "LOCAL_COLLECTION",
             "SERVER_UPLOAD",
@@ -345,12 +355,13 @@ public class PcAgentAsService {
             String idempotencyKey
     ) {
         if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent log gzip file is required.");
+            throw fileValidation("Agent log gzip file is required.");
         }
         String fileName = fileName(file);
         if (!fileName.endsWith(".gz")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent log upload must be gzip.");
+            throw fileValidation("Agent log upload must be gzip.");
         }
+        GzipValidation gzip = validateGzip(file);
         Integer consentCount = jdbcTemplate.queryForObject("""
                 SELECT count(*)
                 FROM agent_consents
@@ -363,9 +374,10 @@ public class PcAgentAsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Server upload consent is required.");
         }
 
-        int rangeMinutes = integer(metadata, "rangeMinutes", 30);
+        int rangeMinutes = integer(metadata, "rangeMinutes", RECENT_LOG_RANGE_MINUTES);
         Instant rangeEndedAt = instant(metadata, "rangeEndedAt", Instant.now(clock));
         Instant rangeStartedAt = instant(metadata, "rangeStartedAt", rangeEndedAt.minus(Duration.ofMinutes(rangeMinutes)));
+        validateRecentThirtyMinuteRange(rangeMinutes, rangeStartedAt, rangeEndedAt);
         Map<String, Object> uploadJob = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_upload_jobs (
                   device_id,
@@ -406,18 +418,40 @@ public class PcAgentAsService {
                           status,
                           file_name,
                           file_size,
-                          range_minutes
+                          range_minutes,
+                          delete_after
                 """,
                 principal.userInternalId(),
                 principal.deviceInternalId(),
                 uploadJobInternalId,
                 rangeMinutes,
                 fileName,
-                file.getSize(),
+                gzip.compressedBytes(),
                 storagePath
         );
 
         Long logUploadInternalId = longValue(logUpload, "log_upload_internal_id");
+        jdbcTemplate.queryForMap("""
+                INSERT INTO agent_log_bundles (
+                  upload_job_id,
+                  log_upload_id,
+                  schema_version,
+                  storage_path,
+                  sha256,
+                  size_bytes,
+                  delete_after
+                )
+                VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, now() + interval '30 days'))
+                RETURNING public_id::text AS log_bundle_id
+                """,
+                uploadJobInternalId,
+                logUploadInternalId,
+                integer(metadata, "schemaVersion", 1),
+                storagePath,
+                gzip.sha256(),
+                gzip.compressedBytes(),
+                DbValueMapper.timestamp(logUpload, "delete_after")
+        );
         String symptom = string(metadata, "symptom", "Agent uploaded recent 30 minute diagnostic log.");
         Map<String, Object> ticket = jdbcTemplate.queryForMap("""
                 INSERT INTO as_tickets (
@@ -471,6 +505,59 @@ public class PcAgentAsService {
                 "supportDecision", DbValueMapper.string(ticket, "support_decision"),
                 "rangeMinutes", rangeMinutes
         );
+    }
+
+    private static GzipValidation validateGzip(MultipartFile file) {
+        byte[] compressed;
+        try {
+            compressed = file.getBytes();
+        } catch (IOException exception) {
+            throw fileValidation("Agent log gzip file cannot be read.");
+        }
+        if (compressed.length == 0) {
+            throw fileValidation("Agent log gzip file is empty.");
+        }
+        if (compressed.length > MAX_GZIP_BYTES) {
+            throw fileValidation("Agent log gzip file is too large.");
+        }
+        long uncompressedBytes = 0L;
+        byte[] buffer = new byte[8192];
+        try (GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(compressed))) {
+            int read;
+            while ((read = gzipInputStream.read(buffer)) != -1) {
+                uncompressedBytes += read;
+                if (uncompressedBytes > MAX_UNCOMPRESSED_BYTES) {
+                    throw fileValidation("Agent log gzip content is too large.");
+                }
+            }
+        } catch (IOException exception) {
+            throw fileValidation("Agent log upload must contain valid gzip content.");
+        }
+        if (uncompressedBytes == 0L) {
+            throw fileValidation("Agent log gzip content is empty.");
+        }
+        return new GzipValidation(compressed.length, uncompressedBytes, sha256Hex(compressed));
+    }
+
+    private static void validateRecentThirtyMinuteRange(int rangeMinutes, Instant rangeStartedAt, Instant rangeEndedAt) {
+        if (rangeMinutes != RECENT_LOG_RANGE_MINUTES) {
+            throw badRequest("Agent log upload rangeMinutes must be 30.");
+        }
+        if (!rangeEndedAt.isAfter(rangeStartedAt)) {
+            throw badRequest("Agent log rangeEndedAt must be after rangeStartedAt.");
+        }
+        Duration duration = Duration.between(rangeStartedAt, rangeEndedAt);
+        if (duration.isNegative() || duration.compareTo(Duration.ofMinutes(RECENT_LOG_RANGE_MINUTES)) > 0) {
+            throw badRequest("Agent log upload range must be within recent 30 minutes.");
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 must be available.", exception);
+        }
     }
 
     private static String newAgentToken() {
@@ -531,6 +618,10 @@ public class PcAgentAsService {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
     }
 
+    private static ApiException fileValidation(String message) {
+        return new ApiException(HttpStatus.BAD_REQUEST, "FILE_VALIDATION_ERROR", message);
+    }
+
     private static int integer(Map<String, Object> request, String key, int fallback) {
         if (request == null || request.get(key) == null) {
             return fallback;
@@ -552,5 +643,8 @@ public class PcAgentAsService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private record GzipValidation(long compressedBytes, long uncompressedBytes, String sha256) {
     }
 }

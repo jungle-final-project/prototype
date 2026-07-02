@@ -9,13 +9,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.http.HttpStatus;
@@ -261,16 +265,27 @@ class PcAgentAsServiceTest {
                 eq(100L),
                 eq(30),
                 eq("agent-log.jsonl.gz"),
-                eq(4L),
+                any(Long.class),
                 eq("agent-logs/device-public-id/agent-log.jsonl.gz")
         )).thenReturn(MockData.map(
                 "log_upload_internal_id", 200L,
                 "log_upload_id", "log-upload-public-id",
                 "status", "UPLOADED",
                 "file_name", "agent-log.jsonl.gz",
-                "file_size", 4L,
-                "range_minutes", 30
+                "file_size", 65L,
+                "range_minutes", 30,
+                "delete_after", Instant.parse("2026-08-01T00:00:00Z")
         ));
+        when(jdbcTemplate.queryForMap(
+                contains("INSERT INTO agent_log_bundles"),
+                eq(100L),
+                eq(200L),
+                eq(1),
+                eq("agent-logs/device-public-id/agent-log.jsonl.gz"),
+                any(String.class),
+                any(Long.class),
+                eq(Instant.parse("2026-08-01T00:00:00Z"))
+        )).thenReturn(MockData.map("log_bundle_id", "bundle-public-id"));
         when(jdbcTemplate.queryForMap(
                 contains("INSERT INTO as_tickets"),
                 eq(20L),
@@ -286,7 +301,7 @@ class PcAgentAsServiceTest {
 
         Map<String, Object> response = service.uploadLogs(
                 AGENT,
-                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", "demo".getBytes()),
+                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", gzip("demo log\n")),
                 MockData.map("rangeMinutes", 30, "symptom", "GPU temperature spike"),
                 "upload-key"
         );
@@ -302,5 +317,46 @@ class PcAgentAsServiceTest {
                 eq(200L),
                 eq("GPU temperature spike")
         );
+    }
+
+    @Test
+    void uploadLogsRejectsInvalidGzipBeforeCreatingRows() {
+        assertThatThrownBy(() -> service.uploadLogs(
+                AGENT,
+                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", "not-gzip".getBytes()),
+                MockData.map("rangeMinutes", 30),
+                "upload-key"
+        ))
+                .isInstanceOf(ApiException.class)
+                .satisfies(exception -> {
+                    ApiException apiException = (ApiException) exception;
+                    assertThat(apiException.status()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(apiException.code()).isEqualTo("FILE_VALIDATION_ERROR");
+                });
+    }
+
+    @Test
+    void uploadLogsRejectsNonThirtyMinuteRange() {
+        assertThatThrownBy(() -> service.uploadLogs(
+                AGENT,
+                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", gzip("demo log\n")),
+                MockData.map("rangeMinutes", 45),
+                "upload-key"
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThat(((ResponseStatusException) exception).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    private static byte[] gzip(String content) {
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try (GZIPOutputStream gzipOutput = new GZIPOutputStream(output)) {
+                gzipOutput.write(content.getBytes());
+            }
+            return output.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 }

@@ -161,7 +161,7 @@ class AdminControllerTest {
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ))).thenReturn(Map.of(
+        ), null)).thenReturn(Map.of(
                 "id", "ticket-public-id",
                 "status", "OPEN",
                 "analysisStatus", "RULE_READY",
@@ -191,6 +191,6 @@ class AdminControllerTest {
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ));
+        ), null);
     }
 }

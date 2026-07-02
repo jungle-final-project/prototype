@@ -117,8 +117,8 @@ public class AdminController {
             @RequestBody(required = false) Map<String, Object> request,
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
-        currentUserService.requireAdmin(authorization);
-        return ticketQueryService.update(id, request);
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.update(id, request, admin);
     }
 
     @GetMapping("/price-jobs")

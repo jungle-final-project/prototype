@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -25,7 +26,10 @@ import com.buildgraph.prototype.ticket.TicketController;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -260,7 +264,7 @@ class PcAgentControllerSecurityTest {
                 "file",
                 "agent-log.jsonl.gz",
                 "application/gzip",
-                "demo".getBytes()
+                gzip("demo log\n")
         );
         mockMvc.perform(multipart("/api/agent/log-uploads")
                         .file(file)
@@ -271,6 +275,115 @@ class PcAgentControllerSecurityTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.ticketId").value("ticket-public-id"))
                 .andExpect(jsonPath("$.analysisStatus").value("RULE_READY"));
+    }
+
+    @Test
+    void logUploadRequiresAgentTokenBeforeIdempotencyKey() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(file)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentIdempotencyService);
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void logUploadRejectsBadAgentTokenBeforeIdempotency() throws Exception {
+        when(agentTokenAuthenticationService.authenticate("bad-agent-token"))
+                .thenReturn(AgentTokenAuthenticationResult.invalid());
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(file)
+                        .header("Authorization", "Bearer bad-agent-token")
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentIdempotencyService);
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void authenticatedAgentLogUploadRequiresIdempotencyKey() throws Exception {
+        authenticateAgent();
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(file)
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void duplicateLogUploadIdempotencyKeyReplaysWithoutCreatingAnotherTicket() throws Exception {
+        AgentPrincipal principal = authenticateAgent();
+        when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), eq("upload-key"), anyString()))
+                .thenReturn(AgentIdempotencyDecision.proceed(301L))
+                .thenReturn(AgentIdempotencyDecision.replay(
+                        201,
+                        "{\"ticketId\":\"ticket-public-id\",\"analysisStatus\":\"RULE_READY\"}",
+                        MediaType.APPLICATION_JSON_VALUE
+                ));
+        when(pcAgentAsService.uploadLogs(eq(principal), any(), any(), eq("upload-key"))).thenReturn(Map.of(
+                "ticketId", "ticket-public-id",
+                "analysisStatus", "RULE_READY"
+        ));
+        MockMultipartFile firstFile = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+        MockMultipartFile retryFile = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(firstFile)
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("ticket-public-id"));
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(retryFile)
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("ticket-public-id"));
+
+        verify(pcAgentAsService).uploadLogs(eq(principal), any(), any(), eq("upload-key"));
     }
 
     @Test
@@ -303,11 +416,11 @@ class PcAgentControllerSecurityTest {
                 "reviewStatus", "REQUIRED",
                 "supportDecision", "NEEDS_MORE_INFO"
         ));
-        when(ticketQueryService.update("ticket-public-id", Map.of(
+        when(ticketQueryService.update(eq("ticket-public-id"), eq(Map.of(
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ))).thenReturn(Map.of(
+        )), isNull())).thenReturn(Map.of(
                 "id", "ticket-public-id",
                 "analysisStatus", "RULE_READY",
                 "reviewStatus", "APPROVED",
@@ -367,7 +480,7 @@ class PcAgentControllerSecurityTest {
                 "file",
                 "agent-log.jsonl.gz",
                 "application/gzip",
-                "demo".getBytes()
+                gzip("demo log\n")
         );
         mockMvc.perform(multipart("/api/agent/log-uploads")
                         .file(file)
@@ -397,6 +510,18 @@ class PcAgentControllerSecurityTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.analysisStatus").value("RULE_READY"))
                 .andExpect(jsonPath("$.supportDecision").value("REMOTE_POSSIBLE"));
+    }
+
+    private static byte[] gzip(String content) {
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try (GZIPOutputStream gzipOutput = new GZIPOutputStream(output)) {
+                gzipOutput.write(content.getBytes());
+            }
+            return output.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private AgentPrincipal authenticateAgent() {
