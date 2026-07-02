@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -43,6 +44,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @Import({AgentSecurityConfig.class, SecurityErrorResponseWriter.class})
 class PcAgentControllerSecurityTest {
     private static final String AGENT_TOKEN = "raw-agent-token";
+    private static final String OTHER_AGENT_TOKEN = "other-raw-agent-token";
     private static final String IDEMPOTENCY_KEY = "demo-key-1";
     private static final String ADMIN_TOKEN = "Bearer jwt-admin-token";
     private static final String USER_TOKEN = "Bearer jwt-user-token";
@@ -341,6 +343,21 @@ class PcAgentControllerSecurityTest {
     }
 
     @Test
+    void authenticatedAgentLogUploadRequiresMultipartFile() throws Exception {
+        AgentPrincipal principal = authenticateAgent();
+        when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), eq("upload-key"), anyString()))
+                .thenReturn(AgentIdempotencyDecision.proceed(300L));
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
     void duplicateLogUploadIdempotencyKeyReplaysWithoutCreatingAnotherTicket() throws Exception {
         AgentPrincipal principal = authenticateAgent();
         when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), eq("upload-key"), anyString()))
@@ -384,6 +401,78 @@ class PcAgentControllerSecurityTest {
                 .andExpect(jsonPath("$.ticketId").value("ticket-public-id"));
 
         verify(pcAgentAsService).uploadLogs(eq(principal), any(), any(), eq("upload-key"));
+    }
+
+    @Test
+    void sameUploadKeyWithDifferentBodyReturnsConflictWithoutRunningUploadService() throws Exception {
+        AgentPrincipal principal = authenticateAgent();
+        when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), eq("upload-key"), anyString()))
+                .thenReturn(AgentIdempotencyDecision.conflict());
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(new MockMultipartFile(
+                                "file",
+                                "agent-log.jsonl.gz",
+                                "application/gzip",
+                                gzip("changed log\n")
+                        ))
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT_STATE"));
+
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void sameUploadKeyFromDifferentAgentsDoesNotConflict() throws Exception {
+        AgentPrincipal firstAgent = authenticateAgent();
+        AgentPrincipal secondAgent = new AgentPrincipal(11L, "other-device-public-id", 21L, "ACTIVE");
+        when(agentTokenAuthenticationService.authenticate(OTHER_AGENT_TOKEN))
+                .thenReturn(AgentTokenAuthenticationResult.authenticated(secondAgent));
+        when(agentIdempotencyService.reserve(eq(firstAgent), anyString(), anyString(), eq("shared-upload-key"), anyString()))
+                .thenReturn(AgentIdempotencyDecision.proceed(401L));
+        when(agentIdempotencyService.reserve(eq(secondAgent), anyString(), anyString(), eq("shared-upload-key"), anyString()))
+                .thenReturn(AgentIdempotencyDecision.proceed(402L));
+        when(pcAgentAsService.uploadLogs(eq(firstAgent), any(), any(), eq("shared-upload-key"))).thenReturn(Map.of(
+                "ticketId", "first-ticket-id",
+                "analysisStatus", "RULE_READY"
+        ));
+        when(pcAgentAsService.uploadLogs(eq(secondAgent), any(), any(), eq("shared-upload-key"))).thenReturn(Map.of(
+                "ticketId", "second-ticket-id",
+                "analysisStatus", "RULE_READY"
+        ));
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(new MockMultipartFile(
+                                "file",
+                                "agent-log.jsonl.gz",
+                                "application/gzip",
+                                gzip("same logical log\n")
+                        ))
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "shared-upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("first-ticket-id"));
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(new MockMultipartFile(
+                                "file",
+                                "agent-log.jsonl.gz",
+                                "application/gzip",
+                                gzip("same logical log\n")
+                        ))
+                        .header("Authorization", "Bearer " + OTHER_AGENT_TOKEN)
+                        .header("Idempotency-Key", "shared-upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("second-ticket-id"));
+
+        verify(pcAgentAsService).uploadLogs(eq(firstAgent), any(), any(), eq("shared-upload-key"));
+        verify(pcAgentAsService).uploadLogs(eq(secondAgent), any(), any(), eq("shared-upload-key"));
+        verify(pcAgentAsService, times(2)).uploadLogs(any(), any(), any(), eq("shared-upload-key"));
     }
 
     @Test

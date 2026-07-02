@@ -193,4 +193,57 @@ class AdminControllerTest {
                 "adminNote", "Remote support link sent."
         ), null);
     }
+
+    @Test
+    void updateAsTicketRequiresAdminToken() throws Exception {
+        mockMvc.perform(patch("/api/admin/as-tickets/ticket-public-id")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "supportDecision": "REMOTE_POSSIBLE"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(ticketQueryService);
+    }
+
+    @Test
+    void updateAsTicketRejectsUserToken() throws Exception {
+        mockMvc.perform(patch("/api/admin/as-tickets/ticket-public-id")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "supportDecision": "REMOTE_POSSIBLE"
+                                }
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+        verifyNoInteractions(ticketQueryService);
+    }
+
+    @Test
+    void updateAsTicketReturnsNotFoundForMissingTicket() throws Exception {
+        when(ticketQueryService.update("missing-ticket-id", Map.of(
+                "supportDecision", "REMOTE_POSSIBLE"
+        ), null)).thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+
+        mockMvc.perform(patch("/api/admin/as-tickets/missing-ticket-id")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "supportDecision": "REMOTE_POSSIBLE"
+                                }
+                                """))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+
+        verify(ticketQueryService).update("missing-ticket-id", Map.of(
+                "supportDecision", "REMOTE_POSSIBLE"
+        ), null);
+    }
 }

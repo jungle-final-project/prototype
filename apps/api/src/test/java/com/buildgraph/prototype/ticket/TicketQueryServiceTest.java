@@ -1,5 +1,6 @@
 package com.buildgraph.prototype.ticket;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -11,6 +12,7 @@ import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -45,8 +47,8 @@ class TicketQueryServiceTest {
                         "analysis_status", "RULE_READY",
                         "review_status", "APPROVED",
                         "support_decision", "REMOTE_POSSIBLE",
-                        "risk_level", "MEDIUM",
-                        "auto_response_allowed", false,
+                        "risk_level", "HIGH",
+                        "auto_response_allowed", true,
                         "symptom", "GPU temperature spike",
                         "log_upload_id", "log-upload-public-id",
                         "assigned_admin_id", "admin-public-id",
@@ -61,10 +63,12 @@ class TicketQueryServiceTest {
                         "visit_time_slot", "AFTERNOON"
                 )));
 
-        service.update("ticket-public-id", MockData.map(
+        Map<String, Object> response = service.update("ticket-public-id", MockData.map(
                 "status", "IN_PROGRESS",
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
+                "riskLevel", "HIGH",
+                "autoResponseAllowed", true,
                 "adminNote", "Remote support link sent.",
                 "remoteSupportLink", "https://support.example/session/1",
                 "visitSupportRequired", true,
@@ -72,7 +76,24 @@ class TicketQueryServiceTest {
                 "visitTimeSlot", "AFTERNOON"
         ), admin);
 
+        assertThat(response.get("supportDecision")).isEqualTo("REMOTE_POSSIBLE");
+        assertThat(response.get("reviewStatus")).isEqualTo("APPROVED");
+        assertThat(response.get("riskLevel")).isEqualTo("HIGH");
+        assertThat(response.get("autoResponseAllowed")).isEqualTo(true);
+        assertThat(response.get("remoteSupportLink")).isEqualTo("https://support.example/session/1");
+        assertThat(response.get("remoteSupportStatus")).isEqualTo("LINK_SENT");
+        assertThat(response.get("visitSupportRequired")).isEqualTo(true);
+        assertThat(response.get("visitSupportStatus")).isEqualTo("REQUESTED");
+
         verify(jdbcTemplate).update(contains("UPDATE as_tickets"), eq("IN_PROGRESS"), eq("ticket-public-id"));
+        verify(jdbcTemplate).update(
+                contains("support_decision"),
+                eq("REMOTE_POSSIBLE"),
+                eq("APPROVED"),
+                eq("HIGH"),
+                eq(true),
+                eq("ticket-public-id")
+        );
         verify(jdbcTemplate).update(contains("remote_support_sessions"), eq("https://support.example/session/1"), eq(1L), eq("ticket-public-id"));
         verify(jdbcTemplate).update(
                 contains("visit_support_reservations"),
@@ -127,6 +148,18 @@ class TicketQueryServiceTest {
         ), admin))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void updateRejectsMissingTicketId() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("missing-ticket-id")))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.update("missing-ticket-id", MockData.map(
+                "supportDecision", "REMOTE_POSSIBLE"
+        ), admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.NOT_FOUND));
     }
 
     private static void assertThatStatus(ResponseStatusException exception, HttpStatus status) {
