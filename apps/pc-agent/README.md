@@ -18,6 +18,7 @@ macOS/Linux에서 `pip` 또는 `python` 명령이 없다면 `pip3`, `python3`를
 ## Goal 11/12 CLI
 
 `agent-config.example.json`을 복사해 `agent-config.json`을 만들고, register를 실행했거나 Goal 10에서 받은 `agentToken`을 넣은 상태를 가정합니다.
+`apiBaseUrl`은 Agent API 서버, `webBaseUrl`은 티켓을 열 웹 앱 주소입니다. 로컬 데모는 각각 `http://localhost:8080`, `http://localhost:5173`을 사용합니다.
 
 ```powershell
 cd apps/pc-agent
@@ -40,6 +41,8 @@ python buildgraph_agent.py upload --config ./agent-config.json --symptom "게임
 - 응답의 `ticketId` 파싱
 - 기본 브라우저로 `/support/{ticketId}` 열기, `--no-open`이면 URL만 출력
 
+최근 30분 안에 보낼 로그가 없거나 로그 파일이 없으면 빈 gzip을 만들지 않고 명확한 오류로 종료합니다. `register`로 token을 저장할 때는 Windows에서 config 파일 ACL을 현재 사용자, Administrators, SYSTEM 중심으로 제한합니다. MVP에서는 token이 여전히 로컬 config에 저장되므로 운영 배포 전에는 Windows Credential Manager 같은 저장소 검토가 필요합니다.
+
 같은 `Idempotency-Key`를 재사용하려면 아래처럼 명시합니다.
 
 ```powershell
@@ -56,7 +59,7 @@ build-agent-exe.cmd
 .\dist\agent.exe doctor --config agent-config.example.json
 ```
 
-`agent.exe`를 인자 없이 더블클릭하면 `%LOCALAPPDATA%\BuildGraphAgent` 아래에 기본 config/log 폴더를 만들고, Windows 시작프로그램에 등록한 뒤 트레이 아이콘으로 백그라운드 수집을 시작합니다. 트레이 메뉴에서는 로그 폴더 열기, AS 페이지 열기, 종료를 사용할 수 있습니다. 이것은 Windows Service가 아니라 MVP용 시작프로그램 기반 백그라운드 실행입니다.
+`agent.exe`를 인자 없이 더블클릭하면 `%LOCALAPPDATA%\BuildGraphAgent` 아래에 기본 config/log 폴더를 만들고, Windows 시작프로그램에 등록한 뒤 트레이 아이콘으로 백그라운드 수집을 시작합니다. 트레이 메뉴에서는 로그 뷰어 열기, 로그 폴더 열기, AS 페이지 열기, 종료를 사용할 수 있습니다. 로그 뷰어는 날짜와 시간을 선택해 1시간 단위 JSONL row를 가볍게 보여주는 창입니다. 이것은 Windows Service가 아니라 MVP용 시작프로그램 기반 백그라운드 실행입니다.
 
 로컬 웹 데모에서 내려받는 파일은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다.
 
@@ -90,6 +93,7 @@ agentToken: present
 - Agent token 기반 `POST /api/agent/log-uploads` 업로드
 - 업로드 응답 `ticketId`로 `/support/{ticketId}` URL 생성
 - 더블클릭 시 시작프로그램 등록과 트레이 기반 백그라운드 demo metric 수집
+- 트레이 아이콘에서 날짜/시간별 1시간 로그 뷰어 열기
 
 ## 구현 시 지켜야 할 점
 
@@ -100,6 +104,7 @@ agentToken: present
 - register API 호출과 token 저장은 `register` 명령에서만 수행합니다.
 - `/api/agent-logs/upload`가 아니라 `/api/agent/log-uploads`만 사용합니다.
 - 현재 백그라운드 실행은 Windows Service가 아니라 사용자 시작프로그램 등록 방식입니다.
+- `webBaseUrl`이 있으면 support URL은 `apiBaseUrl` 포트 추론 대신 해당 값을 우선 사용합니다.
 
 ## 이후 확장 후보
 

@@ -77,6 +77,12 @@ class AgentGoal1112Test(unittest.TestCase):
             "http://localhost:5173/support/ticket-1",
         )
 
+    def test_support_url_prefers_configured_web_base_url(self) -> None:
+        self.assertEqual(
+            agent.support_url("https://api.example.com", "ticket-1", "https://app.example.com"),
+            "https://app.example.com/support/ticket-1",
+        )
+
     def test_upload_gzip_parses_ticket_id_from_response(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             upload_file = Path(directory) / "recent-30m.jsonl.gz"
@@ -108,14 +114,102 @@ class AgentGoal1112Test(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent-config.json"
 
-            created = agent.ensure_default_config(path)
+            with patch("buildgraph_agent.restrict_file_to_current_user") as restrict:
+                created = agent.ensure_default_config(path)
             config = agent.load_config(created)
 
             self.assertEqual(created, path)
             self.assertEqual(config.api_base_url, "http://localhost:8080")
+            self.assertEqual(config.web_base_url, "http://localhost:5173")
+            self.assertEqual(config.environment, "local")
             self.assertEqual(config.activation_token, "demo-agent-activation-token")
             self.assertEqual(config.log_dir, Path(directory) / "logs")
             self.assertIsNone(config.agent_token)
+            restrict.assert_called_once_with(path)
+
+    def test_save_agent_token_restricts_config_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "apiBaseUrl": "http://localhost:8080",
+                        "activationToken": "activation-token",
+                        "deviceFingerprintHash": "fingerprint",
+                        "osVersion": "Windows 11",
+                        "agentVersion": "test-agent",
+                        "policyVersion": "test-policy",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("buildgraph_agent.restrict_file_to_current_user") as restrict:
+                agent.save_agent_token(path, "agent-token")
+
+            self.assertEqual(agent.load_config(path).agent_token, "agent-token")
+            restrict.assert_called_once_with(path)
+
+    def test_gzip_recent_fails_when_recent_window_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "agent-metrics.jsonl"
+            out = Path(directory) / "recent-30m.jsonl.gz"
+            old = datetime.now(timezone(timedelta(hours=9))) - timedelta(hours=2)
+            source.write_text(json.dumps({"timestamp": old.isoformat(), "message": "old"}) + "\n", encoding="utf-8")
+
+            with self.assertRaises(agent.AgentError) as error:
+                agent.gzip_recent(source, out, 30)
+
+            self.assertIn("no log rows found", str(error.exception))
+
+    def test_read_log_tail_returns_recent_valid_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            rows = [{"message": f"row-{index}"} for index in range(4)]
+            path.write_text(
+                "\n".join(json.dumps(row) for row in rows[:2])
+                + "\nnot-json\n"
+                + "\n".join(json.dumps(row) for row in rows[2:])
+                + "\n",
+                encoding="utf-8",
+            )
+
+            tail = agent.read_log_tail(path, 2)
+
+            self.assertEqual([row["message"] for row in tail], ["row-2", "row-3"])
+
+    def test_read_log_tail_returns_empty_when_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.jsonl"
+
+            self.assertEqual(agent.read_log_tail(path), [])
+
+    def test_read_log_hour_filters_selected_day_and_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            rows = [
+                {"timestamp": "2026-07-02T13:59:59+09:00", "message": "before"},
+                {"timestamp": "2026-07-02T14:00:00+09:00", "message": "start"},
+                {"timestamp": "2026-07-02T14:30:00+09:00", "message": "middle"},
+                {"timestamp": "2026-07-02T15:00:00+09:00", "message": "after"},
+                {"timestamp": "2026-07-03T14:30:00+09:00", "message": "other-day"},
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            selected = agent.read_log_hour(path, "2026-07-02", 14)
+
+            self.assertEqual([row["message"] for row in selected], ["start", "middle"])
+
+    def test_read_log_hour_rejects_invalid_date_or_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            path.write_text('{"timestamp":"2026-07-02T14:00:00+09:00"}\n', encoding="utf-8")
+
+            self.assertEqual(agent.read_log_hour(path, "bad-date", 14), [])
+            self.assertEqual(agent.read_log_hour(path, "2026-07-02", 24), [])
+
+    def test_powershell_string_escapes_single_quotes(self) -> None:
+        self.assertEqual(agent.powershell_string("C:\\Users\\O'Brien"), "'C:\\Users\\O''Brien'")
 
     def test_run_background_is_available_as_cli_command(self) -> None:
         with patch("buildgraph_agent.run_background", return_value=0) as run_background:

@@ -12,9 +12,20 @@ Double-click agent.exe:
 
 Tray menu:
 
+  Open log viewer
   Open log folder
   Open AS page
   Stop
+
+The log viewer lets you choose a date and 1-hour range.
+
+Config fields:
+
+  apiBaseUrl: Agent API server, for example http://localhost:8080
+  webBaseUrl: Web support page base URL, for example http://localhost:5173
+
+When register saves agentToken, the agent attempts to restrict the config file
+ACL to the current Windows user, Administrators, and SYSTEM.
 
 For Windows CLI packaging, rebuild agent.exe from the repository:
 
@@ -35,7 +46,6 @@ Run examples:
 Not included yet:
 
   Windows Service
-  tray app
   installer
   auto-update
   signed release channel
