@@ -37,6 +37,10 @@ REQUIRED_PATHS = [
     "/api/price-alerts",
     "/api/admin/price-jobs",
     "/api/admin/price-jobs/run",
+    "/api/agent/devices/register",
+    "/api/agent/consents",
+    "/api/agent/heartbeat",
+    "/api/agent/log-uploads",
     "/api/agent/sessions",
     "/api/agent/sessions/{id}/run",
     "/api/agent/sessions/{id}",
@@ -68,6 +72,9 @@ POST_JSON_REQUEST_SCHEMAS = {
     "/api/builds/{id}/change-part": "ChangePartRequest",
     "/api/price-alerts": "PriceAlertCreateRequest",
     "/api/admin/price-jobs/run": "PriceJobRunRequest",
+    "/api/agent/devices/register": "PcAgentRegisterRequest",
+    "/api/agent/consents": "PcAgentConsentRequest",
+    "/api/agent/heartbeat": "PcAgentHeartbeatRequest",
     "/api/agent/sessions": "AgentSessionCreateRequest",
     "/api/as-tickets": "AsTicketCreateRequest",
 }
@@ -79,6 +86,16 @@ REQUIRED_SCHEMAS = [
     "ToolCheckRequest",
     "ToolCheckResponse",
     "AgentLogUploadRequest",
+    "PcAgentRegisterRequest",
+    "PcAgentRegisterResponse",
+    "PcAgentConsentRequest",
+    "PcAgentConsentResponse",
+    "PcAgentHeartbeatRequest",
+    "PcAgentHeartbeatResponse",
+    "PcAgentLogUploadRequest",
+    "PcAgentLogUploadResponse",
+    "AsTicketDto",
+    "AdminAsTicketUpdateRequest",
     "AgentSessionDto",
     "ToolInvocationDto",
     "RagEvidenceDto",
@@ -156,6 +173,63 @@ def main() -> None:
     upload_schema = request_schema_ref(upload_post, "multipart/form-data")
     if upload_schema != "AgentLogUploadRequest":
         raise SystemExit("/api/agent-logs/upload must use multipart/form-data AgentLogUploadRequest")
+
+    agent_security = spec.get("components", {}).get("securitySchemes", {})
+    if "agentBearerAuth" not in agent_security:
+        raise SystemExit("OpenAPI must define agentBearerAuth for PC Agent token endpoints")
+    for path in ["/api/agent/consents", "/api/agent/heartbeat", "/api/agent/log-uploads"]:
+        post = paths[path].get("post", {})
+        if {"agentBearerAuth": []} not in post.get("security", []):
+            raise SystemExit(f"{path} must use agentBearerAuth")
+        parameters = post.get("parameters", [])
+        if not any(parameter.get("$ref") == "#/components/parameters/IdempotencyKey" for parameter in parameters):
+            raise SystemExit(f"{path} must declare Idempotency-Key header")
+    register_security = paths["/api/agent/devices/register"].get("post", {}).get("security")
+    if register_security != []:
+        raise SystemExit("/api/agent/devices/register must not require bearer auth")
+    agent_upload_post = paths["/api/agent/log-uploads"].get("post", {})
+    agent_upload_schema = request_schema_ref(agent_upload_post, "multipart/form-data")
+    if agent_upload_schema != "PcAgentLogUploadRequest":
+        raise SystemExit("/api/agent/log-uploads must use multipart/form-data PcAgentLogUploadRequest")
+
+    admin_ticket_patch = paths["/api/admin/as-tickets/{id}"].get("patch", {})
+    if request_schema_ref(admin_ticket_patch) != "AdminAsTicketUpdateRequest":
+        raise SystemExit("/api/admin/as-tickets/{id} PATCH must reference AdminAsTicketUpdateRequest")
+
+    as_ticket_properties = schemas["AsTicketDto"].get("properties", {})
+    for field in [
+        "analysisStatus",
+        "reviewStatus",
+        "supportDecision",
+        "riskLevel",
+        "autoResponseAllowed",
+        "adminNote",
+        "remoteSupportLink",
+        "remoteSupportStatus",
+        "visitSupportRequired",
+        "visitSupportStatus",
+        "visitPreferredDate",
+        "visitTimeSlot",
+    ]:
+        if field not in as_ticket_properties:
+            raise SystemExit(f"AsTicketDto missing {field}")
+
+    admin_ticket_update_properties = schemas["AdminAsTicketUpdateRequest"].get("properties", {})
+    for field in [
+        "status",
+        "assignedAdminId",
+        "adminNote",
+        "supportDecision",
+        "reviewStatus",
+        "riskLevel",
+        "autoResponseAllowed",
+        "remoteSupportLink",
+        "visitSupportRequired",
+        "visitPreferredDate",
+        "visitTimeSlot",
+    ]:
+        if field not in admin_ticket_update_properties:
+            raise SystemExit(f"AdminAsTicketUpdateRequest missing {field}")
 
     auth_properties = schemas["AuthResponse"].get("properties", {})
     for field in ["accessToken", "refreshToken", "user"]:

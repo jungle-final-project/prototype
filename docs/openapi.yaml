@@ -896,6 +896,127 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ToolCheckSuccess"
+  /api/agent/devices/register:
+    post:
+      summary: PC Agent device registration
+      description: Activation token bootstrap endpoint. Do not send a web JWT or Agent bearer token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PcAgentRegisterRequest"
+      responses:
+        "201":
+          description: Registered Agent device and one-time raw Agent token response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PcAgentRegisterResponse"
+        "401":
+          description: Invalid activation token or unexpected Authorization header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/consents:
+    post:
+      summary: PC Agent consent save or update
+      security:
+        - agentBearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PcAgentConsentRequest"
+      responses:
+        "200":
+          description: Saved Agent consent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PcAgentConsentResponse"
+        "401":
+          description: Agent token is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Same Idempotency-Key was used with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/heartbeat:
+    post:
+      summary: PC Agent heartbeat
+      security:
+        - agentBearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PcAgentHeartbeatRequest"
+      responses:
+        "200":
+          description: Device heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PcAgentHeartbeatResponse"
+        "401":
+          description: Agent token is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Same Idempotency-Key was used with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/log-uploads:
+    post:
+      summary: PC Agent gzip log upload
+      description: Agent-token based upload used by apps/pc-agent. This is separate from the legacy web JWT /api/agent-logs/upload endpoint.
+      security:
+        - agentBearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/PcAgentLogUploadRequest"
+      responses:
+        "201":
+          description: Created upload job, log upload, and AS ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PcAgentLogUploadResponse"
+        "401":
+          description: Agent token is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Same Idempotency-Key was used with a different upload request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/agent/sessions:
     post:
       summary: Agent 세션 생성
@@ -1331,6 +1452,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    agentBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Agent token
   parameters:
     PublicId:
       in: path
@@ -1356,6 +1481,15 @@ components:
         minimum: 1
         maximum: 100
         default: 20
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 160
+        pattern: "^[A-Za-z0-9._:-]+$"
   requestBodies:
     ToolCheckRequestBody:
       required: true
@@ -2949,6 +3083,20 @@ components:
           format: uuid
         status:
           $ref: "#/components/schemas/AsTicketStatus"
+        analysisStatus:
+          type: string
+          enum: [RULE_READY]
+        reviewStatus:
+          type: string
+          enum: [NOT_REQUIRED, REQUIRED, IN_REVIEW, APPROVED, REJECTED]
+        supportDecision:
+          type: string
+          enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO]
+        riskLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        autoResponseAllowed:
+          type: boolean
         symptom:
           type: string
         logSummary:
@@ -3071,6 +3219,142 @@ components:
         resultPayload:
           type: object
           additionalProperties: true
+    PcAgentRegisterRequest:
+      type: object
+      required:
+        - activationToken
+        - deviceFingerprintHash
+        - registrationIdempotencyKey
+        - osVersion
+        - agentVersion
+        - policyVersion
+      properties:
+        activationToken:
+          type: string
+        deviceFingerprintHash:
+          type: string
+        registrationIdempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: "^[A-Za-z0-9._:-]+$"
+        osVersion:
+          type: string
+        agentVersion:
+          type: string
+        policyVersion:
+          type: string
+    PcAgentRegisterResponse:
+      type: object
+      required: [deviceId, status, agentToken, tokenType]
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ACTIVE, UPDATE_REQUIRED]
+        agentToken:
+          type: string
+          description: Raw Agent token returned once for local Agent storage. Server stores only a hash.
+        tokenType:
+          type: string
+          enum: [Bearer]
+    PcAgentConsentRequest:
+      type: object
+      required: [consentType, policyVersion, accepted]
+      properties:
+        consentType:
+          type: string
+          enum: [SERVER_UPLOAD]
+        policyVersion:
+          type: string
+        accepted:
+          type: boolean
+    PcAgentConsentResponse:
+      type: object
+      required: [id, consentType, policyVersion, accepted]
+      properties:
+        id:
+          type: string
+          format: uuid
+        consentType:
+          type: string
+        policyVersion:
+          type: string
+        accepted:
+          type: boolean
+        acceptedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+    PcAgentHeartbeatRequest:
+      type: object
+      required: [agentVersion, serviceStatus, policyVersion]
+      properties:
+        agentVersion:
+          type: string
+        serviceStatus:
+          type: string
+          enum: [RUNNING, STOPPED, DEGRADED]
+        policyVersion:
+          type: string
+    PcAgentHeartbeatResponse:
+      type: object
+      required: [deviceId, status, lastSeenAt]
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+    PcAgentLogUploadRequest:
+      type: object
+      required: [file, rangeMinutes]
+      properties:
+        file:
+          type: string
+          format: binary
+        rangeMinutes:
+          type: integer
+          enum: [30]
+        rangeStartedAt:
+          type: string
+          format: date-time
+        rangeEndedAt:
+          type: string
+          format: date-time
+        schemaVersion:
+          type: integer
+        symptom:
+          type: string
+    PcAgentLogUploadResponse:
+      type: object
+      required: [uploadJobId, logUploadId, ticketId, analysisStatus, reviewStatus, supportDecision]
+      properties:
+        uploadJobId:
+          type: string
+          format: uuid
+        logUploadId:
+          type: string
+          format: uuid
+        ticketId:
+          type: string
+          format: uuid
+        analysisStatus:
+          type: string
+          enum: [RULE_READY]
+        reviewStatus:
+          type: string
+          enum: [REQUIRED, APPROVED]
+        supportDecision:
+          type: string
+          enum: [NEEDS_MORE_INFO, REMOTE_POSSIBLE, VISIT_REQUIRED]
     AgentLogUploadRequest:
       type: object
       required: [file, rangeMinutes, consentAccepted]
@@ -3123,6 +3407,20 @@ components:
           format: uuid
         status:
           $ref: "#/components/schemas/AsTicketStatus"
+        analysisStatus:
+          type: string
+          enum: [RULE_READY]
+        reviewStatus:
+          type: string
+          enum: [NOT_REQUIRED, REQUIRED, IN_REVIEW, APPROVED, REJECTED]
+        supportDecision:
+          type: string
+          enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO]
+        riskLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        autoResponseAllowed:
+          type: boolean
         symptom:
           type: string
         logUploadId:
@@ -3143,6 +3441,21 @@ components:
             additionalProperties: true
         adminNote:
           type: string
+        remoteSupportLink:
+          type: string
+          format: uri
+        remoteSupportStatus:
+          type: string
+        visitSupportRequired:
+          type: boolean
+        visitSupportStatus:
+          type: string
+        visitPreferredDate:
+          type: string
+          format: date
+        visitTimeSlot:
+          type: string
+          enum: [MORNING, AFTERNOON, EVENING]
         resolvedAt:
           type: string
           format: date-time
@@ -3161,6 +3474,35 @@ components:
           type: string
           format: uuid
         adminNote:
+          type: string
+        supportDecision:
+          type: string
+          enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO]
+        reviewStatus:
+          type: string
+          enum: [NOT_REQUIRED, REQUIRED, IN_REVIEW, APPROVED, REJECTED]
+        riskLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        autoResponseAllowed:
+          type: boolean
+        remoteSupportLink:
+          type: string
+          format: uri
+        remoteSupportUrl:
+          type: string
+          format: uri
+        visitSupportRequired:
+          type: boolean
+        visitPreferredDate:
+          type: string
+          format: date
+        visitTimeSlot:
+          type: string
+          enum: [MORNING, AFTERNOON, EVENING]
+        visitAddressSnapshot:
+          type: string
+        visitTechnicianNote:
           type: string
     AdminDashboardDto:
       type: object

@@ -129,6 +129,13 @@ export type AdminAsTicketUpdateRequest = {
   reviewStatus?: string | null;
   riskLevel?: string | null;
   autoResponseAllowed?: boolean | null;
+  remoteSupportLink?: string | null;
+  remoteSupportUrl?: string | null;
+  visitSupportRequired?: boolean | null;
+  visitPreferredDate?: string | null;
+  visitTimeSlot?: string | null;
+  visitAddressSnapshot?: string | null;
+  visitTechnicianNote?: string | null;
 };
 
 export function getAdminDashboard() {

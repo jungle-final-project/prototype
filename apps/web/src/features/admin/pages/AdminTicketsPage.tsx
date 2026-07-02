@@ -12,12 +12,14 @@ export function AdminTicketsPage() {
 
   const tickets = data?.items ?? [];
   const ticketRows = tickets.map((ticket) => ({
-    '티켓': <Link className="font-bold text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{shortId(ticket.id)}</Link>,
-    '상태': <StatusBadge status={ticket.status} />,
-    '증상': <Link className="font-bold text-slate-800 hover:text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{ticket.title ?? ticket.symptom}</Link>,
-    '사용자': userLabel(ticket),
+    티켓: <Link className="font-bold text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{shortId(ticket.id)}</Link>,
+    상태: <StatusBadge status={ticket.status} />,
+    검토: ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-',
+    '지원 결정': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-',
+    증상: <Link className="font-bold text-slate-800 hover:text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{ticket.title ?? ticket.symptom}</Link>,
+    사용자: userLabel(ticket),
     '접수 시간': formatDateTime(ticket.createdAt),
-    '담당자': ticket.assignedAdminId ?? '-'
+    담당자: ticket.assignedAdminId ?? '-'
   }));
 
   return (
@@ -29,7 +31,7 @@ export function AdminTicketsPage() {
           <StateMessage type="info" title="AS 티켓 없음" body="표시할 관리자 AS 티켓이 없습니다." />
         ) : null}
         {!isLoading && !isError && ticketRows.length > 0 ? (
-          <DataTable columns={['티켓', '상태', '증상', '사용자', '접수 시간', '담당자']} rows={ticketRows} />
+          <DataTable columns={['티켓', '상태', '검토', '지원 결정', '증상', '사용자', '접수 시간', '담당자']} rows={ticketRows} />
         ) : null}
       </Panel>
     </AdminShell>

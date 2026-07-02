@@ -62,6 +62,10 @@ Goal 4~8 담당자는 자기 Goal 외 기능을 미리 구현하지 않는다.
 - [ROUTE_OWNERSHIP.md](../ROUTE_OWNERSHIP.md)
 - [openapi.yaml](../openapi.yaml)
 
+## 데모/QA runbook
+
+- [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md): 데모 계정, 테스트 데이터 준비, 관리자 `supportDecision` 저장 후 사용자 화면 반영 QA, 다운로드 링크 상태, OpenAPI 검증, 운영 장애 대응, 발표 시나리오를 정리한다.
+
 ## 실제 핵심 파일 경로
 
 현재 repo에서 확인한 기준 파일은 다음과 같다.
