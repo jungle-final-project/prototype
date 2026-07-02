@@ -362,6 +362,10 @@ public class PcAgentAsService {
             throw fileValidation("Agent log upload must be gzip.");
         }
         GzipValidation gzip = validateGzip(file);
+        int rangeMinutes = requiredInteger(metadata, "rangeMinutes");
+        Instant rangeEndedAt = instant(metadata, "rangeEndedAt", Instant.now(clock));
+        Instant rangeStartedAt = instant(metadata, "rangeStartedAt", rangeEndedAt.minus(Duration.ofMinutes(rangeMinutes)));
+        validateRecentThirtyMinuteRange(rangeMinutes, rangeStartedAt, rangeEndedAt);
         Integer consentCount = jdbcTemplate.queryForObject("""
                 SELECT count(*)
                 FROM agent_consents
@@ -374,10 +378,6 @@ public class PcAgentAsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Server upload consent is required.");
         }
 
-        int rangeMinutes = integer(metadata, "rangeMinutes", RECENT_LOG_RANGE_MINUTES);
-        Instant rangeEndedAt = instant(metadata, "rangeEndedAt", Instant.now(clock));
-        Instant rangeStartedAt = instant(metadata, "rangeStartedAt", rangeEndedAt.minus(Duration.ofMinutes(rangeMinutes)));
-        validateRecentThirtyMinuteRange(rangeMinutes, rangeStartedAt, rangeEndedAt);
         Map<String, Object> uploadJob = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_upload_jobs (
                   device_id,
@@ -628,6 +628,13 @@ public class PcAgentAsService {
         }
         Object value = request.get(key);
         return value instanceof Number number ? number.intValue() : Integer.parseInt(value.toString());
+    }
+
+    private static int requiredInteger(Map<String, Object> request, String key) {
+        if (request == null || request.get(key) == null) {
+            throw badRequest(key + " is required.");
+        }
+        return integer(request, key, 0);
     }
 
     private static Instant instant(Map<String, Object> request, String key, Instant fallback) {

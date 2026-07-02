@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -430,7 +431,21 @@ class PcAgentAsServiceTest {
         assertThat(response.get("logUploadId")).isEqualTo("log-upload-public-id");
         assertThat(response.get("ticketId")).isEqualTo("ticket-public-id");
         assertThat(response.get("analysisStatus")).isEqualTo("RULE_READY");
+        assertThat(response.get("reviewStatus")).isEqualTo("REQUIRED");
+        assertThat(response.get("supportDecision")).isEqualTo("NEEDS_MORE_INFO");
+        assertThat(response.get("rangeMinutes")).isEqualTo(30);
 
+        verify(jdbcTemplate).queryForMap(contains("INSERT INTO agent_upload_jobs"), eq(10L), eq("upload-key"), any(), any());
+        verify(jdbcTemplate).queryForMap(
+                contains("INSERT INTO agent_log_uploads"),
+                eq(20L),
+                eq(10L),
+                eq(100L),
+                eq(30),
+                eq("agent-log.jsonl.gz"),
+                any(Long.class),
+                eq("agent-logs/device-public-id/agent-log.jsonl.gz")
+        );
         verify(jdbcTemplate).queryForMap(
                 contains("INSERT INTO as_tickets"),
                 eq(20L),
@@ -472,6 +487,21 @@ class PcAgentAsServiceTest {
     }
 
     @Test
+    void uploadLogsRejectsMissingRangeMinutesBeforeCreatingTicket() {
+        assertThatThrownBy(() -> service.uploadLogs(
+                AGENT,
+                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", gzip("demo log\n")),
+                MockData.map("symptom", "GPU temperature spike"),
+                "upload-key"
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThat(((ResponseStatusException) exception).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verify(jdbcTemplate, never()).queryForMap(contains("INSERT INTO as_tickets"), any(), any(), any());
+    }
+
+    @Test
     void uploadLogsRejectsNonThirtyMinuteRange() {
         assertThatThrownBy(() -> service.uploadLogs(
                 AGENT,
@@ -482,6 +512,54 @@ class PcAgentAsServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(exception -> assertThat(((ResponseStatusException) exception).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void uploadLogsRejectsNonGzipExtensionBeforeCreatingTicket() {
+        assertThatThrownBy(() -> service.uploadLogs(
+                AGENT,
+                new MockMultipartFile("file", "agent-log.jsonl", "application/json", gzip("demo log\n")),
+                MockData.map("rangeMinutes", 30),
+                "upload-key"
+        ))
+                .isInstanceOf(ApiException.class)
+                .satisfies(exception -> assertThat(((ApiException) exception).code())
+                        .isEqualTo("FILE_VALIDATION_ERROR"));
+
+        verify(jdbcTemplate, never()).queryForMap(contains("INSERT INTO as_tickets"), any(), any(), any());
+    }
+
+    @Test
+    void uploadLogsRejectsEmptyGzipContentBeforeCreatingTicket() {
+        assertThatThrownBy(() -> service.uploadLogs(
+                AGENT,
+                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", gzip("")),
+                MockData.map("rangeMinutes", 30),
+                "upload-key"
+        ))
+                .isInstanceOf(ApiException.class)
+                .satisfies(exception -> assertThat(((ApiException) exception).code())
+                        .isEqualTo("FILE_VALIDATION_ERROR"));
+
+        verify(jdbcTemplate, never()).queryForMap(contains("INSERT INTO as_tickets"), any(), any(), any());
+    }
+
+    @Test
+    void uploadLogsRejectsMissingConsentBeforeCreatingTicket() {
+        when(jdbcTemplate.queryForObject(contains("FROM agent_consents"), eq(Integer.class), eq(10L)))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> service.uploadLogs(
+                AGENT,
+                new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", gzip("demo log\n")),
+                MockData.map("rangeMinutes", 30),
+                "upload-key"
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThat(((ResponseStatusException) exception).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verify(jdbcTemplate, never()).queryForMap(contains("INSERT INTO as_tickets"), any(), any(), any());
     }
 
     private static byte[] gzip(String content) {
