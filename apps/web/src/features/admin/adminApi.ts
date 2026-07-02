@@ -236,6 +236,50 @@ export type PartCatalogCandidatesResponse = {
   total: number;
 };
 
+export type PartAliasReviewItem = {
+  id: string;
+  sourceType: string;
+  category?: string | null;
+  targetField?: string | null;
+  aliasText?: string | null;
+  rawValue?: string | null;
+  canonicalSuggestion?: string | null;
+  message?: string | null;
+  status: string;
+  resolutionNote?: string | null;
+  partId?: string | null;
+  partName?: string | null;
+  resolvedAliasRuleId?: string | null;
+  createdAt?: string | null;
+};
+
+export type PartAliasReviewItemsResponse = {
+  items: PartAliasReviewItem[];
+  page: number;
+  size: number;
+  total: number;
+};
+
+export type PartAliasRule = {
+  id: string;
+  category: string;
+  targetField: string;
+  aliasText: string;
+  canonicalValue: string;
+  status: string;
+  source?: string;
+  note?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type PartAliasRulesResponse = {
+  items: PartAliasRule[];
+  page: number;
+  size: number;
+  total: number;
+};
+
 export type ManufacturerSourceScanResponse = {
   sourceId: string;
   manufacturer?: string;
@@ -324,6 +368,14 @@ export type CandidatePayload = {
   supplierName?: string | null;
   offerUrl?: string | null;
   lowPrice?: number | null;
+};
+
+export type PartAliasResolvePayload = {
+  aliasText: string;
+  category: string;
+  targetField: string;
+  canonicalValue: string;
+  note?: string;
 };
 
 export type AdminPartExternalOffer = {
@@ -625,5 +677,34 @@ export function rejectPartCatalogCandidate(candidateId: string) {
 export function refreshPartCatalogCandidateOffers(candidateId: string) {
   return api<CandidateOfferRefreshResponse>(`/api/admin/part-catalog-candidates/${candidateId}/refresh-offers`, {
     method: 'POST'
+  });
+}
+
+export function listPartAliasReviewItems() {
+  return api<PartAliasReviewItemsResponse>('/api/admin/part-alias-review-items?status=OPEN&page=0&size=20');
+}
+
+export function resolvePartAliasReviewItem(itemId: string, payload: PartAliasResolvePayload) {
+  return api<PartAliasReviewItem>(`/api/admin/part-alias-review-items/${itemId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function ignorePartAliasReviewItem(itemId: string, note?: string) {
+  return api<PartAliasReviewItem>(`/api/admin/part-alias-review-items/${itemId}/ignore`, {
+    method: 'POST',
+    body: JSON.stringify({ note })
+  });
+}
+
+export function listPartAliasRules() {
+  return api<PartAliasRulesResponse>('/api/admin/part-alias-rules?page=0&size=50');
+}
+
+export function createPartAliasRule(payload: PartAliasResolvePayload) {
+  return api<PartAliasRule>('/api/admin/part-alias-rules', {
+    method: 'POST',
+    body: JSON.stringify(payload)
   });
 }

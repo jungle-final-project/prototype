@@ -55,19 +55,22 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private final AgentRagRetrievalService agentRagRetrievalService;
     private final OpenAiResponsesClient openAiResponsesClient;
     private final AiProfileConfig aiProfileConfig;
+    private final PartReplacementRanker partReplacementRanker;
 
     public DefaultAiChatEngine(
             JdbcTemplate jdbcTemplate,
             AgentTraceService agentTraceService,
             AgentRagRetrievalService agentRagRetrievalService,
             OpenAiResponsesClient openAiResponsesClient,
-            AiProfileConfig aiProfileConfig
+            AiProfileConfig aiProfileConfig,
+            PartReplacementRanker partReplacementRanker
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.agentTraceService = agentTraceService;
         this.agentRagRetrievalService = agentRagRetrievalService;
         this.openAiResponsesClient = openAiResponsesClient;
         this.aiProfileConfig = aiProfileConfig;
+        this.partReplacementRanker = partReplacementRanker;
     }
 
     @Override
@@ -122,8 +125,12 @@ public class DefaultAiChatEngine implements AiChatEngine {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "LLM 응답 JSON을 처리할 수 없습니다.", error);
         }
 
-        AiChatIntent intent = normalizeIntent(text(plan.get("intent")), classify(message, request == null ? null : request.selectedCategory(), context));
+        AiChatIntent fallbackIntent = classify(message, request == null ? null : request.selectedCategory(), context);
+        AiChatIntent intent = normalizeIntent(text(plan.get("intent")), fallbackIntent);
         Map<String, Object> draftEdit = normalizeDraftEdit(objectMap(plan.get("draftEdit")), message, request == null ? null : request.selectedCategory(), context);
+        if (fallbackIntent == AiChatIntent.BUILD_MODIFY && !"NONE".equals(text(draftEdit.get("operation")))) {
+            intent = AiChatIntent.BUILD_MODIFY;
+        }
         String selectedCategory = firstText(categoryFrom(text(draftEdit.get("category"))), firstText(categoryFrom(text(plan.get("selectedCategory"))), request == null ? null : request.selectedCategory()));
         Map<String, Object> parsedContext = normalizeParsedContext(objectMap(plan.get("parsedContext")), fallbackContext);
         if (!draftEdit.isEmpty()) {
@@ -300,13 +307,14 @@ public class DefaultAiChatEngine implements AiChatEngine {
         Map<String, Object> currentItem = currentDraftItem(context, effectiveCategory);
         String priceDirection = normalizePriceDirection(text(normalizedDraftEdit.get("priceDirection")));
         Integer targetMaxPrice = numberValue(normalizedDraftEdit.get("targetMaxPrice"));
-        List<AiChatEngineResponse.PartRecommendation> candidates = draftEditPartRecommendations(
+        PartReplacementRanker.SelectionResult selection = draftEditPartRecommendations(
                 effectiveCategory,
                 currentItem,
                 priceDirection,
                 targetMaxPrice,
                 3
         );
+        List<AiChatEngineResponse.PartRecommendation> candidates = selection.parts();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("category", effectiveCategory);
         payload.put("quantity", defaultQuantity(effectiveCategory));
@@ -315,13 +323,23 @@ public class DefaultAiChatEngine implements AiChatEngine {
             payload.put("currentPartId", text(currentItem.get("partId")));
         }
         payload.put("priceDirection", priceDirection);
+        if (!candidates.isEmpty()) {
+            AiChatEngineResponse.PartRecommendation firstCandidate = candidates.get(0);
+            payload.put("partId", firstCandidate.partId());
+            payload.put("name", firstCandidate.name());
+            payload.put("price", firstCandidate.price());
+        }
+        Map<String, Object> parsedContext = MockData.map("category", effectiveCategory, "draftEdit", normalizedDraftEdit);
+        if (!selection.warnings().isEmpty()) {
+            parsedContext.put("warnings", selection.warnings());
+        }
         return response(
                 buildModifyMessage(effectiveCategory, priceDirection, currentItem, candidates),
                 AiChatIntent.BUILD_MODIFY,
                 List.of(new AiChatAction(AiChatActionType.REPLACE_DRAFT_PART, "견적 부품 교체", payload)),
                 List.of(),
                 candidates,
-                MockData.map("category", effectiveCategory, "draftEdit", normalizedDraftEdit)
+                parsedContext
         );
     }
 
@@ -485,33 +503,54 @@ public class DefaultAiChatEngine implements AiChatEngine {
 
     private List<AiChatEngineResponse.PartRecommendation> partRecommendations(String category, int limit) {
         return jdbcTemplate.queryForList("""
-                        SELECT public_id::text AS id,
-                               category,
-                               name,
-                               manufacturer,
-                               price,
-                               attributes
-                        FROM parts
-                        WHERE category = ?
-                          AND status = 'ACTIVE'
-                          AND deleted_at IS NULL
-                          AND coalesce((attributes->>'toolReady')::boolean, false) = true
-                        ORDER BY price DESC, id ASC
+                        SELECT p.public_id::text AS id,
+                               p.category,
+                               p.name,
+                               p.manufacturer,
+                               p.price,
+                               p.attributes,
+                               b.score AS benchmark_score,
+                               b.summary AS benchmark_summary
+                        FROM parts p
+                        LEFT JOIN LATERAL (
+                          SELECT score, summary
+                          FROM benchmark_summaries bs
+                          WHERE bs.part_id = p.id
+                            AND bs.deleted_at IS NULL
+                          ORDER BY bs.created_at DESC, bs.id DESC
+                          LIMIT 1
+                        ) b ON true
+                        WHERE p.category = ?
+                          AND p.status = 'ACTIVE'
+                          AND p.deleted_at IS NULL
+                          AND coalesce((p.attributes->>'toolReady')::boolean, false) = true
+                        ORDER BY p.price DESC, p.id ASC
                         LIMIT ?
                         """, category, Math.max(1, Math.min(limit, 50)))
                 .stream()
-                .map(row -> new AiChatEngineResponse.PartRecommendation(
-                        DbValueMapper.string(row, "id"),
-                        DbValueMapper.string(row, "category"),
-                        DbValueMapper.string(row, "name"),
-                        DbValueMapper.string(row, "manufacturer"),
-                        DbValueMapper.integer(row, "price"),
-                        objectMap(DbValueMapper.json(row, "attributes", Map.of()))
-                ))
+                .map(row -> {
+                    Map<String, Object> attributes = new LinkedHashMap<>(objectMap(DbValueMapper.json(row, "attributes", Map.of())));
+                    Object benchmarkScore = row.get("benchmark_score");
+                    if (benchmarkScore != null) {
+                        attributes.put("_benchmarkScore", benchmarkScore);
+                    }
+                    Object benchmarkSummary = row.get("benchmark_summary");
+                    if (benchmarkSummary != null) {
+                        attributes.put("_benchmarkSummary", benchmarkSummary);
+                    }
+                    return new AiChatEngineResponse.PartRecommendation(
+                            DbValueMapper.string(row, "id"),
+                            DbValueMapper.string(row, "category"),
+                            DbValueMapper.string(row, "name"),
+                            DbValueMapper.string(row, "manufacturer"),
+                            DbValueMapper.integer(row, "price"),
+                            attributes
+                    );
+                })
                 .toList();
     }
 
-    private List<AiChatEngineResponse.PartRecommendation> draftEditPartRecommendations(
+    private PartReplacementRanker.SelectionResult draftEditPartRecommendations(
             String category,
             Map<String, Object> currentItem,
             String priceDirection,
@@ -519,38 +558,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
             int limit
     ) {
         List<AiChatEngineResponse.PartRecommendation> parts = partRecommendations(category, 50);
-        String currentPartId = text(currentItem.get("partId"));
-        Integer currentPrice = firstNumber(currentItem.get("currentPrice"), currentItem.get("price"));
-        java.util.stream.Stream<AiChatEngineResponse.PartRecommendation> stream = parts.stream()
-                .filter(part -> currentPartId == null || !currentPartId.equals(part.partId()));
-
-        if ("CHEAPER".equals(priceDirection)) {
-            int maxPrice = targetMaxPrice == null || targetMaxPrice <= 0
-                    ? (currentPrice == null ? Integer.MAX_VALUE : currentPrice - 1)
-                    : targetMaxPrice;
-            stream = stream.filter(part -> part.price() <= maxPrice);
-            return stream
-                    .sorted((left, right) -> Integer.compare(right.price(), left.price()))
-                    .limit(limit)
-                    .toList();
-        }
-        if ("MORE_EXPENSIVE".equals(priceDirection)) {
-            if (currentPrice != null) {
-                stream = stream.filter(part -> part.price() > currentPrice);
-            }
-            return stream
-                    .sorted((left, right) -> Integer.compare(left.price(), right.price()))
-                    .limit(limit)
-                    .toList();
-        }
-        if ("SIMILAR_PRICE".equals(priceDirection) && currentPrice != null) {
-            int price = currentPrice;
-            return stream
-                    .sorted((left, right) -> Integer.compare(Math.abs(left.price() - price), Math.abs(right.price() - price)))
-                    .limit(limit)
-                    .toList();
-        }
-        return stream.limit(limit).toList();
+        return partReplacementRanker.select(category, currentItem, priceDirection, targetMaxPrice, parts, limit);
     }
 
     private static String buildModifyMessage(
@@ -749,16 +757,16 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (containsAny(normalized, "왜", "이유", "근거", "설명")) {
             return AiChatIntent.EXPLAIN;
         }
-        if (containsAny(normalized, "알림", "목표가", "떨어지", "되면 알려", "가격")) {
-            return AiChatIntent.PRICE_ALERT_HELP;
-        }
         boolean hasBuildSignal = containsAny(normalized, "컴퓨터", "본체", "pc", "견적", "맞춰");
         boolean hasUsageSignal = containsAny(normalized, "게임", "개발", "영상", "편집", "ai", "cuda", "qhd", "fhd", "4k");
-        boolean hasModifySignal = containsAny(normalized, "바꿔", "변경", "교체", "업그레이드", "추가", "빼줘", "낮춰", "올려", "비싸", "저렴", "싼", "가성비");
+        boolean hasModifySignal = containsAny(normalized, "바꿔", "변경", "교체", "업그레이드", "추가", "빼줘", "낮춰", "올려", "비싸", "저렴", "싼", "가성비", "더 좋은", "상위", "고급", "빠른", "넉넉", "여유", "비슷", "가격대", "유지");
         boolean hasExistingBuildSignal = containsAny(normalized, "견적", "현재 견적", "기존", "구성", "부품");
         boolean asksUpgradeHeadroom = containsAny(normalized, "업그레이드 여유", "추후 업그레이드", "향후 업그레이드");
         if (hasModifySignal && !asksUpgradeHeadroom && (!hasBuildSignal || hasExistingBuildSignal)) {
             return AiChatIntent.BUILD_MODIFY;
+        }
+        if (containsAny(normalized, "알림", "목표가", "떨어지", "되면 알려", "가격")) {
+            return AiChatIntent.PRICE_ALERT_HELP;
         }
         if (categoryFrom(firstText(selectedCategory, message)) != null && !containsAny(normalized, "컴퓨터", "본체", "pc", "견적", "맞춰")) {
             return AiChatIntent.PART_RECOMMEND;
@@ -924,12 +932,18 @@ public class DefaultAiChatEngine implements AiChatEngine {
             Map<String, Object> context
     ) {
         Map<String, Object> result = new LinkedHashMap<>();
-        String operation = normalizeDraftOperation(firstText(text(source.get("operation")), inferDraftOperation(message)));
-        String category = firstText(categoryFrom(text(source.get("category"))), categoryFrom(firstText(selectedCategory, message)));
+        String inferredOperation = inferDraftOperation(message);
+        String operation = !"NONE".equals(inferredOperation)
+                ? inferredOperation
+                : normalizeDraftOperation(text(source.get("operation")));
+        String category = firstText(categoryFrom(firstText(selectedCategory, message)), categoryFrom(text(source.get("category"))));
         if (category == null) {
             category = categoryFrom(text(mostExpensiveDraftItem(context).get("category")));
         }
-        String priceDirection = normalizePriceDirection(firstText(text(source.get("priceDirection")), inferPriceDirection(message)));
+        String inferredPriceDirection = inferPriceDirection(message);
+        String priceDirection = !"ANY".equals(inferredPriceDirection)
+                ? inferredPriceDirection
+                : normalizePriceDirection(text(source.get("priceDirection")));
         Integer targetMaxPrice = firstNumber(source.get("targetMaxPrice"), inferBudget(message));
         Integer targetQuantity = numberValue(source.get("targetQuantity"));
         result.put("operation", operation);
@@ -952,7 +966,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String normalized = safe(message).toLowerCase(Locale.ROOT);
         if (containsAny(normalized, "빼", "삭제", "제거", "remove", "delete")) return "REMOVE";
         if (containsAny(normalized, "수량", "개로", "장으로", "늘려", "줄여")) return "UPDATE_QUANTITY";
-        if (containsAny(normalized, "바꿔", "변경", "교체", "낮춰", "올려", "싼", "저렴", "비싸", "추천")) return "REPLACE";
+        if (containsAny(normalized, "바꿔", "변경", "교체", "낮춰", "올려", "싼", "저렴", "비싸", "추천", "더 좋은", "상위", "고급", "빠른", "넉넉", "여유", "비슷", "가격대", "유지")) return "REPLACE";
         return "NONE";
     }
 
@@ -968,7 +982,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (containsAny(normalized, "싼", "저렴", "낮춰", "줄여", "가성비", "예산 안", "이하", "초과", "비싸")) {
             return "CHEAPER";
         }
-        if (containsAny(normalized, "좋은", "상위", "업그레이드", "성능", "올려", "비싸도", "고급")) {
+        if (containsAny(normalized, "좋은", "상위", "업그레이드", "성능", "올려", "비싸도", "고급", "빠른", "넉넉", "여유", "조용", "잘 식히", "큰 그래픽카드")) {
             return "MORE_EXPENSIVE";
         }
         if (containsAny(normalized, "비슷", "유지", "그 가격", "같은 가격")) {
@@ -1090,6 +1104,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
 
     private static String categoryFrom(String value) {
         String normalized = safe(value).toLowerCase(Locale.ROOT);
+        String canonical = normalized.toUpperCase(Locale.ROOT).replace("-", "_");
+        if (BUILD_CATEGORIES.contains(canonical)) {
+            return canonical;
+        }
         if (containsAny(normalized, "gpu", "그래픽", "글카", "rtx", "지포스", "라데온")) return "GPU";
         if (containsAny(normalized, "cpu", "프로세서", "라이젠", "인텔")) return "CPU";
         if (containsAny(normalized, "메인보드", "보드", "motherboard")) return "MOTHERBOARD";

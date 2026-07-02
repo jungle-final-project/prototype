@@ -37,9 +37,9 @@ REQUIRED_PATHS = [
     "/api/price-alerts",
     "/api/admin/price-jobs",
     "/api/admin/price-jobs/run",
-    "/api/agent/sessions",
-    "/api/agent/sessions/{id}/run",
-    "/api/agent/sessions/{id}",
+    "/api/ai/agent-sessions",
+    "/api/ai/agent-sessions/{id}/run",
+    "/api/ai/agent-sessions/{id}",
     "/api/rag/search",
     "/api/rag/evidence/{id}",
     "/api/agent-logs/upload",
@@ -67,7 +67,7 @@ POST_JSON_REQUEST_SCHEMAS = {
     "/api/builds/recommend": "BuildRecommendRequest",
     "/api/builds/{id}/change-part": "ChangePartRequest",
     "/api/price-alerts": "PriceAlertCreateRequest",
-    "/api/agent/sessions": "AgentSessionCreateRequest",
+    "/api/ai/agent-sessions": "AgentSessionCreateRequest",
     "/api/as-tickets": "AsTicketCreateRequest",
 }
 

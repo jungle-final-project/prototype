@@ -248,7 +248,7 @@ Figma 기준으로 5번이 직접 맡아야 할 화면은 `153:1880 STATE-15 ADM
 3번은 Agent/RAG/AS Chat owner라서 AS Chat과 RAG 근거 흐름은 많이 들어왔지만, 일반 Agent session 계약과 queue 정책이 남아 있습니다.
 
 - AS Chat은 사용자 티켓 소유권 확인, SSE 진행 이벤트, RAG/Tool/LLM 구조화 응답까지 잘 들어와 있습니다.
-- 일반 `POST /api/agent/sessions`, `POST /api/agent/sessions/{id}/run`, `GET /api/agent/sessions/{id}`는 현재 로그인 사용자 소유권을 확인해야 합니다.
+- 일반 `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`는 현재 로그인 사용자 소유권을 확인해야 합니다.
 - 본인 소유가 아닌 Agent session은 계약대로 `404_NOT_FOUND`를 반환해야 합니다.
 - AdminShell의 `Agent 세션`, `Tool 이력`, `RAG 근거` 메뉴가 현재 seed 상세 id로 바로 이동합니다. list route를 만들지, seed/sample link로 둘지 결정해 주세요.
 - Agent job을 실제 비동기 queue로 처리할 계획이면 상태 전이 `QUEUED -> RUNNING -> RAG_SEARCHED -> TOOLS_CALLED -> SUMMARY_READY -> SUCCEEDED`와 실패/취소 정책을 문서와 테스트에 맞춰 주세요.

@@ -99,7 +99,7 @@ MVP 기준 결정값:
 | from | to | actor | 허용 여부 | 실패 시 API status code | audit log 기록 여부 |
 |---|---|---|---|---|---|
 | `-` | `QUEUED` | USER 또는 SYSTEM | yes | - | no |
-| `QUEUED` | `RUNNING` | Agent runner 또는 `POST /api/agent/sessions/{id}/run` | yes | - | no |
+| `QUEUED` | `RUNNING` | Agent runner 또는 `POST /api/ai/agent-sessions/{id}/run` | yes | - | no |
 | `RUNNING` | `RAG_SEARCHED` | system | yes | - | no |
 | `RAG_SEARCHED` | `TOOLS_CALLED` | system | yes | - | no |
 | `TOOLS_CALLED` | `SUMMARY_READY` | system | yes | - | no |
@@ -571,6 +571,75 @@ Index:
 - index: `part_catalog_candidates.published_part_id`
 - index: `part_catalog_candidates.last_seen_at`
 - index: `part_catalog_candidates.deleted_at`
+
+### part_alias_rules
+
+목적: 자연어 alias와 내부 표준 스펙 값을 연결한다. 예: `5070티아이 -> RTX_5070_TI`, `골드 파워 -> GOLD`.
+
+주 owner: 2번
+
+협업자: 3번, 5번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `category` | `VARCHAR(50)` | no | - | 부품 카테고리 |
+| `target_field` | `VARCHAR(80)` | no | - | 정규화 대상 필드. 예: `gpuClass`, `efficiency`, `rank` |
+| `alias_text` | `VARCHAR(255)` | no | - | 사용자/외부 자료에서 발견한 표현 |
+| `canonical_value` | `VARCHAR(255)` | no | - | 내부 표준 값 |
+| `status` | `VARCHAR(30)` | no | - | `ACTIVE`, `IGNORED`, `DELETED` |
+| `source` | `VARCHAR(80)` | no | - | 생성 출처 |
+| `note` | `TEXT` | yes | - | 운영자 메모 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+Index:
+
+- unique: active 상태에서는 `(category, target_field, alias_text)` 중복을 허용하지 않는다.
+- index: `part_alias_rules.category`, `part_alias_rules.target_field`, `part_alias_rules.status`
+
+### part_alias_review_items
+
+목적: AI 추천/후보 수집 중 alias 파싱 실패, rank 계산 불가, 필수 스펙 누락 같은 운영 보정 대상을 쌓는다.
+
+주 owner: 2번
+
+협업자: 3번, 5번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `source_type` | `VARCHAR(50)` | no | - | `PART_ATTRIBUTE`, `USER_QUERY`, `NAVER_CANDIDATE`, `MANUFACTURER_POST`, `AI_BUILD_CHAT` |
+| `category` | `VARCHAR(50)` | yes | - | 관련 카테고리 |
+| `target_field` | `VARCHAR(80)` | yes | - | 보정 대상 필드 |
+| `alias_text` | `VARCHAR(255)` | yes | - | 발견 표현 |
+| `raw_value` | `VARCHAR(255)` | yes | - | 원본값 |
+| `canonical_suggestion` | `VARCHAR(255)` | yes | - | 제안 표준값 |
+| `part_id` | `BIGINT` | yes | `parts.id` | 관련 부품 |
+| `part_catalog_candidate_id` | `BIGINT` | yes | `part_catalog_candidates.id` | 관련 후보 |
+| `manufacturer_post_id` | `BIGINT` | yes | `manufacturer_posts.id` | 관련 게시글 |
+| `message` | `TEXT` | yes | - | 검수 사유 |
+| `status` | `VARCHAR(30)` | no | - | `OPEN`, `RESOLVED`, `IGNORED` |
+| `resolution_note` | `TEXT` | yes | - | 처리 메모 |
+| `resolved_alias_rule_id` | `BIGINT` | yes | `part_alias_rules.id` | 해결 시 생성/연결된 rule |
+| `raw_payload` | `JSONB` | no | - | 당시 입력 context |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+Index:
+
+- unique: 열린 검수 항목은 `source_type`, `category`, `target_field`, `alias_text`, `raw_value` 조합으로 중복 생성하지 않는다.
+- index: `part_alias_review_items.status`, `part_alias_review_items.category`, `part_alias_review_items.created_at`
+
+정책:
+
+- AI 엔진은 추천 응답을 위해 이 테이블에 검수 항목만 남기며 `quote_drafts`, `parts`, `part_catalog_candidates`를 직접 수정하지 않는다.
+- 해결 API는 alias rule을 생성하거나 갱신하고 review item을 `RESOLVED`로 닫는다. 무시 API는 `IGNORED`로 닫는다.
+- 이 큐는 관리자 운영 backlog이며 사용자 화면에는 노출하지 않는다.
 
 ### manufacturer_sources
 
@@ -1621,6 +1690,7 @@ V32__llm_generations.sql
 V34__llm_generations_nano_profile.sql
 V55__llm_generations_ai_profile_ladder.sql
 V35__correct_corsair_ram_offer_seed.sql
+V60__part_alias_review_queue.sql
 ```
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.

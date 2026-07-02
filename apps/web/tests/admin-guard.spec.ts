@@ -296,6 +296,30 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
       })
     });
   });
+  await page.route('**/api/admin/part-alias-review-items?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [],
+        page: 0,
+        size: 20,
+        total: 0
+      })
+    });
+  });
+  await page.route('**/api/admin/part-alias-rules?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [],
+        page: 0,
+        size: 50,
+        total: 0
+      })
+    });
+  });
   let scanAllCalls = 0;
   await page.route('**/api/admin/manufacturer-sources/scan?**', async (route) => {
     scanAllCalls += 1;

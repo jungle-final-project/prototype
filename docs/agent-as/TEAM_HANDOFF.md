@@ -163,4 +163,4 @@
 ## 확인 필요
 
 - Goal 3 변경이 현재 브랜치에서 commit된 상태인지, 또는 working tree 변경으로 남아 있는지 작업 시작 전에 확인한다.
-- 기존 계약 문서의 `/api/agent/sessions`와 `/api/agent-logs/upload`는 PC Agent 전용 정책과 충돌할 수 있다. 각 담당자는 자기 Goal 착수 전에 path와 auth 정책을 확인해야 한다.
+- AI Agent/RAG session API는 `/api/ai/agent-sessions`로 분리되어 PC Agent 전용 `/api/agent/**`와 충돌하지 않는다. `/api/agent-logs/upload`는 여전히 웹 JWT 사용자 API이므로, PC Agent 직접 업로드 path는 Goal 6 착수 전에 확인해야 한다.

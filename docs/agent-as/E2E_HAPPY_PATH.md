@@ -143,4 +143,4 @@ Agent 등록
 ## 확인 필요
 
 - 현재 계약 문서에는 `POST /api/agent-logs/upload`, `POST /api/as-tickets`가 웹 JWT USER API로 정의되어 있다. PC Agent 직접 업로드와 AS ticket 생성 path는 Goal 6 전에 확정해야 한다.
-- 현재 계약 문서에는 `/api/agent/sessions`가 웹 JWT USER API로 남아 있다. PC Agent 전용 `/api/agent/**` 원칙과 충돌 가능성이 있다.
+- AI Agent/RAG session API는 `/api/ai/agent-sessions`로 분리되어 PC Agent 전용 `/api/agent/**` 원칙과 충돌하지 않는다.

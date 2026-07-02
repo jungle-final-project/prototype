@@ -1318,6 +1318,113 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PartCatalogCandidateOfferRefreshResponse"
+  /api/admin/part-alias-review-items:
+    get:
+      summary: 부품 alias 및 스펙 검수 큐 조회
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OPEN, RESOLVED, IGNORED]
+        - name: category
+          in: query
+          schema:
+            $ref: "#/components/schemas/PartCategory"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 검수 큐 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartAliasReviewItemListResponse"
+  /api/admin/part-alias-review-items/{id}/resolve:
+    post:
+      summary: 검수 큐 항목 해결 및 alias rule 생성
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartAliasResolveRequest"
+      responses:
+        "200":
+          description: 해결된 검수 항목
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartAliasReviewItemDto"
+  /api/admin/part-alias-review-items/{id}/ignore:
+    post:
+      summary: 검수 큐 항목 무시
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        "200":
+          description: 무시 처리된 검수 항목
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartAliasReviewItemDto"
+  /api/admin/part-alias-rules:
+    get:
+      summary: 부품 alias rule 목록
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            $ref: "#/components/schemas/PartCategory"
+        - name: targetField
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: alias rule 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartAliasRuleListResponse"
+    post:
+      summary: 부품 alias rule 수동 등록
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartAliasResolveRequest"
+      responses:
+        "200":
+          description: 등록된 alias rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartAliasRuleDto"
   /api/tools/compatibility/check:
     post:
       summary: 호환성 Tool check
@@ -1368,7 +1475,7 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ToolCheckSuccess"
-  /api/agent/sessions:
+  /api/ai/agent-sessions:
     post:
       summary: Agent 세션 생성
       security:
@@ -1386,7 +1493,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentSessionDto"
-  /api/agent/sessions/{id}/run:
+  /api/ai/agent-sessions/{id}/run:
     post:
       summary: Agent 세션 실행 시작
       description: QUEUED Agent 세션에 RabbitMQ agent.run 메시지를 발행한다. worker가 메시지를 수신한 뒤 RUNNING 이후 상태 전이를 수행한다.
@@ -1407,7 +1514,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-  /api/agent/sessions/{id}:
+  /api/ai/agent-sessions/{id}:
     get:
       summary: Agent 세션 상세
       security:
@@ -3438,6 +3545,130 @@ components:
           type: integer
         message:
           type: string
+    PartAliasResolveRequest:
+      type: object
+      required: [aliasText, category, targetField, canonicalValue]
+      properties:
+        aliasText:
+          type: string
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        targetField:
+          type: string
+          example: gpuClass
+        canonicalValue:
+          type: string
+          example: RTX_5070_TI
+        note:
+          type: string
+    PartAliasReviewItemDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceType:
+          type: string
+          enum: [PART_ATTRIBUTE, USER_QUERY, NAVER_CANDIDATE, MANUFACTURER_POST, AI_BUILD_CHAT]
+        category:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PartCategory"
+        targetField:
+          type: string
+          nullable: true
+        aliasText:
+          type: string
+          nullable: true
+        rawValue:
+          type: string
+          nullable: true
+        canonicalSuggestion:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [OPEN, RESOLVED, IGNORED]
+        resolutionNote:
+          type: string
+          nullable: true
+        rawPayload:
+          type: object
+          additionalProperties: true
+        partId:
+          type: string
+          format: uuid
+          nullable: true
+        partName:
+          type: string
+          nullable: true
+        resolvedAliasRuleId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+    PartAliasReviewItemListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartAliasReviewItemDto"
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+    PartAliasRuleDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        targetField:
+          type: string
+        aliasText:
+          type: string
+        canonicalValue:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, IGNORED, DELETED]
+        source:
+          type: string
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    PartAliasRuleListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartAliasRuleDto"
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
     ToolCheckRequest:
       type: object
       required: [partIds, context]

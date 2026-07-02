@@ -271,6 +271,11 @@ Google OAuth 정책:
 | `POST` | `/api/admin/part-catalog-candidates/{id}/approve` | ADMIN | 2번 | - | `{ "candidateId": "9a1...", "publishedPartId": "0e9...", "created": true, "partStatus": "INACTIVE", "status": "PUBLISHED" }` | `part_catalog_candidates`, `parts`, `part_external_offers`, `price_snapshots`, `admin_audit_logs` |
 | `POST` | `/api/admin/part-catalog-candidates/{id}/reject` | ADMIN | 2번 | `{ "reason": "공식 신제품이 아닌 이벤트 게시글" }` | `{ "candidateId": "9a1...", "status": "REJECTED", "reason": "공식 신제품이 아닌 이벤트 게시글" }` | `part_catalog_candidates`, `admin_audit_logs` |
 | `POST` | `/api/admin/part-catalog-candidates/{id}/refresh-offers` | ADMIN | 2번 | - | `{ "configured": true, "candidateId": "9a1...", "updated": true, "attempted": 1, "title": "ASUS RTX 5090 ...", "lowPrice": 3980000 }` | `part_catalog_candidates` |
+| `GET` | `/api/admin/part-alias-review-items` | ADMIN | 2번 | `?status=OPEN&category=GPU&page=0&size=20` | `{ "items": [{ "id": "4d2...", "sourceType": "AI_BUILD_CHAT", "category": "GPU", "targetField": "rank", "aliasText": "5070티아이", "status": "OPEN" }], "page": 0, "size": 20, "total": 1 }` | `part_alias_review_items`, `parts`, `part_alias_rules` |
+| `POST` | `/api/admin/part-alias-review-items/{id}/resolve` | ADMIN | 2번 | `{ "aliasText": "5070티아이", "category": "GPU", "targetField": "gpuClass", "canonicalValue": "RTX_5070_TI", "note": "한국어 표기 alias" }` | `PartAliasReviewItemDto` | `part_alias_review_items`, `part_alias_rules`, `admin_audit_logs` |
+| `POST` | `/api/admin/part-alias-review-items/{id}/ignore` | ADMIN | 2번 | `{ "note": "처리 불필요" }` | `PartAliasReviewItemDto` | `part_alias_review_items`, `admin_audit_logs` |
+| `GET` | `/api/admin/part-alias-rules` | ADMIN | 2번 | `?category=GPU&targetField=gpuClass&page=0&size=50` | `{ "items": [{ "id": "f21...", "category": "GPU", "targetField": "gpuClass", "aliasText": "5070티아이", "canonicalValue": "RTX_5070_TI" }], "page": 0, "size": 50, "total": 1 }` | `part_alias_rules` |
+| `POST` | `/api/admin/part-alias-rules` | ADMIN | 2번 | `{ "aliasText": "골드 파워", "category": "PSU", "targetField": "efficiency", "canonicalValue": "GOLD" }` | `PartAliasRuleDto` | `part_alias_rules`, `admin_audit_logs` |
 
 `POST /api/price-snapshots/collect`는 공개 API가 아니다. 가격 스냅샷 생성은 `/api/admin/price-jobs/run` 뒤의 내부 service 처리다.
 
@@ -305,6 +310,8 @@ Google OAuth 정책:
 제조사 신제품 감지 파이프라인은 `manufacturer_sources`를 주기적으로 scan해 새 공식 게시글을 `manufacturer_posts`에 저장한다. scan은 `parts`를 직접 수정하지 않고, 제품 후보로 판정된 게시글만 네이버 쇼핑 검색을 거쳐 `part_catalog_candidates.source = "MANUFACTURER_RELEASE_NAVER_SEARCH"` 상태로 저장한다. source 생성/수정은 공식 제조사 도메인의 `https` URL만 허용한다. 단, Flyway seed로 들어가는 `BuildGraph Demo` source는 로컬 시연용 예외이며 `parserConfig.demo=true`와 localhost URL만 허용한다. 관리자 승인 전 후보는 사용자 화면, 추천, Tool 대상에 노출하지 않는다. `POST /api/admin/part-catalog-candidates/{id}/approve`와 `POST /api/admin/manufacturer-posts/{id}/ai-asset-draft`는 후보를 `parts.status = "INACTIVE"` 초안으로만 생성하며, 최종 `ACTIVE` 전환은 관리자 스펙 검수 후 별도 작업으로 처리한다. 신제품 판정 AI는 공식 게시글 본문을 읽어 게시글 분류, 검색어 생성, 후보 생성 사유 요약, 카테고리별 스펙 초안 추출, INACTIVE 초안화 연결까지만 담당한다. AI가 추출한 스펙은 `part_catalog_candidates.raw_payload.manufacturerRelease.aiSpecAttributes`를 거쳐 연결된 `parts.attributes`에 저장되며, 특정 제품명 하드코딩으로 채우지 않는다. `OPENAI_API_KEY`가 없으면 AI 초안화 API는 `428 PRECONDITION_REQUIRED`를 반환하고 가짜 후보를 만들지 않는다. AI JSON 계약 위반은 `502 UPSTREAM_ERROR`로 처리한다.
 
 `part_catalog_candidates.source_product_key`는 외부 후보 중복 방지를 위한 서버 생성 내부키다. 관리자 후보 보정 화면과 `PATCH /api/admin/part-catalog-candidates/{id}` request는 이 값을 받지 않으며, 서버는 기존 값을 유지하거나 legacy 빈 값이 발견될 때 source/category/title/offerUrl/searchQuery 기반 안정 키로 보정한다.
+
+AI 부품 교체 어시스턴트는 `quote_drafts`를 직접 수정하지 않고 `ADD_PART_TO_DRAFT`, `REPLACE_DRAFT_PART`, `REMOVE_DRAFT_PART`, `UPDATE_DRAFT_QUANTITY` action만 반환한다. 교체 후보 선정은 가격만 보지 않고 카테고리별 rank를 함께 사용한다. “더 좋은/상위/업그레이드”는 현재 부품보다 높은 rank 후보를 우선하고, “더 싼/저렴/예산 낮춰”는 현재보다 낮은 가격 중 성능 하락이 가장 작은 후보를 우선한다. rank 계산에 필요한 alias나 스펙이 부족하면 응답 `warnings[]`에 `ALIAS_REVIEW_REQUIRED`, `RANK_FALLBACK_USED`, `NO_HIGHER_RANK_CANDIDATE` 중 필요한 값을 붙이고 `part_alias_review_items`에 관리자 검수 항목을 남긴다.
 
 로컬 시연용 source는 Flyway seed로 `manufacturer = "BuildGraph Demo"`, `enabled = false`, `sourceType = "RSS"` 상태로 1개 제공한다. 이 source는 `/api/demo/manufacturer-release-feed.xml`을 읽는 데모 전용 feed이며 운영 제조사 감시 source가 아니다. `/admin/parts`에서 수동 scan을 실행하면 실제 파이프라인과 동일하게 `manufacturer_posts`를 기록하고, 네이버 쇼핑 API 설정이 있으면 `parserConfig.searchQuery` 기반으로 후보 생성을 시도한다. 네이버 API가 없거나 검색 결과가 부적합하면 게시글만 남기고 후보는 생성하지 않는다.
 
@@ -363,9 +370,9 @@ Tool별 `context`와 `details` shape:
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/agent/sessions` | USER | 3번 | `{ "requirementId": "2e0f8c9c-8e1c-4d75-94a2-5d6a4977de11", "buildId": null, "asTicketId": null }` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "QUEUED", "summary": null, "stateTimeline": [{ "from": null, "to": "QUEUED", "actor": "USER", "at": "2026-06-29T10:35:00Z" }] }` | `agent_sessions` |
-| `POST` | `/api/agent/sessions/{id}/run` | USER | 3번 | `{}` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "RUNNING", "summary": null, "stateTimeline": [{ "from": "QUEUED", "to": "RUNNING", "actor": "SYSTEM", "at": "2026-06-29T10:36:00Z" }] }` | `agent_sessions` |
-| `GET` | `/api/agent/sessions/{id}` | USER | 3번 | - | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "SUCCEEDED", "summary": "추천이 완료되었습니다.", "stateTimeline": [], "toolInvocationIds": ["4cf44761-e25b-4d5b-bd31-52c13dd9975c"], "evidenceIds": ["9ebf5278-68aa-42a5-96f4-8ec0f90f0f77"] }` | `agent_sessions`, `tool_invocations`, `rag_evidence` |
+| `POST` | `/api/ai/agent-sessions` | USER | 3번 | `{ "requirementId": "2e0f8c9c-8e1c-4d75-94a2-5d6a4977de11", "buildId": null, "asTicketId": null }` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "QUEUED", "summary": null, "stateTimeline": [{ "from": null, "to": "QUEUED", "actor": "USER", "at": "2026-06-29T10:35:00Z" }] }` | `agent_sessions` |
+| `POST` | `/api/ai/agent-sessions/{id}/run` | USER | 3번 | `{}` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "RUNNING", "summary": null, "stateTimeline": [{ "from": "QUEUED", "to": "RUNNING", "actor": "SYSTEM", "at": "2026-06-29T10:36:00Z" }] }` | `agent_sessions` |
+| `GET` | `/api/ai/agent-sessions/{id}` | USER | 3번 | - | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "SUCCEEDED", "summary": "추천이 완료되었습니다.", "stateTimeline": [], "toolInvocationIds": ["4cf44761-e25b-4d5b-bd31-52c13dd9975c"], "evidenceIds": ["9ebf5278-68aa-42a5-96f4-8ec0f90f0f77"] }` | `agent_sessions`, `tool_invocations`, `rag_evidence` |
 | `GET` | `/api/rag/search` | USER | 3번 | `?q=5090&purpose=REQUIREMENT_PARSE&sourceType=INTERNAL_RULE&limit=3` | `{ "items": [{ "id": "9ebf5278-68aa-42a5-96f4-8ec0f90f0f77", "summary": "명시 GPU 조건은 하드 제약입니다.", "sourceId": "requirement-rule-explicit-gpu-class-hard-constraint", "score": 0.92 }], "page": 0, "size": 3, "total": 1 }` | `rag_evidence` |
 | `GET` | `/api/rag/evidence/{id}` | USER | 3번 | - | `{ "id": "9ebf5278-68aa-42a5-96f4-8ec0f90f0f77", "summary": "RTX 4070 QHD 성능 근거", "sourceId": "spec-rtx4070", "metadata": { "sourceType": "PART_SPEC", "title": "RTX 4070 Spec" } }` | `rag_evidence` |
 | `GET` | `/api/admin/agent-sessions` | ADMIN | 3번 | `?page=0&size=20` | `{ "items": [{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "RUNNING", "userId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "createdAt": "2026-06-29T10:35:00Z" }], "page": 0, "size": 20, "total": 1 }` | `agent_sessions` |
@@ -389,19 +396,19 @@ RAG 공개 범위:
 - 이번 계약은 기본값을 바꾸지 않고 경로별 policy benchmark를 가능하게 하는 목적이다. 운영 기본값 변경은 `docs/reports/rag-retrieval-benchmark-YYYYMMDD.md`와 live benchmark 결과를 근거로 별도 PR에서 판단한다.
 - embedding 생성은 Flyway에서 수행하지 않는다. 데모 전 관리자가 `POST /api/admin/rag-embeddings/backfill`을 실행해 reusable RAG chunk를 백필한다.
 
-`POST /api/agent/sessions/{id}/run` 409 조건:
+`POST /api/ai/agent-sessions/{id}/run` 409 조건:
 
 - 해당 세션이 요청 사용자 소유가 아니면 `404 NOT_FOUND`다.
 - status가 `QUEUED`가 아니면 실행을 시작하지 않고 `409 CONFLICT_STATE`를 반환한다.
 - 특히 `RUNNING`, `RAG_SEARCHED`, `TOOLS_CALLED`, `SUMMARY_READY`, `FALLBACK_READY`는 이미 실행 중인 상태로 본다.
 - `SUCCEEDED`, `FAILED`, `CANCELLED`는 완료된 상태이므로 재실행하지 않고 `409 CONFLICT_STATE`를 반환한다.
 
-`POST /api/agent/sessions`는 `requirementId`, `buildId`, `asTicketId` 중 정확히 하나만 non-null이어야 한다. 0개 또는 2개 이상이면 `400 VALIDATION_ERROR`다.
+`POST /api/ai/agent-sessions`는 `requirementId`, `buildId`, `asTicketId` 중 정확히 하나만 non-null이어야 한다. 0개 또는 2개 이상이면 `400 VALIDATION_ERROR`다.
 
 Agent 실행 방식:
 
-- 계약상 `POST /api/agent/sessions/{id}/run`은 실행 시작 API이며 `QUEUED -> RUNNING` 전이를 반환한다.
-- 클라이언트는 `POST /run` 응답만으로 완료를 판단하지 않고 `GET /api/agent/sessions/{id}`로 최종 상태와 근거 ID를 조회한다.
+- 계약상 `POST /api/ai/agent-sessions/{id}/run`은 실행 시작 API이며 `QUEUED -> RUNNING` 전이를 반환한다.
+- 클라이언트는 `POST /run` 응답만으로 완료를 판단하지 않고 `GET /api/ai/agent-sessions/{id}`로 최종 상태와 근거 ID를 조회한다.
 - Sprint 1 mock/dev 구현이 내부에서 즉시 완료 상태를 만들어도 public contract의 시작 응답 기준은 `RUNNING`이다.
 
 ### AS AI Chat
@@ -745,7 +752,7 @@ AS AI Chat 규칙:
 | 401/403 권한 분기 | 인증 없음은 `401 UNAUTHORIZED`, USER가 admin API 접근 시 `403 FORBIDDEN`이다. |
 | 본인 자원 접근 | build, ticket, agent log, agent session이 본인 소유가 아니면 `404 NOT_FOUND`다. |
 | 금지된 상태 전이 | 상태 전이표에 없는 변경은 `409 CONFLICT_STATE`다. |
-| 중복 실행 | `POST /api/admin/price-jobs/run`은 active job이 있으면 `409`, `POST /api/agent/sessions/{id}/run`은 `QUEUED`가 아니면 `409`다. |
+| 중복 실행 | `POST /api/admin/price-jobs/run`은 active job이 있으면 `409`, `POST /api/ai/agent-sessions/{id}/run`은 `QUEUED`가 아니면 `409`다. |
 | soft delete 조회 제외 | soft delete 리소스 상세는 `404 NOT_FOUND`, 목록에는 포함하지 않는다. |
 | Flyway migration 순서 검증 | API contract에 필요한 table/column이 migration 순서상 먼저 생성되는지 확인한다. |
 | JSONL 업로드 validation | 크기, MIME/확장자, JSONL line 검증 실패는 `400 FILE_VALIDATION_ERROR`다. |

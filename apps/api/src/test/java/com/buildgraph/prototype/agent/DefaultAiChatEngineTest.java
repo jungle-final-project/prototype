@@ -13,6 +13,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.buildgraph.prototype.part.PartAliasReviewService;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,7 @@ class DefaultAiChatEngineTest {
     private AgentTraceService agentTraceService;
     private AgentRagRetrievalService agentRagRetrievalService;
     private OpenAiResponsesClient openAiResponsesClient;
+    private PartAliasReviewService partAliasReviewService;
     private DefaultAiChatEngine engine;
 
     @BeforeEach
@@ -35,17 +37,20 @@ class DefaultAiChatEngineTest {
         agentTraceService = mock(AgentTraceService.class);
         agentRagRetrievalService = mock(AgentRagRetrievalService.class);
         openAiResponsesClient = mock(OpenAiResponsesClient.class);
+        partAliasReviewService = mock(PartAliasReviewService.class);
         engine = new DefaultAiChatEngine(
                 jdbcTemplate,
                 agentTraceService,
                 agentRagRetrievalService,
                 openAiResponsesClient,
-                AiProfileConfigTest.config("AS_CHAT_FAST", "BUILD_CHAT_FAST")
+                AiProfileConfigTest.config("AS_CHAT_FAST", "BUILD_CHAT_FAST"),
+                new PartReplacementRanker(partAliasReviewService)
         );
 
         doAnswer(invocation -> {
                     Object category = invocation.getArgument(1);
-                    return partRows(String.valueOf(category));
+                    int limit = invocation.getArgument(2);
+                    return partRows(String.valueOf(category)).stream().limit(limit).toList();
                 })
                 .when(jdbcTemplate)
                 .queryForList(anyString(), anyString(), anyInt());
@@ -231,9 +236,91 @@ class DefaultAiChatEngineTest {
                 .containsEntry("priceDirection", "CHEAPER");
         assertThat(response.partRecommendations())
                 .extracting(AiChatEngineResponse.PartRecommendation::partId)
-                .containsExactly("gpu-5080", "gpu-5070");
+                .containsExactly("gpu-5080", "gpu-5070-ti", "gpu-5070");
         assertThat(response.partRecommendations())
                 .allSatisfy(part -> assertThat(part.price()).isLessThan(5_000_000));
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void buildModifyBetterGpuDoesNotRecommendLowerGpuClass() {
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "그래픽카드 더 좋은 걸로 추천해줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                "draft-1",
+                Map.of("currentQuoteDraft", Map.of(
+                        "items", List.of(Map.of(
+                                "partId", "gpu-5070-ti",
+                                "category", "GPU",
+                                "name", "GeForce RTX 5070 Ti 16GB",
+                                "currentPrice", 1_200_000,
+                                "quantity", 1
+                        ))
+                )),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.BUILD_MODIFY);
+        assertThat(response.partRecommendations())
+                .extracting(AiChatEngineResponse.PartRecommendation::partId)
+                .containsExactly("gpu-5080", "gpu-5090");
+        assertThat(response.partRecommendations())
+                .extracting(part -> String.valueOf(part.attributes().get("gpuClass")))
+                .doesNotContain("RTX_5060", "RTX_5070");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void buildModifyBetterCpuUsesCpuRankInsteadOfPriceOnly() {
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "CPU 더 좋은 걸로 바꿔줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                "draft-1",
+                Map.of("currentQuoteDraft", Map.of(
+                        "items", List.of(Map.of(
+                                "partId", "cpu-mid",
+                                "category", "CPU",
+                                "name", "CPU Mid",
+                                "currentPrice", 300_000,
+                                "quantity", 1
+                        ))
+                )),
+                1L
+        ));
+
+        assertThat(response.partRecommendations())
+                .extracting(AiChatEngineResponse.PartRecommendation::partId)
+                .containsExactly("cpu-high");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void buildModifyCheaperPsuKeepsStrongestLowerPriceCandidate() {
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "파워가 너무 비싸니 더 싼 걸로 추천해줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                "draft-1",
+                Map.of("currentQuoteDraft", Map.of(
+                        "items", List.of(Map.of(
+                                "partId", "psu-high",
+                                "category", "PSU",
+                                "name", "PSU High",
+                                "currentPrice", 260_000,
+                                "quantity", 1
+                        ))
+                )),
+                1L
+        ));
+
+        assertThat(response.partRecommendations())
+                .extracting(AiChatEngineResponse.PartRecommendation::partId)
+                .containsExactly("psu-mid", "psu-low");
         verifyNoJdbcWrites();
     }
 
@@ -445,7 +532,23 @@ class DefaultAiChatEngineTest {
             return List.of(
                     partRow(category, "gpu-5090", "GeForce RTX 5090 32GB", 5_000_000, Map.of("toolReady", true, "gpuClass", "RTX_5090")),
                     partRow(category, "gpu-5080", "GeForce RTX 5080 16GB", 2_200_000, Map.of("toolReady", true, "gpuClass", "RTX_5080")),
+                    partRow(category, "gpu-5070-ti", "GeForce RTX 5070 Ti 16GB", 1_200_000, Map.of("toolReady", true, "gpuClass", "RTX_5070_TI")),
+                    partRow(category, "gpu-5060", "GeForce RTX 5060 8GB", 500_000, Map.of("toolReady", true, "gpuClass", "RTX_5060")),
                     partRow(category, "gpu-5070", "GeForce RTX 5070 12GB", 900_000, Map.of("toolReady", true, "gpuClass", "RTX_5070"))
+            );
+        }
+        if ("CPU".equals(category)) {
+            return List.of(
+                    partRow(category, "cpu-high", "CPU High", 500_000, Map.of("toolReady", true, "cpuClass", "RYZEN_9", "coreCount", 16, "threadCount", 32)),
+                    partRow(category, "cpu-mid", "CPU Mid", 300_000, Map.of("toolReady", true, "cpuClass", "RYZEN_7", "coreCount", 8, "threadCount", 16)),
+                    partRow(category, "cpu-low", "CPU Low", 180_000, Map.of("toolReady", true, "cpuClass", "RYZEN_5", "coreCount", 6, "threadCount", 12))
+            );
+        }
+        if ("PSU".equals(category)) {
+            return List.of(
+                    partRow(category, "psu-high", "PSU High", 260_000, Map.of("toolReady", true, "capacityW", 1000, "efficiency", "PLATINUM", "atxSpec", "3.1", "modular", true)),
+                    partRow(category, "psu-mid", "PSU Mid", 150_000, Map.of("toolReady", true, "capacityW", 850, "efficiency", "GOLD", "atxSpec", "3.1", "modular", true)),
+                    partRow(category, "psu-low", "PSU Low", 80_000, Map.of("toolReady", true, "capacityW", 650, "efficiency", "BRONZE", "atxSpec", "2.4", "modular", false))
             );
         }
         return List.of(

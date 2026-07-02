@@ -23,6 +23,7 @@ public class PartController {
     private final DanawaPriceTrendService danawaPriceTrendService;
     private final ManufacturerReleaseIntakeService manufacturerReleaseIntakeService;
     private final PartAdminService partAdminService;
+    private final PartAliasReviewService partAliasReviewService;
     private final CurrentUserService currentUserService;
 
     public PartController(
@@ -33,6 +34,7 @@ public class PartController {
             DanawaPriceTrendService danawaPriceTrendService,
             ManufacturerReleaseIntakeService manufacturerReleaseIntakeService,
             PartAdminService partAdminService,
+            PartAliasReviewService partAliasReviewService,
             CurrentUserService currentUserService
     ) {
         this.partQueryService = partQueryService;
@@ -42,6 +44,7 @@ public class PartController {
         this.danawaPriceTrendService = danawaPriceTrendService;
         this.manufacturerReleaseIntakeService = manufacturerReleaseIntakeService;
         this.partAdminService = partAdminService;
+        this.partAliasReviewService = partAliasReviewService;
         this.currentUserService = currentUserService;
     }
 
@@ -449,6 +452,59 @@ public class PartController {
     ) {
         currentUserService.requireAdmin(authorization);
         return naverShoppingOfferService.refreshCatalogCandidateOffer(id);
+    }
+
+    @GetMapping("/admin/part-alias-review-items")
+    Map<String, Object> partAliasReviewItems(
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "category", required = false) String category,
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "size", required = false) Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return partAliasReviewService.listReviewItems(status, category, page, size);
+    }
+
+    @PostMapping("/admin/part-alias-review-items/{id}/resolve")
+    Map<String, Object> resolvePartAliasReviewItem(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        var admin = currentUserService.requireAdmin(authorization);
+        return partAliasReviewService.resolveReviewItem(id, request, admin);
+    }
+
+    @PostMapping("/admin/part-alias-review-items/{id}/ignore")
+    Map<String, Object> ignorePartAliasReviewItem(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        var admin = currentUserService.requireAdmin(authorization);
+        return partAliasReviewService.ignoreReviewItem(id, request, admin);
+    }
+
+    @GetMapping("/admin/part-alias-rules")
+    Map<String, Object> partAliasRules(
+            @RequestParam(value = "category", required = false) String category,
+            @RequestParam(value = "targetField", required = false) String targetField,
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "size", required = false) Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return partAliasReviewService.listRules(category, targetField, page, size);
+    }
+
+    @PostMapping("/admin/part-alias-rules")
+    Map<String, Object> createPartAliasRule(
+            @RequestBody Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        var admin = currentUserService.requireAdmin(authorization);
+        return partAliasReviewService.createRule(request, admin);
     }
 
     @PostMapping("/tools/compatibility/check")

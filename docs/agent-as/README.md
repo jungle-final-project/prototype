@@ -94,6 +94,6 @@ Goal 4~8 담당자는 자기 Goal 외 기능을 미리 구현하지 않는다.
 
 ## 확인 필요
 
-- 현재 [API_CONTRACT.md](../API_CONTRACT.md)와 [openapi.yaml](../openapi.yaml)에는 기존 웹 JWT 기반 `/api/agent/sessions` 계약이 남아 있다. 현재 구현 원칙은 `/api/agent/**` 를 PC Agent token 전용으로 처리하므로, Goal 4 착수 전에 기존 AI Agent/RAG session API를 `/api/ai/**` 등 웹 JWT 영역으로 분리할지 계약 정리가 필요하다.
+- AI Agent/RAG session API는 웹 JWT 영역인 `/api/ai/agent-sessions`로 분리했다. `/api/agent/**`는 PC Agent token 전용 prefix로 유지한다.
 - `POST /api/agent/devices/register`는 Agent token 발급 전 단계일 가능성이 높다. 현재 Agent Security Chain은 `/api/agent/**` 전체를 인증 요구로 처리하므로, Goal 4에서 등록 API의 인증 전 단계 처리 방식을 명확히 결정해야 한다.
 - `POST /api/agent-logs/upload`는 현재 계약상 웹 JWT 사용자 API다. PC Agent 직접 업로드 API를 `/api/agent/**` 로 새로 둘지, 기존 경로를 유지할지 Goal 6 전에 계약 확인이 필요하다.

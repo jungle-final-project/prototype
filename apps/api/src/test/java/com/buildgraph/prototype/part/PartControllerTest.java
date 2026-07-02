@@ -55,6 +55,9 @@ class PartControllerTest {
     private PartAdminService partAdminService;
 
     @MockitoBean
+    private PartAliasReviewService partAliasReviewService;
+
+    @MockitoBean
     private CurrentUserService currentUserService;
 
     @BeforeEach
@@ -438,5 +441,52 @@ class PartControllerTest {
         verify(manufacturerReleaseIntakeService).createAiAssetDraftForPost(eq("00000000-0000-4000-8000-000000009511"), isNull());
         verify(naverShoppingOfferService).updateCatalogCandidate(eq("00000000-0000-4000-8000-000000009601"), anyMap(), isNull());
         verify(naverShoppingOfferService).softDeleteCatalogCandidate(eq("00000000-0000-4000-8000-000000009601"), isNull());
+    }
+
+    @Test
+    void partAliasReviewEndpointsDelegateForAdmin() throws Exception {
+        when(partAliasReviewService.listReviewItems(eq("OPEN"), eq("GPU"), eq(0), eq(20)))
+                .thenReturn(Map.of("items", java.util.List.of(), "page", 0, "size", 20, "total", 0));
+        when(partAliasReviewService.createRule(anyMap(), isNull()))
+                .thenReturn(Map.of("id", "rule-1", "aliasText", "5070티아이", "canonicalValue", "RTX_5070_TI"));
+        when(partAliasReviewService.resolveReviewItem(eq("review-1"), anyMap(), isNull()))
+                .thenReturn(Map.of("id", "review-1", "status", "RESOLVED"));
+        when(partAliasReviewService.ignoreReviewItem(eq("review-1"), anyMap(), isNull()))
+                .thenReturn(Map.of("id", "review-1", "status", "IGNORED"));
+
+        mockMvc.perform(get("/api/admin/part-alias-review-items")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .param("status", "OPEN")
+                        .param("category", "GPU")
+                        .param("page", "0")
+                        .param("size", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+
+        mockMvc.perform(post("/api/admin/part-alias-rules")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"aliasText\":\"5070티아이\",\"category\":\"GPU\",\"targetField\":\"gpuClass\",\"canonicalValue\":\"RTX_5070_TI\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canonicalValue").value("RTX_5070_TI"));
+
+        mockMvc.perform(post("/api/admin/part-alias-review-items/review-1/resolve")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"aliasText\":\"5070티아이\",\"category\":\"GPU\",\"targetField\":\"gpuClass\",\"canonicalValue\":\"RTX_5070_TI\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESOLVED"));
+
+        mockMvc.perform(post("/api/admin/part-alias-review-items/review-1/ignore")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"처리 불필요\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("IGNORED"));
+
+        verify(partAliasReviewService).listReviewItems(eq("OPEN"), eq("GPU"), eq(0), eq(20));
+        verify(partAliasReviewService).createRule(anyMap(), isNull());
+        verify(partAliasReviewService).resolveReviewItem(eq("review-1"), anyMap(), isNull());
+        verify(partAliasReviewService).ignoreReviewItem(eq("review-1"), anyMap(), isNull());
     }
 }

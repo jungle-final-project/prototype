@@ -7,6 +7,7 @@ import {
   createAiAssetDraftFromManufacturerPost,
   createCandidateFromManufacturerPost,
   createAdminPart,
+  createPartAliasRule,
   createManufacturerPost,
   createManufacturerSource,
   deleteManufacturerPost,
@@ -15,11 +16,15 @@ import {
   deleteAdminPart,
   getAdminPart,
   listAdminParts,
+  listPartAliasReviewItems,
+  listPartAliasRules,
   listManufacturerPosts,
   listManufacturerReleaseCandidates,
   listManufacturerSources,
   refreshPartCatalogCandidateOffers,
   rejectPartCatalogCandidate,
+  ignorePartAliasReviewItem,
+  resolvePartAliasReviewItem,
   restoreAdminPart,
   restoreManufacturerPost,
   restoreManufacturerSource,
@@ -40,13 +45,15 @@ import {
   type ManufacturerPostPayload,
   type ManufacturerSource,
   type ManufacturerSourcePayload,
+  type PartAliasReviewItem,
+  type PartAliasRule,
   type PartCatalogCandidate
 } from '../adminApi';
 
 const CATEGORIES = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
 const STATUSES = ['ACTIVE', 'INACTIVE', 'DISCONTINUED', 'DELETED'];
 const TABS = ['기본 정보', '스펙', '가격/Offer', '이력'] as const;
-const INTAKE_TABS = ['추적 Source', '감지 게시글', '신제품 후보함'] as const;
+const INTAKE_TABS = ['추적 Source', '감지 게시글', '신제품 후보함', 'Alias/스펙 검수 큐'] as const;
 const SOURCE_TYPES = ['NEWS', 'PRODUCT_RELEASE', 'SUPPORT_NEWS', 'RSS', 'SITEMAP'];
 const SOURCE_STATUSES = ['ACTIVE', 'PAUSED', 'ERROR'];
 const POST_STATUSES = ['PENDING', 'PRODUCT_CANDIDATE', 'IGNORED', 'FAILED'];
@@ -112,6 +119,14 @@ type CandidateDraft = {
   supplierName: string;
   offerUrl: string;
   lowPrice: string;
+};
+
+type AliasReviewDraft = {
+  aliasText: string;
+  category: string;
+  targetField: string;
+  canonicalValue: string;
+  note: string;
 };
 
 type SpecField = {
@@ -181,6 +196,14 @@ const DEFAULT_CANDIDATE_DRAFT: CandidateDraft = {
   supplierName: '',
   offerUrl: '',
   lowPrice: ''
+};
+
+const DEFAULT_ALIAS_REVIEW_DRAFT: AliasReviewDraft = {
+  aliasText: '',
+  category: 'GPU',
+  targetField: 'rank',
+  canonicalValue: '',
+  note: ''
 };
 
 const COMMON_SPEC_FIELDS: SpecField[] = [
@@ -294,6 +317,8 @@ export function AdminPartsPage() {
   const [postDraft, setPostDraft] = useState<PostDraft>(DEFAULT_POST_DRAFT);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [candidateDraft, setCandidateDraft] = useState<CandidateDraft>(DEFAULT_CANDIDATE_DRAFT);
+  const [selectedAliasReviewId, setSelectedAliasReviewId] = useState<string | null>(null);
+  const [aliasReviewDraft, setAliasReviewDraft] = useState<AliasReviewDraft>(DEFAULT_ALIAS_REVIEW_DRAFT);
 
   const adminPartsQuery = useQuery({
     queryKey: ['admin-parts', filters],
@@ -327,15 +352,26 @@ export function AdminPartsPage() {
     queryKey: ['admin-manufacturer-release-candidates'],
     queryFn: listManufacturerReleaseCandidates
   });
+  const aliasReviewQuery = useQuery({
+    queryKey: ['admin-part-alias-review-items'],
+    queryFn: listPartAliasReviewItems
+  });
+  const aliasRulesQuery = useQuery({
+    queryKey: ['admin-part-alias-rules'],
+    queryFn: listPartAliasRules
+  });
 
   const parts = adminPartsQuery.data?.items ?? [];
   const selectedPart = selectedPartQuery.data;
   const sources = sourcesQuery.data?.items ?? [];
   const posts = postsQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
+  const aliasReviewItems = aliasReviewQuery.data?.items ?? [];
+  const aliasRules = aliasRulesQuery.data?.items ?? [];
   const selectedSource = sources.find((source) => source.id === selectedSourceId);
   const selectedPost = posts.find((post) => post.id === selectedPostId);
   const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
+  const selectedAliasReviewItem = aliasReviewItems.find((item) => item.id === selectedAliasReviewId);
   const selectedPostReadyForCandidate = Boolean(
     selectedPost
       && selectedPost.classificationStatus === 'PRODUCT_CANDIDATE'
@@ -377,6 +413,18 @@ export function AdminPartsPage() {
     }
   }, [selectedCandidate]);
 
+  useEffect(() => {
+    if (selectedAliasReviewItem) {
+      setAliasReviewDraft({
+        aliasText: selectedAliasReviewItem.aliasText ?? selectedAliasReviewItem.partName ?? '',
+        category: selectedAliasReviewItem.category ?? 'GPU',
+        targetField: selectedAliasReviewItem.targetField ?? 'rank',
+        canonicalValue: selectedAliasReviewItem.canonicalSuggestion ?? selectedAliasReviewItem.rawValue ?? '',
+        note: selectedAliasReviewItem.message ?? ''
+      });
+    }
+  }, [selectedAliasReviewItem]);
+
   const refreshPartQueries = async (partId?: string) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['admin-parts'] }),
@@ -389,6 +437,8 @@ export function AdminPartsPage() {
       queryClient.invalidateQueries({ queryKey: ['admin-manufacturer-sources'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-manufacturer-posts'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-manufacturer-release-candidates'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-part-alias-review-items'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-part-alias-rules'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-parts'] })
     ]);
   };
@@ -538,6 +588,26 @@ export function AdminPartsPage() {
     mutationFn: refreshPartCatalogCandidateOffers,
     onSuccess: refreshIntakeQueries
   });
+  const resolveAliasReviewMutation = useMutation({
+    mutationFn: ({ itemId, payload }: { itemId: string; payload: AliasReviewDraft }) => resolvePartAliasReviewItem(itemId, payload),
+    onSuccess: async () => {
+      setSelectedAliasReviewId(null);
+      setAliasReviewDraft(DEFAULT_ALIAS_REVIEW_DRAFT);
+      await refreshIntakeQueries();
+    }
+  });
+  const ignoreAliasReviewMutation = useMutation({
+    mutationFn: ({ itemId, note }: { itemId: string; note?: string }) => ignorePartAliasReviewItem(itemId, note),
+    onSuccess: async () => {
+      setSelectedAliasReviewId(null);
+      setAliasReviewDraft(DEFAULT_ALIAS_REVIEW_DRAFT);
+      await refreshIntakeQueries();
+    }
+  });
+  const createAliasRuleMutation = useMutation({
+    mutationFn: createPartAliasRule,
+    onSuccess: refreshIntakeQueries
+  });
 
   const selectedMutationError = createMutation.error
     ?? updateMutation.error
@@ -560,7 +630,10 @@ export function AdminPartsPage() {
     ?? restoreCandidateMutation.error
     ?? approveMutation.error
     ?? rejectMutation.error
-    ?? refreshOffersMutation.error;
+    ?? refreshOffersMutation.error
+    ?? resolveAliasReviewMutation.error
+    ?? ignoreAliasReviewMutation.error
+    ?? createAliasRuleMutation.error;
   const intakePending = scanMutation.isPending
     || scanAllMutation.isPending
     || saveSourceMutation.isPending
@@ -576,7 +649,10 @@ export function AdminPartsPage() {
     || restoreCandidateMutation.isPending
     || approveMutation.isPending
     || rejectMutation.isPending
-    || refreshOffersMutation.isPending;
+    || refreshOffersMutation.isPending
+    || resolveAliasReviewMutation.isPending
+    || ignoreAliasReviewMutation.isPending
+    || createAliasRuleMutation.isPending;
   const specFields = useMemo(() => [
     ...COMMON_SPEC_FIELDS,
     ...(CATEGORY_SPEC_FIELDS[draft.category] ?? [])
@@ -754,6 +830,29 @@ export function AdminPartsPage() {
     if (selectedCandidateId && window.confirm('이 후보를 복구할까요?')) {
       restoreCandidateMutation.mutate(selectedCandidateId);
     }
+  };
+  const resolveAliasReview = () => {
+    if (!selectedAliasReviewId) {
+      window.alert('해결할 검수 항목을 먼저 선택하십시오.');
+      return;
+    }
+    if (!aliasReviewDraft.aliasText.trim() || !aliasReviewDraft.canonicalValue.trim()) {
+      window.alert('alias와 canonical 값을 입력해야 합니다.');
+      return;
+    }
+    resolveAliasReviewMutation.mutate({ itemId: selectedAliasReviewId, payload: aliasReviewDraft });
+  };
+  const ignoreAliasReview = () => {
+    if (selectedAliasReviewId && window.confirm('이 검수 항목을 무시 처리할까요?')) {
+      ignoreAliasReviewMutation.mutate({ itemId: selectedAliasReviewId, note: aliasReviewDraft.note });
+    }
+  };
+  const createAliasRule = () => {
+    if (!aliasReviewDraft.aliasText.trim() || !aliasReviewDraft.canonicalValue.trim()) {
+      window.alert('alias와 canonical 값을 입력해야 합니다.');
+      return;
+    }
+    createAliasRuleMutation.mutate(aliasReviewDraft);
   };
 
   return (
@@ -1079,6 +1178,44 @@ export function AdminPartsPage() {
               </div>
             </div>
           ) : null}
+
+          {intakeTab === 'Alias/스펙 검수 큐' ? (
+            <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+              <div className="space-y-5">
+                <div>
+                  {aliasReviewQuery.isLoading ? <StateMessage type="info" title="검수 큐 로딩 중" body="AI 추천 중 rank/alias 판단이 어려웠던 항목을 불러오고 있습니다." /> : null}
+                  {aliasReviewQuery.isError ? <StateMessage type="warn" title="검수 큐 조회 실패" body="GET /api/admin/part-alias-review-items 응답을 확인해야 합니다." /> : null}
+                  {!aliasReviewQuery.isLoading && !aliasReviewQuery.isError ? (
+                    aliasReviewItems.length > 0
+                      ? <DataTable columns={['category', 'field', 'alias', 'raw', 'source', 'status', 'created']} rows={aliasReviewRows(aliasReviewItems, setSelectedAliasReviewId)} />
+                      : <StateMessage type="info" title="열린 검수 항목 없음" body="AI가 rank/alias를 확신하지 못한 경우 이 큐에 항목이 쌓입니다." />
+                  ) : null}
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-black text-commerce-ink">등록된 alias rule</div>
+                  {aliasRules.length > 0
+                    ? <DataTable columns={['category', 'field', 'alias', 'canonical', 'source']} rows={aliasRuleRows(aliasRules)} />
+                    : <StateMessage type="info" title="등록된 alias rule 없음" body="검수 항목을 해결하면 alias rule이 생성됩니다." />}
+                </div>
+              </div>
+              <div className="rounded-md border border-slate-200 p-4">
+                <div className="mb-3 text-sm font-black text-commerce-ink">Alias / 스펙 기준 보정</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormSelect label="카테고리" value={aliasReviewDraft.category} options={CATEGORIES} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, category: value })} />
+                  <FormInput label="대상 필드" value={aliasReviewDraft.targetField} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, targetField: value })} />
+                  <FormInput label="alias text" value={aliasReviewDraft.aliasText} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, aliasText: value })} />
+                  <FormInput label="canonical value" value={aliasReviewDraft.canonicalValue} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, canonicalValue: value })} />
+                </div>
+                <textarea value={aliasReviewDraft.note} onChange={(event) => setAliasReviewDraft({ ...aliasReviewDraft, note: event.target.value })} placeholder="처리 메모" className="mt-3 h-24 w-full rounded border border-slate-300 px-3 py-2 text-xs" />
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" disabled={!selectedAliasReviewId || intakePending} onClick={resolveAliasReview} className="rounded bg-brand-blue px-3 py-2 text-xs font-black text-white disabled:opacity-50">선택 항목 해결</button>
+                  <button type="button" disabled={!selectedAliasReviewId || intakePending} onClick={ignoreAliasReview} className="rounded border border-slate-300 px-3 py-2 text-xs font-black text-slate-700 disabled:opacity-50">무시</button>
+                  <button type="button" disabled={intakePending} onClick={createAliasRule} className="rounded border border-brand-blue px-3 py-2 text-xs font-black text-brand-blue disabled:opacity-50">규칙만 추가</button>
+                </div>
+                <StateMessage type="info" title="운영 기준" body="이 큐는 AI 엔진이 불확실한 alias와 스펙 누락을 운영자가 보정하기 위한 내부 backlog입니다. 사용자 추천은 저장 API를 직접 실행하지 않습니다." />
+              </div>
+            </div>
+          ) : null}
             </>
           ) : null}
         </Panel>
@@ -1230,6 +1367,32 @@ function candidateRows(
       ) : '-'
     };
   });
+}
+
+function aliasReviewRows(items: PartAliasReviewItem[], onSelect: (itemId: string) => void) {
+  return items.map((item) => ({
+    category: item.category ?? '-',
+    field: item.targetField ?? '-',
+    alias: (
+      <button type="button" onClick={() => onSelect(item.id)} className="text-left font-bold text-brand-blue hover:underline">
+        {item.aliasText ?? item.partName ?? '-'}
+      </button>
+    ),
+    raw: item.rawValue ?? '-',
+    source: item.sourceType,
+    status: <StatusBadge status={item.status} />,
+    created: item.createdAt ? new Date(item.createdAt).toLocaleString('ko-KR') : '-'
+  }));
+}
+
+function aliasRuleRows(rules: PartAliasRule[]) {
+  return rules.map((rule) => ({
+    category: rule.category,
+    field: rule.targetField,
+    alias: rule.aliasText,
+    canonical: rule.canonicalValue,
+    source: rule.source ?? '-'
+  }));
 }
 
 function sourceToDraft(source: ManufacturerSource): SourceDraft {

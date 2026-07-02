@@ -23,7 +23,7 @@ public class AgentController {
         this.currentUserService = currentUserService;
     }
 
-    @PostMapping("/agent/sessions")
+    @PostMapping("/ai/agent-sessions")
     @ResponseStatus(HttpStatus.CREATED)
     Map<String, Object> createSession(
             @RequestBody(required = false) AgentSessionCreateRequest request,
@@ -33,7 +33,7 @@ public class AgentController {
         return agentQueryService.createSession(request, user);
     }
 
-    @PostMapping("/agent/sessions/{id}/run")
+    @PostMapping("/ai/agent-sessions/{id}/run")
     Map<String, Object> runSession(
             @PathVariable String id,
             @RequestHeader(value = "Authorization", required = false) String authorization
@@ -42,7 +42,7 @@ public class AgentController {
         return agentQueryService.runSession(id, user);
     }
 
-    @GetMapping("/agent/sessions/{id}")
+    @GetMapping("/ai/agent-sessions/{id}")
     Map<String, Object> getSession(
             @PathVariable String id,
             @RequestHeader(value = "Authorization", required = false) String authorization
