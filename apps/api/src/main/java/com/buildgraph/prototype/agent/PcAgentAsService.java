@@ -2,16 +2,28 @@ package com.buildgraph.prototype.agent;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.security.SecureRandom;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -22,6 +34,15 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class PcAgentAsService {
     private static final String DEMO_ACTIVATION_TOKEN = "demo-agent-activation-token";
+    private static final Pattern IDEMPOTENCY_KEY_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,160}");
+    private static final long MAX_GZIP_BYTES = 10L * 1024L * 1024L;
+    private static final long MAX_UNCOMPRESSED_BYTES = 20L * 1024L * 1024L;
+    private static final int RECENT_LOG_RANGE_MINUTES = 30;
+    private static final Set<String> CONSENT_TYPES = Set.of(
+            "LOCAL_COLLECTION",
+            "SERVER_UPLOAD",
+            "QUALITY_IMPROVEMENT"
+    );
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final JdbcTemplate jdbcTemplate;
@@ -48,59 +69,47 @@ public class PcAgentAsService {
 
     @Transactional
     public Map<String, Object> register(Map<String, Object> request) {
-        String activationToken = string(request, "activationToken", null);
+        String activationToken = requiredString(request, "activationToken");
         if (!DEMO_ACTIVATION_TOKEN.equals(activationToken)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Agent activation token is invalid.");
         }
 
         String rawAgentToken = tokenGenerator.get();
+        if (rawAgentToken == null || rawAgentToken.isBlank()) {
+            throw new IllegalStateException("Generated agent token must not be blank.");
+        }
         String tokenHash = tokenHasher.sha256Hex(rawAgentToken);
-        String deviceFingerprintHash = string(request, "deviceFingerprintHash", "demo-device-fingerprint");
+        String deviceFingerprintHash = requiredString(request, "deviceFingerprintHash");
         String hostnameHash = string(request, "hostnameHash", null);
-        String registrationKey = string(request, "registrationIdempotencyKey", "demo-register-" + deviceFingerprintHash);
-        String osVersion = string(request, "osVersion", "Windows");
-        String agentVersion = string(request, "agentVersion", "0.1.0");
-        String policyVersion = string(request, "policyVersion", "demo-policy-v1");
+        String registrationKey = requiredString(request, "registrationIdempotencyKey");
+        validateIdempotencyKey("registrationIdempotencyKey", registrationKey);
+        String osVersion = requiredString(request, "osVersion");
+        String agentVersion = requiredString(request, "agentVersion");
+        String policyVersion = requiredString(request, "policyVersion");
         String userEmail = string(request, "userEmail", "user@example.com");
 
-        Map<String, Object> row = jdbcTemplate.queryForMap("""
-                INSERT INTO agent_devices (
-                  user_id,
-                  activation_token_id,
-                  device_fingerprint_hash,
-                  hostname_hash,
-                  agent_token_hash,
-                  registration_idempotency_key,
-                  status,
-                  os_version,
-                  agent_version,
-                  policy_version,
-                  updated_at
-                )
-                VALUES (
-                  (SELECT id FROM users WHERE email = ?),
-                  NULL,
-                  ?,
-                  ?,
-                  ?,
-                  ?,
-                  'ACTIVE',
-                  ?,
-                  ?,
-                  ?,
-                  now()
-                )
-                RETURNING id AS device_internal_id, public_id::text AS device_id, status
-                """,
+        Map<String, Object> row = refreshExistingRegistration(
                 userEmail,
+                registrationKey,
+                tokenHash,
                 deviceFingerprintHash,
                 hostnameHash,
-                tokenHash,
-                registrationKey,
                 osVersion,
                 agentVersion,
                 policyVersion
         );
+        if (row == null) {
+            row = insertRegistration(
+                    userEmail,
+                    deviceFingerprintHash,
+                    hostnameHash,
+                    tokenHash,
+                    registrationKey,
+                    osVersion,
+                    agentVersion,
+                    policyVersion
+            );
+        }
 
         return MockData.map(
                 "deviceId", DbValueMapper.string(row, "device_id"),
@@ -110,13 +119,121 @@ public class PcAgentAsService {
         );
     }
 
+    private Map<String, Object> refreshExistingRegistration(
+            String userEmail,
+            String registrationKey,
+            String tokenHash,
+            String deviceFingerprintHash,
+            String hostnameHash,
+            String osVersion,
+            String agentVersion,
+            String policyVersion
+    ) {
+        List<Map<String, Object>> existingRows = jdbcTemplate.queryForList("""
+                SELECT id AS device_internal_id,
+                       public_id::text AS device_id,
+                       status
+                FROM agent_devices
+                WHERE user_id = (SELECT id FROM users WHERE email = ?)
+                  AND registration_idempotency_key = ?
+                  AND status IN ('PENDING_REGISTERED', 'ACTIVE', 'UPDATE_REQUIRED')
+                ORDER BY id DESC
+                LIMIT 1
+                """, userEmail, registrationKey);
+        if (existingRows.isEmpty()) {
+            return null;
+        }
+
+        Long deviceInternalId = longValue(existingRows.get(0), "device_internal_id");
+        return jdbcTemplate.queryForMap("""
+                UPDATE agent_devices
+                SET device_fingerprint_hash = ?,
+                    hostname_hash = ?,
+                    agent_token_hash = ?,
+                    status = 'ACTIVE',
+                    os_version = ?,
+                    agent_version = ?,
+                    policy_version = ?,
+                    updated_at = now()
+                WHERE id = ?
+                RETURNING id AS device_internal_id, public_id::text AS device_id, status
+                """,
+                deviceFingerprintHash,
+                hostnameHash,
+                tokenHash,
+                osVersion,
+                agentVersion,
+                policyVersion,
+                deviceInternalId
+        );
+    }
+
+    private Map<String, Object> insertRegistration(
+            String userEmail,
+            String deviceFingerprintHash,
+            String hostnameHash,
+            String tokenHash,
+            String registrationKey,
+            String osVersion,
+            String agentVersion,
+            String policyVersion
+    ) {
+        try {
+            return jdbcTemplate.queryForMap("""
+                    INSERT INTO agent_devices (
+                      user_id,
+                      activation_token_id,
+                      device_fingerprint_hash,
+                      hostname_hash,
+                      agent_token_hash,
+                      registration_idempotency_key,
+                      status,
+                      os_version,
+                      agent_version,
+                      policy_version,
+                      updated_at
+                    )
+                    VALUES (
+                      (SELECT id FROM users WHERE email = ?),
+                      NULL,
+                      ?,
+                      ?,
+                      ?,
+                      ?,
+                      'ACTIVE',
+                      ?,
+                      ?,
+                      ?,
+                      now()
+                    )
+                    RETURNING id AS device_internal_id, public_id::text AS device_id, status
+                    """,
+                    userEmail,
+                    deviceFingerprintHash,
+                    hostnameHash,
+                    tokenHash,
+                    registrationKey,
+                    osVersion,
+                    agentVersion,
+                    policyVersion
+            );
+        } catch (DuplicateKeyException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Agent device is already registered.", exception);
+        }
+    }
+
     @Transactional
     public Map<String, Object> saveConsent(
             AgentPrincipal principal,
             Map<String, Object> request,
             String idempotencyKey
     ) {
-        boolean accepted = booleanValue(request, "accepted", true);
+        String consentType = requiredString(request, "consentType");
+        if (!CONSENT_TYPES.contains(consentType)) {
+            throw badRequest("consentType is invalid.");
+        }
+        String policyVersion = requiredString(request, "policyVersion");
+        boolean accepted = requiredBoolean(request, "accepted");
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_consents (
                   user_id,
@@ -144,8 +261,8 @@ public class PcAgentAsService {
                 """,
                 principal.userInternalId(),
                 principal.deviceInternalId(),
-                string(request, "consentType", "SERVER_UPLOAD"),
-                string(request, "policyVersion", "demo-policy-v1"),
+                consentType,
+                policyVersion,
                 idempotencyKey,
                 accepted,
                 accepted,
@@ -167,16 +284,10 @@ public class PcAgentAsService {
             Map<String, Object> request,
             String idempotencyKey
     ) {
-        String agentVersion = string(request, "agentVersion", "0.1.0");
+        String agentVersion = requiredString(request, "agentVersion");
+        String serviceStatus = requiredString(request, "serviceStatus");
         String policyVersion = string(request, "policyVersion", null);
-        jdbcTemplate.update("""
-                UPDATE agent_devices
-                SET last_seen_at = now(),
-                    agent_version = ?,
-                    policy_version = COALESCE(?, policy_version),
-                    updated_at = now()
-                WHERE id = ?
-                """, agentVersion, policyVersion, principal.deviceInternalId());
+        Map<String, Object> deviceRow = updateHeartbeatDevice(principal, agentVersion, policyVersion);
 
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_heartbeats (
@@ -193,7 +304,7 @@ public class PcAgentAsService {
                 """,
                 principal.deviceInternalId(),
                 agentVersion,
-                string(request, "serviceStatus", "RUNNING"),
+                serviceStatus,
                 string(request, "trayStatus", null),
                 policyVersion,
                 idempotencyKey
@@ -202,10 +313,38 @@ public class PcAgentAsService {
         return MockData.map(
                 "id", DbValueMapper.string(row, "id"),
                 "deviceId", principal.deviceId(),
-                "status", principal.status(),
+                "status", DbValueMapper.string(deviceRow, "status"),
+                "lastSeenAt", DbValueMapper.timestamp(deviceRow, "last_seen_at"),
                 "receivedAt", DbValueMapper.timestamp(row, "received_at"),
                 "pendingCommands", java.util.List.of()
         );
+    }
+
+    private Map<String, Object> updateHeartbeatDevice(
+            AgentPrincipal principal,
+            String agentVersion,
+            String policyVersion
+    ) {
+        try {
+            return jdbcTemplate.queryForMap("""
+                    UPDATE agent_devices
+                    SET last_seen_at = now(),
+                        agent_version = ?,
+                        policy_version = COALESCE(?, policy_version),
+                        updated_at = now()
+                    WHERE id = ?
+                      AND user_id = ?
+                      AND status IN ('ACTIVE', 'UPDATE_REQUIRED')
+                    RETURNING status, last_seen_at
+                    """,
+                    agentVersion,
+                    policyVersion,
+                    principal.deviceInternalId(),
+                    principal.userInternalId()
+            );
+        } catch (EmptyResultDataAccessException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent device is not active.", exception);
+        }
     }
 
     @Transactional
@@ -216,12 +355,13 @@ public class PcAgentAsService {
             String idempotencyKey
     ) {
         if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent log gzip file is required.");
+            throw fileValidation("Agent log gzip file is required.");
         }
         String fileName = fileName(file);
         if (!fileName.endsWith(".gz")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent log upload must be gzip.");
+            throw fileValidation("Agent log upload must be gzip.");
         }
+        GzipValidation gzip = validateGzip(file);
         Integer consentCount = jdbcTemplate.queryForObject("""
                 SELECT count(*)
                 FROM agent_consents
@@ -234,9 +374,10 @@ public class PcAgentAsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Server upload consent is required.");
         }
 
-        int rangeMinutes = integer(metadata, "rangeMinutes", 30);
+        int rangeMinutes = integer(metadata, "rangeMinutes", RECENT_LOG_RANGE_MINUTES);
         Instant rangeEndedAt = instant(metadata, "rangeEndedAt", Instant.now(clock));
         Instant rangeStartedAt = instant(metadata, "rangeStartedAt", rangeEndedAt.minus(Duration.ofMinutes(rangeMinutes)));
+        validateRecentThirtyMinuteRange(rangeMinutes, rangeStartedAt, rangeEndedAt);
         Map<String, Object> uploadJob = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_upload_jobs (
                   device_id,
@@ -277,18 +418,40 @@ public class PcAgentAsService {
                           status,
                           file_name,
                           file_size,
-                          range_minutes
+                          range_minutes,
+                          delete_after
                 """,
                 principal.userInternalId(),
                 principal.deviceInternalId(),
                 uploadJobInternalId,
                 rangeMinutes,
                 fileName,
-                file.getSize(),
+                gzip.compressedBytes(),
                 storagePath
         );
 
         Long logUploadInternalId = longValue(logUpload, "log_upload_internal_id");
+        jdbcTemplate.queryForMap("""
+                INSERT INTO agent_log_bundles (
+                  upload_job_id,
+                  log_upload_id,
+                  schema_version,
+                  storage_path,
+                  sha256,
+                  size_bytes,
+                  delete_after
+                )
+                VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, now() + interval '30 days'))
+                RETURNING public_id::text AS log_bundle_id
+                """,
+                uploadJobInternalId,
+                logUploadInternalId,
+                integer(metadata, "schemaVersion", 1),
+                storagePath,
+                gzip.sha256(),
+                gzip.compressedBytes(),
+                DbValueMapper.timestamp(logUpload, "delete_after")
+        );
         String symptom = string(metadata, "symptom", "Agent uploaded recent 30 minute diagnostic log.");
         Map<String, Object> ticket = jdbcTemplate.queryForMap("""
                 INSERT INTO as_tickets (
@@ -344,6 +507,59 @@ public class PcAgentAsService {
         );
     }
 
+    private static GzipValidation validateGzip(MultipartFile file) {
+        byte[] compressed;
+        try {
+            compressed = file.getBytes();
+        } catch (IOException exception) {
+            throw fileValidation("Agent log gzip file cannot be read.");
+        }
+        if (compressed.length == 0) {
+            throw fileValidation("Agent log gzip file is empty.");
+        }
+        if (compressed.length > MAX_GZIP_BYTES) {
+            throw fileValidation("Agent log gzip file is too large.");
+        }
+        long uncompressedBytes = 0L;
+        byte[] buffer = new byte[8192];
+        try (GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(compressed))) {
+            int read;
+            while ((read = gzipInputStream.read(buffer)) != -1) {
+                uncompressedBytes += read;
+                if (uncompressedBytes > MAX_UNCOMPRESSED_BYTES) {
+                    throw fileValidation("Agent log gzip content is too large.");
+                }
+            }
+        } catch (IOException exception) {
+            throw fileValidation("Agent log upload must contain valid gzip content.");
+        }
+        if (uncompressedBytes == 0L) {
+            throw fileValidation("Agent log gzip content is empty.");
+        }
+        return new GzipValidation(compressed.length, uncompressedBytes, sha256Hex(compressed));
+    }
+
+    private static void validateRecentThirtyMinuteRange(int rangeMinutes, Instant rangeStartedAt, Instant rangeEndedAt) {
+        if (rangeMinutes != RECENT_LOG_RANGE_MINUTES) {
+            throw badRequest("Agent log upload rangeMinutes must be 30.");
+        }
+        if (!rangeEndedAt.isAfter(rangeStartedAt)) {
+            throw badRequest("Agent log rangeEndedAt must be after rangeStartedAt.");
+        }
+        Duration duration = Duration.between(rangeStartedAt, rangeEndedAt);
+        if (duration.isNegative() || duration.compareTo(Duration.ofMinutes(RECENT_LOG_RANGE_MINUTES)) > 0) {
+            throw badRequest("Agent log upload range must be within recent 30 minutes.");
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 must be available.", exception);
+        }
+    }
+
     private static String newAgentToken() {
         byte[] token = new byte[32];
         SECURE_RANDOM.nextBytes(token);
@@ -366,12 +582,44 @@ public class PcAgentAsService {
         return value.isBlank() ? fallback : value;
     }
 
-    private static boolean booleanValue(Map<String, Object> request, String key, boolean fallback) {
+    private static String requiredString(Map<String, Object> request, String key) {
+        String value = string(request, key, null);
+        if (value == null) {
+            throw badRequest(key + " is required.");
+        }
+        return value;
+    }
+
+    private static boolean requiredBoolean(Map<String, Object> request, String key) {
         if (request == null || request.get(key) == null) {
-            return fallback;
+            throw badRequest(key + " is required.");
         }
         Object value = request.get(key);
-        return value instanceof Boolean booleanValue ? booleanValue : Boolean.parseBoolean(value.toString());
+        if (value instanceof Boolean booleanValue) {
+            return booleanValue;
+        }
+        String text = value.toString();
+        if ("true".equalsIgnoreCase(text)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(text)) {
+            return false;
+        }
+        throw badRequest(key + " must be boolean.");
+    }
+
+    private static void validateIdempotencyKey(String fieldName, String value) {
+        if (!IDEMPOTENCY_KEY_PATTERN.matcher(value).matches()) {
+            throw badRequest(fieldName + " is invalid.");
+        }
+    }
+
+    private static ResponseStatusException badRequest(String message) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private static ApiException fileValidation(String message) {
+        return new ApiException(HttpStatus.BAD_REQUEST, "FILE_VALIDATION_ERROR", message);
     }
 
     private static int integer(Map<String, Object> request, String key, int fallback) {
@@ -395,5 +643,8 @@ public class PcAgentAsService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private record GzipValidation(long compressedBytes, long uncompressedBytes, String sha256) {
     }
 }

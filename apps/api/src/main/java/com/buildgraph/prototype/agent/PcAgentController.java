@@ -3,6 +3,7 @@ package com.buildgraph.prototype.agent;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import java.util.Map;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/agent")
@@ -26,7 +28,13 @@ public class PcAgentController {
 
     @PostMapping("/devices/register")
     @ResponseStatus(HttpStatus.CREATED)
-    Map<String, Object> register(@RequestBody(required = false) Map<String, Object> request) {
+    Map<String, Object> register(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization
+    ) {
+        if (authorization != null && !authorization.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Register uses activation token only.");
+        }
         return pcAgentAsService.register(request == null ? Map.of() : request);
     }
 

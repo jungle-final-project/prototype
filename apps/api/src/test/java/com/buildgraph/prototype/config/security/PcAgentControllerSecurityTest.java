@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -25,7 +26,11 @@ import com.buildgraph.prototype.ticket.TicketController;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -34,6 +39,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 @WebMvcTest({PcAgentController.class, AdminController.class, TicketController.class})
 @Import({AgentSecurityConfig.class, SecurityErrorResponseWriter.class})
@@ -45,6 +51,9 @@ class PcAgentControllerSecurityTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @MockitoBean
     private PcAgentAsService pcAgentAsService;
@@ -90,8 +99,10 @@ class PcAgentControllerSecurityTest {
                                 {
                                   "activationToken": "demo-agent-activation-token",
                                   "deviceFingerprintHash": "fingerprint-hash",
+                                  "registrationIdempotencyKey": "register-key",
                                   "osVersion": "Windows 11",
-                                  "agentVersion": "0.1.0"
+                                  "agentVersion": "0.1.0",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isCreated())
@@ -100,6 +111,28 @@ class PcAgentControllerSecurityTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
 
         verify(pcAgentAsService).register(anyMap());
+        verifyNoInteractions(agentTokenAuthenticationService);
+    }
+
+    @Test
+    void registerRejectsAuthorizationHeaderToAvoidJwtAgentTokenMixing() throws Exception {
+        mockMvc.perform(post("/api/agent/devices/register")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "activationToken": "demo-agent-activation-token",
+                                  "deviceFingerprintHash": "fingerprint-hash",
+                                  "registrationIdempotencyKey": "register-key",
+                                  "osVersion": "Windows 11",
+                                  "agentVersion": "0.1.0",
+                                  "policyVersion": "policy-v1"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(pcAgentAsService);
         verifyNoInteractions(agentTokenAuthenticationService);
     }
 
@@ -113,12 +146,70 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
                                   "accepted": true
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void authenticatedAgentHeartbeatRequiresIdempotencyKey() throws Exception {
+        authenticateAgent();
+
+        mockMvc.perform(post("/api/agent/heartbeat")
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "agentVersion": "0.1.0",
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void consentAndHeartbeatRejectInvalidAgentTokenBeforeIdempotency() throws Exception {
+        when(agentTokenAuthenticationService.authenticate("bad-agent-token"))
+                .thenReturn(AgentTokenAuthenticationResult.invalid());
+
+        mockMvc.perform(post("/api/agent/consents")
+                        .header("Authorization", "Bearer bad-agent-token")
+                        .header("Idempotency-Key", "consent-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
+                                  "accepted": true
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        mockMvc.perform(post("/api/agent/heartbeat")
+                        .header("Authorization", "Bearer bad-agent-token")
+                        .header("Idempotency-Key", "heartbeat-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "agentVersion": "0.1.0",
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentIdempotencyService);
         verifyNoInteractions(pcAgentAsService);
     }
 
@@ -152,6 +243,7 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
                                   "accepted": true
                                 }
                                 """))
@@ -166,7 +258,8 @@ class PcAgentControllerSecurityTest {
                         .content("""
                                 {
                                   "agentVersion": "0.1.0",
-                                  "serviceStatus": "RUNNING"
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -176,7 +269,7 @@ class PcAgentControllerSecurityTest {
                 "file",
                 "agent-log.jsonl.gz",
                 "application/gzip",
-                "demo".getBytes()
+                gzip("demo log\n")
         );
         mockMvc.perform(multipart("/api/agent/log-uploads")
                         .file(file)
@@ -190,13 +283,136 @@ class PcAgentControllerSecurityTest {
     }
 
     @Test
+    void logUploadRequiresAgentTokenBeforeIdempotencyKey() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(file)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentIdempotencyService);
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void logUploadRejectsBadAgentTokenBeforeIdempotency() throws Exception {
+        when(agentTokenAuthenticationService.authenticate("bad-agent-token"))
+                .thenReturn(AgentTokenAuthenticationResult.invalid());
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(file)
+                        .header("Authorization", "Bearer bad-agent-token")
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentIdempotencyService);
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void authenticatedAgentLogUploadRequiresIdempotencyKey() throws Exception {
+        authenticateAgent();
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(file)
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(pcAgentAsService);
+    }
+
+    @Test
+    void duplicateLogUploadIdempotencyKeyReplaysWithoutCreatingAnotherTicket() throws Exception {
+        AgentPrincipal principal = authenticateAgent();
+        when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), eq("upload-key"), anyString()))
+                .thenReturn(AgentIdempotencyDecision.proceed(301L))
+                .thenReturn(AgentIdempotencyDecision.replay(
+                        201,
+                        "{\"ticketId\":\"ticket-public-id\",\"analysisStatus\":\"RULE_READY\"}",
+                        MediaType.APPLICATION_JSON_VALUE
+                ));
+        when(pcAgentAsService.uploadLogs(eq(principal), any(), any(), eq("upload-key"))).thenReturn(Map.of(
+                "ticketId", "ticket-public-id",
+                "analysisStatus", "RULE_READY"
+        ));
+        MockMultipartFile firstFile = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+        MockMultipartFile retryFile = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(firstFile)
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("ticket-public-id"));
+
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(retryFile)
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("ticket-public-id"));
+
+        verify(pcAgentAsService).uploadLogs(eq(principal), any(), any(), eq("upload-key"));
+    }
+
+    @Test
     void minimalAgentAsHappyPathCanRunThroughHttpEndpoints() throws Exception {
         AgentPrincipal principal = authenticateAgent();
         when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(
                         AgentIdempotencyDecision.proceed(201L),
                         AgentIdempotencyDecision.proceed(202L),
-                        AgentIdempotencyDecision.proceed(203L)
+                        AgentIdempotencyDecision.proceed(203L),
+                        AgentIdempotencyDecision.replay(
+                                201,
+                                """
+                                        {
+                                          "uploadJobId": "upload-job-public-id",
+                                          "logUploadId": "log-upload-public-id",
+                                          "ticketId": "ticket-public-id",
+                                          "analysisStatus": "RULE_READY",
+                                          "reviewStatus": "REQUIRED",
+                                          "supportDecision": "NEEDS_MORE_INFO"
+                                        }
+                                        """,
+                                MediaType.APPLICATION_JSON_VALUE
+                        )
                 );
         when(pcAgentAsService.register(anyMap())).thenReturn(Map.of(
                 "deviceId", "device-public-id",
@@ -219,11 +435,11 @@ class PcAgentControllerSecurityTest {
                 "reviewStatus", "REQUIRED",
                 "supportDecision", "NEEDS_MORE_INFO"
         ));
-        when(ticketQueryService.update("ticket-public-id", Map.of(
+        when(ticketQueryService.update(eq("ticket-public-id"), eq(Map.of(
                 "supportDecision", "REMOTE_POSSIBLE",
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
-        ))).thenReturn(Map.of(
+        )), isNull())).thenReturn(Map.of(
                 "id", "ticket-public-id",
                 "analysisStatus", "RULE_READY",
                 "reviewStatus", "APPROVED",
@@ -237,26 +453,33 @@ class PcAgentControllerSecurityTest {
                 "supportDecision", "REMOTE_POSSIBLE"
         ));
 
-        mockMvc.perform(post("/api/agent/devices/register")
+        MvcResult registerResult = mockMvc.perform(post("/api/agent/devices/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
                                   "activationToken": "demo-agent-activation-token",
                                   "deviceFingerprintHash": "fingerprint-hash",
+                                  "registrationIdempotencyKey": "register-key",
                                   "osVersion": "Windows 11",
-                                  "agentVersion": "0.1.0"
+                                  "agentVersion": "0.1.0",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.agentToken").value(AGENT_TOKEN));
+                .andExpect(jsonPath("$.agentToken").value(AGENT_TOKEN))
+                .andReturn();
+        String issuedAgentToken = objectMapper.readTree(registerResult.getResponse().getContentAsString())
+                .get("agentToken")
+                .asText();
 
         mockMvc.perform(post("/api/agent/consents")
-                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
                         .header("Idempotency-Key", "consent-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
                                   "consentType": "SERVER_UPLOAD",
+                                  "policyVersion": "policy-v1",
                                   "accepted": true
                                 }
                                 """))
@@ -264,13 +487,14 @@ class PcAgentControllerSecurityTest {
                 .andExpect(jsonPath("$.accepted").value(true));
 
         mockMvc.perform(post("/api/agent/heartbeat")
-                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
                         .header("Idempotency-Key", "heartbeat-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
                                   "agentVersion": "0.1.0",
-                                  "serviceStatus": "RUNNING"
+                                  "serviceStatus": "RUNNING",
+                                  "policyVersion": "policy-v1"
                                 }
                                 """))
                 .andExpect(status().isOk());
@@ -279,11 +503,27 @@ class PcAgentControllerSecurityTest {
                 "file",
                 "agent-log.jsonl.gz",
                 "application/gzip",
-                "demo".getBytes()
+                gzip("demo log\n")
         );
         mockMvc.perform(multipart("/api/agent/log-uploads")
                         .file(file)
-                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
+                        .header("Idempotency-Key", "upload-key")
+                        .param("rangeMinutes", "30")
+                        .param("symptom", "GPU temperature spike"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ticketId").value("ticket-public-id"))
+                .andExpect(jsonPath("$.analysisStatus").value("RULE_READY"));
+
+        MockMultipartFile retryFile = new MockMultipartFile(
+                "file",
+                "agent-log.jsonl.gz",
+                "application/gzip",
+                gzip("demo log\n")
+        );
+        mockMvc.perform(multipart("/api/agent/log-uploads")
+                        .file(retryFile)
+                        .header("Authorization", "Bearer " + issuedAgentToken)
                         .header("Idempotency-Key", "upload-key")
                         .param("rangeMinutes", "30")
                         .param("symptom", "GPU temperature spike"))
@@ -309,6 +549,20 @@ class PcAgentControllerSecurityTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.analysisStatus").value("RULE_READY"))
                 .andExpect(jsonPath("$.supportDecision").value("REMOTE_POSSIBLE"));
+
+        verify(pcAgentAsService).uploadLogs(eq(principal), any(), any(), eq("upload-key"));
+    }
+
+    private static byte[] gzip(String content) {
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try (GZIPOutputStream gzipOutput = new GZIPOutputStream(output)) {
+                gzipOutput.write(content.getBytes());
+            }
+            return output.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private AgentPrincipal authenticateAgent() {
