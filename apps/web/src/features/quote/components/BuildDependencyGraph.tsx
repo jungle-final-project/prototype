@@ -45,8 +45,8 @@ type BuildDependencyGraphProps = {
 type CandidateContext = NonNullable<BuildDependencyGraphProps['candidateContext']>;
 
 const categoryOrder = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'PSU', 'CASE', 'COOLER', 'STORAGE', 'PRICE'];
-const DEFAULT_NODE_DIAMETER = 112;
-const FLOATING_GRAPH_DEFAULT_SIZE = { width: 360, graphHeight: 240 };
+const DEFAULT_NODE_DIAMETER = 140;
+const FLOATING_GRAPH_DEFAULT_SIZE = { width: 760, graphHeight: 560 };
 const FLOATING_GRAPH_MIN_SIZE = { width: 300, graphHeight: 200 };
 const FLOATING_GRAPH_MAX_SIZE = { width: 760, graphHeight: 560 };
 const FLOATING_GRAPH_VIEWPORT_MARGIN = 40;
@@ -182,7 +182,7 @@ export function BuildDependencyGraph({
       </div>
 
       {isLoading && !displayGraph ? (
-        <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="grid h-[430px] place-items-center border-b border-commerce-line bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] p-6 text-sm font-bold text-slate-500 lg:h-[680px] lg:border-b-0 lg:border-r xl:h-[720px]">
             관계 그래프를 계산하는 중입니다.
           </div>
@@ -216,13 +216,13 @@ export function BuildDependencyGraph({
             data-testid="graph-flow-canvas"
             className="relative min-w-0 border-b border-commerce-line bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] lg:border-b-0 lg:border-r"
           >
-            <div className="h-[430px] lg:h-[680px] xl:h-full">
+            <div className="h-[520px] lg:h-[calc(100vh-180px)] xl:h-[calc(100vh-160px)]">
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={graphNodeTypes}
                 fitView
-                fitViewOptions={{ padding: 0.12 }}
+                fitViewOptions={{ padding: 0.06 }}
                 minZoom={0.45}
                 maxZoom={1.35}
                 proOptions={{ hideAttribution: true }}
