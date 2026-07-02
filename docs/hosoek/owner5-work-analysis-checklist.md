@@ -974,6 +974,20 @@ AdminShell nav 분석 결과:
 - [x] Home/SelfQuote Playwright 테스트는 새 패널 test id를 기준으로 선택 부품 상세, 읽기 전용 후보, 담기/교체 동작을 검증하도록 맞춘다.
 - [x] 모바일 홈 테스트는 챗봇 추천 후 관계도와 후보 패널을 열어도 가로 overflow가 생기지 않는지 확인한다.
 
+#### 2026-07-02 미구현 운영 기능 마감 점검
+
+- [x] 공통 `ApiErrorResponse`에 optional `details`를 추가하고 `ApiExceptionHandler`가 validation 세부 정보를 보존하도록 구현했다.
+- [x] Agent 로그 업로드에서 `.jsonl`/`.ndjson`, MIME, 10MiB, 20000 line, JSON object line 파싱, PII 마스킹을 DB insert 전에 검증하도록 구현했다.
+- [x] 로그 검증 실패는 `400 FILE_VALIDATION_ERROR`로 반환하고 `agent_log_uploads` row를 만들지 않도록 테스트로 고정했다.
+- [x] `PriceJobWorker`가 `startPriceJob()` 후 네이버 external-offers refresh와 다나와 current snapshot refresh를 실행하고 성공/실패 상태를 저장하도록 연결했다.
+- [x] `/api/admin/rag-evidence` 목록 API를 추가하고 ADMIN/USER/unauthorized 분기 테스트를 추가했다.
+- [x] 관리자 sidebar의 Agent/Tool/RAG 메뉴를 seed 상세 ID가 아니라 목록 route(`/admin/agent-sessions`, `/admin/tool-invocations`, `/admin/rag-evidence`)로 변경했다.
+- [x] 관리자 Agent/Tool/RAG 목록 화면을 추가하고 목록에서 기존 상세 화면으로 이동하도록 구현했다.
+- [x] 관리자 topbar `내보내기`를 CSV export로 구현하고, `작업 실행`은 `/admin/price-jobs`에서 가격 Job 실행 action으로만 표시되도록 변경했다.
+- [x] `/admin/load-tests`는 k6 직접 실행이 아니라 smoke 대상, 검증 명령, 리포트 위치를 보여주는 운영 화면으로 정리했다.
+- [x] `docs/API_CONTRACT.md`, `docs/openapi.yaml`, `tools/validate_openapi.py`에 새 RAG 목록 API 계약을 반영했다.
+- [x] 검증: `apps/api ./gradlew test --no-daemon`, `apps/web npm run test`, `apps/web npm run build`, `OpenAPI validation`, `git diff --check` 통과.
+
 ## 우선순위
 
 ### P0
@@ -1003,8 +1017,8 @@ AdminShell nav 분석 결과:
 
 - [ ] Redis/RabbitMQ/Mailpit 실제 기능 연동. 조건: OAuth one-time code, AI 견적 추천 실행 작업, 부품 가격 수집 작업, 가격 알림 메일 중 해당 owner 구현 PR 발생
 - [ ] 부하 테스트 300명/1000명 시나리오 확장
-- [ ] AdminShell sample id 메뉴를 3번과 합의해 list route 또는 seed link 정책으로 정리
-- [ ] `/admin/price-jobs` 중복 실행 409 계약 위반 여부를 2번과 정리
+- [x] AdminShell sample id 메뉴를 list route 정책으로 정리
+- [x] `/admin/price-jobs` 중복 실행 409 계약을 유지하고 worker 실제 현재가 갱신을 연결
 - [ ] `/admin/as-tickets` mock/static 상태를 4번과 정리
 
 ## 다음 작업 순서
@@ -1038,7 +1052,7 @@ AdminShell nav 분석 결과:
 - [x] DB 연결 실패 시 `/api/health`를 500 `INTERNAL_ERROR`, 503 `DOWN`, 또는 200 `status: "DOWN"` 중 어떤 정책으로 반환할지 결정해야 한다. 결정: `503 Service Unavailable` + `{ "status": "DOWN" }`
 - [x] AdminShell nav의 `가격 Job`을 2번의 `/admin/parts` 안에 둘지 별도 route로 둘지 결정해야 한다. 결정: `/admin/price-jobs` 별도 route
 - [x] `부하 테스트` 관리자 화면을 MVP route로 만들지, 문서/리포트 링크로 둘지 결정해야 한다. 결정: `/admin/load-tests` route
-- [x] topbar `작업 실행`이 어떤 작업을 실행하는 버튼인지 결정해야 한다. 결정: Sprint 1에서는 실행 job 미확정으로 disabled placeholder 처리한다.
+- [x] topbar `작업 실행`이 어떤 작업을 실행하는 버튼인지 결정해야 한다. 결정: 전역 placeholder를 제거하고 route별 action으로 둔다. 현재는 `/admin/price-jobs`에서 가격 Job 실행만 표시한다.
 - [x] admin search가 전역 검색인지, 단순 placeholder인지 결정해야 한다. 결정: Sprint 1에서는 전역 검색과 placeholder input을 모두 제외한다.
 
 | 구분 | 남은 일 | 상태 |

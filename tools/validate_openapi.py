@@ -54,6 +54,7 @@ REQUIRED_PATHS = [
     "/api/admin/agent-sessions/{id}",
     "/api/admin/tool-invocations",
     "/api/admin/tool-invocations/{id}",
+    "/api/admin/rag-evidence",
     "/api/admin/rag-evidence/{id}",
     "/api/admin/as-tickets",
     "/api/admin/as-tickets/{id}",
@@ -92,6 +93,7 @@ REQUIRED_SCHEMAS = [
     "AgentSessionDto",
     "ToolInvocationDto",
     "RagEvidenceDto",
+    "AdminRagEvidenceDto",
 ]
 
 REQUIRED_ERROR_CODES = {

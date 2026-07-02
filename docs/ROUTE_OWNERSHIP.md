@@ -105,11 +105,11 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 
 | 항목 | 내용 |
 |---|---|
-| 담당 화면 route | `/support/ai-chat`, `/admin/agent-sessions/:id`, `/admin/tool-invocations/:id`, `/admin/rag-evidence/:id` |
+| 담당 화면 route | `/support/ai-chat`, `/admin/agent-sessions`, `/admin/agent-sessions/:id`, `/admin/tool-invocations`, `/admin/tool-invocations/:id`, `/admin/rag-evidence`, `/admin/rag-evidence/:id` |
 | frontend files | `features/support/**` 중 AS AI Chat 화면/API, `features/admin/agent/**`, `features/admin/evidence/**` |
 | backend packages | `agent`, `rag` |
 | DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages`, `llm_generations` |
-| API endpoints | `POST /api/ai/build-chat`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence/{id}` |
+| API endpoints | `POST /api/ai/build-chat`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
 | 협업자 | 추천 결과 UI는 1번, Tool 판정 로직은 2번, AS 원인 후보는 4번 |
 
 ### 4번: PC Agent/AS
@@ -157,8 +157,11 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | `/admin/parts` | 2번 | 5번, 3번 | `GET/POST /api/admin/parts`, `GET /api/admin/parts/quality-report`, `GET/PATCH/DELETE /api/admin/parts/{id}`, `POST /api/admin/parts/{id}/restore`, `POST /api/admin/parts/{id}/manual-price`, `PATCH /api/admin/parts/{id}/external-offer`, `GET /api/parts/{id}/price-history`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, `POST /api/admin/parts/danawa-price-snapshots/refresh`, `POST /api/admin/parts/danawa-price-trends/refresh`, source/post/candidate CRUD under `/api/admin/manufacturer-*`, `POST /api/admin/manufacturer-sources/{id}/scan`, `POST /api/admin/manufacturer-sources/scan`, `POST /api/admin/manufacturer-posts/{id}/ai-asset-draft`, `POST /api/admin/part-catalog-candidates/{id}/approve|reject|refresh-offers`, `GET/POST /api/admin/part-alias-rules`, `GET /api/admin/part-alias-review-items`, `GET /api/admin/part-alias-review-items/summary`, `POST /api/admin/part-alias-review-items/{id}/resolve|ignore` |
 | `/admin/price-jobs` | 2번 | 5번 | `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run` |
 | `/admin/load-tests` | 5번 | 2번, 3번, 4번 | k6 smoke/load report, `GET /api/health` smoke |
+| `/admin/agent-sessions` | 3번 | 5번 | `GET /api/admin/agent-sessions` |
 | `/admin/agent-sessions/:id` | 3번 | 5번 | `GET /api/admin/agent-sessions/{id}` |
+| `/admin/tool-invocations` | 3번 | 5번 | `GET /api/admin/tool-invocations` |
 | `/admin/tool-invocations/:id` | 3번 | 5번 | `GET /api/admin/tool-invocations/{id}` |
+| `/admin/rag-evidence` | 3번 | 5번 | `GET /api/admin/rag-evidence` |
 | `/admin/rag-evidence/:id` | 3번 | 5번 | `GET /api/admin/rag-evidence/{id}` |
 | `/admin/as-tickets` | 4번 | 5번 | `GET /api/admin/as-tickets` |
 | `/admin/as-tickets/:ticketId` | 4번 | 5번 | `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}` |
@@ -249,6 +252,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | `GET /api/admin/agent-sessions/{id}` | 3번 | 5번 |
 | `GET /api/admin/tool-invocations` | 3번 | 5번 |
 | `GET /api/admin/tool-invocations/{id}` | 3번 | 5번 |
+| `GET /api/admin/rag-evidence` | 3번 | 5번 |
 | `GET /api/admin/rag-evidence/{id}` | 3번 | 5번 |
 | `POST /api/agent-logs/upload` | 4번 | - |
 | `GET /api/agent-logs/{id}` | 4번 | - |
