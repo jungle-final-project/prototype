@@ -64,4 +64,64 @@ Updated: 2026-07-02
 - It is still unclear whether the same `activationToken` may register multiple devices.
 - It is still unclear whether duplicate `deviceFingerprintHash` with a new `registrationIdempotencyKey` should create a new device, reject with conflict, or rotate the existing token.
 - Consent update policy is not fully settled. Current behavior appends a consent row instead of updating an older row.
-- API contract docs still list legacy web JWT paths such as `/api/agent/sessions` and `/api/agent-logs/upload`; they do not yet describe the current Agent-token lifecycle endpoints.
+
+# Agent AS contract/web QA follow-up
+
+Updated: 2026-07-02
+
+## Security boundary
+
+- Web Agent/RAG session APIs stay on web JWT:
+  - `POST /api/agent/sessions`
+  - `POST /api/agent/sessions/{id}/run`
+  - `GET /api/agent/sessions/{id}`
+- PC Agent token security applies only to PC Agent lifecycle endpoints:
+  - `POST /api/agent/devices/register`
+  - `POST /api/agent/consents`
+  - `POST /api/agent/heartbeat`
+  - `POST /api/agent/log-uploads`
+- `POST /api/agent/devices/register` remains bootstrap-only and must not receive an Authorization header.
+- `/api/agent-logs/upload` remains the web JWT/manual upload path. `/api/agent/log-uploads` is the PC Agent token upload path.
+
+## Demo account and download notes
+
+- Demo user/admin credentials must be prepared from the auth seed or shared by the integration owner before QA. Do not hard-code new demo credentials in the web app.
+- Latest main provides a demo `agent.exe` download at `/downloads/pc-agent/agent.exe`, backed by `apps/web/public/downloads/pc-agent/agent.exe`.
+- The sample JSONL download remains a manual AS upload fallback for QA environments where the Windows runtime is not used.
+- When `agent.exe` changes, verify the web download path, `README.txt`, SHA256, and the local `agent-config.json` path documented by the PC Agent runtime.
+
+## Main merge verification commands
+
+Run these after every main merge touching Agent AS, support UI, or OpenAPI:
+
+```powershell
+python tools\validate_openapi.py
+cd apps\api
+.\gradlew.bat test --tests com.buildgraph.prototype.config.security.AgentSecurityChainTest --no-daemon
+.\gradlew.bat test --tests com.buildgraph.prototype.config.security.PcAgentControllerSecurityTest --no-daemon
+.\gradlew.bat test --tests com.buildgraph.prototype.agent.PcAgentAsServiceTest --no-daemon
+cd ..\..
+cd apps\web
+npm run build
+npm run test -- --reporter=dot
+```
+## Agent AS contract/web/QA P1-P3 completion
+
+- 기준 브랜치: `integration/agent-as-e2e`
+- 완료 범위:
+  - P1: 사용자 `/support/{ticketId}` 화면 QA, 관리자 `supportDecision`/`reviewStatus`/`riskLevel`/`adminNote`/`remoteSupportLink` 저장 UI, 저장 후 사용자 화면 반영 Playwright QA, demo USER/ADMIN 계정 및 테스트 데이터 절차 문서화, 최신 main의 `agent.exe` 다운로드와 샘플 JSONL fallback을 runbook에 고정.
+  - P2: `RULE_READY`, `REQUIRED`, `REMOTE_POSSIBLE`, `NEEDS_MORE_INFO` 및 관련 support enum 한글 배지 표시, 사용자/관리자 AS 화면 raw enum 노출 축소, 데모용 업로드 실패 메시지 유지, frontend DTO와 backend/OpenAPI 필드 불일치 방지 테스트 보강.
+  - P3: `tools/validate_openapi.py`가 PC Agent token 경계와 AS ticket decision schema를 검증하도록 강화, OpenAPI client generation 검토 결과 문서화, 운영 장애 대응/runbook/발표 시나리오 정리.
+- 추가 문서:
+  - `docs/agent-as/DEMO_RUNBOOK.md`
+  - `docs/agent-as/README.md` runbook 링크
+- 실행 검증:
+  - `git diff --check`: pass
+  - `C:\Users\82103\anaconda3\python.exe tools\validate_openapi.py`: pass, 67 paths
+  - `cd apps\api; .\gradlew.bat test --tests com.buildgraph.prototype.ticket.TicketQueryServiceTest --tests com.buildgraph.prototype.config.security.AgentSecurityChainTest --tests com.buildgraph.prototype.config.security.PcAgentControllerSecurityTest --tests com.buildgraph.prototype.agent.PcAgentAsServiceTest --no-daemon`: pass
+  - `cd apps\api; .\gradlew.bat test --no-daemon`: pass
+  - `cd apps\web; npm run build`: pass
+  - `cd apps\web; npm run test -- --reporter=dot`: pass, 74 tests
+- 제외/주의:
+  - Quick Assist 직접 실행, Windows Service, signed installer, auto-update, release channel 운영은 범위 밖으로 유지.
+  - sandbox 내부에서 Gradle wrapper와 Playwright proxy가 네트워크 권한에 막혀, 필요한 테스트는 승인된 escalated 실행으로 검증했다.

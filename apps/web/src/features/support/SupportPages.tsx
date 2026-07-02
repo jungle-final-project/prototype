@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../components/ui';
+import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
@@ -441,6 +441,7 @@ export function SupportTicketPage() {
           <div className="mb-4 flex flex-wrap gap-2">
             <StatusBadge status={ticket.status} />
             {ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : null}
+            {ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : null}
             {ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : null}
           </div>
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
@@ -470,22 +471,22 @@ function ticketTimeline(ticket: AsTicketDto) {
     {
       시간: formatTime(ticket.createdAt),
       주체: '시스템',
-      내용: ticket.analysisStatus ? `진단 상태: ${ticket.analysisStatus}` : ticket.causeCandidates.length ? '로그 확인 자료 준비 완료' : '로그 확인 자료 준비 중'
+      내용: ticket.analysisStatus ? `진단 상태: ${statusLabel(ticket.analysisStatus)}` : ticket.causeCandidates.length ? '로그 확인 자료 준비 완료' : '로그 확인 자료 준비 중'
     },
     {
       시간: '-',
       주체: '상담원',
-      내용: ticket.supportDecision ? `지원 결정: ${ticket.supportDecision}` : ticket.assignedAdminId ? '담당자 배정 완료' : '담당자 배정 대기'
+      내용: ticket.supportDecision ? `지원 결정: ${statusLabel(ticket.supportDecision)}` : ticket.assignedAdminId ? '담당자 배정 완료' : '담당자 배정 대기'
     }
   ];
 }
 
 function ticketDecisionRows(ticket: AsTicketDto) {
   return [
-    { 항목: '진단 상태', 값: ticket.analysisStatus ?? '-' },
-    { 항목: '검토 상태', 값: ticket.reviewStatus ?? '-' },
-    { 항목: '지원 결정', 값: ticket.supportDecision ?? '-' },
-    { 항목: '위험도', 값: ticket.riskLevel ?? '-' },
+    { 항목: '진단 상태', 값: ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : '-' },
+    { 항목: '검토 상태', 값: ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
+    { 항목: '지원 결정', 값: ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
+    { 항목: '위험도', 값: ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
     { 항목: '관리자 메모', 값: ticket.adminNote ?? '-' },
     { 항목: '원격지원', 값: ticket.remoteSupportLink ?? ticket.remoteSupportStatus ?? '-' },
     { 항목: '방문지원', 값: ticket.visitSupportRequired ? `${ticket.visitSupportStatus ?? 'REQUESTED'} ${ticket.visitPreferredDate ?? ''} ${ticket.visitTimeSlot ?? ''}`.trim() : '-' }

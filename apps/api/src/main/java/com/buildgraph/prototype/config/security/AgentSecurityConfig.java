@@ -14,6 +14,13 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @Configuration
 @EnableWebSecurity
 public class AgentSecurityConfig {
+    private static final String[] PC_AGENT_ENDPOINTS = {
+            "/api/agent/devices/register",
+            "/api/agent/consents",
+            "/api/agent/heartbeat",
+            "/api/agent/log-uploads"
+    };
+
     @Bean
     AgentAccessTokenFilter agentAccessTokenFilter(
             AgentTokenAuthenticationService authenticationService,
@@ -42,7 +49,7 @@ public class AgentSecurityConfig {
             AgentIdempotencyFilter agentIdempotencyFilter
     ) throws Exception {
         return http
-                .securityMatcher("/api/agent/**")
+                .securityMatcher(PC_AGENT_ENDPOINTS)
                 .csrf(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)

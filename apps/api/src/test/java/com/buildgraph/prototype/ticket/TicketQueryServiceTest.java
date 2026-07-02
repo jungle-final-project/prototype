@@ -151,6 +151,58 @@ class TicketQueryServiceTest {
     }
 
     @Test
+    void updateStoresAssignedAdminPublicId() {
+        String assignedAdminId = "00000000-0000-4000-8000-000000000001";
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN",
+                        "review_status", "REQUIRED",
+                        "support_decision", "NEEDS_MORE_INFO"
+                )))
+                .thenReturn(List.of(MockData.map(
+                        "id", "ticket-public-id",
+                        "status", "OPEN",
+                        "analysis_status", "RULE_READY",
+                        "review_status", "REQUIRED",
+                        "support_decision", "NEEDS_MORE_INFO",
+                        "risk_level", "MEDIUM",
+                        "symptom", "GPU temperature spike",
+                        "assigned_admin_id", assignedAdminId,
+                        "cause_candidates", "[]",
+                        "upgrade_candidates", "[]"
+                )));
+        when(jdbcTemplate.queryForList(contains("FROM users"), eq(assignedAdminId)))
+                .thenReturn(List.of(MockData.map("id", 1L)));
+
+        Map<String, Object> response = service.update("ticket-public-id", MockData.map(
+                "assignedAdminId", assignedAdminId
+        ), admin);
+
+        assertThat(response.get("assignedAdminId")).isEqualTo(assignedAdminId);
+        verify(jdbcTemplate).update(contains("assigned_admin_id"), eq(1L), eq("ticket-public-id"));
+    }
+
+    @Test
+    void updateRejectsInvalidAssignedAdminId() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN"
+                )));
+
+        assertThatThrownBy(() -> service.update("ticket-public-id", MockData.map(
+                "assignedAdminId", "not-a-uuid"
+        ), admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
     void updateRejectsInvalidTicketStatusTransition() {
         when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
                 .thenReturn(List.of(MockData.map(

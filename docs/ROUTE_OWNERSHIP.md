@@ -118,7 +118,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | frontend files | `features/support/**`, `features/admin/as-tickets/**` |
 | backend packages | `log`, `ticket` |
 | DB tables | `agent_log_uploads`, `as_tickets` |
-| API endpoints | `POST /api/agent-logs/upload`, `GET /api/agent-logs/{id}`, `POST /api/as-tickets`, `GET /api/as-tickets/{id}`, `GET /api/admin/as-tickets`, `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}` |
+| API endpoints | PC Agent token: `POST /api/agent/devices/register`, `POST /api/agent/consents`, `POST /api/agent/heartbeat`, `POST /api/agent/log-uploads`; Web JWT/manual: `POST /api/agent-logs/upload`, `GET /api/agent-logs/{id}`, `POST /api/as-tickets`, `GET /api/as-tickets/{id}`, `GET /api/admin/as-tickets`, `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}` |
 | 협업자 | Auth/guard는 5번, AS 원인 후보 Agent는 3번 |
 
 ### 5번: AdminShell/Auth Common/Infra
@@ -222,6 +222,10 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | `GET /api/admin/tool-invocations` | 3번 | 5번 |
 | `GET /api/admin/tool-invocations/{id}` | 3번 | 5번 |
 | `GET /api/admin/rag-evidence/{id}` | 3번 | 5번 |
+| `POST /api/agent/devices/register` | 4번 | 5번 security |
+| `POST /api/agent/consents` | 4번 | 5번 security |
+| `POST /api/agent/heartbeat` | 4번 | 5번 security |
+| `POST /api/agent/log-uploads` | 4번 | 5번 security |
 | `POST /api/agent-logs/upload` | 4번 | - |
 | `GET /api/agent-logs/{id}` | 4번 | - |
 | `POST /api/as-tickets` | 4번 | 3번 |

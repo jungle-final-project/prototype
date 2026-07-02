@@ -323,6 +323,16 @@ Tool별 `context`와 `details` shape:
 
 ### Agent/RAG
 
+보안 경계:
+
+- `/api/agent/sessions`, `/api/agent/sessions/{id}/run`, `/api/agent/sessions/{id}`는 웹 사용자 JWT(`USER`) 기반 Agent/RAG API다.
+- PC Agent token 인증 체인은 아래 PC Agent 전용 경로에만 적용한다.
+  - `POST /api/agent/devices/register`
+  - `POST /api/agent/consents`
+  - `POST /api/agent/heartbeat`
+  - `POST /api/agent/log-uploads`
+- `/api/agent/sessions*`는 Agent raw token으로 인증하지 않는다. 웹 JWT와 Agent token을 섞지 않는다.
+
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/agent/sessions` | USER | 3번 | `{ "requirementId": "2e0f8c9c-8e1c-4d75-94a2-5d6a4977de11", "buildId": null, "asTicketId": null }` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "QUEUED", "summary": null, "stateTimeline": [{ "from": null, "to": "QUEUED", "actor": "USER", "at": "2026-06-29T10:35:00Z" }] }` | `agent_sessions` |
@@ -397,6 +407,17 @@ AS AI Chat 규칙:
 
 ### PC Agent/AS
 
+PC Agent token lifecycle API:
+
+| Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
+|---|---|---|---|---|---|---|
+| `POST` | `/api/agent/devices/register` | none, activation token only | 4번 | `{ "activationToken": "demo-agent-activation-token", "deviceFingerprintHash": "fingerprint-hash", "registrationIdempotencyKey": "agent-register-key", "osVersion": "Windows 11", "agentVersion": "0.1.0", "policyVersion": "policy-v1" }` | `{ "deviceId": "00000000-0000-4000-8000-000000009001", "status": "ACTIVE", "agentToken": "raw-token-returned-once", "tokenType": "Bearer" }` | `agent_devices` |
+| `POST` | `/api/agent/consents` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `{ "consentType": "SERVER_UPLOAD", "policyVersion": "policy-v1", "accepted": true }` | `{ "id": "00000000-0000-4000-8000-000000009101", "consentType": "SERVER_UPLOAD", "accepted": true, "policyVersion": "policy-v1" }` | `agent_consents`, `agent_idempotency_records` |
+| `POST` | `/api/agent/heartbeat` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `{ "agentVersion": "0.1.0", "serviceStatus": "RUNNING", "policyVersion": "policy-v1" }` | `{ "deviceId": "00000000-0000-4000-8000-000000009001", "status": "ACTIVE", "lastSeenAt": "2026-07-02T10:00:00Z" }` | `agent_devices`, `agent_heartbeats`, `agent_idempotency_records` |
+| `POST` | `/api/agent/log-uploads` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `multipart/form-data`: `file`, `rangeMinutes=30`, `schemaVersion`, `symptom` | `{ "uploadJobId": "00000000-0000-4000-8000-000000009201", "logUploadId": "00000000-0000-4000-8000-000000009301", "ticketId": "00000000-0000-4000-8000-000000009401", "analysisStatus": "RULE_READY", "reviewStatus": "REQUIRED", "supportDecision": "NEEDS_MORE_INFO" }` | `agent_upload_jobs`, `agent_log_uploads`, `as_tickets` |
+
+Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버는 raw `agentToken`을 저장하지 않고 hash만 저장한다. `/api/agent-logs/upload`는 웹 사용자가 JWT로 업로드하는 legacy/manual 경로이고, `/api/agent/log-uploads`는 PC Agent가 Agent token으로 업로드하는 경로다.
+
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/agent-logs/upload` | USER | 4번 | `multipart/form-data` | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "fileSize": 12000, "rangeMinutes": 30, "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
@@ -436,6 +457,43 @@ AS AI Chat 규칙:
 - `RESOLVED`에서 `CLOSED` 외 상태로 변경하면 `409 CONFLICT_STATE`다.
 - 위 허용 전이표에 없는 전이는 `409 CONFLICT_STATE`다.
 - 409가 발생해도 DB status는 변경하지 않는다. admin 요청이므로 거절 이력은 `admin_audit_logs`에 기록한다.
+
+#### Agent AS 관리자 결정 필드
+
+`PATCH /api/admin/as-tickets/{id}`는 기존 status 변경뿐 아니라 데모 운영에 필요한 관리자 결정 필드를 같은 요청에서 저장한다.
+
+요청에 포함할 수 있는 필드:
+
+| field | allowed values / type | note |
+|---|---|---|
+| `status` | `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `CANCELLED` | 위 상태 전이표를 따른다. |
+| `assignedAdminId` | admin user `public_id` UUID | ADMIN role 사용자만 허용한다. |
+| `reviewStatus` | `NOT_REQUIRED`, `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` | 관리자 검토 상태다. |
+| `supportDecision` | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO` | 사용자 `/support/{ticketId}` 화면에도 노출된다. |
+| `riskLevel` | `LOW`, `MEDIUM`, `HIGH` | 데모 화면 표시용 위험도다. |
+| `autoResponseAllowed` | boolean | 자동 안내 가능 여부다. |
+| `adminNote` | string | 사용자와 관리자 화면에 표시되는 관리자 메모다. |
+| `remoteSupportLink` | URI string | 외부 원격 지원 링크를 저장한다. Quick Assist 직접 연동은 MVP 제외다. |
+| `visitSupportRequired` | boolean | 방문 지원 예약 생성 여부다. |
+| `visitPreferredDate` | date string | `visitSupportRequired=true`일 때 사용할 수 있다. |
+| `visitTimeSlot` | `MORNING`, `AFTERNOON`, `EVENING` | 미입력 시 서버 기본값을 사용할 수 있다. |
+
+예시:
+
+```json
+{
+  "status": "IN_PROGRESS",
+  "assignedAdminId": "00000000-0000-4000-8000-000000000001",
+  "reviewStatus": "APPROVED",
+  "supportDecision": "REMOTE_POSSIBLE",
+  "riskLevel": "MEDIUM",
+  "autoResponseAllowed": true,
+  "adminNote": "Remote support link sent.",
+  "remoteSupportLink": "https://support.example.test/session/qa-ticket-after"
+}
+```
+
+사용자 `GET /api/as-tickets/{id}`와 관리자 `GET /api/admin/as-tickets/{id}` 응답은 `analysisStatus`, `reviewStatus`, `supportDecision`, `riskLevel`, `autoResponseAllowed`, `adminNote`, `remoteSupportLink`, `remoteSupportStatus`, `visitSupportRequired`, `visitSupportStatus`, `visitPreferredDate`, `visitTimeSlot`을 포함할 수 있다.
 
 ### Admin/Health
 

@@ -9,6 +9,7 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -164,6 +165,10 @@ public class TicketQueryService {
                     SET admin_note = ?, updated_at = now()
                     WHERE public_id = ?::uuid
                     """, adminNote, id);
+        }
+        String assignedAdminId = request == null ? null : stringOrNull(request.get("assignedAdminId"));
+        if (assignedAdminId != null) {
+            assignAdmin(id, assignedAdminId);
         }
         String supportDecision = request == null ? null : stringOrNull(request.get("supportDecision"));
         String reviewStatus = request == null ? null : stringOrNull(request.get("reviewStatus"));
@@ -327,6 +332,24 @@ public class TicketQueryService {
         );
     }
 
+    private void assignAdmin(String ticketId, String assignedAdminId) {
+        validatePublicUuid("assignedAdminId", assignedAdminId);
+        Map<String, Object> adminRow = jdbcTemplate.queryForList("""
+                        SELECT id
+                        FROM users
+                        WHERE public_id = ?::uuid
+                          AND role = 'ADMIN'
+                        """, assignedAdminId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "assignedAdminId must reference an ADMIN user."));
+        jdbcTemplate.update("""
+                UPDATE as_tickets
+                SET assigned_admin_id = ?, updated_at = now()
+                WHERE public_id = ?::uuid
+                """, longValue(adminRow, "id"), ticketId);
+    }
+
     private String ticketSql() {
         return """
                 SELECT t.public_id::text AS id,
@@ -463,6 +486,14 @@ public class TicketQueryService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private static void validatePublicUuid(String fieldName, String value) {
+        try {
+            UUID.fromString(value);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " must be a UUID.");
+        }
     }
 
     private static String stringOrNull(Object value) {
