@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.function.Supplier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ public class PcAgentAsService {
     private final Clock clock;
     private final Supplier<String> tokenGenerator;
 
+    @Autowired
     public PcAgentAsService(JdbcTemplate jdbcTemplate, AgentTokenHasher tokenHasher) {
         this(jdbcTemplate, tokenHasher, Clock.systemUTC(), PcAgentAsService::newAgentToken);
     }

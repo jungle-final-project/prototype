@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 
@@ -30,6 +31,18 @@ class PcAgentAsServiceTest {
             CLOCK,
             () -> "raw-agent-token"
     );
+
+    @Test
+    void springCanInstantiateServiceWithProductionConstructor() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(JdbcTemplate.class, () -> jdbcTemplate);
+            context.registerBean(AgentTokenHasher.class, () -> tokenHasher);
+            context.register(PcAgentAsService.class);
+            context.refresh();
+
+            assertThat(context.getBean(PcAgentAsService.class)).isNotNull();
+        }
+    }
 
     @Test
     void registerStoresHashedAgentTokenAndReturnsRawTokenOnce() {
