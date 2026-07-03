@@ -1317,9 +1317,10 @@ test('shows chatbot session recommendations on the recommendation result page wi
 
   await expect(page).toHaveURL('/builds/latest');
   await expect(page.getByRole('heading', { name: '추천 결과' })).toBeVisible();
-  await expect(page.getByText('200만원 실속형')).toBeVisible();
-  await expect(page.getByText('200만원 균형형')).toBeVisible();
-  await expect(page.getByText('200만원 성능형')).toBeVisible();
+  const latestGrid = page.getByTestId('latest-build-card-grid');
+  await expect(latestGrid.getByText('200만원 실속형')).toBeVisible();
+  await expect(latestGrid.getByText('200만원 균형형')).toBeVisible();
+  await expect(latestGrid.getByText('200만원 성능형')).toBeVisible();
   await expect(page.getByText('최근 AI 추천 조합을 최대 9개까지 보관합니다. 현재 3/9개')).toBeVisible();
   await expect(page.getByRole('button', { name: '전체', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: '실속형', exact: true })).toBeVisible();
@@ -1369,12 +1370,13 @@ test('accumulates chatbot recommendations up to nine and sends only the latest r
   expect(storedBuilds.map((build) => build.id)).not.toContain(uniqueBudgetBuilds(2_000_000, '1차')[0].id);
 
   await page.getByRole('navigation').getByRole('link', { name: '추천 결과' }).click();
+  const latestGrid = page.getByTestId('latest-build-card-grid');
   await expect(page.getByText('최근 AI 추천 조합을 최대 9개까지 보관합니다. 현재 9/9개')).toBeVisible();
   await expect(page.getByRole('button', { name: '상세 보기' })).toHaveCount(9);
-  await expect(page.getByText('230만원 실속형 4차')).toBeVisible();
-  await expect(page.getByText('220만원 성능형 3차')).toBeVisible();
-  await expect(page.getByText('210만원 균형형 2차')).toBeVisible();
-  await expect(page.getByText('200만원 실속형 1차')).toHaveCount(0);
+  await expect(latestGrid.getByText('230만원 실속형 4차')).toBeVisible();
+  await expect(latestGrid.getByText('220만원 성능형 3차')).toBeVisible();
+  await expect(latestGrid.getByText('210만원 균형형 2차')).toBeVisible();
+  await expect(latestGrid.getByText('200만원 실속형 1차')).toHaveCount(0);
 });
 
 test('deduplicates identical build compositions when accumulating chatbot recommendations', async ({ page }) => {
@@ -1398,9 +1400,10 @@ test('deduplicates identical build compositions when accumulating chatbot recomm
   expect(storedBuilds.map((build) => build.id)).toEqual(duplicateBuilds.map((build) => build.id));
 
   await page.getByRole('navigation').getByRole('link', { name: '추천 결과' }).click();
+  const latestGrid = page.getByTestId('latest-build-card-grid');
   await expect(page.getByText('최근 AI 추천 조합을 최대 9개까지 보관합니다. 현재 3/9개')).toBeVisible();
-  await expect(page.getByText('200만원 실속형 새추천')).toBeVisible();
-  await expect(page.getByText('200만원 실속형 원본')).toHaveCount(0);
+  await expect(latestGrid.getByText('200만원 실속형 새추천')).toBeVisible();
+  await expect(latestGrid.getByText('200만원 실속형 원본')).toHaveCount(0);
 });
 
 test('filters latest recommendation cards and closes the detail drawer when the selected build is hidden', async ({ page }) => {
@@ -1414,6 +1417,7 @@ test('filters latest recommendation cards and closes the detail drawer when the 
     sessionStorage.setItem('buildgraph.ai.assistantSession:user-1004', JSON.stringify(session));
   }, { session: storedAssistantSessionWithBuilds('최근 추천', latestBuilds) });
   await page.getByRole('navigation').getByRole('link', { name: '추천 결과' }).click();
+  const latestGrid = page.getByTestId('latest-build-card-grid');
 
   await expect(page.getByRole('button', { name: '상세 보기' })).toHaveCount(9);
   await page.getByRole('button', { name: /230만원 성능형 4차/ }).click();
@@ -1424,8 +1428,8 @@ test('filters latest recommendation cards and closes the detail drawer when the 
   await page.getByRole('button', { name: '실속형', exact: true }).click();
   await expect(page.getByRole('button', { name: '실속형', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: '상세 보기' })).toHaveCount(3);
-  await expect(page.getByText('230만원 실속형 4차')).toBeVisible();
-  await expect(page.getByText('230만원 성능형 4차')).toHaveCount(0);
+  await expect(latestGrid.getByText('230만원 실속형 4차')).toBeVisible();
+  await expect(latestGrid.getByText('230만원 성능형 4차')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: /선택한 추천 조합/ })).toHaveCount(0);
   await expect(drawer).toHaveCount(0);
 
