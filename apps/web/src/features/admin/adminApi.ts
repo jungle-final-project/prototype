@@ -8,6 +8,146 @@ export type AdminDashboard = {
   generatedAt?: string;
 };
 
+export type RecommendationModelSummary = {
+  latestModel?: {
+    id?: string;
+    modelName?: string;
+    modelVersion?: string;
+    algorithm?: string;
+    status?: string;
+    artifactPath?: string | null;
+    createdAt?: string | null;
+  } | null;
+  homeParts: {
+    windowDays: number;
+    impressions: number;
+    clicks: number;
+    ctr: number;
+    recentShadowScores: number;
+    scoreSources: Array<{
+      scoreSource: string;
+      count: number;
+      share: number;
+    }>;
+    recentCandidates: Array<{
+      partId: string;
+      category: string;
+      name: string;
+      manufacturer?: string | null;
+      price?: number | null;
+      score?: number | string | null;
+      rankPosition?: number | null;
+      modelVersion?: string | null;
+      createdAt?: string | null;
+    }>;
+  };
+  generatedAt?: string;
+};
+
+export type HomePartRecommendationFeedbackPayload = {
+  partId: string;
+  label: 'PROMOTE' | 'DEMOTE';
+  reason?: string;
+  recommendationId?: string;
+  category?: string;
+  rankPosition?: number | null;
+};
+
+export type RecommendationTrainingOverview = {
+  eligibleEvents: number;
+  trainedDistinctEvents: number;
+  untrainedEligibleEvents: number;
+  excludedDatasetItems: number;
+  recentSevenDayEvents: number;
+  activeModel?: RecommendationModelVersion | null;
+  latestJob?: RecommendationTrainingJob | null;
+  generatedAt?: string;
+};
+
+export type RecommendationTrainingDataset = {
+  id: string;
+  name: string;
+  sourceSurface: string;
+  filters?: Record<string, unknown>;
+  status: string;
+  eligibleCount: number;
+  includedCount: number;
+  excludedCount: number;
+  lockedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  updatedItems?: number;
+};
+
+export type RecommendationTrainingDatasetsResponse = {
+  items: RecommendationTrainingDataset[];
+  page?: number;
+  size?: number;
+  total?: number;
+};
+
+export type RecommendationTrainingDatasetItem = {
+  id: string;
+  eventId: string;
+  eventType: string;
+  sourceSurface: string;
+  category?: string | null;
+  rankPosition?: number | null;
+  included: boolean;
+  excludedReason?: string | null;
+  labelScoreSnapshot: number | string;
+  eventCreatedAt?: string | null;
+};
+
+export type RecommendationTrainingDatasetItemsResponse = {
+  items: RecommendationTrainingDatasetItem[];
+  page?: number;
+  size?: number;
+  total?: number;
+};
+
+export type RecommendationTrainingJob = {
+  id: string;
+  datasetId: string;
+  datasetName?: string;
+  status: string;
+  workerId?: string | null;
+  modelVersion?: string | null;
+  artifactPath?: string | null;
+  metrics?: Record<string, unknown>;
+  logSummary?: string | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+};
+
+export type RecommendationTrainingJobsResponse = {
+  items: RecommendationTrainingJob[];
+  page?: number;
+  size?: number;
+  total?: number;
+};
+
+export type RecommendationModelVersion = {
+  id: string;
+  modelName?: string;
+  modelVersion: string;
+  algorithm?: string;
+  artifactPath?: string | null;
+  status: string;
+  metrics?: Record<string, unknown>;
+  featureSchema?: Record<string, unknown>;
+  activatedAt?: string | null;
+  createdAt?: string | null;
+};
+
+export type RecommendationModelsResponse = {
+  items: RecommendationModelVersion[];
+  page?: number;
+  size?: number;
+  total?: number;
+};
+
 export type AdminAuditLog = {
   action?: string;
   targetType?: string;
@@ -514,6 +654,96 @@ export type PartQualityReportResponse = {
 
 export function getAdminDashboard() {
   return api<AdminDashboard>('/api/admin/dashboard');
+}
+
+export function getRecommendationModelSummary() {
+  return api<RecommendationModelSummary>('/api/admin/recommendation-models/summary');
+}
+
+export function getRecommendationModels() {
+  return api<RecommendationModelsResponse>('/api/admin/recommendation-models');
+}
+
+export function getRecommendationTrainingOverview() {
+  return api<RecommendationTrainingOverview>('/api/admin/recommendation-training/overview');
+}
+
+export function listRecommendationTrainingDatasets() {
+  return api<RecommendationTrainingDatasetsResponse>('/api/admin/recommendation-training-datasets');
+}
+
+export function createRecommendationTrainingDataset(payload: { name?: string; from?: string; to?: string; eventTypes?: string[]; categories?: string[] }) {
+  return api<RecommendationTrainingDataset>('/api/admin/recommendation-training-datasets', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateRecommendationTrainingDataset(datasetId: string, payload: { name?: string }) {
+  return api<RecommendationTrainingDataset>(`/api/admin/recommendation-training-datasets/${datasetId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function lockRecommendationTrainingDataset(datasetId: string) {
+  return api<RecommendationTrainingDataset>(`/api/admin/recommendation-training-datasets/${datasetId}/lock`, {
+    method: 'POST'
+  });
+}
+
+export function archiveRecommendationTrainingDataset(datasetId: string) {
+  return api<RecommendationTrainingDataset>(`/api/admin/recommendation-training-datasets/${datasetId}/archive`, {
+    method: 'POST'
+  });
+}
+
+export function getRecommendationTrainingDatasetItems(datasetId: string) {
+  return api<RecommendationTrainingDatasetItemsResponse>(`/api/admin/recommendation-training-datasets/${datasetId}/items`);
+}
+
+export function bulkIncludeRecommendationTrainingDatasetItems(datasetId: string, payload: { eventType?: string; category?: string; itemIds?: string[]; reason?: string }) {
+  return api<RecommendationTrainingDataset>(`/api/admin/recommendation-training-datasets/${datasetId}/items/bulk-include`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function bulkExcludeRecommendationTrainingDatasetItems(datasetId: string, payload: { eventType?: string; category?: string; itemIds?: string[]; reason?: string }) {
+  return api<RecommendationTrainingDataset>(`/api/admin/recommendation-training-datasets/${datasetId}/items/bulk-exclude`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function listRecommendationTrainingJobs() {
+  return api<RecommendationTrainingJobsResponse>('/api/admin/recommendation-training-jobs');
+}
+
+export function createRecommendationTrainingJob(payload: { datasetId: string }) {
+  return api<RecommendationTrainingJob>('/api/admin/recommendation-training-jobs', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function activateRecommendationModel(modelId: string) {
+  return api<RecommendationModelVersion>(`/api/admin/recommendation-models/${modelId}/activate`, {
+    method: 'POST'
+  });
+}
+
+export function retireRecommendationModel(modelId: string) {
+  return api<RecommendationModelVersion>(`/api/admin/recommendation-models/${modelId}/retire`, {
+    method: 'POST'
+  });
+}
+
+export function createHomePartRecommendationFeedback(payload: HomePartRecommendationFeedbackPayload) {
+  return api('/api/admin/recommendation-feedback/home-parts', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 }
 
 export function getRecentAdminAuditLogs() {

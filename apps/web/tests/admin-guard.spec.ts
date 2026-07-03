@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const adminRoutes = [
   '/admin',
@@ -14,6 +14,167 @@ const adminRoutes = [
   '/admin/as-tickets',
   '/admin/as-tickets/AS-1031'
 ];
+
+async function mockRecommendationModelSummary(page: Page) {
+  await page.route('**/api/admin/recommendation-models/summary', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        latestModel: {
+          modelName: 'xgboost-reranker',
+          modelVersion: 'xgb-20260703100000',
+          status: 'SHADOW'
+        },
+        homeParts: {
+          windowDays: 7,
+          impressions: 10,
+          clicks: 2,
+          ctr: 0.2,
+          recentShadowScores: 40,
+          scoreSources: [
+            { scoreSource: 'XGBOOST', count: 10, share: 1.0 }
+          ],
+          recentCandidates: [
+            {
+              partId: '00000000-0000-4000-8000-000000010001',
+              category: 'GPU',
+              name: 'RTX 5090 추천 후보',
+              manufacturer: 'NVIDIA',
+              price: 4000000,
+              score: 9.5,
+              rankPosition: 0,
+              modelVersion: 'xgb-20260703100000',
+              createdAt: '2026-07-03T10:00:00Z'
+            }
+          ]
+        },
+        generatedAt: '2026-07-03T10:00:00Z'
+      })
+    });
+  });
+  await page.route('**/api/admin/recommendation-training/overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        eligibleEvents: 24,
+        trainedDistinctEvents: 8,
+        untrainedEligibleEvents: 16,
+        excludedDatasetItems: 2,
+        recentSevenDayEvents: 12,
+        activeModel: null,
+        latestJob: { id: 'job-001', datasetId: 'dataset-001', status: 'SKIPPED_LOW_DATASET' },
+        generatedAt: '2026-07-03T10:00:00Z'
+      })
+    });
+  });
+  await page.route('**/api/admin/recommendation-training-datasets', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'dataset-002',
+          name: '새 데이터셋',
+          status: 'DRAFT',
+          eligibleCount: 24,
+          includedCount: 24,
+          excludedCount: 0
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'dataset-001',
+            name: '홈 추천부품 학습 데이터셋',
+            sourceSurface: 'HOME_PARTS',
+            status: 'DRAFT',
+            eligibleCount: 24,
+            includedCount: 22,
+            excludedCount: 2,
+            createdAt: '2026-07-03T10:00:00Z'
+          }
+        ],
+        page: 0,
+        size: 50,
+        total: 1
+      })
+    });
+  });
+  await page.route('**/api/admin/recommendation-training-datasets/*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'dataset-001',
+        name: '홈 추천부품 학습 데이터셋',
+        sourceSurface: 'HOME_PARTS',
+        status: 'DRAFT',
+        eligibleCount: 24,
+        includedCount: 22,
+        excludedCount: 2
+      })
+    });
+  });
+  await page.route('**/api/admin/recommendation-training-jobs', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'job-002', datasetId: 'dataset-001', status: 'QUEUED' })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'job-001',
+            datasetId: 'dataset-001',
+            datasetName: '홈 추천부품 학습 데이터셋',
+            status: 'SKIPPED_LOW_DATASET',
+            metrics: { rowCount: 12 },
+            logSummary: '학습 데이터 부족',
+            createdAt: '2026-07-03T10:00:00Z'
+          }
+        ],
+        page: 0,
+        size: 50,
+        total: 1
+      })
+    });
+  });
+  await page.route('**/api/admin/recommendation-models', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'model-001',
+            modelName: 'xgboost-reranker',
+            modelVersion: 'xgb-20260703100000',
+            status: 'SHADOW',
+            artifactPath: '/models/xgb-20260703100000.json',
+            metrics: { mae: 0.42 },
+            createdAt: '2026-07-03T10:00:00Z'
+          }
+        ],
+        page: 0,
+        size: 50,
+        total: 1
+      })
+    });
+  });
+}
 
 test('shows permission screen without calling auth/me when token is missing', async ({ page }) => {
   let authMeCalls = 0;
@@ -731,6 +892,7 @@ test('renders eight admin shell navigation entries for ADMIN role', async ({ pag
       body: JSON.stringify({ items: [] })
     });
   });
+  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
@@ -843,6 +1005,7 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
       })
     });
   });
+  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
@@ -860,6 +1023,22 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
   await expect(page.locator('main')).toContainText('운영 작업');
   await expect(page.locator('main')).toContainText('관리자 할 일');
   await expect(page.locator('main')).toContainText('최근 관리자 작업');
+  await expect(page.locator('main')).toContainText('AI 추천 모델 상태');
+  await expect(page.locator('main')).toContainText('xgb-20260703100000');
+  await expect(page.locator('main')).toContainText('20%');
+  await expect(page.locator('main')).toContainText('RTX 5090 추천 후보');
+  await expect(page.getByRole('button', { name: '추천 강화' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '추천 낮춤' })).toBeVisible();
+  await expect(page.locator('main')).toContainText('XGBoost 학습 운영');
+  await expect(page.locator('main')).toContainText('eligible events');
+  await expect(page.locator('main')).toContainText('untrained eligible events');
+  await page.getByRole('button', { name: '데이터셋' }).click();
+  await expect(page.locator('main')).toContainText('홈 추천부품 학습 데이터셋');
+  await expect(page.getByRole('button', { name: '현재 HOME 이벤트로 데이터셋 생성' })).toBeVisible();
+  await page.getByRole('button', { name: '학습 Job' }).click();
+  await expect(page.locator('main')).toContainText('학습 데이터 부족');
+  await page.getByRole('button', { name: '모델 버전' }).click();
+  await expect(page.getByRole('button', { name: '활성화' })).toBeVisible();
   await expect(page.locator('main')).toContainText('AS_TICKET_UPDATED');
   await expect(page.locator('main')).toContainText('as_tickets');
   await expect(page.locator('main')).toContainText('4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a');
@@ -910,6 +1089,7 @@ test('shows degraded alert on admin dashboard when dashboard API reports degrade
       body: JSON.stringify({ items: [] })
     });
   });
+  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
@@ -953,6 +1133,7 @@ test('keeps admin dashboard usable when audit logs API fails', async ({ page }) 
       body: JSON.stringify({ code: 'INTERNAL_ERROR', message: '감사 로그 조회 실패' })
     });
   });
+  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
@@ -993,6 +1174,7 @@ test('shows admin dashboard loading state while dashboard API is pending', async
       })
     });
   });
+  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 

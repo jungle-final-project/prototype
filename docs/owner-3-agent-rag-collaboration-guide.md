@@ -263,15 +263,24 @@ LLM 호출 결과는 `llm_generations`에 저장한다. 저장 대상은 provide
 
 Build Chat은 반복 상담 속도 개선을 위해 Redis cache를 사용할 수 있다. 기본 TTL은 `BUILD_CHAT_CACHE_TTL_SECONDS=600`초이며, cache key는 `user internal id + profile + normalized message + selectedCategory + currentQuoteDraft partId/quantity fingerprint + parts/benchmark/FPS/RAG/alias version`으로 만든다. Redis 장애, 미설정, 직렬화 실패가 있어도 사용자 응답 shape는 바뀌지 않고 기존 LLM/RAG 실행으로 우회한다. cache hit/miss는 내부 로그와 benchmark 보고서에서만 확인하고 프론트 계약에는 노출하지 않는다. cache payload는 이전 실행의 `agentSessionId`, `evidenceIds`, `toolInvocationIds`를 제거해 trace 식별자를 재사용하지 않는다.
 
-Build Chat 추천 품질 개선을 위한 XGBoost reranker는 1차에서 shadow scoring만 수행한다. 홈 하단 추천부품 랭킹은 같은 scorer를 사용할 수 있지만, scorer 장애나 모델 부재 시 deterministic fallback을 반환해 사용자 화면을 유지한다. 기본 설정은 `RECOMMENDATION_RERANKER_ENABLED=false`, `RECOMMENDATION_RERANKER_SHADOW_ENABLED=true`, `RECOMMENDATION_RERANKER_ENDPOINT=http://localhost:8091/score`다. Java API는 기존 Tool/규칙 필터를 통과한 후보만 external scorer에 보내고, scorer 장애나 미기동은 사용자 응답 실패로 전파하지 않는다. Build Chat의 반환 score는 `recommendation_shadow_scores`에 저장하지만 추천 순서는 바꾸지 않는다.
+Build Chat 추천 품질 개선을 위한 XGBoost reranker는 shadow scoring만 수행한다. 홈 하단 추천부품 랭킹은 같은 scorer를 보이는 랭킹에 사용하며, scorer 장애나 모델 부재 시 deterministic fallback을 반환해 사용자 화면을 유지한다. Docker 기본 endpoint는 `RECOMMENDATION_RERANKER_ENDPOINT=http://xgb-reranker:8091/score`이고, 로컬 jar 단독 실행 시에는 `http://localhost:8091/score`를 사용한다. Java API는 기존 Tool/규칙 필터를 통과한 후보만 external scorer에 보내고, scorer 장애나 미기동은 사용자 응답 실패로 전파하지 않는다. Build Chat의 반환 score는 `recommendation_shadow_scores`에 저장하지만 추천 순서는 바꾸지 않는다.
 
-학습 데이터는 `POST /api/recommendation-events`와 관리자 AS feedback API로 수집한다. 홈 추천부품의 노출/클릭/상세 이동은 `sourceSurface=HOME_RECOMMENDED_PARTS`로 저장한다. AS 접수 자체는 자동 negative label이 아니며, 관리자가 `POST /api/admin/recommendation-feedback/as-tickets/{id}`로 추천 조합/부품 문제를 확정한 경우에만 `AS_CONFIRMED_NEGATIVE` 이벤트를 저장한다. 이 과정에서 `as_tickets.status`, `cause_candidates`, `upgrade_candidates`는 수정하지 않는다.
+학습 데이터는 `POST /api/recommendation-events`, 관리자 홈 추천부품 라벨 API, 관리자 AS feedback API로 수집한다. 홈 추천부품의 노출/클릭/상세 이동/견적 담기는 `sourceSurface=HOME_RECOMMENDED_PARTS`로 저장한다. 관리자는 `POST /api/admin/recommendation-feedback/home-parts`로 `ADMIN_PROMOTE` 또는 `ADMIN_DEMOTE` 라벨을 추가할 수 있다. 이 라벨은 학습 신호일 뿐 `parts.status`나 사용자 노출 여부를 바꾸지 않는다. AS 접수 자체는 자동 negative label이 아니며, 관리자가 `POST /api/admin/recommendation-feedback/as-tickets/{id}`로 추천 조합/부품 문제를 확정한 경우에만 `AS_CONFIRMED_NEGATIVE` 이벤트를 저장한다. 이 과정에서 `as_tickets.status`, `cause_candidates`, `upgrade_candidates`는 수정하지 않는다.
 
 Python batch 도구:
 
-- `tools/export_recommendation_training_data.py`: `recommendation_events`를 CSV 학습 데이터로 export한다.
-- `tools/train_xgb_reranker.py`: CSV에서 XGBoost 모델과 metric 보고서를 생성한다.
-- `tools/reranker_service.py`: optional local scorer API다. 모델 경로가 있으면 XGBoost로 점수를 내고, 모델이 없으면 shadow 연결 smoke용 baseline score만 반환한다.
+- `tools/export_recommendation_training_data.py`: `recommendation_events`를 CSV 학습 데이터로 export한다. 홈 추천부품은 `--home-parts`로 사용자 HOME 이벤트와 관리자 HOME 라벨을 함께 export한다.
+- `tools/train_xgb_reranker.py`: CSV에서 XGBoost 모델과 metric 보고서를 생성한다. 기본은 50행 미만이면 `SKIPPED_LOW_DATASET`으로 모델 생성을 건너뛰고, 데모 강제 학습은 `--allow-small-dataset`을 명시한다.
+- `tools/reranker_service.py`: optional scorer API와 training worker다. Docker `xgb-reranker` 서비스에서 실행되며 `/models/home-parts-active.json`이 있으면 XGBoost로 점수를 내고, 모델이 없거나 로드 실패하면 연결 smoke용 baseline score를 반환한다. worker는 `recommendation_training_jobs.status=QUEUED` row를 polling해 locked dataset을 학습한다.
+
+관리자 운영 학습/배포 절차:
+
+1. `/admin` 대시보드의 “AI 추천 모델 상태”에서 학습 dataset을 만든다. dataset은 eligible event의 feature/label snapshot이다.
+2. `DRAFT` dataset에서 포함/제외를 정리한 뒤 `LOCKED`로 잠근다.
+3. 학습 Job을 만든다. API는 `QUEUED` row만 만들고 Python 학습은 `xgb-reranker` worker가 처리한다.
+4. 50행 미만이면 `SKIPPED_LOW_DATASET`으로 끝나며 모델을 만들지 않는다.
+5. 성공 모델은 `recommendation_model_versions.status=SHADOW`로 저장된다. 관리자 검토 후 activate API가 scorer reload에 성공하면 `/models/home-parts-active.json`이 갱신되고 DB status가 `ACTIVE`로 바뀐다.
+6. CLI export/train은 로컬 분석과 데모 보조용으로만 사용한다. 특정 파일을 강제 테스트하려면 `.env`의 `RECOMMENDATION_RERANKER_MODEL_PATH=/models/<model-file>.json`에 지정한다.
 
 LLM mode에서도 외부 담당자가 보는 계약은 바뀌지 않는다.
 

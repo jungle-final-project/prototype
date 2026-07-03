@@ -51,6 +51,9 @@ class RecommendationControllerTest {
     private RecommendationLearningService recommendationLearningService;
 
     @MockitoBean
+    private RecommendationTrainingService recommendationTrainingService;
+
+    @MockitoBean
     private HomePartRecommendationService homePartRecommendationService;
 
     @MockitoBean
@@ -172,6 +175,39 @@ class RecommendationControllerTest {
     }
 
     @Test
+    void homePartFeedbackRequiresAdmin() throws Exception {
+        mockMvc.perform(post("/api/admin/recommendation-feedback/home-parts")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partId\":\"part-public-id\",\"label\":\"PROMOTE\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void adminCanCreateHomePartFeedback() throws Exception {
+        when(recommendationLearningService.recordHomePartAdminFeedback(Map.of("partId", "part-public-id", "label", "PROMOTE"), ADMIN))
+                .thenReturn(MockData.map(
+                        "id", "event-public-id",
+                        "eventType", "ADMIN_PROMOTE",
+                        "labelScore", 4.0,
+                        "sourceSurface", "ADMIN_HOME_PART_FEEDBACK",
+                        "category", "GPU",
+                        "createdAt", "2026-07-03T10:00:00Z"
+                ));
+
+        mockMvc.perform(post("/api/admin/recommendation-feedback/home-parts")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partId\":\"part-public-id\",\"label\":\"PROMOTE\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.eventType").value("ADMIN_PROMOTE"))
+                .andExpect(jsonPath("$.labelScore").value(4.0));
+
+        verify(recommendationLearningService).recordHomePartAdminFeedback(Map.of("partId", "part-public-id", "label", "PROMOTE"), ADMIN);
+    }
+
+    @Test
     void adminCanListRecommendationModels() throws Exception {
         when(recommendationLearningService.modelVersions()).thenReturn(Map.of(
                 "items", List.of(Map.of(
@@ -189,5 +225,101 @@ class RecommendationControllerTest {
                         .header("Authorization", ADMIN_TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].modelVersion").value("xgb-20260703100000"));
+    }
+
+    @Test
+    void adminCanReadRecommendationModelSummary() throws Exception {
+        when(recommendationLearningService.modelSummary()).thenReturn(Map.of(
+                "latestModel", Map.of(
+                        "modelName", "xgboost-reranker",
+                        "modelVersion", "xgb-20260703100000",
+                        "status", "SHADOW"
+                ),
+                "homeParts", Map.of(
+                        "windowDays", 7,
+                        "impressions", 10,
+                        "clicks", 2,
+                        "ctr", 0.2,
+                        "scoreSources", List.of(Map.of("scoreSource", "XGBOOST", "count", 10, "share", 1.0)),
+                        "recentShadowScores", 40,
+                        "recentCandidates", List.of(Map.of(
+                                "partId", "part-public-id",
+                                "category", "GPU",
+                                "name", "RTX 5090",
+                                "price", 4_000_000
+                        ))
+                ),
+                "generatedAt", "2026-07-03T10:00:00Z"
+        ));
+
+        mockMvc.perform(get("/api/admin/recommendation-models/summary")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.latestModel.modelVersion").value("xgb-20260703100000"))
+                .andExpect(jsonPath("$.homeParts.impressions").value(10))
+                .andExpect(jsonPath("$.homeParts.scoreSources[0].scoreSource").value("XGBOOST"));
+    }
+
+    @Test
+    void trainingOverviewRequiresAdmin() throws Exception {
+        mockMvc.perform(get("/api/admin/recommendation-training/overview")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+        verifyNoInteractions(recommendationTrainingService);
+    }
+
+    @Test
+    void adminCanReadTrainingOverview() throws Exception {
+        when(recommendationTrainingService.overview()).thenReturn(MockData.map(
+                "eligibleEvents", 12,
+                "trainedDistinctEvents", 4,
+                "untrainedEligibleEvents", 8,
+                "excludedDatasetItems", 1
+        ));
+
+        mockMvc.perform(get("/api/admin/recommendation-training/overview")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eligibleEvents").value(12))
+                .andExpect(jsonPath("$.untrainedEligibleEvents").value(8));
+    }
+
+    @Test
+    void adminCanCreateTrainingDataset() throws Exception {
+        when(recommendationTrainingService.createDataset(Map.of("name", "dataset"), ADMIN)).thenReturn(MockData.map(
+                "id", "dataset-public-id",
+                "name", "dataset",
+                "status", "DRAFT",
+                "eligibleCount", 10,
+                "includedCount", 10
+        ));
+
+        mockMvc.perform(post("/api/admin/recommendation-training-datasets")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"dataset\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value("dataset-public-id"))
+                .andExpect(jsonPath("$.status").value("DRAFT"));
+
+        verify(recommendationTrainingService).createDataset(Map.of("name", "dataset"), ADMIN);
+    }
+
+    @Test
+    void adminCanCreateTrainingJob() throws Exception {
+        when(recommendationTrainingService.createJob(Map.of("datasetId", "dataset-public-id"), ADMIN)).thenReturn(MockData.map(
+                "id", "job-public-id",
+                "datasetId", "dataset-public-id",
+                "status", "QUEUED"
+        ));
+
+        mockMvc.perform(post("/api/admin/recommendation-training-jobs")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"datasetId\":\"dataset-public-id\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("QUEUED"));
     }
 }

@@ -41,6 +41,34 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  xgb-reranker:
+    build:
+      context: .
+      dockerfile: ./infra/docker/xgb-reranker/Dockerfile
+    container_name: buildgraph-xgb-reranker
+    environment:
+      RECOMMENDATION_RERANKER_MODEL_PATH: ${RECOMMENDATION_RERANKER_MODEL_PATH:-}
+      RECOMMENDATION_TRAINING_WORKER_ENABLED: ${RECOMMENDATION_TRAINING_WORKER_ENABLED:-true}
+      RECOMMENDATION_TRAINING_MIN_ROWS: ${RECOMMENDATION_TRAINING_MIN_ROWS:-50}
+      RECOMMENDATION_TRAINING_POLL_SECONDS: ${RECOMMENDATION_TRAINING_POLL_SECONDS:-5}
+      RECOMMENDATION_DB_HOST: postgres
+      RECOMMENDATION_DB_PORT: 5432
+      RECOMMENDATION_DB_NAME: buildgraph
+      RECOMMENDATION_DB_USER: buildgraph
+      RECOMMENDATION_DB_PASSWORD: buildgraph
+    volumes:
+      - ./artifacts/recommendation/model:/models
+    ports:
+      - "8091:8091"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8091/health', timeout=2).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: ./apps/api
@@ -137,7 +165,7 @@ services:
       BUILD_CHAT_54_MINI_FAST_RECENT_MESSAGE_LIMIT: ${BUILD_CHAT_54_MINI_FAST_RECENT_MESSAGE_LIMIT:-0}
       RECOMMENDATION_RERANKER_ENABLED: ${RECOMMENDATION_RERANKER_ENABLED:-false}
       RECOMMENDATION_RERANKER_SHADOW_ENABLED: ${RECOMMENDATION_RERANKER_SHADOW_ENABLED:-true}
-      RECOMMENDATION_RERANKER_ENDPOINT: ${RECOMMENDATION_RERANKER_ENDPOINT:-http://localhost:8091/score}
+      RECOMMENDATION_RERANKER_ENDPOINT: ${RECOMMENDATION_RERANKER_ENDPOINT:-http://xgb-reranker:8091/score}
       RECOMMENDATION_RERANKER_TIMEOUT_MS: ${RECOMMENDATION_RERANKER_TIMEOUT_MS:-1200}
       NAVER_SEARCH_CLIENT_ID: ${NAVER_SEARCH_CLIENT_ID:-}
       NAVER_SEARCH_CLIENT_SECRET: ${NAVER_SEARCH_CLIENT_SECRET:-}
@@ -167,6 +195,8 @@ services:
         condition: service_started
       rabbitmq:
         condition: service_started
+      xgb-reranker:
+        condition: service_healthy
     ports:
       - "8080:8080"
 

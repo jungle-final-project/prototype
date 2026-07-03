@@ -21,7 +21,7 @@ import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT } from '../../../lib/api';
 import { partImageUrl } from '../../parts/partDisplay';
 import { applyAiBuildToQuoteDraft, getPart, listHomeRecommendedParts, listParts, recordRecommendationEvent } from '../../parts/partsApi';
-import type { PartRow } from '../../parts/types';
+import type { HomeRecommendedPart, PartRow } from '../../parts/types';
 import { AiBuildAssistant } from '../components/AiBuildAssistant';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
 import {
@@ -668,6 +668,7 @@ function PopularPartsSection() {
         idempotencyKey: `${eventSessionId.current}:impression:${item.recommendationId}`,
         eventPayload: {
           scoreSource: item.scoreSource,
+          modelVersion: item.modelVersion,
           reasonTags: item.reasonTags
         }
       }).catch(() => undefined);
@@ -685,6 +686,7 @@ function PopularPartsSection() {
       idempotencyKey: `${eventSessionId.current}:click:${item.recommendationId}`,
       eventPayload: {
         scoreSource: item.scoreSource,
+        modelVersion: item.modelVersion,
         reasonTags: item.reasonTags
       }
     }).catch(() => undefined);
@@ -703,8 +705,9 @@ function PopularPartsSection() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {displayItems.map((item, index) => {
           const matchedPart = item?.part ?? null;
-          const partDetailPath = matchedPart ? `/parts/${matchedPart.id}` : '.';
+          const partDetailPath = matchedPart && item ? homeRecommendedPartPath(item) : '.';
           const saleLabel = index === 0 ? 'BEST' : matchedPart?.benchmarkSummary ? 'PASS' : '추천';
+          const reasonLabels = item ? homeReasonLabels(item.reasonTags ?? []) : [];
 
           return (
             <Link
@@ -737,6 +740,15 @@ function PopularPartsSection() {
               <div className="mt-3 text-xs font-black text-brand-blue">{matchedPart?.category ?? '추천'}</div>
               <h3 className="mt-1 min-h-10 text-sm font-black leading-5 text-commerce-ink">{matchedPart?.name ?? '추천 부품을 불러오는 중'}</h3>
               <p className="mt-1 text-xs text-slate-500">{matchedPart ? homePartDetail(matchedPart) : '내부 자산 랭킹 계산 중입니다.'}</p>
+              {reasonLabels.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {reasonLabels.slice(0, 3).map((label) => (
+                    <span key={label} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <div className="mt-3 flex items-center justify-between gap-2">
                 <span className="text-lg font-black text-commerce-ink">{matchedPart ? `${matchedPart.price.toLocaleString()}원` : '가격 확인 중'}</span>
                 <div className="flex items-center gap-1 text-[11px] font-bold text-amber-600">
@@ -753,6 +765,28 @@ function PopularPartsSection() {
       ) : null}
     </section>
   );
+}
+
+function homeRecommendedPartPath(item: HomeRecommendedPart) {
+  const search = new URLSearchParams({
+    recId: item.recommendationId,
+    recSurface: 'HOME_RECOMMENDED_PARTS',
+    rank: String(item.rankPosition)
+  });
+  return `/parts/${item.part.id}?${search.toString()}`;
+}
+
+function homeReasonLabels(tags: string[]) {
+  const labels: Record<string, string> = {
+    benchmark: '성능 근거',
+    fps: '게임 FPS 근거',
+    toolReady: '호환 검증 가능',
+    image: '상품 정보 확인',
+    freshPrice: '최근 가격',
+    userReaction: '사용자 반응 반영',
+    internalAsset: '내부 자산'
+  };
+  return tags.map((tag) => labels[tag]).filter((label): label is string => Boolean(label));
 }
 
 function homePartDetail(part: PartRow) {

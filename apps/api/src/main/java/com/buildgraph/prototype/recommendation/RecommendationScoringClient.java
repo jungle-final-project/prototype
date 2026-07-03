@@ -46,6 +46,26 @@ public class RecommendationScoringClient {
         return OBJECT_MAPPER.readValue(response.body(), MAP_TYPE);
     }
 
+    public Map<String, Object> reload(String modelPath) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(reloadUri())
+                    .timeout(Duration.ofSeconds(5))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            OBJECT_MAPPER.writeValueAsString(MockData.map("modelPath", modelPath)),
+                            StandardCharsets.UTF_8
+                    ))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException("scorer reload returned HTTP " + response.statusCode());
+            }
+            return OBJECT_MAPPER.readValue(response.body(), MAP_TYPE);
+        } catch (Exception error) {
+            throw new IllegalStateException("scorer reload failed: " + error.getMessage(), error);
+        }
+    }
+
     public Map<String, Object> payload(
             String requestHash,
             String profile,
@@ -58,5 +78,17 @@ public class RecommendationScoringClient {
                 "activeRerankEnabled", activeRerankEnabled,
                 "candidates", candidates
         );
+    }
+
+    private URI reloadUri() {
+        URI scoreUri = URI.create(endpoint);
+        String path = scoreUri.getPath();
+        String reloadPath = path == null || path.isBlank() || "/".equals(path)
+                ? "/reload"
+                : path.replaceFirst("/score$", "/reload");
+        if (reloadPath.equals(path)) {
+            reloadPath = "/reload";
+        }
+        return URI.create(scoreUri.getScheme() + "://" + scoreUri.getAuthority() + reloadPath);
     }
 }

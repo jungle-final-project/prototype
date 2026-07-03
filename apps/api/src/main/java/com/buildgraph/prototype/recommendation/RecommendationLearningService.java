@@ -17,17 +17,20 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class RecommendationLearningService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final Map<String, Double> LABEL_SCORES = Map.of(
-            "IMPRESSION", 0.0,
-            "CLICK", 1.0,
-            "DETAIL_VIEW", 1.0,
-            "SAVE", 3.0,
-            "CHANGE_ADOPTED", 3.0,
-            "ADD_BUILD_TO_DRAFT", 3.0,
-            "ORDER_INTENT", 5.0,
-            "REJECT", -1.0,
-            "CHANGE_REVERTED", -1.0,
-            "AS_CONFIRMED_NEGATIVE", -2.0
+    private static final Map<String, Double> LABEL_SCORES = Map.ofEntries(
+            Map.entry("IMPRESSION", 0.0),
+            Map.entry("CLICK", 1.0),
+            Map.entry("DETAIL_VIEW", 1.0),
+            Map.entry("SAVE", 3.0),
+            Map.entry("CHANGE_ADOPTED", 3.0),
+            Map.entry("ADD_BUILD_TO_DRAFT", 3.0),
+            Map.entry("ADD_PART_TO_DRAFT", 3.0),
+            Map.entry("ORDER_INTENT", 5.0),
+            Map.entry("REJECT", -1.0),
+            Map.entry("CHANGE_REVERTED", -1.0),
+            Map.entry("AS_CONFIRMED_NEGATIVE", -2.0),
+            Map.entry("ADMIN_PROMOTE", 4.0),
+            Map.entry("ADMIN_DEMOTE", -3.0)
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -40,6 +43,9 @@ public class RecommendationLearningService {
         String eventType = normalizeEventType(text(request.get("eventType")));
         if ("AS_CONFIRMED_NEGATIVE".equals(eventType)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "AS 확정 피드백은 관리자 API를 사용해야 합니다.");
+        }
+        if (eventType.startsWith("ADMIN_")) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 추천 피드백은 관리자 API를 사용해야 합니다.");
         }
         String idempotencyKey = text(request.get("idempotencyKey"));
         if (idempotencyKey != null) {
@@ -114,6 +120,53 @@ public class RecommendationLearningService {
         );
     }
 
+    public Map<String, Object> recordHomePartAdminFeedback(
+            Map<String, Object> request,
+            CurrentUserService.CurrentUser admin
+    ) {
+        String partPublicId = text(request.get("partId"));
+        if (partPublicId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "partId는 필수입니다.");
+        }
+        Long partId = resolvePartId(partPublicId);
+        String label = text(request.get("label"));
+        String eventType;
+        if ("PROMOTE".equalsIgnoreCase(label)) {
+            eventType = "ADMIN_PROMOTE";
+        } else if ("DEMOTE".equalsIgnoreCase(label)) {
+            eventType = "ADMIN_DEMOTE";
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "label은 PROMOTE 또는 DEMOTE여야 합니다.");
+        }
+        Map<String, Object> part = jdbcTemplate.queryForMap("""
+                SELECT category,
+                       name,
+                       manufacturer
+                FROM parts
+                WHERE id = ?
+                """, partId);
+        Map<String, Object> payload = new LinkedHashMap<>(eventPayload(request));
+        payload.put("label", label.toUpperCase(Locale.ROOT));
+        payload.put("partName", part.get("name"));
+        payload.put("manufacturer", part.get("manufacturer"));
+        payload.put("createdByAdminId", admin.id());
+        return insertEvent(
+                admin.internalId(),
+                admin.internalId(),
+                eventType,
+                label(eventType),
+                "ADMIN_HOME_PART_FEEDBACK",
+                text(request.get("recommendationId")),
+                null,
+                partId,
+                null,
+                firstText(text(request.get("category")), DbValueMapper.string(part, "category")),
+                integer(request.get("rankPosition")),
+                text(request.get("idempotencyKey")),
+                payload
+        );
+    }
+
     public Map<String, Object> modelVersions() {
         List<Map<String, Object>> items = jdbcTemplate.queryForList("""
                         SELECT public_id::text AS id,
@@ -137,6 +190,119 @@ public class RecommendationLearningService {
                 .map(this::modelVersionDto)
                 .toList();
         return MockData.map("items", items, "page", 0, "size", 50, "total", items.size());
+    }
+
+    public Map<String, Object> modelSummary() {
+        Map<String, Object> latestModel = jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id,
+                               model_name,
+                               model_version,
+                               algorithm,
+                               artifact_path,
+                               status,
+                               trained_from,
+                               trained_to,
+                               metrics,
+                               feature_schema,
+                               activated_at,
+                               created_at
+                        FROM recommendation_model_versions
+                        WHERE deleted_at IS NULL
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """)
+                .stream()
+                .findFirst()
+                .map(this::modelVersionDto)
+                .orElse(null);
+        Map<String, Object> homeEvents = jdbcTemplate.queryForMap("""
+                SELECT count(*) FILTER (WHERE event_type = 'IMPRESSION') AS impressions,
+                       count(*) FILTER (WHERE event_type IN ('CLICK', 'DETAIL_VIEW')) AS clicks
+                FROM recommendation_events
+                WHERE source_surface = 'HOME_RECOMMENDED_PARTS'
+                  AND created_at >= now() - interval '7 days'
+                """);
+        long impressions = longValue(homeEvents, "impressions");
+        long clicks = longValue(homeEvents, "clicks");
+        List<Map<String, Object>> scoreSources = jdbcTemplate.queryForList("""
+                        SELECT coalesce(
+                                 nullif(event_payload->>'scoreSource', ''),
+                                 nullif(event_payload #>> '{eventPayload,scoreSource}', ''),
+                                 'UNKNOWN'
+                               ) AS score_source,
+                               count(*) AS count
+                        FROM recommendation_events
+                        WHERE source_surface = 'HOME_RECOMMENDED_PARTS'
+                          AND event_type = 'IMPRESSION'
+                          AND created_at >= now() - interval '7 days'
+                        GROUP BY 1
+                        ORDER BY count DESC, score_source
+                        """)
+                .stream()
+                .map(row -> {
+                    long count = longValue(row, "count");
+                    return MockData.map(
+                            "scoreSource", DbValueMapper.string(row, "score_source"),
+                            "count", count,
+                            "share", impressions <= 0 ? 0.0 : count / (double) impressions
+                    );
+                })
+                .toList();
+        Long recentShadowScores = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM recommendation_shadow_scores
+                WHERE source_surface = 'HOME_RECOMMENDED_PARTS'
+                  AND created_at >= now() - interval '7 days'
+                """, Long.class);
+        List<Map<String, Object>> recentCandidates = jdbcTemplate.queryForList("""
+                        SELECT *
+                        FROM (
+                          SELECT DISTINCT ON (p.id)
+                                 p.public_id::text AS part_id,
+                                 p.category,
+                                 p.name,
+                                 p.manufacturer,
+                                 p.price,
+                                 s.score,
+                                 s.rank_position,
+                                 mv.model_version,
+                                 s.created_at
+                          FROM recommendation_shadow_scores s
+                          JOIN parts p ON p.id = s.part_id
+                          LEFT JOIN recommendation_model_versions mv ON mv.id = s.model_version_id
+                          WHERE s.source_surface = 'HOME_RECOMMENDED_PARTS'
+                            AND p.deleted_at IS NULL
+                          ORDER BY p.id, s.created_at DESC
+                        ) latest
+                        ORDER BY created_at DESC
+                        LIMIT 12
+                        """)
+                .stream()
+                .map(row -> MockData.map(
+                        "partId", DbValueMapper.string(row, "part_id"),
+                        "category", DbValueMapper.string(row, "category"),
+                        "name", DbValueMapper.string(row, "name"),
+                        "manufacturer", DbValueMapper.string(row, "manufacturer"),
+                        "price", row.get("price"),
+                        "score", row.get("score"),
+                        "rankPosition", row.get("rank_position"),
+                        "modelVersion", DbValueMapper.string(row, "model_version"),
+                        "createdAt", DbValueMapper.timestamp(row, "created_at")
+                ))
+                .toList();
+        return MockData.map(
+                "latestModel", latestModel,
+                "homeParts", MockData.map(
+                        "windowDays", 7,
+                        "impressions", impressions,
+                        "clicks", clicks,
+                        "ctr", impressions <= 0 ? 0.0 : clicks / (double) impressions,
+                        "scoreSources", scoreSources,
+                        "recentShadowScores", recentShadowScores == null ? 0L : recentShadowScores,
+                        "recentCandidates", recentCandidates
+                ),
+                "generatedAt", java.time.Instant.now().toString()
+        );
     }
 
     private Map<String, Object> insertEvent(
@@ -297,11 +463,17 @@ public class RecommendationLearningService {
 
     private Map<String, Object> eventPayload(Map<String, Object> request) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        for (String key : List.of("message", "reason", "intent", "aiProfile", "modelVersion", "metadata", "eventPayload")) {
+        for (String key : List.of("message", "reason", "intent", "aiProfile", "modelVersion", "metadata")) {
             Object value = request.get(key);
             if (value != null) {
                 payload.put(key, value);
             }
+        }
+        Object eventPayload = request.get("eventPayload");
+        if (eventPayload instanceof Map<?, ?> map) {
+            map.forEach((key, value) -> payload.put(String.valueOf(key), value));
+        } else if (eventPayload != null) {
+            payload.put("eventPayload", eventPayload);
         }
         return payload;
     }

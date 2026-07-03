@@ -56,6 +56,8 @@ docker compose up --build
 | `BUILD_CHAT_DEFAULT_PROFILE` | 선택 | Build Chat 기본 profile | 기본값은 실측 benchmark 기준 `BUILD_CHAT_54_MINI_FAST`입니다. |
 | `BUILD_CHAT_CACHE_ENABLED` | 선택 | Build Chat Redis cache | 기본값은 `true`입니다. Redis 장애 시 자동 우회하며 응답 body에는 cache 상태를 노출하지 않습니다. |
 | `BUILD_CHAT_CACHE_TTL_SECONDS` | 선택 | Build Chat Redis cache | 기본값은 `600`초입니다. 사용자/profile/draft와 parts/benchmark/FPS/RAG/alias version이 바뀌면 cache key도 달라집니다. cache hit 응답은 이전 실행의 agent trace id를 재사용하지 않습니다. |
+| `RECOMMENDATION_RERANKER_ENDPOINT` | 선택 | 홈 추천부품 XGBoost scorer | Docker 기본값은 `http://xgb-reranker:8091/score`입니다. 로컬 jar 단독 실행 시에는 `http://localhost:8091/score`로 바꿉니다. |
+| `RECOMMENDATION_RERANKER_MODEL_PATH` | 선택 | XGBoost scorer 모델 파일 | Docker에서는 `/models/<model-file>.json` 형식입니다. 비어 있으면 baseline scorer로 동작합니다. |
 | `OPENAI_EMBEDDING_MODEL` | 선택 | RAG vector 검색 | 기본값은 `text-embedding-3-small`입니다. |
 | `OPENAI_EMBEDDING_DIMENSIONS` | 선택 | RAG vector 검색 | 기본값은 `1536`입니다. |
 | `RAG_VECTOR_ENABLED` | 선택 | RAG 검색 방식 | 기본값은 `true`입니다. 키/embedding이 없으면 keyword fallback을 사용합니다. |
@@ -78,6 +80,7 @@ docker compose up --build
 | --- | --- |
 | 웹 | http://localhost:5173 |
 | API health | http://localhost:8080/api/health |
+| XGBoost scorer health | http://localhost:8091/health |
 | RabbitMQ 관리 화면 | http://localhost:15672 |
 | Mailpit | http://localhost:8025 |
 
@@ -292,6 +295,42 @@ python tools/benchmark_build_chat_profiles.py --variant-label vector-on
 ```
 
 경로별로 vector를 꺼서 비교할 때는 API를 재기동합니다. 예를 들어 AS Chat만 끄려면 `RAG_VECTOR_AS_ANALYZE_ENABLED=false`를 설정하고 `docker compose up --build -d api` 후 같은 명령을 `--variant-label as-vector-off`로 다시 실행합니다. 이번 단계에서는 `RAG_VECTOR_ENABLED=true` 기본값을 유지하고, 보고서에서 경로별 권장 정책만 남깁니다.
+
+## 홈 추천부품 XGBoost scorer
+
+홈 하단 추천부품 4장은 `GET /api/recommendations/home-parts`가 반환합니다. Docker Compose는 `xgb-reranker` 서비스를 함께 실행하며, trained model scorer가 정상 응답하면 XGBoost score를 홈 추천부품 순서에 반영합니다. 모델 파일이 없거나 scorer가 baseline-shadow/오류를 반환하면 API는 deterministic fallback으로 4장을 반환해 사용자 화면을 유지합니다.
+
+권장 운영 순서:
+
+```powershell
+docker compose up --build -d api web xgb-reranker
+```
+
+1. 관리자 계정으로 `/admin`에 접속합니다.
+2. `AI 추천 모델 상태`의 `XGBoost 학습 운영`에서 dataset을 생성합니다.
+3. dataset이 `DRAFT`인 동안 노출만 있는 약한 이벤트 등을 include/exclude로 정리합니다.
+4. dataset을 `LOCKED`로 잠급니다.
+5. 학습 Job을 생성합니다. API는 DB에 `QUEUED` Job만 만들고, `xgb-reranker` worker가 학습을 처리합니다.
+6. 성공한 모델은 `SHADOW`로만 저장됩니다. metric을 확인한 뒤 `활성화`를 누르면 scorer reload 성공 후 `ACTIVE`로 전환됩니다.
+
+기본 학습은 50행 미만이면 `SKIPPED_LOW_DATASET`으로 끝나며 모델 버전을 만들지 않습니다. CLI export/train은 로컬 분석 또는 데모 보조용으로 남겨두며, 운영 기본 흐름은 관리자 dataset/job UI입니다.
+
+```powershell
+python tools/export_recommendation_training_data.py --home-parts --output artifacts/recommendation/training-home-parts.csv
+python tools/train_xgb_reranker.py --input artifacts/recommendation/training-home-parts.csv --output-dir artifacts/recommendation/model --allow-small-dataset
+```
+
+Docker scorer의 기본 active 모델 경로는 `/models/home-parts-active.json`입니다. 이 파일은 관리자 activate API가 scorer reload에 성공했을 때 갱신됩니다. 특정 모델 파일을 고정 테스트하려면 `.env`에 모델 경로를 넣고 scorer/API를 재기동합니다.
+
+```env
+RECOMMENDATION_RERANKER_MODEL_PATH=/models/home-parts-active.json
+```
+
+```powershell
+docker compose up --build -d xgb-reranker api
+```
+
+운영 상태는 관리자 계정으로 `/admin`에 접속해 `AI 추천 모델 상태` 카드에서 확인합니다.
 
 ## 네이버 쇼핑 검색 연동
 

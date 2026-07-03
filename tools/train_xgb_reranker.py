@@ -19,6 +19,14 @@ FEATURES = [
     "part_has_offer",
     "part_price_age_days",
     "part_has_fps_coverage",
+    "category_CPU",
+    "category_GPU",
+    "category_RAM",
+    "category_MOTHERBOARD",
+    "category_STORAGE",
+    "category_PSU",
+    "category_CASE",
+    "category_COOLER",
 ]
 
 
@@ -27,6 +35,8 @@ def main() -> int:
     parser.add_argument("--input", default="artifacts/recommendation/training.csv")
     parser.add_argument("--output-dir", default="artifacts/recommendation/model")
     parser.add_argument("--model-version", default=None)
+    parser.add_argument("--min-rows", type=int, default=50)
+    parser.add_argument("--allow-small-dataset", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -48,6 +58,18 @@ def main() -> int:
             "modelVersion": model_version,
             "status": "SKIPPED_EMPTY_DATASET",
             "rowCount": 0,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+        (output_dir / "metrics.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(report, ensure_ascii=False))
+        return 0
+
+    if len(data) < args.min_rows and not args.allow_small_dataset:
+        report = {
+            "modelVersion": model_version,
+            "status": "SKIPPED_LOW_DATASET",
+            "rowCount": int(len(data)),
+            "minRows": args.min_rows,
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
         (output_dir / "metrics.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -82,11 +104,14 @@ def main() -> int:
 
     model_path = output_dir / f"{model_version}.json"
     model.save_model(model_path)
+    latest_path = output_dir / "home-parts-latest.json"
+    model.save_model(latest_path)
     report = {
         "modelName": "xgboost-reranker",
         "modelVersion": model_version,
         "algorithm": "XGBOOST",
         "artifactPath": str(model_path),
+        "latestArtifactPath": str(latest_path),
         "status": "TRAINED",
         "rowCount": int(len(data)),
         "features": FEATURES,
