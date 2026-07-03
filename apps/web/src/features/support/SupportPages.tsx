@@ -261,7 +261,6 @@ export function SupportNewPage() {
   const [supportRequestKind, setSupportRequestKind] = useState<SupportRequestKind>('DIAGNOSIS_ONLY');
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [logPreview, setLogPreview] = useState('');
   const [asRagPreview, setAsRagPreview] = useState<AsRagAnalysisDto | null>(null);
   const [asRagPreviewState, setAsRagPreviewState] = useState<AsRagPreviewState>('idle');
   const [asRagPreviewError, setAsRagPreviewError] = useState('');
@@ -299,7 +298,6 @@ export function SupportNewPage() {
     const file = event.target.files?.[0] ?? null;
     setError('');
     setSelectedFile(null);
-    setLogPreview('');
     setAsRagPreview(null);
     setAsRagPreviewState('idle');
     setAsRagPreviewError('');
@@ -326,12 +324,6 @@ export function SupportNewPage() {
         setAsRagPreviewState('error');
         setAsRagPreviewError(cause instanceof Error && cause.message ? cause.message : 'AS RAG 추천을 불러오지 못했습니다.');
       });
-    file.text()
-      .then((text) => {
-        const lines = text.split(/\r?\n/).filter(Boolean).slice(0, 8);
-        setLogPreview(lines.join('\n') || '선택한 파일에 표시할 로그 라인이 없습니다.');
-      })
-      .catch(() => setLogPreview('로그 미리보기를 읽지 못했습니다. 파일은 그대로 제출할 수 있습니다.'));
   }
 
   async function submit(event: FormEvent) {
@@ -554,11 +546,8 @@ export function SupportNewPage() {
               {selectedFile ? <p className="mt-2 text-xs text-slate-500">{selectedFile.name} · {selectedFile.size.toLocaleString()} bytes</p> : null}
             </div>
             {asRagPreviewState === 'loading' ? <StateMessage type="info" title="AS RAG 분석 중" body="업로드한 로그를 바탕으로 적절한 지원 방식을 찾고 있습니다." /> : null}
-            {asRagPreviewState === 'error' ? <StateMessage type="warn" title="AS RAG 추천 실패" body={asRagPreviewError || '추천 결과를 불러오지 못했습니다. 로그 미리보기와 접수는 계속 진행할 수 있습니다.'} /> : null}
+            {asRagPreviewState === 'error' ? <StateMessage type="warn" title="AS RAG 추천 실패" body={asRagPreviewError || '추천 결과를 불러오지 못했습니다. AS 접수는 계속 진행할 수 있습니다.'} /> : null}
             {asRagPreview ? <AsRagRecommendation analysis={asRagPreview} /> : null}
-            <div className="min-h-32 rounded bg-slate-900 p-4 font-mono text-xs leading-6 text-slate-200">
-              {logPreview ? <pre className="whitespace-pre-wrap">{logPreview}</pre> : '선택한 로그 파일의 일부가 여기에 표시됩니다.'}
-            </div>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} />
               선택한 구간의 로그 업로드와 30일 보관 후 삭제 정책에 동의합니다.
