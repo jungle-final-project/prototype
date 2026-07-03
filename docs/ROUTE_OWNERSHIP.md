@@ -116,9 +116,9 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 |---|---|
 | 담당 화면 route | `/support/new`, `/support/:ticketId`, `/admin/as-tickets`, `/admin/as-tickets/:ticketId` |
 | frontend files | `features/support/**`, `features/admin/as-tickets/**` |
-| backend packages | `log`, `ticket` |
-| DB tables | `agent_log_uploads`, `as_tickets` |
-| API endpoints | PC Agent token: `POST /api/agent/devices/register`, `POST /api/agent/consents`, `POST /api/agent/heartbeat`, `POST /api/agent/log-uploads`; Web JWT/manual: `POST /api/agent-logs/upload`, `GET /api/agent-logs/{id}`, `POST /api/as-tickets`, `GET /api/as-tickets/{id}`, `GET /api/admin/as-tickets`, `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}` |
+| backend packages | `log`, `ticket`, `support` |
+| DB tables | `agent_log_uploads`, `as_tickets`, `as_rag_evidence` |
+| API endpoints | PC Agent token: `POST /api/agent/devices/register`, `POST /api/agent/consents`, `POST /api/agent/heartbeat`, `POST /api/agent/log-uploads`; Web JWT/manual: `POST /api/agent-logs/upload`, `POST /api/agent-logs/as-rag-preview`, `GET /api/agent-logs/{id}`, `POST /api/as-tickets`, `GET /api/as-tickets/{id}`, `GET /api/admin/as-tickets`, `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}` |
 | 협업자 | Auth/guard는 5번, AS 원인 후보 Agent는 3번 |
 
 ### 5번: AdminShell/Auth Common/Infra

@@ -39,6 +39,7 @@
 - `agent_sessions`
 - `tool_invocations`
 - `rag_evidence`
+- `as_rag_evidence`
 - `agent_log_uploads`
 - `as_tickets`
 - `as_chat_sessions`
@@ -932,6 +933,37 @@ Embedding 정책:
 - `metadata.embeddingModel`, `metadata.embeddingDimensions`, `metadata.embeddingTextHash`, `metadata.embeddingUpdatedAt`으로 백필 상태를 추적한다.
 - Agent 실행 중 복사된 세션별 evidence에는 원본 chunk의 `source_id`, `summary`, `chunk_text`와 함께 `metadata.sourceEvidenceId`, `metadata.retrievalMode`, `metadata.vectorScore`, `metadata.keywordScore`를 남긴다.
 
+### as_rag_evidence
+
+목적: AS 접수 페이지 로그 업로드 전용 RAG 근거를 저장한다. 기존 챗봇/Agent RAG의 `rag_evidence`와 완전히 분리한다.
+
+Owner: 4번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `source_id` | `VARCHAR(160)` | no | - | AS RAG seed/source key |
+| `symptom_type` | `VARCHAR(80)` | yes | - | 최종 AS 시나리오 증상 코드 |
+| `source_type` | `VARCHAR(60)` | no | - | `TROUBLESHOOTING`, `SUPPORT_POLICY` 등 |
+| `recommended_service` | `VARCHAR(40)` | no | - | `DIAGNOSIS_ONLY`, `REMOTE_SUPPORT`, `VISIT_SUPPORT` |
+| `support_decision` | `VARCHAR(50)` | no | - | 최종 `SupportDecision` enum |
+| `reason_code` | `VARCHAR(80)` | no | - | 추천 사유 코드 |
+| `title` | `TEXT` | no | - | 근거 제목 |
+| `chunk_text` | `TEXT` | no | - | 검색 대상 AS 근거 chunk |
+| `summary` | `TEXT` | no | - | 사용자/관리자 표시용 요약 |
+| `score` | `NUMERIC(8,5)` | no | - | 기본 근거 점수 |
+| `metadata` | `JSONB` | no | - | keywords, remoteActions, visitReasons 등 |
+| `active` | `BOOLEAN` | no | - | 검색 사용 여부 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+
+분리 원칙:
+
+- `as_rag_evidence`는 `/support/new` 로그 업로드와 `/api/agent-logs/upload` 기반 티켓 초기 추천에만 사용한다.
+- 기존 `rag_evidence`, `RagQueryService`, `AgentRagRetrievalService`, `/api/rag/*`는 사용하지 않는다.
+- `agent_log_uploads.as_rag_analysis`에 분석 결과 snapshot을 저장하고, `/api/as-tickets` 생성 시 이를 읽어 `supportDecision`, `causeCandidates`, `logSummary`, `supportRouting`에 반영한다.
+- AS 접수 전용 RAG는 최종 시나리오의 coarse decision 4개(`SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`)만 직접 생성한다. 교체 가능성은 `VISIT_REQUIRED`의 `visitReasons`, 미지원 가능성은 `NEEDS_MORE_INFO`의 `blockingFactors`로 표현한다.
+
 ### agent_log_uploads
 
 목적: PC Agent JSONL 로그 업로드와 보관 정책을 저장한다.
@@ -951,6 +983,7 @@ Owner: 4번
 | `file_size` | `BIGINT` | yes | - | 파일 크기 |
 | `storage_path` | `TEXT` | yes | - | 저장 위치 |
 | `summary` | `TEXT` | yes | - | 요약 |
+| `as_rag_analysis` | `JSONB` | yes | - | AS 접수 전용 RAG 분석 snapshot |
 | `incident_window` | `JSONB` | yes | - | 로그 분석에 사용한 IncidentWindow |
 | `range_started_at` | `TIMESTAMPTZ` | yes | - | IncidentWindow 시작 |
 | `range_ended_at` | `TIMESTAMPTZ` | yes | - | IncidentWindow 종료 |

@@ -136,7 +136,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
 
   await page.goto('/support/new');
   await expect(page.getByRole('main')).toContainText('AS 접수');
-  await expect(page.getByRole('main')).toContainText('IncidentWindow 확인');
+  await expect(page.getByRole('main')).toContainText('문제 발생 전후 로그');
   await expect(page.getByRole('main')).toContainText('선택 구간 로그 파일');
   await page.screenshot({ path: `${screenshotDir}/01-support-new.png`, fullPage: true });
 

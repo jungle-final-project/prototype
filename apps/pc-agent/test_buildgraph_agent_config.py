@@ -9,7 +9,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from buildgraph_agent import ConfigError, load_config, main
+import buildgraph_agent as agent
+from buildgraph_agent import ConfigError, import_activation_config, load_config, main
 
 
 class FakeHttpResponse:
@@ -119,7 +120,7 @@ class AgentConfigTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("REGISTERED", output.getvalue())
-        self.assertEqual(len(captured_requests), 1)
+        self.assertEqual(len(captured_requests), 2)
 
         request, timeout = captured_requests[0]
         self.assertEqual(timeout, 15)
@@ -145,12 +146,55 @@ class AgentConfigTest(unittest.TestCase):
         saved_config = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(saved_config["agentToken"], "raw-agent-token")
 
+        consent_request, consent_timeout = captured_requests[1]
+        self.assertEqual(consent_timeout, 15)
+        self.assertEqual(consent_request.full_url, "http://localhost:8080/api/agent/consents")
+        self.assertEqual(consent_request.headers["Authorization"], "Bearer raw-agent-token")
+        consent_body = json.loads(consent_request.data.decode("utf-8"))
+        self.assertEqual(consent_body["consentType"], "SERVER_UPLOAD")
+        self.assertTrue(consent_body["accepted"])
+
         status_output = io.StringIO()
         with redirect_stdout(status_output):
             status_exit_code = main(["status", "--config", str(path)])
 
         self.assertEqual(status_exit_code, 0)
         self.assertEqual(status_output.getvalue().strip(), "REGISTERED")
+
+    def test_import_activation_config_preserves_local_fingerprint_and_updates_token(self) -> None:
+        path = self.write_config(self.valid_config(activationToken="old-token", deviceFingerprintHash="local-fingerprint"))
+        activation_path = path.parent / "buildgraph-agent-activation.json"
+        activation_path.write_text(
+            json.dumps(
+                {
+                    "apiBaseUrl": "http://localhost:8080",
+                    "webBaseUrl": "http://localhost:5173",
+                    "activationToken": "download-token",
+                    "environment": "local",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        changed = import_activation_config(path, activation_path)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertTrue(changed)
+        self.assertEqual(saved["activationToken"], "download-token")
+        self.assertEqual(saved["deviceFingerprintHash"], "local-fingerprint")
+        self.assertIsNone(saved["agentToken"])
+
+    def test_import_activation_config_reads_token_from_executable_name(self) -> None:
+        path = self.write_config(self.valid_config(activationToken="old-token", agentToken="old-agent-token"))
+
+        with patch("buildgraph_agent.sys.executable", r"C:\Users\me\Downloads\BuildGraphAgent-download-token-1234567890.exe"):
+            with patch.object(agent.sys, "frozen", True, create=True):
+                changed = agent.import_activation_config(path)
+
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(changed)
+        self.assertEqual(saved["activationToken"], "download-token-1234567890")
+        self.assertIsNone(saved["agentToken"])
 
 
 if __name__ == "__main__":

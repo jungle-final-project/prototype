@@ -5,6 +5,7 @@ import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
+import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
@@ -114,6 +115,14 @@ public class PcAgentAsService {
         }
     }
 
+    @Transactional
+    public Map<String, Object> issueActivationTokenForUser(CurrentUserService.CurrentUser user) {
+        return issueActivationToken(MockData.map(
+                "userId", user.id(),
+                "ttlDays", 1
+        ));
+    }
+
     private Long resolveActivationTokenUser(Map<String, Object> request) {
         String userId = string(request, "userId", null);
         String userEmail = string(request, "userEmail", null);
@@ -170,6 +179,19 @@ public class PcAgentAsService {
                 agentVersion,
                 policyVersion
         );
+        if (row == null) {
+            row = refreshExistingActiveRegistration(
+                    activation.userInternalId(),
+                    activation.activationTokenId(),
+                    deviceFingerprintHash,
+                    hostnameHash,
+                    tokenHash,
+                    registrationKey,
+                    osVersion,
+                    agentVersion,
+                    policyVersion
+            );
+        }
         if (row == null) {
             markActivationTokenUsed(activation.activationTokenId());
             row = insertRegistration(
@@ -285,6 +307,58 @@ public class PcAgentAsService {
                 WHERE id = ?
                 RETURNING id AS device_internal_id, public_id::text AS device_id, status
                 """,
+                deviceFingerprintHash,
+                hostnameHash,
+                tokenHash,
+                osVersion,
+                agentVersion,
+                policyVersion,
+                deviceInternalId
+        );
+    }
+
+    private Map<String, Object> refreshExistingActiveRegistration(
+            Long userInternalId,
+            Long activationTokenId,
+            String deviceFingerprintHash,
+            String hostnameHash,
+            String tokenHash,
+            String registrationKey,
+            String osVersion,
+            String agentVersion,
+            String policyVersion
+    ) {
+        List<Map<String, Object>> existingRows = jdbcTemplate.queryForList("""
+                SELECT id AS device_internal_id
+                FROM agent_devices
+                WHERE user_id = ?
+                  AND status IN ('PENDING_REGISTERED', 'ACTIVE', 'UPDATE_REQUIRED')
+                ORDER BY id DESC
+                LIMIT 1
+                """, userInternalId);
+        if (existingRows.isEmpty()) {
+            return null;
+        }
+
+        markActivationTokenUsed(activationTokenId);
+        Long deviceInternalId = longValue(existingRows.get(0), "device_internal_id");
+        return jdbcTemplate.queryForMap("""
+                UPDATE agent_devices
+                SET activation_token_id = ?,
+                    registration_idempotency_key = ?,
+                    device_fingerprint_hash = ?,
+                    hostname_hash = ?,
+                    agent_token_hash = ?,
+                    status = 'ACTIVE',
+                    os_version = ?,
+                    agent_version = ?,
+                    policy_version = ?,
+                    updated_at = now()
+                WHERE id = ?
+                RETURNING id AS device_internal_id, public_id::text AS device_id, status
+                """,
+                activationTokenId,
+                registrationKey,
                 deviceFingerprintHash,
                 hostnameHash,
                 tokenHash,
@@ -708,6 +782,235 @@ public class PcAgentAsService {
                 "rawSamplesCount", ((List<?>) logSummary.get("rawSamples")).size(),
                 "deleteAfter", deleteAfter
         );
+    }
+
+    @Transactional
+    public Map<String, Object> createAsDraft(
+            AgentPrincipal principal,
+            MultipartFile file,
+            Map<String, Object> metadata,
+            String idempotencyKey
+    ) {
+        validateIdempotencyKey("Idempotency-Key", idempotencyKey);
+        if (file == null || file.isEmpty()) {
+            throw fileValidation("Agent log gzip file is required.");
+        }
+        String fileName = fileName(file);
+        if (!fileName.endsWith(".gz")) {
+            throw fileValidation("Agent log upload must be gzip.");
+        }
+        Map<String, Object> existing = existingDraftResult(principal, idempotencyKey);
+        if (existing != null) {
+            return existing;
+        }
+        GzipValidation gzip = validateGzip(file);
+        String symptom = string(metadata, "symptom", "Agent detected PC issue.");
+        PcAgentLogAnalyzer.IncidentWindow incidentWindow = PcAgentLogAnalyzer.resolveIncidentWindow(metadata, clock);
+        PcAgentLogAnalyzer.RawLogBundle rawLogs = PcAgentLogAnalyzer.validateJsonl(gzip.contentText(), incidentWindow);
+        PcAgentLogAnalyzer.AnalysisResult analysis = PcAgentLogAnalyzer.analyze(principal, symptom, incidentWindow, rawLogs);
+        int rangeMinutes = incidentWindow.durationMinutes();
+        int schemaVersion = analysis.schemaVersion();
+
+        Integer consentCount = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM agent_consents
+                WHERE device_id = ?
+                  AND consent_type = 'SERVER_UPLOAD'
+                  AND accepted = true
+                  AND revoked_at IS NULL
+                """, Integer.class, principal.deviceInternalId());
+        if (consentCount == null || consentCount == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Server upload consent is required.");
+        }
+
+        Map<String, Object> uploadJob = jdbcTemplate.queryForMap("""
+                INSERT INTO agent_upload_jobs (
+                  device_id,
+                  idempotency_key,
+                  status,
+                  range_started_at,
+                  range_ended_at,
+                  updated_at
+                )
+                VALUES (?, ?, 'UPLOADED', ?, ?, now())
+                RETURNING id AS upload_job_internal_id, public_id::text AS upload_job_id, status
+                """,
+                principal.deviceInternalId(),
+                idempotencyKey,
+                Timestamp.from(incidentWindow.startedAt()),
+                Timestamp.from(incidentWindow.endedAt())
+        );
+
+        Long uploadJobInternalId = longValue(uploadJob, "upload_job_internal_id");
+        String storagePath = "agent-logs/" + principal.deviceId() + "/" + fileName;
+        String incidentWindowJson = toJson(incidentWindow.toMap());
+        Map<String, Object> logUpload = jdbcTemplate.queryForMap("""
+                INSERT INTO agent_log_uploads (
+                  user_id,
+                  device_id,
+                  upload_job_id,
+                  range_minutes,
+                  status,
+                  file_name,
+                  file_size,
+                  storage_path,
+                  summary,
+                  incident_window,
+                  range_started_at,
+                  range_ended_at,
+                  consent_accepted_at,
+                  delete_after
+                )
+                VALUES (?, ?, ?, ?, 'UPLOADED', ?, ?, ?, ?, ?::jsonb, ?, ?, now(), now() + interval '30 days')
+                RETURNING id AS log_upload_internal_id,
+                          public_id::text AS log_upload_id,
+                          status,
+                          file_name,
+                          file_size,
+                          range_minutes,
+                          delete_after
+                """,
+                principal.userInternalId(),
+                principal.deviceInternalId(),
+                uploadJobInternalId,
+                rangeMinutes,
+                fileName,
+                gzip.compressedBytes(),
+                storagePath,
+                analysis.summaryText(),
+                incidentWindowJson,
+                Timestamp.from(incidentWindow.startedAt()),
+                Timestamp.from(incidentWindow.endedAt())
+        );
+
+        Long logUploadInternalId = longValue(logUpload, "log_upload_internal_id");
+        jdbcTemplate.queryForMap("""
+                INSERT INTO agent_log_bundles (
+                  upload_job_id,
+                  log_upload_id,
+                  schema_version,
+                  storage_path,
+                  sha256,
+                  size_bytes,
+                  delete_after
+                )
+                VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, now() + interval '30 days'))
+                RETURNING public_id::text AS log_bundle_id
+                """,
+                uploadJobInternalId,
+                logUploadInternalId,
+                schemaVersion,
+                storagePath,
+                gzip.sha256(),
+                gzip.compressedBytes(),
+                timestampParameter(logUpload.get("delete_after"))
+        );
+
+        String title = string(metadata, "title", titleFor(incidentWindow.symptomType()));
+        String detail = string(metadata, "detailDescription", detailFor(incidentWindow.symptomType()));
+        String supportRequestKind = string(metadata, "supportRequestKind", "DIAGNOSIS_ONLY");
+        Map<String, Object> draft = jdbcTemplate.queryForMap("""
+                INSERT INTO as_ticket_drafts (
+                  user_id,
+                  device_id,
+                  upload_job_id,
+                  log_upload_id,
+                  idempotency_key,
+                  title,
+                  detail_description,
+                  symptom_type,
+                  symptom,
+                  detected_at,
+                  incident_window,
+                  support_request_kind,
+                  updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, now())
+                RETURNING public_id::text AS draft_id,
+                          title,
+                          detail_description,
+                          symptom_type,
+                          symptom,
+                          detected_at,
+                          incident_window,
+                          support_request_kind,
+                          status,
+                          created_at
+                """,
+                principal.userInternalId(),
+                principal.deviceInternalId(),
+                uploadJobInternalId,
+                logUploadInternalId,
+                idempotencyKey,
+                title,
+                detail,
+                incidentWindow.symptomType(),
+                symptom,
+                Timestamp.from(incidentWindow.detectedAt()),
+                incidentWindowJson,
+                supportRequestKind
+        );
+        return draftMap(draft, DbValueMapper.string(logUpload, "log_upload_id"));
+    }
+
+    private Map<String, Object> existingDraftResult(AgentPrincipal principal, String idempotencyKey) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT d.public_id::text AS draft_id,
+                       d.title,
+                       d.detail_description,
+                       d.symptom_type,
+                       d.symptom,
+                       d.detected_at,
+                       d.incident_window,
+                       d.support_request_kind,
+                       d.status,
+                       d.created_at,
+                       lu.public_id::text AS log_upload_id
+                FROM as_ticket_drafts d
+                JOIN agent_log_uploads lu ON lu.id = d.log_upload_id
+                WHERE d.device_id = ?
+                  AND d.idempotency_key = ?
+                ORDER BY d.id DESC
+                LIMIT 1
+                """, principal.deviceInternalId(), idempotencyKey);
+        return rows.stream()
+                .findFirst()
+                .map(row -> draftMap(row, DbValueMapper.string(row, "log_upload_id")))
+                .orElse(null);
+    }
+
+    private static Map<String, Object> draftMap(Map<String, Object> row, String logUploadId) {
+        return MockData.map(
+                "draftId", DbValueMapper.string(row, "draft_id"),
+                "logUploadId", logUploadId,
+                "title", DbValueMapper.string(row, "title"),
+                "detailDescription", DbValueMapper.string(row, "detail_description"),
+                "symptomType", DbValueMapper.string(row, "symptom_type"),
+                "symptom", DbValueMapper.string(row, "symptom"),
+                "detectedAt", DbValueMapper.timestamp(row, "detected_at"),
+                "incidentWindow", DbValueMapper.json(row, "incident_window", Map.of()),
+                "supportRequestKind", DbValueMapper.string(row, "support_request_kind"),
+                "status", DbValueMapper.string(row, "status"),
+                "createdAt", DbValueMapper.timestamp(row, "created_at")
+        );
+    }
+
+    private static String titleFor(String symptomType) {
+        return switch (symptomType) {
+            case "REMOTE_DRIVER_OS" -> "디스플레이 드라이버 경고가 감지되었습니다";
+            case "REMOTE_STORAGE_MEMORY" -> "메모리 또는 저장공간 이상이 감지되었습니다";
+            case "VISIT_POWER_SHUTDOWN" -> "전원 꺼짐 또는 재부팅 이상이 감지되었습니다";
+            default -> "PC Agent가 문제를 감지했습니다";
+        };
+    }
+
+    private static String detailFor(String symptomType) {
+        return switch (symptomType) {
+            case "REMOTE_DRIVER_OS" -> "PC Agent가 디스플레이 드라이버 관련 경고 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.";
+            case "REMOTE_STORAGE_MEMORY" -> "PC Agent가 메모리 또는 저장공간 압박 징후를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.";
+            case "VISIT_POWER_SHUTDOWN" -> "PC Agent가 전원 안정성 관련 이상 징후를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.";
+            default -> "PC Agent가 문제 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.";
+        };
     }
 
     private Map<String, Object> existingUploadResult(

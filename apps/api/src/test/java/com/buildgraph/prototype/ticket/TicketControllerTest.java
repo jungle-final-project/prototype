@@ -37,6 +37,9 @@ class TicketControllerTest {
     private TicketQueryService ticketQueryService;
 
     @MockitoBean
+    private AsTicketDraftService asTicketDraftService;
+
+    @MockitoBean
     private CurrentUserService currentUserService;
 
     @Test

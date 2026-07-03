@@ -22,7 +22,8 @@ class AgentIdempotencyFilter extends OncePerRequestFilter {
     private static final Set<String> PC_AGENT_IDEMPOTENCY_PATHS = Set.of(
             "/api/agent/consents",
             "/api/agent/heartbeat",
-            "/api/agent/log-uploads"
+            "/api/agent/log-uploads",
+            "/api/agent/as-drafts"
     );
 
     private final AgentIdempotencyKeyExtractor keyExtractor;

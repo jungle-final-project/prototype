@@ -19,7 +19,8 @@ public class AgentAccessTokenFilter extends OncePerRequestFilter {
             "/api/agent/devices/register",
             "/api/agent/consents",
             "/api/agent/heartbeat",
-            "/api/agent/log-uploads"
+            "/api/agent/log-uploads",
+            "/api/agent/as-drafts"
     );
 
     private final AgentTokenAuthenticationService authenticationService;

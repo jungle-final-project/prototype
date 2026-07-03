@@ -103,4 +103,58 @@ public class PcAgentController {
                 idempotencyKey
         );
     }
+
+    @PostMapping(value = "/as-drafts", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> createAsDraft(
+            @AuthenticationPrincipal AgentPrincipal principal,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) Integer rangeMinutes,
+            @RequestParam(required = false) String rangeStartedAt,
+            @RequestParam(required = false) String rangeEndedAt,
+            @RequestParam(required = false) Integer schemaVersion,
+            @RequestParam(required = false) String incidentId,
+            @RequestParam(required = false) String triggerType,
+            @RequestParam(required = false) String symptomType,
+            @RequestParam(required = false) String detectedAt,
+            @RequestParam(required = false) String incidentStartedAt,
+            @RequestParam(required = false) String incidentEndedAt,
+            @RequestParam(required = false) String lastNormalBootAt,
+            @RequestParam(required = false) String startedAt,
+            @RequestParam(required = false) String endedAt,
+            @RequestParam(required = false) Boolean selectedByUser,
+            @RequestParam(required = false) String consentId,
+            @RequestParam(required = false) String title,
+            @RequestParam(required = false) String detailDescription,
+            @RequestParam(required = false) String supportRequestKind,
+            @RequestParam(required = false) String symptom,
+            @RequestHeader("Idempotency-Key") String idempotencyKey
+    ) {
+        return pcAgentAsService.createAsDraft(
+                principal,
+                file,
+                MockData.map(
+                        "rangeMinutes", rangeMinutes,
+                        "rangeStartedAt", rangeStartedAt,
+                        "rangeEndedAt", rangeEndedAt,
+                        "schemaVersion", schemaVersion,
+                        "incidentId", incidentId,
+                        "triggerType", triggerType,
+                        "symptomType", symptomType,
+                        "detectedAt", detectedAt,
+                        "startedAt", startedAt,
+                        "endedAt", endedAt,
+                        "incidentStartedAt", incidentStartedAt,
+                        "incidentEndedAt", incidentEndedAt,
+                        "lastNormalBootAt", lastNormalBootAt,
+                        "selectedByUser", selectedByUser,
+                        "consentId", consentId,
+                        "title", title,
+                        "detailDescription", detailDescription,
+                        "supportRequestKind", supportRequestKind,
+                        "symptom", symptom
+                ),
+                idempotencyKey
+        );
+    }
 }

@@ -1,14 +1,16 @@
-import { ChangeEvent, FormEvent, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
-import { createSupportTicket, getSupportTicket, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
-import type { AsTicketDto, CauseCandidate } from './types';
+import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate } from './types';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
+type AgentDownloadState = 'idle' | 'issuing' | 'done' | 'error';
+type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
 
 const remoteSymptomTypes = new Set([
@@ -243,6 +245,8 @@ function progressLabel(eventName: string) {
 
 export function SupportNewPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const draftId = searchParams.get('draftId')?.trim() ?? '';
   const [symptomTitle, setSymptomTitle] = useState('');
   const [symptomDetail, setSymptomDetail] = useState('');
   const [symptomType, setSymptomType] = useState('REMOTE_DRIVER_OS');
@@ -260,9 +264,44 @@ export function SupportNewPage() {
   const [supportRequestKind, setSupportRequestKind] = useState<SupportRequestKind>('DIAGNOSIS_ONLY');
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [draftLogUploadId, setDraftLogUploadId] = useState('');
   const [logPreview, setLogPreview] = useState('');
+  const [asRagPreview, setAsRagPreview] = useState<AsRagAnalysisDto | null>(null);
+  const [asRagPreviewState, setAsRagPreviewState] = useState<AsRagPreviewState>('idle');
+  const [asRagPreviewError, setAsRagPreviewError] = useState('');
   const [submitState, setSubmitState] = useState<SubmitState>('default');
+  const [agentDownloadState, setAgentDownloadState] = useState<AgentDownloadState>('idle');
+  const [agentDownloadMessage, setAgentDownloadMessage] = useState('');
   const [error, setError] = useState('');
+
+  const draftQuery = useQuery({
+    queryKey: ['as-ticket-draft', draftId],
+    queryFn: () => getSupportDraft(draftId),
+    enabled: Boolean(draftId)
+  });
+
+  useEffect(() => {
+    const draft = draftQuery.data;
+    if (!draft) return;
+    setDraftLogUploadId(draft.logUploadId);
+    setSymptomTitle(draft.title || 'PC Agent가 문제를 감지했습니다');
+    setSymptomDetail(draft.detailDescription || draft.symptom || 'PC Agent가 문제 이벤트를 감지했습니다.');
+    setSymptomType(draft.symptomType || 'REMOTE_AGENT');
+    setSupportRequestKind(toSupportRequestKind(draft.supportRequestKind));
+    setDetectedAt(datetimeLocalFromIso(draft.detectedAt) || datetimeLocalValue(new Date()));
+    const draftStartedAt = datetimeLocalFromIso(draft.incidentWindow?.startedAt);
+    const draftEndedAt = datetimeLocalFromIso(draft.incidentWindow?.endedAt);
+    if (draftStartedAt) setWindowStartedAt(draftStartedAt);
+    if (draftEndedAt) setWindowEndedAt(draftEndedAt);
+    setConsentAccepted(true);
+    setSelectedFile(null);
+    setLogPreview('PC Agent가 감지 시점 기준 선택 구간 로그를 gzip으로 이미 업로드했습니다.');
+    setAsRagPreview(null);
+    setAsRagPreviewState('idle');
+    setAsRagPreviewError('');
+    setSubmitState('default');
+    setError('');
+  }, [draftQuery.data]);
 
   function applyDefaultWindow(nextSymptomType = symptomType, nextDetectedAt = detectedAt) {
     const detected = datetimeLocalToDate(nextDetectedAt);
@@ -296,6 +335,9 @@ export function SupportNewPage() {
     setError('');
     setSelectedFile(null);
     setLogPreview('');
+    setAsRagPreview(null);
+    setAsRagPreviewState('idle');
+    setAsRagPreviewError('');
     setSubmitState('default');
 
     if (!file) return;
@@ -308,12 +350,39 @@ export function SupportNewPage() {
     }
 
     setSelectedFile(file);
+    setAsRagPreviewState('loading');
+    previewAgentLogRag(incidentRangeMinutes(windowStartedAt, windowEndedAt), file)
+      .then((analysis) => {
+        setAsRagPreview(analysis);
+        setAsRagPreviewState('ready');
+        setSupportRequestKind(supportKindFromRecommendation(analysis.recommendedService));
+      })
+      .catch((cause) => {
+        setAsRagPreviewState('error');
+        setAsRagPreviewError(cause instanceof Error && cause.message ? cause.message : 'AS RAG 추천을 불러오지 못했습니다.');
+      });
     file.text()
       .then((text) => {
         const lines = text.split(/\r?\n/).filter(Boolean).slice(0, 8);
         setLogPreview(lines.join('\n') || '선택한 파일에 표시할 로그 라인이 없습니다.');
       })
       .catch(() => setLogPreview('로그 미리보기를 읽지 못했습니다. 파일은 그대로 제출할 수 있습니다.'));
+  }
+
+  async function downloadPcAgent() {
+    setAgentDownloadState('issuing');
+    setAgentDownloadMessage('');
+    try {
+      const activation = await issueAgentActivationToken();
+      await downloadAgentExe(activation.activationToken);
+      setAgentDownloadState('done');
+      setAgentDownloadMessage('사용자 등록 토큰이 포함된 PC Agent 실행 파일을 내려받았습니다. 실행하면 자동 등록됩니다.');
+    } catch (cause) {
+      setAgentDownloadState('error');
+      setAgentDownloadMessage(cause instanceof ApiError && cause.status === 401
+        ? '로그인 후 PC Agent를 다운로드해 주세요.'
+        : 'Agent 등록 토큰 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -337,9 +406,9 @@ export function SupportNewPage() {
       setError('업로드 구간의 종료 시각은 시작 시각보다 뒤여야 합니다.');
       return;
     }
-    if (!selectedFile) {
+    if (!selectedFile && !draftLogUploadId) {
       setSubmitState('validation_error');
-      setError('선택한 IncidentWindow 구간의 PC Agent 로그 파일을 선택해 주세요. .jsonl 또는 .ndjson 파일을 사용할 수 있습니다.');
+      setError('선택한 문제 발생 전후 로그 구간의 PC Agent 로그 파일을 선택해 주세요. .jsonl 또는 .ndjson 파일을 사용할 수 있습니다.');
       return;
     }
     if (!consentAccepted) {
@@ -362,10 +431,10 @@ export function SupportNewPage() {
     }
   }
 
-  async function uploadAndCreateTicket(title: string, detail: string, file: File) {
+  async function uploadAndCreateTicket(title: string, detail: string, file: File | null) {
     const rangeMinutes = incidentRangeMinutes(windowStartedAt, windowEndedAt);
     const incidentId = `web-incident-${crypto.randomUUID()}`;
-    const uploadedLog = await uploadAgentLog(rangeMinutes, consentAccepted, file, {
+    const uploadedLog = file ? await uploadAgentLog(rangeMinutes, consentAccepted, file, {
       incidentId,
       triggerType: 'USER_REQUEST',
       symptomType,
@@ -374,18 +443,19 @@ export function SupportNewPage() {
       rangeEndedAt: toIsoFromDatetimeLocal(windowEndedAt),
       selectedByUser: true,
       consentId: `web-consent-${incidentId}`
-    });
+    }) : null;
+    const logUploadId = uploadedLog?.id || draftLogUploadId;
     const symptom = [
       title,
       '',
       detail,
       '',
       `[증상 유형] ${symptomLabel(symptomType)}`,
-      `[IncidentWindow] ${windowStartedAt} ~ ${windowEndedAt}`,
+      `[문제 발생 전후 로그] ${windowStartedAt} ~ ${windowEndedAt}`,
       `[지원 신청] ${supportRequestLabel(supportRequestKind)}`
     ].join('\n');
     try {
-      const ticket = await createSupportTicket(symptom, uploadedLog.id);
+      const ticket = await createSupportTicket(symptom, logUploadId);
       setSubmitState('ticket_created');
       navigate(`/support/${ticket.id}`);
     } catch {
@@ -400,6 +470,9 @@ export function SupportNewPage() {
       <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
+            {draftQuery.isLoading ? <StateMessage type="info" title="Agent 초안 불러오는 중" body="감지된 문제와 선택 구간 로그 정보를 확인하고 있습니다." /> : null}
+            {draftQuery.isError ? <StateMessage type="warn" title="Agent 초안 조회 실패" body="초안을 불러오지 못했습니다. 로그인 상태를 확인하거나 수동으로 AS를 접수해 주세요." /> : null}
+            {draftLogUploadId ? <StateMessage type="success" title="Agent 초안 적용됨" body="감지된 문제 시각과 선택 구간 로그가 접수 폼에 반영되었습니다." /> : null}
             <div>
               <label className="mb-1 block text-xs font-bold text-slate-600">증상 제목</label>
               <input
@@ -450,7 +523,7 @@ export function SupportNewPage() {
             </div>
             <div className="rounded border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-bold text-slate-800">IncidentWindow 확인</p>
+                <p className="text-sm font-bold text-slate-800">문제 발생 전후 로그</p>
                 <button
                   type="button"
                   className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-bold"
@@ -502,13 +575,14 @@ export function SupportNewPage() {
             <div>
               <label className="mb-1 block text-xs font-bold text-slate-600">선택 구간 로그 파일</label>
               <div className="mb-2 flex flex-wrap gap-2">
-                <a
+                <button
+                  type="button"
                   className="rounded border border-brand-blue px-3 py-2 text-xs font-bold text-brand-blue"
-                  href="/downloads/pc-agent/agent.exe"
-                  download
+                  onClick={downloadPcAgent}
+                  disabled={agentDownloadState === 'issuing'}
                 >
-                  PC Agent 다운로드
-                </a>
+                  {agentDownloadState === 'issuing' ? '등록 토큰 발급 중...' : 'PC Agent 다운로드'}
+                </button>
                 <a
                   className="rounded border border-slate-300 px-3 py-2 text-xs font-bold"
                   href="/downloads/pc-agent/README.txt"
@@ -525,8 +599,15 @@ export function SupportNewPage() {
                 </button>
               </div>
               <p className="mb-2 text-xs leading-5 text-slate-500">
-                PC Agent는 더블클릭 시 트레이 아이콘으로 백그라운드 수집을 시작합니다. 선택한 구간의 로그만 gzip 또는 JSONL로 전송합니다.
+                {draftLogUploadId
+                  ? 'PC Agent가 선택한 구간의 로그를 이미 gzip으로 전송했습니다. 다른 로그로 교체할 때만 파일을 선택해 주세요.'
+                  : 'PC Agent는 더블클릭 시 트레이 아이콘으로 백그라운드 수집을 시작합니다. 선택한 구간의 로그만 gzip 또는 JSONL로 전송합니다.'}
               </p>
+              {agentDownloadMessage ? (
+                <p className={`mb-2 text-xs font-semibold ${agentDownloadState === 'error' ? 'text-red-600' : 'text-emerald-700'}`}>
+                  {agentDownloadMessage}
+                </p>
+              ) : null}
               <input
                 className="block w-full rounded border border-slate-300 p-3 text-sm file:mr-4 file:rounded file:border-0 file:bg-brand-blue file:px-4 file:py-2 file:text-sm file:font-bold file:text-white"
                 type="file"
@@ -534,10 +615,14 @@ export function SupportNewPage() {
                 onChange={handleFileChange}
               />
               {selectedFile ? <p className="mt-2 text-xs text-slate-500">{selectedFile.name} · {selectedFile.size.toLocaleString()} bytes</p> : null}
+              {draftLogUploadId && !selectedFile ? <p className="mt-2 text-xs font-semibold text-brand-blue">Agent 업로드 로그 ID: {draftLogUploadId}</p> : null}
             </div>
             <div className="min-h-32 rounded bg-slate-900 p-4 font-mono text-xs leading-6 text-slate-200">
               {logPreview ? <pre className="whitespace-pre-wrap">{logPreview}</pre> : '선택한 로그 파일의 일부가 여기에 표시됩니다.'}
             </div>
+            {asRagPreviewState === 'loading' ? <StateMessage type="info" title="AS RAG 분석 중" body="업로드한 로그를 바탕으로 적절한 지원 방식을 찾고 있습니다." /> : null}
+            {asRagPreviewState === 'error' ? <StateMessage type="warn" title="AS RAG 추천 실패" body={asRagPreviewError || '추천 결과를 불러오지 못했습니다. AS 접수는 계속 진행할 수 있습니다.'} /> : null}
+            {asRagPreview ? <AsRagRecommendation analysis={asRagPreview} /> : null}
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} />
               선택한 구간의 로그 업로드와 30일 보관 후 삭제 정책에 동의합니다.
@@ -564,6 +649,35 @@ export function SupportNewPage() {
 }
 
 class TicketCreateError extends Error {}
+
+function AsRagRecommendation({ analysis }: { analysis: AsRagAnalysisDto }) {
+  return (
+    <div className="rounded border border-blue-200 bg-blue-50 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-bold text-blue-950">추천 서비스</span>
+        <StatusBadge status={analysis.supportDecision ?? 'NEEDS_MORE_INFO'} />
+        {analysis.confidence ? <StatusBadge status={analysis.confidence} /> : null}
+      </div>
+      <p className="mt-2 text-base font-bold text-blue-950">
+        {analysis.recommendationMessage ?? `이 증상은 ${analysis.recommendedServiceLabel ?? '우선 진단만 받기'} 서비스를 받는 것이 좋습니다.`}
+      </p>
+      {analysis.summaryText ? <p className="mt-2 text-sm leading-6 text-blue-900">{analysis.summaryText}</p> : null}
+      {analysis.evidence?.length ? (
+        <div className="mt-3 space-y-1 text-xs leading-5 text-blue-800">
+          {analysis.evidence.slice(0, 2).map((item, index) => (
+            <p key={`${String(item.sourceId ?? index)}`}>근거 {index + 1}. {String(item.summary ?? item.title ?? item.sourceId ?? 'AS RAG 근거')}</p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function supportKindFromRecommendation(value?: string): SupportRequestKind {
+  if (value === 'REMOTE_SUPPORT') return 'REMOTE_REQUESTED';
+  if (value === 'VISIT_SUPPORT') return 'VISIT_REQUESTED';
+  return 'DIAGNOSIS_ONLY';
+}
 
 function uploadFailureMessage(cause: unknown) {
   if (cause instanceof ApiError && cause.status === 400) {
@@ -813,7 +927,7 @@ function causeRows(candidates: CauseCandidate[]) {
   }
   return candidates.map((candidate) => ({
     '확인 항목': candidate.label ?? candidate.code ?? '로그 확인 항목',
-    내용: candidate.evidenceIds?.length ? candidate.evidenceIds.join(', ') : '업로드한 로그 기반 참고 자료',
+    내용: candidate.reason ?? (candidate.evidenceIds?.length ? candidate.evidenceIds.join(', ') : '업로드한 로그 기반 참고 자료'),
     상태: <StatusBadge status={candidate.confidence ?? 'MEDIUM'} />
   }));
 }
@@ -835,6 +949,13 @@ function datetimeLocalValue(date: Date) {
   const offset = date.getTimezoneOffset();
   const local = new Date(date.getTime() - offset * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function datetimeLocalFromIso(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return datetimeLocalValue(date);
 }
 
 function datetimeLocalToDate(value: string) {
@@ -876,6 +997,33 @@ function supportRequestLabel(value: SupportRequestKind) {
   if (value === 'REMOTE_REQUESTED') return '원격지원 신청';
   if (value === 'VISIT_REQUESTED') return '방문지원 신청';
   return '우선 진단만 받기';
+}
+
+function toSupportRequestKind(value?: string | null): SupportRequestKind {
+  if (value === 'REMOTE_REQUESTED' || value === 'VISIT_REQUESTED' || value === 'DIAGNOSIS_ONLY') {
+    return value;
+  }
+  return 'DIAGNOSIS_ONLY';
+}
+
+async function downloadAgentExe(activationToken: string) {
+  const response = await fetch('/downloads/pc-agent/agent.exe');
+  if (!response.ok) {
+    throw new Error('Agent exe download failed.');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  downloadUrl(url, `BuildGraphAgent-${activationToken}.exe`);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadUrl(url: string, filename: string) {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function visitSlotLabel(value?: string | null) {

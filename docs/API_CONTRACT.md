@@ -423,6 +423,7 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/agent-logs/upload` | USER | 4번 | `multipart/form-data` | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "fileSize": 12000, "rangeMinutes": 30, "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
+| `POST` | `/api/agent-logs/as-rag-preview` | USER | 4번 | `multipart/form-data` | `{ "recommendedService": "REMOTE_SUPPORT", "recommendedServiceLabel": "원격지원 신청", "recommendationMessage": "로그상 원격지원으로 먼저 확인할 가능성이 높습니다.", "supportDecision": "REMOTE_POSSIBLE" }` | `as_rag_evidence` |
 | `GET` | `/api/agent-logs/{id}` | USER | 4번 | - | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "rangeMinutes": 30, "summary": "GPU driver error 반복", "createdAt": "2026-06-29T10:40:00Z", "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
 | `POST` | `/api/as-tickets` | USER | 4번 | `{ "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "symptom": "화면이 멈춤" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets`, `agent_log_uploads` |
 | `GET` | `/api/as-tickets/{id}` | USER | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "adminNote": null, "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets` |
@@ -443,6 +444,17 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 `consentAccepted=false`이면 `400`을 반환한다. `true`일 때 서버가 `consent_accepted_at`을 저장한다.
 
 파일 검증 실패는 `400 FILE_VALIDATION_ERROR`를 반환하고 `agent_log_uploads` row를 만들지 않는다. 기준은 `DB_SCHEMA.md`의 로그 업로드 보안 정책을 따른다.
+
+AS 접수 페이지 RAG 분석:
+
+- `/api/agent-logs/upload`는 업로드된 JSONL 로그를 AS 접수 전용 RAG로 분석해 `AgentLogUploadDto.asRagAnalysis`를 반환하고 `agent_log_uploads.as_rag_analysis`에 저장한다.
+- AS 접수 전용 RAG는 `as_rag_evidence`만 사용한다.
+- 기존 챗봇/Agent RAG의 `rag_evidence`, `RagQueryService`, `AgentRagRetrievalService`, `/api/rag/*` 계약은 사용하거나 수정하지 않는다.
+- `/api/as-tickets` 생성 시 연결된 `agent_log_uploads.as_rag_analysis`를 읽어 `supportDecision`, `causeCandidates`, `logSummary`, `supportRouting`, `aiDiagnosisRequest`를 초기값으로 채운다.
+- `recommendedService` 값은 `DIAGNOSIS_ONLY`, `REMOTE_SUPPORT`, `VISIT_SUPPORT`만 사용하며 UI는 각각 `우선 진단만 받기`, `원격지원 신청`, `방문지원 신청`으로 표시한다.
+- AS 접수 전용 RAG가 직접 생성하는 `supportDecision`은 최종 시나리오 기준 coarse decision 4개(`SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`)만 사용한다.
+- 방문지원 추천은 `VISIT_BOOT_REMOTE_BLOCKED`, `VISIT_DISK_FAILURE`, `VISIT_WHEA_BSOD`, `VISIT_POWER_SHUTDOWN`, `VISIT_FAN_THERMAL`의 강한 신호가 있을 때만 올린다. 디스크 교체 가능성은 `REPAIR_OR_REPLACE` decision이 아니라 `visitReasons`/`reasonCodes`로 표현한다.
+- 미지원 가능성은 `UNSUPPORTED` decision으로 직접 확정하지 않고 `NEEDS_MORE_INFO`와 `blockingFactors`로 표현해 관리자 확인 대상으로 둔다.
 
 `POST /api/as-tickets/{id}/remote-support-requests`는 사용자가 원격지원 검토를 요청하는 신규 endpoint다. 서버는 티켓 소유자만 허용하고, `reason`이 비어 있으면 `400`을 반환한다. 같은 ticket에 `REQUESTED`, `LINK_SENT`, `IN_PROGRESS` 상태의 원격 세션이 이미 있으면 `409 CONFLICT_STATE`로 중복 생성을 막는다. 생성 시 `remote_support_sessions.status='REQUESTED'` row를 만들고 `as_tickets.review_status='REQUIRED'`로 올린다.
 

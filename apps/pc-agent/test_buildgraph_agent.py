@@ -41,6 +41,43 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(row["payload"]["eventType"], row["eventType"])
             self.assertEqual(row["privacyFlags"], {"containsRawPath": False, "masked": True})
 
+    def test_append_metric_with_row_returns_written_issue_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="token",
+                log_dir=Path(directory),
+                agent_version="test-agent",
+                policy_version="test-policy",
+            )
+
+            log_path, row = agent.append_metric_with_row(config, index=7)
+
+            self.assertEqual(log_path, config.log_dir / "agent-metrics.jsonl")
+            self.assertEqual(row["eventType"], "DISPLAY_DRIVER_WARNING")
+            self.assertEqual(row["message"], "Display driver warning observed.")
+
+    def test_issue_notification_is_throttled(self) -> None:
+        runtime = agent.AgentRuntime()
+        warning = {"eventType": "DISPLAY_DRIVER_WARNING", "message": "Display driver warning observed."}
+        normal = {"eventType": "DEMO_METRIC", "message": "Demo metric collected."}
+
+        self.assertFalse(agent.should_show_issue_notification(normal, runtime, now=1000))
+        self.assertTrue(agent.should_show_issue_notification(warning, runtime, now=1000))
+        self.assertFalse(agent.should_show_issue_notification(warning, runtime, now=1059))
+        self.assertTrue(agent.should_show_issue_notification(warning, runtime, now=1060))
+
+    def test_issue_macro_maps_display_driver_warning_to_remote_draft(self) -> None:
+        macro = agent.issue_macro({"eventType": "DISPLAY_DRIVER_WARNING", "message": "Display driver warning observed."})
+
+        self.assertEqual(macro.symptom_type, "REMOTE_DRIVER_OS")
+        self.assertEqual(macro.support_request_kind, "REMOTE_REQUESTED")
+        self.assertIn("디스플레이", macro.title)
+        self.assertIn("Display driver warning observed.", macro.symptom)
+
     def test_gzip_recent_selects_recent_rows_and_writes_non_empty_gzip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "agent-metrics.jsonl"
@@ -195,6 +232,53 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertIn(b'name="rangeMinutes"', body)
             self.assertIn(b"\r\n20\r\n", body)
             self.assertIn(b'name="consentId"', body)
+
+    def test_create_as_draft_sends_prefill_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            upload_file = Path(directory) / "incident-window.jsonl.gz"
+            upload_file.write_bytes(b"gzip-bytes")
+            detected = datetime(2026, 7, 2, 14, 0, tzinfo=agent.KST)
+            window = agent.default_incident_window(
+                "REMOTE_DRIVER_OS",
+                detected_at=detected,
+                trigger_type="AGENT_DETECTED",
+                incident_id="incident-1",
+                selected_by_user=False,
+                consent_id="consent-1",
+            )
+            macro = agent.IssueDraftMacro(
+                symptom_type="REMOTE_DRIVER_OS",
+                title="디스플레이 드라이버 경고가 감지되었습니다",
+                detail="PC Agent가 경고를 감지했습니다.",
+                symptom="PC Agent 자동 감지: Display driver warning observed.",
+                support_request_kind="REMOTE_REQUESTED",
+            )
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="token",
+                log_dir=Path(directory),
+                agent_version="test-agent",
+                policy_version="test-policy",
+            )
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = b'{"draftId":"draft-public-id","logUploadId":"log-id"}'
+            response.__exit__.return_value = None
+
+            with patch("buildgraph_agent.urllib.request.urlopen", return_value=response) as urlopen:
+                result = agent.create_as_draft(config, upload_file, "draft-key", macro, window)
+
+            request = urlopen.call_args.args[0]
+            self.assertEqual(result["draftId"], "draft-public-id")
+            self.assertEqual(request.full_url, "http://localhost:8080/api/agent/as-drafts")
+            self.assertEqual(request.headers["Authorization"], "Bearer token")
+            self.assertEqual(request.headers["Idempotency-key"], "draft-key")
+            self.assertIn(b'name="title"', request.data)
+            self.assertIn("디스플레이 드라이버".encode("utf-8"), request.data)
+            self.assertIn(b'name="supportRequestKind"', request.data)
+            self.assertIn(b"\r\nREMOTE_REQUESTED\r\n", request.data)
 
     def test_ensure_default_config_creates_background_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

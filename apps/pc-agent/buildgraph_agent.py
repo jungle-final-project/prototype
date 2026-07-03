@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import quote
 
 try:
     import tkinter as tk
@@ -48,6 +49,7 @@ KST = timezone(timedelta(hours=9))
 DEFAULT_CONFIG_PATH = Path("agent-config.json")
 DEFAULT_LOG_DIR = Path("out/logs")
 DEFAULT_LOG_FILE = "agent-metrics.jsonl"
+ACTIVATION_CONFIG_FILE = "buildgraph-agent-activation.json"
 DEFAULT_RANGE_MINUTES = 30
 DEFAULT_SCHEMA_VERSION = 1
 REMOTE_SYMPTOM_TYPES = {
@@ -66,7 +68,9 @@ VISIT_SYMPTOM_TYPES = {
     "VISIT_FAN_THERMAL",
 }
 REGISTER_PATH = "/api/agent/devices/register"
+CONSENT_PATH = "/api/agent/consents"
 LOG_UPLOAD_PATH = "/api/agent/log-uploads"
+AS_DRAFT_PATH = "/api/agent/as-drafts"
 REGISTERED_STATUS = "REGISTERED"
 UNREGISTERED_STATUS = "UNREGISTERED"
 APP_NAME = "BuildGraphAgent"
@@ -300,11 +304,21 @@ class IncidentWindow:
         return fields
 
 
+@dataclass(frozen=True)
+class IssueDraftMacro:
+    symptom_type: str
+    title: str
+    detail: str
+    symptom: str
+    support_request_kind: str
+
+
 class AgentRuntime:
     def __init__(self) -> None:
         self.running = True
         self.index = 0
         self.last_event_panel_signature: str | None = None
+        self.last_issue_notification_at: float = 0.0
 
     def stop(self) -> None:
         self.running = False
@@ -421,6 +435,10 @@ def support_new_url(config: AgentConfig) -> str:
     return f"{web_base_url(config)}/support/new"
 
 
+def support_draft_url(config: AgentConfig, draft_id: str) -> str:
+    return f"{support_new_url(config)}?draftId={quote(draft_id)}"
+
+
 def restrict_file_to_current_user(path: Path) -> None:
     if os.name == "nt":
         user_sid = current_user_sid()
@@ -509,6 +527,80 @@ def ensure_default_config(path: Path) -> Path:
     return path
 
 
+def downloads_dir() -> Path:
+    return Path.home() / "Downloads"
+
+
+def activation_config_candidates() -> list[Path]:
+    candidates: list[Path] = [
+        Path.cwd() / ACTIVATION_CONFIG_FILE,
+        downloads_dir() / ACTIVATION_CONFIG_FILE,
+        app_data_dir() / ACTIVATION_CONFIG_FILE,
+    ]
+    for directory in (Path.cwd(), downloads_dir(), app_data_dir()):
+        if directory.exists():
+            candidates.extend(directory.glob("buildgraph-agent-activation*.json"))
+    unique: dict[Path, Path] = {}
+    for path in candidates:
+        if path.exists():
+            unique[path.resolve()] = path
+    return list(unique.values())
+
+
+def latest_activation_config() -> Path | None:
+    candidates = activation_config_candidates()
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def activation_token_from_executable_name() -> str | None:
+    name = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(sys.argv[0]).name
+    match = re.search(r"BuildGraphAgent-([A-Za-z0-9_-]{20,})", name)
+    return match.group(1) if match else None
+
+
+def import_activation_config(config_path: Path, activation_path: Path | None = None) -> bool:
+    executable_token = activation_token_from_executable_name()
+    if executable_token:
+        config_data = read_config_json(config_path)
+        if config_data.get("activationToken") != executable_token:
+            config_data["activationToken"] = executable_token
+            config_data["agentToken"] = None
+            with config_path.open("w", encoding="utf-8") as file:
+                json.dump(config_data, file, ensure_ascii=False, indent=2)
+                file.write("\n")
+            restrict_file_to_current_user(config_path)
+            return True
+        return False
+
+    source = activation_path or latest_activation_config()
+    if source is None:
+        return False
+    activation_data = read_config_json(source)
+    activation_token = optional_config_text(activation_data, "activationToken")
+    if not activation_token:
+        return False
+
+    config_data = read_config_json(config_path)
+    changed = False
+    for field in ("apiBaseUrl", "webBaseUrl", "environment"):
+        value = optional_config_text(activation_data, field)
+        if value and config_data.get(field) != value:
+            config_data[field] = value
+            changed = True
+    if config_data.get("activationToken") != activation_token:
+        config_data["activationToken"] = activation_token
+        config_data["agentToken"] = None
+        changed = True
+    if changed:
+        with config_path.open("w", encoding="utf-8") as file:
+            json.dump(config_data, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        restrict_file_to_current_user(config_path)
+    return changed
+
+
 def log_file(config: AgentConfig) -> Path:
     return config.log_dir / DEFAULT_LOG_FILE
 
@@ -541,6 +633,10 @@ def print_doctor(config_path: Path) -> None:
 
 def register_endpoint(api_base_url: str) -> str:
     return api_base_url.rstrip("/") + REGISTER_PATH
+
+
+def consent_endpoint(api_base_url: str) -> str:
+    return api_base_url.rstrip("/") + CONSENT_PATH
 
 
 def registration_idempotency_key(config: AgentConfig) -> str:
@@ -594,6 +690,40 @@ def call_register(config: AgentConfig, timeout_seconds: int = 15) -> str:
     return agent_token.strip()
 
 
+def call_server_upload_consent(config: AgentConfig, timeout_seconds: int = 15) -> None:
+    if not config.agent_token:
+        raise RegisterError("agentToken is missing; cannot save server upload consent.")
+    request_body = json.dumps(
+        {
+            "consentType": "SERVER_UPLOAD",
+            "policyVersion": config.policy_version,
+            "accepted": True,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        consent_endpoint(config.api_base_url),
+        data=request_body,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {config.agent_token}",
+            "Content-Type": "application/json",
+            "Idempotency-Key": "agent-consent-server-upload-" + hashlib.sha256(
+                config.device_fingerprint_hash.encode("utf-8")
+            ).hexdigest()[:32],
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            response.read()
+    except urllib.error.HTTPError as exception:
+        detail = exception.read().decode("utf-8", errors="replace").strip()
+        message = detail or exception.reason
+        raise RegisterError(f"Consent request failed with HTTP {exception.code}: {message}") from exception
+    except urllib.error.URLError as exception:
+        raise RegisterError(f"Consent request failed: {exception.reason}") from exception
+
+
 def save_agent_token(config_path: Path, agent_token: str) -> None:
     if not agent_token.strip():
         raise ConfigError("agentToken must be a non-empty string.")
@@ -609,8 +739,20 @@ def register_agent(config_path: Path) -> None:
     config = load_config(config_path)
     agent_token = call_register(config)
     save_agent_token(config_path, agent_token)
+    call_server_upload_consent(load_config(config_path))
     print(REGISTERED_STATUS)
     print(f"agentToken: saved to {config_path}")
+    print("serverUploadConsent: accepted")
+
+
+def auto_register_agent(config_path: Path) -> bool:
+    config = load_config(config_path)
+    if config.agent_token:
+        return False
+    agent_token = call_register(config)
+    save_agent_token(config_path, agent_token)
+    call_server_upload_consent(load_config(config_path))
+    return True
 
 
 def metric_snapshot(ts: datetime, index: int) -> dict:
@@ -625,21 +767,55 @@ def metric_snapshot(ts: datetime, index: int) -> dict:
 
     event_type = "DISPLAY_DRIVER_WARNING" if index % 7 == 0 else "DEMO_METRIC"
     message = "Display driver warning observed." if event_type != "DEMO_METRIC" else "Demo metric collected."
-    return {
-        "timestamp": ts.isoformat(),
-        "cpuUsage": round(cpu_usage, 1),
-        "memoryUsage": round(memory_usage, 1),
-        "ramUsage": round(memory_usage, 1),
+    cpu_usage = round(cpu_usage, 1)
+    memory_usage = round(memory_usage, 1)
+    disk_usage = round(disk_usage, 1)
+    gpu_usage = round(min(98, 64 + index * 4 + random.random() * 8), 1)
+    vram_usage = round(min(95, 58 + index * 3 + random.random() * 5), 1)
+    gpu_temp = round(min(91, 70 + index * 1.8 + random.random() * 3), 1)
+    cpu_temp = round(min(86, 62 + index * 1.2 + random.random() * 2), 1)
+    collected_at = ts.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    payload = {
+        "cpuUsage": cpu_usage,
+        "memoryUsage": memory_usage,
+        "ramUsage": memory_usage,
+        "gpuUsage": gpu_usage,
+        "vramUsage": vram_usage,
+        "gpuTemp": gpu_temp,
+        "cpuTemp": cpu_temp,
+        "diskUsage": disk_usage,
         "eventType": event_type,
         "message": message,
-        "gpuUsage": round(min(98, 64 + index * 4 + random.random() * 8), 1),
-        "vramUsage": round(min(95, 58 + index * 3 + random.random() * 5), 1),
-        "gpuTemp": round(min(91, 70 + index * 1.8 + random.random() * 3), 1),
-        "cpuTemp": round(min(86, 62 + index * 1.2 + random.random() * 2), 1),
-        "diskUsage": round(disk_usage, 1),
         "osErrorEvent": None if event_type == "DEMO_METRIC" else "Display driver warning",
         "topCpuProcess": "game.exe" if index % 2 else "ide64.exe",
         "topRamProcess": "game.exe",
+    }
+    return {
+        "schemaVersion": str(DEFAULT_SCHEMA_VERSION),
+        "collectedAt": collected_at,
+        "agentId": socket.gethostname() or "local-agent",
+        "sequence": index,
+        "kind": event_type,
+        "payload": payload,
+        "privacyFlags": {
+            "containsRawPath": False,
+            "masked": True,
+            "containsUserContent": False,
+        },
+        "timestamp": ts.isoformat(),
+        "cpuUsage": cpu_usage,
+        "memoryUsage": memory_usage,
+        "ramUsage": memory_usage,
+        "eventType": event_type,
+        "message": message,
+        "gpuUsage": gpu_usage,
+        "vramUsage": vram_usage,
+        "gpuTemp": gpu_temp,
+        "cpuTemp": cpu_temp,
+        "diskUsage": disk_usage,
+        "osErrorEvent": payload["osErrorEvent"],
+        "topCpuProcess": payload["topCpuProcess"],
+        "topRamProcess": payload["topRamProcess"],
     }
 
 
@@ -811,7 +987,7 @@ def export_window(source: Path, out: Path, window: IncidentWindow) -> None:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def append_metric(config: AgentConfig, index: int = 0) -> Path:
+def append_metric_with_row(config: AgentConfig, index: int = 0) -> tuple[Path, dict]:
     path = log_file(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = metric_log_row(
@@ -824,6 +1000,11 @@ def append_metric(config: AgentConfig, index: int = 0) -> Path:
     row["policyVersion"] = config.policy_version
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path, row
+
+
+def append_metric(config: AgentConfig, index: int = 0) -> Path:
+    path, _ = append_metric_with_row(config, index)
     return path
 
 
@@ -937,6 +1118,56 @@ def upload_gzip(
 
     if not isinstance(result, dict) or not result.get("ticketId"):
         raise UploadError(f"upload response did not include ticketId: {result}")
+    return result
+
+
+def create_as_draft(
+    config: AgentConfig,
+    gzip_path: Path,
+    idempotency_key: str,
+    macro: IssueDraftMacro,
+    incident_window: IncidentWindow,
+) -> dict:
+    if not config.agent_token:
+        raise UploadError("agentToken is missing. Run register first or wait for Goal 10 token storage.")
+    if gzip_path.stat().st_size == 0:
+        raise UploadError(f"gzip file is empty: {gzip_path}")
+
+    fields = incident_window.metadata()
+    fields["schemaVersion"] = str(config.schema_version)
+    fields["symptom"] = macro.symptom
+    fields["title"] = macro.title
+    fields["detailDescription"] = macro.detail
+    fields["supportRequestKind"] = macro.support_request_kind
+    body, content_type = build_multipart(fields, "file", gzip_path)
+    draft_url = config.api_base_url.rstrip("/") + AS_DRAFT_PATH
+    request = urllib.request.Request(
+        draft_url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.agent_token}",
+            "Idempotency-Key": idempotency_key,
+            "Content-Type": content_type,
+            "Content-Length": str(len(body)),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exception:
+        detail = exception.read().decode("utf-8", errors="replace")
+        raise UploadError(f"draft upload failed: HTTP {exception.code} {detail}") from exception
+    except urllib.error.URLError as exception:
+        raise UploadError(f"draft upload failed: {exception.reason}") from exception
+
+    try:
+        result = json.loads(payload)
+    except json.JSONDecodeError as exception:
+        raise UploadError(f"draft response is not JSON: {payload[:200]}") from exception
+
+    if not isinstance(result, dict) or not result.get("draftId"):
+        raise UploadError(f"draft response did not include draftId: {result}")
     return result
 
 
@@ -1426,6 +1657,64 @@ $versionText = {powershell_string(str(model["version"]))}
 $policyText = {powershell_string(str(model["policyVersion"]))}
 $signalsText = {powershell_string(signals_text)}
 
+$appBg = [System.Drawing.ColorTranslator]::FromHtml("#f5f7f8")
+$sidebarBg = [System.Drawing.ColorTranslator]::FromHtml("#e7f2ef")
+$cardBg = [System.Drawing.ColorTranslator]::FromHtml("#ffffff")
+$sectionBg = [System.Drawing.ColorTranslator]::FromHtml("#f8fbfb")
+$primaryBg = [System.Drawing.ColorTranslator]::FromHtml("#1f8a70")
+$borderColor = [System.Drawing.ColorTranslator]::FromHtml("#d7e0e3")
+$textColor = [System.Drawing.ColorTranslator]::FromHtml("#172b3a")
+$mutedColor = [System.Drawing.ColorTranslator]::FromHtml("#5c6b73")
+
+function Style-Button {{
+  param($Button, [bool]$Primary = $false)
+  $Button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+  $Button.FlatAppearance.BorderSize = 1
+  $Button.FlatAppearance.BorderColor = $borderColor
+  $Button.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+  $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
+  if ($Primary) {{
+    $Button.BackColor = $primaryBg
+    $Button.ForeColor = [System.Drawing.Color]::White
+  }} else {{
+    $Button.BackColor = [System.Drawing.Color]::White
+    $Button.ForeColor = $textColor
+  }}
+}}
+
+function Style-NavLink {{
+  param($Button)
+  $Button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+  $Button.FlatAppearance.BorderSize = 0
+  $Button.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+  $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
+  $Button.BackColor = $sidebarBg
+  $Button.ForeColor = $textColor
+  $Button.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+}}
+
+function Add-SoftBorder {{
+  param($Panel)
+  $Panel.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+  $Panel.Add_Paint({{
+    param($sender, $eventArgs)
+    $eventArgs.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $rect = New-Object System.Drawing.Rectangle(0, 0, ($sender.Width - 1), ($sender.Height - 1))
+    $radius = 8
+    $diameter = $radius * 2
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $path.AddArc($rect.X, $rect.Y, $diameter, $diameter, 180, 90)
+    $path.AddArc(($rect.Right - $diameter), $rect.Y, $diameter, $diameter, 270, 90)
+    $path.AddArc(($rect.Right - $diameter), ($rect.Bottom - $diameter), $diameter, $diameter, 0, 90)
+    $path.AddArc($rect.X, ($rect.Bottom - $diameter), $diameter, $diameter, 90, 90)
+    $path.CloseFigure()
+    $pen = New-Object System.Drawing.Pen($borderColor, 1)
+    $eventArgs.Graphics.DrawPath($pen, $path)
+    $pen.Dispose()
+    $path.Dispose()
+  }})
+}}
+
 function Get-RowValue {{
   param($Row, [string[]]$Names)
   foreach ($name in $Names) {{
@@ -1481,6 +1770,8 @@ function Get-FilteredLogText {{
     return "날짜 형식이 올바르지 않습니다. yyyy-MM-dd 형식으로 입력하세요."
   }}
   $end = $start.AddHours(1)
+  $output.Add(("{{0,-9}} {{1,-26}} {{2,8}} {{3,8}} {{4,8}} {{5,8}} {{6,8}}  {{7}}" -f "시간", "이벤트 종류", "CPU", "MEM", "DISK", "GPU", "CPU 온도", "메시지"))
+  $output.Add("-" * 112)
   Get-Content -LiteralPath $logPath | ForEach-Object {{
     try {{
       $row = $_ | ConvertFrom-Json
@@ -1494,11 +1785,11 @@ function Get-FilteredLogText {{
         $gpu = Format-Percent (Get-RowValue $row @("gpuUsage", "gpuUsagePercent"))
         $cpuTemp = Format-Temp (Get-RowValue $row @("cpuTemp", "cpuTempCelsius", "cpuTemperatureCelsius"))
         $message = Hide-SensitiveText (Get-RowValue $row @("message", "osErrorEvent", "status", "summary"))
-        $output.Add(("{0,-8} {1,-24} CPU {2,7} MEM {3,7} DISK {4,7} GPU {5,7} CPU-T {6,7}  {7}" -f $timeText, $kind, $cpu, $memory, $disk, $gpu, $cpuTemp, $message))
+        $output.Add(("{{0,-9}} {{1,-26}} {{2,8}} {{3,8}} {{4,8}} {{5,8}} {{6,8}}  {{7}}" -f $timeText, $kind, $cpu, $memory, $disk, $gpu, $cpuTemp, $message))
       }}
     }} catch {{}}
   }}
-  if ($output.Count -eq 0) {{
+  if ($output.Count -eq 2) {{
     return "선택한 1시간 구간에 표시할 로그가 없습니다."
   }}
   if ($output.Count -gt 500) {{
@@ -1509,119 +1800,196 @@ function Get-FilteredLogText {{
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "PC Agent"
-$form.Size = New-Object System.Drawing.Size(980, 640)
+$form.Size = New-Object System.Drawing.Size(1000, 640)
+$form.MinimumSize = New-Object System.Drawing.Size(1000, 640)
+$form.MaximumSize = New-Object System.Drawing.Size(1000, 2000)
 $form.StartPosition = "CenterScreen"
+$form.BackColor = $appBg
+$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
 $sidebar = New-Object System.Windows.Forms.Panel
 $sidebar.Location = New-Object System.Drawing.Point(0, 0)
-$sidebar.Size = New-Object System.Drawing.Size(118, 640)
-$sidebar.BackColor = [System.Drawing.Color]::FromArgb(239, 250, 248)
+$sidebar.Size = New-Object System.Drawing.Size(150, 640)
+$sidebar.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+$sidebar.BackColor = $sidebarBg
 $form.Controls.Add($sidebar)
 
 $brand = New-Object System.Windows.Forms.Label
-$brand.Text = ""
-$brand.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-$brand.Location = New-Object System.Drawing.Point(14, 18)
-$brand.Size = New-Object System.Drawing.Size(92, 48)
+$brand.Text = "PC Agent"
+$brand.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
+$brand.ForeColor = $textColor
+$brand.BackColor = $sidebarBg
+$brand.Location = New-Object System.Drawing.Point(24, 12)
+$brand.Size = New-Object System.Drawing.Size(110, 26)
 $sidebar.Controls.Add($brand)
 
-$navStatus = New-Object System.Windows.Forms.Button
-$navStatus.Text = "● 상태"
-$navStatus.Location = New-Object System.Drawing.Point(14, 82)
-$navStatus.Size = New-Object System.Drawing.Size(90, 32)
+$navStatus = New-Object System.Windows.Forms.Panel
+$navStatus.Location = New-Object System.Drawing.Point(8, 58)
+$navStatus.Size = New-Object System.Drawing.Size(134, 44)
+$navStatus.BackColor = [System.Drawing.Color]::White
+Add-SoftBorder $navStatus
+$activeBar = New-Object System.Windows.Forms.Panel
+$activeBar.Location = New-Object System.Drawing.Point(0, 0)
+$activeBar.Size = New-Object System.Drawing.Size(4, 44)
+$activeBar.BackColor = $primaryBg
+$navStatus.Controls.Add($activeBar)
+$navStatusLabel = New-Object System.Windows.Forms.Label
+$navStatusLabel.Text = "  • 상태"
+$navStatusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$navStatusLabel.ForeColor = $textColor
+$navStatusLabel.BackColor = [System.Drawing.Color]::White
+$navStatusLabel.Location = New-Object System.Drawing.Point(18, 12)
+$navStatusLabel.Size = New-Object System.Drawing.Size(96, 20)
+$navStatus.Controls.Add($navStatusLabel)
 $sidebar.Controls.Add($navStatus)
 
 $navLog = New-Object System.Windows.Forms.Button
 $navLog.Text = "≡ 로그"
-$navLog.Location = New-Object System.Drawing.Point(14, 124)
-$navLog.Size = New-Object System.Drawing.Size(90, 32)
+$navLog.Location = New-Object System.Drawing.Point(28, 124)
+$navLog.Size = New-Object System.Drawing.Size(96, 32)
+Style-NavLink $navLog
 $navLog.Add_Click({{ $textbox.Focus() }})
 $sidebar.Controls.Add($navLog)
 
 $navSupport = New-Object System.Windows.Forms.Button
 $navSupport.Text = "+ AS 접수"
-$navSupport.Location = New-Object System.Drawing.Point(14, 166)
-$navSupport.Size = New-Object System.Drawing.Size(90, 32)
+$navSupport.Location = New-Object System.Drawing.Point(28, 174)
+$navSupport.Size = New-Object System.Drawing.Size(96, 32)
+Style-NavLink $navSupport
 $navSupport.Add_Click({{ Start-Process -FilePath $supportUrl }})
 $sidebar.Controls.Add($navSupport)
 
 $navSettings = New-Object System.Windows.Forms.Button
 $navSettings.Text = "○ 설정"
-$navSettings.Location = New-Object System.Drawing.Point(14, 208)
-$navSettings.Size = New-Object System.Drawing.Size(90, 32)
+$navSettings.Location = New-Object System.Drawing.Point(28, 224)
+$navSettings.Size = New-Object System.Drawing.Size(96, 32)
+Style-NavLink $navSettings
 $navSettings.Add_Click({{ Start-Process -FilePath $logDir }})
 $sidebar.Controls.Add($navSettings)
 
 $title = New-Object System.Windows.Forms.Label
-$title.Text = ""
+$title.Text = "상태 홈"
 $title.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+$title.ForeColor = $textColor
+$title.BackColor = $appBg
 $title.AutoSize = $true
-$title.Location = New-Object System.Drawing.Point(138, 18)
+$title.Location = New-Object System.Drawing.Point(170, 48)
 $form.Controls.Add($title)
 
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = "시스템 상태와 감지 로그를 실시간으로 확인합니다."
+$subtitle.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$subtitle.ForeColor = $mutedColor
+$subtitle.BackColor = $appBg
+$subtitle.AutoSize = $true
+$subtitle.Location = New-Object System.Drawing.Point(170, 82)
+$form.Controls.Add($subtitle)
+
 function Add-Card {{
-  param([int]$X, [string]$Title, [string]$Value, [string]$Detail)
+  param([int]$X, [string]$Icon, [string]$Title, [string]$Value, [string]$Detail)
   $card = New-Object System.Windows.Forms.Panel
-  $card.Location = New-Object System.Drawing.Point($X, 64)
-  $card.Size = New-Object System.Drawing.Size(190, 82)
-  $card.BorderStyle = "FixedSingle"
+  $card.Location = New-Object System.Drawing.Point($X, 114)
+  $card.Size = New-Object System.Drawing.Size(185, 90)
+  $card.BackColor = $cardBg
+  Add-SoftBorder $card
   $form.Controls.Add($card)
+  $iconBox = New-Object System.Windows.Forms.Label
+  $iconBox.Text = $Icon
+  $iconBox.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+  $iconBox.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+  $iconBox.ForeColor = $primaryBg
+  $iconBox.BackColor = $sectionBg
+  $iconBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+  $iconBox.Location = New-Object System.Drawing.Point(14, 16)
+  $iconBox.Size = New-Object System.Drawing.Size(36, 38)
+  $card.Controls.Add($iconBox)
   $cardTitle = New-Object System.Windows.Forms.Label
   $cardTitle.Text = $Title
   $cardTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-  $cardTitle.Location = New-Object System.Drawing.Point(12, 10)
-  $cardTitle.Size = New-Object System.Drawing.Size(160, 20)
+  $cardTitle.ForeColor = $textColor
+  $cardTitle.BackColor = $cardBg
+  $cardTitle.Location = New-Object System.Drawing.Point(62, 14)
+  $cardTitle.Size = New-Object System.Drawing.Size(108, 20)
   $card.Controls.Add($cardTitle)
   $cardValue = New-Object System.Windows.Forms.Label
   $cardValue.Text = $Value
-  $cardValue.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-  $cardValue.Location = New-Object System.Drawing.Point(12, 34)
-  $cardValue.Size = New-Object System.Drawing.Size(160, 20)
+  $cardValue.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+  $cardValue.ForeColor = $textColor
+  $cardValue.BackColor = $cardBg
+  $cardValue.Location = New-Object System.Drawing.Point(62, 38)
+  $cardValue.Size = New-Object System.Drawing.Size(112, 24)
   $card.Controls.Add($cardValue)
   $cardDetail = New-Object System.Windows.Forms.Label
   $cardDetail.Text = $Detail
-  $cardDetail.Location = New-Object System.Drawing.Point(12, 58)
-  $cardDetail.Size = New-Object System.Drawing.Size(160, 18)
+  $cardDetail.ForeColor = $mutedColor
+  $cardDetail.BackColor = $cardBg
+  $cardDetail.Location = New-Object System.Drawing.Point(62, 68)
+  $cardDetail.Size = New-Object System.Drawing.Size(112, 18)
   $card.Controls.Add($cardDetail)
 }}
 
-Add-Card 138 "Agent 상태" $agentStatus "백그라운드 수집"
-Add-Card 340 "서버 연결" $serverStatus "heartbeat 미호출"
-Add-Card 542 "마지막 업로드" $lastUpload "로컬 기록 기준"
-Add-Card 744 "버전" $versionText "정책 $policyText"
+Add-Card 170 "OK" "Agent 상태" $agentStatus "백그라운드 수집"
+Add-Card 365 "PC" "서버 연결" $serverStatus "heartbeat 미호출"
+Add-Card 560 "UP" "마지막 업로드" $lastUpload "로컬 기록 기준"
+Add-Card 755 "i" "버전" "$versionText / $policyText" "agent / policy"
+
+$signalsPanel = New-Object System.Windows.Forms.Panel
+$signalsPanel.Location = New-Object System.Drawing.Point(170, 216)
+$signalsPanel.Size = New-Object System.Drawing.Size(790, 124)
+$signalsPanel.BackColor = $cardBg
+Add-SoftBorder $signalsPanel
+$form.Controls.Add($signalsPanel)
 
 $signalLabel = New-Object System.Windows.Forms.Label
-$signalLabel.Text = "최근 신호"
+$signalLabel.Text = "최근 감지 신호"
 $signalLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$signalLabel.Location = New-Object System.Drawing.Point(138, 164)
+$signalLabel.ForeColor = $textColor
+$signalLabel.BackColor = $cardBg
+$signalLabel.Location = New-Object System.Drawing.Point(16, 14)
 $signalLabel.AutoSize = $true
-$form.Controls.Add($signalLabel)
+$signalsPanel.Controls.Add($signalLabel)
 
-$signalsBox = New-Object System.Windows.Forms.TextBox
-$signalsBox.Multiline = $true
-$signalsBox.ReadOnly = $true
-$signalsBox.BorderStyle = "FixedSingle"
-$signalsBox.Location = New-Object System.Drawing.Point(138, 190)
-$signalsBox.Size = New-Object System.Drawing.Size(796, 70)
-$signalsBox.Text = $signalsText
-$form.Controls.Add($signalsBox)
+$signalsBody = New-Object System.Windows.Forms.Label
+$signalsBody.Text = $signalsText
+$signalsBody.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$signalsBody.ForeColor = $textColor
+$signalsBody.BackColor = $cardBg
+$signalsBody.Location = New-Object System.Drawing.Point(16, 44)
+$signalsBody.Size = New-Object System.Drawing.Size(750, 22)
+$signalsPanel.Controls.Add($signalsBody)
+
+$signalsHelp = New-Object System.Windows.Forms.Label
+$signalsHelp.Text = "단순 CPU/RAM/GPU 고사용률은 AS 알림에서 제외됩니다"
+$signalsHelp.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+$signalsHelp.ForeColor = $mutedColor
+$signalsHelp.BackColor = $cardBg
+$signalsHelp.Location = New-Object System.Drawing.Point(16, 70)
+$signalsHelp.Size = New-Object System.Drawing.Size(750, 20)
+$signalsPanel.Controls.Add($signalsHelp)
 
 $dateLabel = New-Object System.Windows.Forms.Label
 $dateLabel.Text = "날짜"
 $dateLabel.AutoSize = $true
+$dateLabel.ForeColor = $mutedColor
+$dateLabel.BackColor = $appBg
 $dateLabel.Location = New-Object System.Drawing.Point(138, 282)
+$dateLabel.Visible = $false
 $form.Controls.Add($dateLabel)
 
 $dateInput = New-Object System.Windows.Forms.TextBox
 $dateInput.Location = New-Object System.Drawing.Point(180, 278)
 $dateInput.Size = New-Object System.Drawing.Size(96, 22)
 $dateInput.Text = (Get-Date).ToString("yyyy-MM-dd")
+$dateInput.Visible = $false
 $form.Controls.Add($dateInput)
 
 $hourLabel = New-Object System.Windows.Forms.Label
 $hourLabel.Text = "시간"
 $hourLabel.AutoSize = $true
+$hourLabel.ForeColor = $mutedColor
+$hourLabel.BackColor = $appBg
 $hourLabel.Location = New-Object System.Drawing.Point(292, 282)
+$hourLabel.Visible = $false
 $form.Controls.Add($hourLabel)
 
 $hourSelect = New-Object System.Windows.Forms.ComboBox
@@ -1630,49 +1998,91 @@ $hourSelect.Location = New-Object System.Drawing.Point(334, 278)
 $hourSelect.Size = New-Object System.Drawing.Size(72, 22)
 0..23 | ForEach-Object {{ [void]$hourSelect.Items.Add(($_.ToString("00")) + ":00") }}
 $hourSelect.SelectedIndex = [int](Get-Date).Hour
+$hourSelect.Visible = $false
 $form.Controls.Add($hourSelect)
+
+$logPanel = New-Object System.Windows.Forms.Panel
+$logPanel.Location = New-Object System.Drawing.Point(170, 350)
+$logPanel.Size = New-Object System.Drawing.Size(790, 240)
+$logPanel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+$logPanel.BackColor = $cardBg
+Add-SoftBorder $logPanel
+$form.Controls.Add($logPanel)
+
+$logTitle = New-Object System.Windows.Forms.Label
+$logTitle.Text = "1시간 로그 요약"
+$logTitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$logTitle.ForeColor = $textColor
+$logTitle.BackColor = $cardBg
+$logTitle.Location = New-Object System.Drawing.Point(16, 14)
+$logTitle.AutoSize = $true
+$logPanel.Controls.Add($logTitle)
 
 $textbox = New-Object System.Windows.Forms.TextBox
 $textbox.Multiline = $true
 $textbox.ScrollBars = "Both"
 $textbox.ReadOnly = $true
 $textbox.Font = New-Object System.Drawing.Font("Consolas", 9)
-$textbox.Location = New-Object System.Drawing.Point(138, 312)
-$textbox.Size = New-Object System.Drawing.Size(796, 220)
+$textbox.BackColor = [System.Drawing.Color]::White
+$textbox.ForeColor = $textColor
+$textbox.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+$textbox.Location = New-Object System.Drawing.Point(16, 46)
+$textbox.Size = New-Object System.Drawing.Size(758, 178)
+$textbox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $textbox.Text = Get-FilteredLogText $dateInput.Text $hourSelect.SelectedIndex
-$form.Controls.Add($textbox)
+$logPanel.Controls.Add($textbox)
 
 $refresh = New-Object System.Windows.Forms.Button
 $refresh.Text = "1시간 로그"
 $refresh.Location = New-Object System.Drawing.Point(420, 277)
 $refresh.Size = New-Object System.Drawing.Size(88, 24)
+Style-Button $refresh $true
 $refresh.Add_Click({{ $textbox.Text = Get-FilteredLogText $dateInput.Text $hourSelect.SelectedIndex }})
+$refresh.Visible = $false
 $form.Controls.Add($refresh)
 
 $today = New-Object System.Windows.Forms.Button
 $today.Text = "현재"
 $today.Location = New-Object System.Drawing.Point(516, 277)
 $today.Size = New-Object System.Drawing.Size(64, 24)
+Style-Button $today
 $today.Add_Click({{
   $dateInput.Text = (Get-Date).ToString("yyyy-MM-dd")
   $hourSelect.SelectedIndex = [int](Get-Date).Hour
   $textbox.Text = Get-FilteredLogText $dateInput.Text $hourSelect.SelectedIndex
 }})
+$today.Visible = $false
 $form.Controls.Add($today)
 
 $folder = New-Object System.Windows.Forms.Button
 $folder.Text = "로그 폴더"
 $folder.Location = New-Object System.Drawing.Point(138, 550)
 $folder.Size = New-Object System.Drawing.Size(100, 28)
+$folder.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+Style-Button $folder
 $folder.Add_Click({{ Start-Process -FilePath $logDir }})
+$folder.Visible = $false
 $form.Controls.Add($folder)
 
 $support = New-Object System.Windows.Forms.Button
 $support.Text = "AS 페이지"
 $support.Location = New-Object System.Drawing.Point(250, 550)
 $support.Size = New-Object System.Drawing.Size(100, 28)
+$support.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+Style-Button $support
 $support.Add_Click({{ Start-Process -FilePath $supportUrl }})
+$support.Visible = $false
 $form.Controls.Add($support)
+
+$liveRefreshTimer = New-Object System.Windows.Forms.Timer
+$liveRefreshTimer.Interval = 5000
+$liveRefreshTimer.Add_Tick({{
+  $textbox.Text = Get-FilteredLogText $dateInput.Text $hourSelect.SelectedIndex
+  $textbox.SelectionStart = $textbox.TextLength
+  $textbox.ScrollToCaret()
+}})
+$form.Add_Shown({{ $liveRefreshTimer.Start() }})
+$form.Add_FormClosed({{ $liveRefreshTimer.Stop(); $liveRefreshTimer.Dispose() }})
 
 [void]$form.ShowDialog()
 """
@@ -1709,7 +2119,9 @@ def show_log_viewer(
     root = tk.Tk()
     root.title("PC Agent")
     root.geometry("1000x640")
-    root.minsize(860, 560)
+    root.minsize(1000, 640)
+    root.maxsize(1000, 2000)
+    root.resizable(False, True)
     colors = {
         "app_bg": "#f5f7f8",
         "sidebar_bg": "#e7f2ef",
@@ -2611,6 +3023,26 @@ def show_log_viewer(
         select_signal(focus_signal)
     else:
         show_status_tab()
+
+    live_refresh_job: str | None = None
+
+    def schedule_live_refresh() -> None:
+        nonlocal live_refresh_job
+        refresh_status()
+        refresh_log_summary()
+        refresh_log()
+        live_refresh_job = root.after(5000, schedule_live_refresh)
+
+    def stop_live_refresh() -> None:
+        nonlocal live_refresh_job
+        if live_refresh_job is not None:
+            root.after_cancel(live_refresh_job)
+            live_refresh_job = None
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", stop_live_refresh)
+
+    schedule_live_refresh()
     root.mainloop()
 
 
@@ -2903,11 +3335,374 @@ def maybe_show_event_panel(config_path: Path, config: AgentConfig, runtime: Agen
     show_event_panel_async(config_path, signals)
 
 
+def is_issue_metric(row: dict) -> bool:
+    event_type = str(row.get("eventType", "")).strip()
+    if not event_type:
+        return False
+    return event_type not in {"DEMO_METRIC", "INFO", "OK"}
+
+
+def should_show_issue_notification(row: dict, runtime: AgentRuntime, now: float | None = None) -> bool:
+    if not is_issue_metric(row):
+        return False
+    observed = time.time() if now is None else now
+    if observed - runtime.last_issue_notification_at < 60:
+        return False
+    runtime.last_issue_notification_at = observed
+    return True
+
+
+def issue_macro(row: dict) -> IssueDraftMacro:
+    event_type = str(row.get("eventType") or row.get("kind") or "").strip()
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    message = str(row.get("message") or payload.get("message") or "").strip()
+    if event_type == "DISPLAY_DRIVER_WARNING":
+        return IssueDraftMacro(
+            symptom_type="REMOTE_DRIVER_OS",
+            title="디스플레이 드라이버 경고가 감지되었습니다",
+            detail="PC Agent가 디스플레이 드라이버 관련 경고 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.",
+            symptom=f"PC Agent 자동 감지: {message or 'Display driver warning observed.'}",
+            support_request_kind="REMOTE_REQUESTED",
+        )
+    return IssueDraftMacro(
+        symptom_type="REMOTE_AGENT",
+        title="PC Agent가 문제를 감지했습니다",
+        detail="PC Agent가 문제 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.",
+        symptom=f"PC Agent 자동 감지: {message or event_type or 'Unknown issue'}",
+        support_request_kind="DIAGNOSIS_ONLY",
+    )
+
+
+def issue_idempotency_key(row: dict) -> str:
+    payload = json.dumps(
+        {
+            "timestamp": row.get("timestamp") or row.get("collectedAt"),
+            "eventType": row.get("eventType") or row.get("kind"),
+            "message": row.get("message"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return "agent-draft-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def issue_ticket_idempotency_key(row: dict, title: str, detail: str, support_request_kind: str) -> str:
+    payload = json.dumps(
+        {
+            "timestamp": row.get("timestamp") or row.get("collectedAt"),
+            "eventType": row.get("eventType") or row.get("kind"),
+            "message": row.get("message"),
+            "title": title,
+            "detail": detail,
+            "supportRequestKind": support_request_kind,
+            "target": "ticket",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return "agent-ticket-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def agent_launch_parts(command: str, config_path: Path, issue_file: Path) -> tuple[str, list[str]]:
+    if getattr(sys, "frozen", False):
+        return sys.executable, [command, "--config", str(config_path), "--issue-file", str(issue_file)]
+    return sys.executable, [str(Path(__file__).resolve()), command, "--config", str(config_path), "--issue-file", str(issue_file)]
+
+
+def powershell_array(values: Sequence[str]) -> str:
+    return "@(" + ", ".join(powershell_string(value) for value in values) + ")"
+
+
+def show_issue_notification(config_path: Path, row: dict) -> None:
+    config = load_config(config_path)
+    macro = issue_macro(row)
+    detected_at = parse_log_timestamp(row) or datetime.now(KST)
+    window = default_incident_window(macro.symptom_type, detected_at=detected_at, trigger_type="AGENT_DETECTED")
+    message = str(row.get("message") or row.get("eventType") or "알 수 없는 문제가 감지되었습니다.").strip()
+    if not message:
+        message = "알 수 없는 문제가 감지되었습니다."
+    title = "BuildGraph PC Agent"
+    body = f"컴퓨터에 문제가 감지되었습니다: {message}"
+    support_url_text = support_new_url(config)
+    issue_file = app_data_dir() / "pending-issues" / f"issue-{uuid.uuid4()}.json"
+    issue_file.parent.mkdir(parents=True, exist_ok=True)
+    issue_file.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
+    launch_file, launch_args = agent_launch_parts("submit-issue", config_path, issue_file)
+    script = f"""
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$appBg = [System.Drawing.ColorTranslator]::FromHtml("#f8fbfc")
+$cardBg = [System.Drawing.ColorTranslator]::FromHtml("#ffffff")
+$softBg = [System.Drawing.ColorTranslator]::FromHtml("#eef8f9")
+$primaryBg = [System.Drawing.ColorTranslator]::FromHtml("#0e7490")
+$borderColor = [System.Drawing.ColorTranslator]::FromHtml("#d7e0e3")
+$textColor = [System.Drawing.ColorTranslator]::FromHtml("#17313b")
+$mutedColor = [System.Drawing.ColorTranslator]::FromHtml("#5f737b")
+
+function Style-PopupButton {{
+  param($Button, [bool]$Primary = $false)
+  $Button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+  $Button.FlatAppearance.BorderSize = 1
+  $Button.FlatAppearance.BorderColor = $borderColor
+  $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
+  $Button.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+  if ($Primary) {{
+    $Button.BackColor = $primaryBg
+    $Button.ForeColor = [System.Drawing.Color]::White
+  }} else {{
+    $Button.BackColor = [System.Drawing.Color]::White
+    $Button.ForeColor = $textColor
+  }}
+}}
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "감지 신호"
+$form.Size = New-Object System.Drawing.Size(352, 430)
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$form.TopMost = $true
+$form.ShowInTaskbar = $true
+$form.BackColor = $appBg
+$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$form.Location = New-Object System.Drawing.Point(20, ($screen.Bottom - $form.Height - 20))
+
+$iconLabel = New-Object System.Windows.Forms.Label
+$iconLabel.Text = "!"
+$iconLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+$iconLabel.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$iconLabel.ForeColor = $primaryBg
+$iconLabel.BackColor = [System.Drawing.Color]::White
+$iconLabel.BorderStyle = "FixedSingle"
+$iconLabel.Location = New-Object System.Drawing.Point(18, 26)
+$iconLabel.Size = New-Object System.Drawing.Size(22, 22)
+$form.Controls.Add($iconLabel)
+
+$headline = New-Object System.Windows.Forms.Label
+$headline.Text = "확인이 필요한 신호가 감지되었습니다"
+$headline.Location = New-Object System.Drawing.Point(54, 20)
+$headline.Size = New-Object System.Drawing.Size(270, 24)
+$headline.Font = New-Object System.Drawing.Font("Malgun Gothic", 11, [System.Drawing.FontStyle]::Bold)
+$headline.ForeColor = $textColor
+$headline.BackColor = $appBg
+$form.Controls.Add($headline)
+
+$subhead = New-Object System.Windows.Forms.Label
+$subhead.Text = "로그에서 자세히 확인할 수 있습니다."
+$subhead.Location = New-Object System.Drawing.Point(56, 46)
+$subhead.Size = New-Object System.Drawing.Size(250, 20)
+$subhead.Font = New-Object System.Drawing.Font("Malgun Gothic", 8)
+$subhead.ForeColor = $mutedColor
+$subhead.BackColor = $appBg
+$form.Controls.Add($subhead)
+
+$infoPanel = New-Object System.Windows.Forms.Panel
+$infoPanel.Location = New-Object System.Drawing.Point(16, 84)
+$infoPanel.Size = New-Object System.Drawing.Size(312, 96)
+$infoPanel.BackColor = $softBg
+$form.Controls.Add($infoPanel)
+
+$timeCaption = New-Object System.Windows.Forms.Label
+$timeCaption.Text = "발생 시간"
+$timeCaption.Location = New-Object System.Drawing.Point(12, 12)
+$timeCaption.Size = New-Object System.Drawing.Size(58, 18)
+$timeCaption.ForeColor = $mutedColor
+$timeCaption.BackColor = $softBg
+$infoPanel.Controls.Add($timeCaption)
+
+$timeLabel = New-Object System.Windows.Forms.Label
+$timeLabel.Text = {powershell_string(detected_at.strftime("%Y-%m-%d %H:%M"))}
+$timeLabel.Location = New-Object System.Drawing.Point(82, 12)
+$timeLabel.Size = New-Object System.Drawing.Size(210, 18)
+$timeLabel.ForeColor = $textColor
+$timeLabel.BackColor = $softBg
+$infoPanel.Controls.Add($timeLabel)
+
+$signalCaption = New-Object System.Windows.Forms.Label
+$signalCaption.Text = "감지 신호"
+$signalCaption.Location = New-Object System.Drawing.Point(12, 38)
+$signalCaption.Size = New-Object System.Drawing.Size(58, 18)
+$signalCaption.ForeColor = $mutedColor
+$signalCaption.BackColor = $softBg
+$infoPanel.Controls.Add($signalCaption)
+
+$signalLabel = New-Object System.Windows.Forms.Label
+$signalLabel.Text = {powershell_string(message)}
+$signalLabel.Location = New-Object System.Drawing.Point(82, 38)
+$signalLabel.Size = New-Object System.Drawing.Size(210, 34)
+$signalLabel.ForeColor = $textColor
+$signalLabel.BackColor = $softBg
+$infoPanel.Controls.Add($signalLabel)
+
+$windowCaption = New-Object System.Windows.Forms.Label
+$windowCaption.Text = "전송 구간"
+$windowCaption.Location = New-Object System.Drawing.Point(12, 72)
+$windowCaption.Size = New-Object System.Drawing.Size(58, 18)
+$windowCaption.ForeColor = $mutedColor
+$windowCaption.BackColor = $softBg
+$infoPanel.Controls.Add($windowCaption)
+
+$windowLabel = New-Object System.Windows.Forms.Label
+$windowLabel.Text = {powershell_string(window.started_at.strftime("%H:%M") + " ~ " + window.ended_at.strftime("%H:%M") + f" ({window.range_minutes()}분)")}
+$windowLabel.Location = New-Object System.Drawing.Point(82, 72)
+$windowLabel.Size = New-Object System.Drawing.Size(210, 18)
+$windowLabel.ForeColor = $textColor
+$windowLabel.BackColor = $softBg
+$infoPanel.Controls.Add($windowLabel)
+
+$bodyText = New-Object System.Windows.Forms.Label
+$bodyText.Text = "PC Agent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다."
+$bodyText.Location = New-Object System.Drawing.Point(18, 196)
+$bodyText.Size = New-Object System.Drawing.Size(310, 58)
+$bodyText.ForeColor = $textColor
+$bodyText.BackColor = $appBg
+$form.Controls.Add($bodyText)
+
+$kindLabel = New-Object System.Windows.Forms.Label
+$kindLabel.Text = "신청 방식"
+$kindLabel.Location = New-Object System.Drawing.Point(18, 266)
+$kindLabel.Size = New-Object System.Drawing.Size(70, 22)
+$kindLabel.ForeColor = $mutedColor
+$kindLabel.BackColor = $appBg
+$form.Controls.Add($kindLabel)
+
+$remoteRadio = New-Object System.Windows.Forms.RadioButton
+$remoteRadio.Text = "원격 접수"
+$remoteRadio.Location = New-Object System.Drawing.Point(96, 264)
+$remoteRadio.Size = New-Object System.Drawing.Size(82, 24)
+$remoteRadio.Checked = $true
+$remoteRadio.ForeColor = $textColor
+$remoteRadio.BackColor = $appBg
+$form.Controls.Add($remoteRadio)
+
+$visitRadio = New-Object System.Windows.Forms.RadioButton
+$visitRadio.Text = "방문 접수"
+$visitRadio.Location = New-Object System.Drawing.Point(188, 264)
+$visitRadio.Size = New-Object System.Drawing.Size(82, 24)
+$visitRadio.ForeColor = $textColor
+$visitRadio.BackColor = $appBg
+$form.Controls.Add($visitRadio)
+
+$notice = New-Object System.Windows.Forms.Label
+$notice.Text = "선택한 구간의 로그를 함께 첨부해 접수합니다."
+$notice.Location = New-Object System.Drawing.Point(18, 302)
+$notice.Size = New-Object System.Drawing.Size(300, 22)
+$notice.ForeColor = $primaryBg
+$notice.BackColor = $appBg
+$form.Controls.Add($notice)
+
+$send = New-Object System.Windows.Forms.Button
+$send.Text = "AS 접수하기"
+$send.Location = New-Object System.Drawing.Point(18, 340)
+$send.Size = New-Object System.Drawing.Size(156, 36)
+Style-PopupButton $send $true
+$send.Add_Click({{
+  $send.Enabled = $false
+  $send.Text = "접수 중"
+  $ignore.Enabled = $false
+  $requestKind = "REMOTE_REQUESTED"
+  if ($visitRadio.Checked) {{ $requestKind = "VISIT_REQUESTED" }}
+  $args = {powershell_array(launch_args)}
+  $args += @("--title", {powershell_string(macro.title)}, "--detail", {powershell_string(macro.detail)}, "--support-request-kind", $requestKind, "--no-open")
+  $script:submitStdout = New-Object System.Text.StringBuilder
+  $script:submitStderr = New-Object System.Text.StringBuilder
+  $script:submitProcess = New-Object System.Diagnostics.Process
+  $script:submitProcess.StartInfo.FileName = {powershell_string(launch_file)}
+  $escapedArgs = New-Object System.Collections.Generic.List[string]
+  foreach ($arg in $args) {{
+    $escaped = [string]$arg
+    $escaped = $escaped.Replace('"', '\"')
+    [void]$escapedArgs.Add('"' + $escaped + '"')
+  }}
+  $script:submitProcess.StartInfo.Arguments = [string]::Join(" ", $escapedArgs)
+  $script:submitProcess.StartInfo.UseShellExecute = $false
+  $script:submitProcess.StartInfo.RedirectStandardOutput = $true
+  $script:submitProcess.StartInfo.RedirectStandardError = $true
+  $script:submitProcess.Add_OutputDataReceived({{
+    if ($_.Data) {{ [void]$script:submitStdout.AppendLine($_.Data) }}
+  }})
+  $script:submitProcess.Add_ErrorDataReceived({{
+    if ($_.Data) {{ [void]$script:submitStderr.AppendLine($_.Data) }}
+  }})
+  try {{
+    [void]$script:submitProcess.Start()
+    $script:submitProcess.BeginOutputReadLine()
+    $script:submitProcess.BeginErrorReadLine()
+  }} catch {{
+    [System.Windows.Forms.MessageBox]::Show("AS 접수 실행에 실패했습니다.`r`n`r`n" + $_.Exception.Message, "BuildGraph PC Agent") | Out-Null
+    $send.Enabled = $true
+    $send.Text = "접수하기"
+    $ignore.Enabled = $true
+    return
+  }}
+  $script:submitTimer = New-Object System.Windows.Forms.Timer
+  $script:submitTimer.Interval = 500
+  $script:submitTimer.Add_Tick({{
+    if (-not $script:submitProcess.HasExited) {{
+      return
+    }}
+    $script:submitTimer.Stop()
+    $stdout = $script:submitStdout.ToString().Trim()
+    $stderr = $script:submitStderr.ToString().Trim()
+    if ($script:submitProcess.ExitCode -eq 0) {{
+      [System.Windows.Forms.MessageBox]::Show("AS 접수가 완료되었습니다.`r`n`r`n" + $stdout, "BuildGraph PC Agent") | Out-Null
+      $form.Close()
+    }} else {{
+      [System.Windows.Forms.MessageBox]::Show("AS 접수에 실패했습니다.`r`n`r`n" + $stderr, "BuildGraph PC Agent") | Out-Null
+      $send.Enabled = $true
+      $send.Text = "접수하기"
+      $ignore.Enabled = $true
+    }}
+  }})
+  $script:submitTimer.Start()
+}})
+$form.Controls.Add($send)
+
+$ignore = New-Object System.Windows.Forms.Button
+$ignore.Text = "무시하기"
+$ignore.Location = New-Object System.Drawing.Point(220, 340)
+$ignore.Size = New-Object System.Drawing.Size(84, 36)
+Style-PopupButton $ignore
+$ignore.Add_Click({{ $form.Close() }})
+$form.Controls.Add($ignore)
+
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 120000
+$timer.Add_Tick({{ $timer.Stop(); $form.Close() }})
+$timer.Start()
+
+[void]$form.ShowDialog()
+"""
+    notification_path = app_data_dir() / "issue-notification.ps1"
+    notification_path.parent.mkdir(parents=True, exist_ok=True)
+    notification_path.write_text(script.strip() + "\n", encoding="utf-8")
+    try:
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(notification_path),
+            ],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        webbrowser.open(support_url_text)
+
+
 def collect_background_loop(config_path: Path, runtime: AgentRuntime, interval_seconds: int) -> None:
     while runtime.running:
         try:
             config = load_config(config_path)
-            append_metric(config, runtime.index)
+            _, row = append_metric_with_row(config, runtime.index)
+            if should_show_issue_notification(row, runtime):
+                show_issue_notification(config_path, row)
             runtime.index += 1
             maybe_show_event_panel(config_path, config, runtime)
         except Exception as exception:
@@ -2923,6 +3718,14 @@ def collect_background_loop(config_path: Path, runtime: AgentRuntime, interval_s
 
 def run_background(config_path: Path | None = None, interval_seconds: int = 5, with_tray: bool = True) -> int:
     path = ensure_default_config(config_path or default_background_config_path())
+    try:
+        import_activation_config(path)
+        auto_register_agent(path)
+    except Exception as exception:
+        error_log = app_data_dir() / "agent-error.log"
+        error_log.parent.mkdir(parents=True, exist_ok=True)
+        with error_log.open("a", encoding="utf-8") as file:
+            file.write(f"{datetime.now(KST).isoformat()} auto-register failed: {exception}\n")
     register_startup()
     hide_console_window()
     write_pid()
@@ -2996,6 +3799,106 @@ def upload_recent(
         print("opened support ticket in default browser")
 
 
+def open_issue_draft(config_path: Path, issue_file: Path, open_browser: bool = True) -> dict:
+    config = load_config(config_path)
+    try:
+        row = json.loads(issue_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exception:
+        raise AgentError(f"issue file cannot be read: {issue_file}") from exception
+    if not isinstance(row, dict):
+        raise AgentError("issue file root must be a JSON object.")
+
+    macro = issue_macro(row)
+    detected_at = parse_log_timestamp(row) or datetime.now(KST)
+    window = default_incident_window(
+        macro.symptom_type,
+        detected_at=detected_at,
+        trigger_type="AGENT_DETECTED",
+        incident_id=f"incident-{uuid.uuid4()}",
+        selected_by_user=False,
+        consent_id=f"agent-consent-{uuid.uuid4()}",
+    )
+    work_dir = app_data_dir() / "draft-uploads"
+    gzip_path = work_dir / f"{window.incident_id}.jsonl.gz"
+    size = gzip_window(log_file(config), gzip_path, window)
+    key = issue_idempotency_key(row)
+    print(f"created draft gzip: {gzip_path} ({size} bytes)")
+    print(f"draft upload path: {AS_DRAFT_PATH}")
+    print(f"incidentId: {window.incident_id}")
+    print(f"detectedAt: {window.detected_at.isoformat()}")
+    print(f"window: {window.started_at.isoformat()} -> {window.ended_at.isoformat()}")
+    print(f"Idempotency-Key: {key}")
+    result = create_as_draft(config, gzip_path, key, macro, window)
+    draft_id = str(result["draftId"])
+    url = support_draft_url(config, draft_id)
+    print(f"draftId: {draft_id}")
+    print(f"supportDraftUrl: {url}")
+    if open_browser:
+        webbrowser.open(url)
+        print("opened support draft in default browser")
+    return result
+
+
+def submit_issue_ticket(
+    config_path: Path,
+    issue_file: Path,
+    title: str | None = None,
+    detail: str | None = None,
+    support_request_kind: str | None = None,
+    open_browser: bool = False,
+) -> dict:
+    config = load_config(config_path)
+    try:
+        row = json.loads(issue_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exception:
+        raise AgentError(f"issue file cannot be read: {issue_file}") from exception
+    if not isinstance(row, dict):
+        raise AgentError("issue file root must be a JSON object.")
+
+    macro = issue_macro(row)
+    detected_at = parse_log_timestamp(row) or datetime.now(KST)
+    window = default_incident_window(
+        macro.symptom_type,
+        detected_at=detected_at,
+        trigger_type="AGENT_CONFIRMED",
+        incident_id=f"incident-{uuid.uuid4()}",
+        selected_by_user=True,
+        consent_id=f"agent-consent-{uuid.uuid4()}",
+    )
+    resolved_title = (title or macro.title).strip() or macro.title
+    resolved_detail = (detail or macro.detail).strip() or macro.detail
+    resolved_kind = (support_request_kind or macro.support_request_kind).strip() or macro.support_request_kind
+    symptom = "\n".join(
+        [
+            f"[증상 제목] {resolved_title}",
+            f"[증상 상세] {resolved_detail}",
+            f"[감지 이벤트] {macro.symptom}",
+            f"[신청 방식] {resolved_kind}",
+            f"[발생 시각] {window.detected_at.isoformat()}",
+            f"[선택 구간] {window.started_at.isoformat()} ~ {window.ended_at.isoformat()}",
+        ]
+    )
+    work_dir = app_data_dir() / "ticket-uploads"
+    gzip_path = work_dir / f"{window.incident_id}.jsonl.gz"
+    size = gzip_window(log_file(config), gzip_path, window)
+    key = issue_ticket_idempotency_key(row, resolved_title, resolved_detail, resolved_kind)
+    print(f"created gzip: {gzip_path} ({size} bytes)")
+    print(f"upload path: {LOG_UPLOAD_PATH}")
+    print(f"incidentId: {window.incident_id}")
+    print(f"detectedAt: {window.detected_at.isoformat()}")
+    print(f"window: {window.started_at.isoformat()} -> {window.ended_at.isoformat()}")
+    print(f"Idempotency-Key: {key}")
+    result = upload_gzip(config, gzip_path, key, symptom, window)
+    ticket_id = str(result["ticketId"])
+    url = support_url(config.api_base_url, ticket_id, config.web_base_url)
+    print(f"ticketId: {ticket_id}")
+    print(f"supportUrl: {url}")
+    if open_browser:
+        webbrowser.open(url)
+        print("opened support ticket in default browser")
+    return result
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
@@ -3058,6 +3961,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     viewer = sub.add_parser("viewer", help="open the Tkinter status home and log viewer")
     viewer.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
 
+    open_issue = sub.add_parser("open-issue", help="upload detected issue logs as an AS draft and open the support form")
+    open_issue.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    open_issue.add_argument("--issue-file", type=Path, required=True)
+    open_issue.add_argument("--no-open", action="store_true")
+
+    submit_issue = sub.add_parser("submit-issue", help="submit detected issue logs as an AS ticket after user confirmation")
+    submit_issue.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    submit_issue.add_argument("--issue-file", type=Path, required=True)
+    submit_issue.add_argument("--title", default=None)
+    submit_issue.add_argument("--detail", default=None)
+    submit_issue.add_argument("--support-request-kind", default=None)
+    submit_issue.add_argument("--no-open", action="store_true")
+
     args = parser.parse_args(argv)
 
     try:
@@ -3109,6 +4025,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_background(args.config, args.interval_seconds, not args.no_tray)
         elif args.command == "viewer":
             show_log_viewer(args.config)
+        elif args.command == "open-issue":
+            open_issue_draft(args.config, args.issue_file, not args.no_open)
+        elif args.command == "submit-issue":
+            submit_issue_ticket(
+                args.config,
+                args.issue_file,
+                title=args.title,
+                detail=args.detail,
+                support_request_kind=args.support_request_kind,
+                open_browser=not args.no_open,
+            )
     except ConfigError as exception:
         print(f"config error: {exception}", file=sys.stderr)
         return 2

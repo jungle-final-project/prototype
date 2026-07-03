@@ -24,6 +24,7 @@ import com.buildgraph.prototype.agent.PcAgentController;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
 import com.buildgraph.prototype.ticket.TicketController;
+import com.buildgraph.prototype.ticket.AsTicketDraftService;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -68,6 +69,9 @@ class PcAgentControllerSecurityTest {
 
     @MockitoBean
     private TicketQueryService ticketQueryService;
+
+    @MockitoBean
+    private AsTicketDraftService asTicketDraftService;
 
     @MockitoBean
     private CurrentUserService currentUserService;

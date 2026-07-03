@@ -1,5 +1,5 @@
 import { api } from '../../lib/api';
-import type { AgentLogUploadDto, AsTicketDto } from './types';
+import type { AgentActivationTokenDto, AgentLogUploadDto, AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto } from './types';
 
 export type UploadAgentLogMetadata = {
   rangeStartedAt?: string;
@@ -39,11 +39,33 @@ export function uploadAgentLog(rangeMinutes: number, consentAccepted: boolean, f
   });
 }
 
+export function issueAgentActivationToken() {
+  return api<AgentActivationTokenDto>('/api/users/me/agent-activation-token', {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+}
+
+export function previewAgentLogRag(rangeMinutes: number, file: File) {
+  const body = new FormData();
+  body.append('file', file);
+  body.append('rangeMinutes', String(rangeMinutes));
+
+  return api<AsRagAnalysisDto>('/api/agent-logs/as-rag-preview', {
+    method: 'POST',
+    body
+  });
+}
+
 export function createSupportTicket(symptom: string, logUploadId: string) {
   return api<AsTicketDto>('/api/as-tickets', {
     method: 'POST',
     body: JSON.stringify({ symptom, logUploadId })
   });
+}
+
+export function getSupportDraft(draftId: string) {
+  return api<AsTicketDraftDto>(`/api/as-ticket-drafts/${draftId}`);
 }
 
 export function getSupportTicket(ticketId: string) {
