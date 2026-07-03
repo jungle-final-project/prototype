@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -179,6 +180,66 @@ public class BuildQueryService {
                 .toList();
     }
 
+    @Transactional
+    public Map<String, Object> saveFromChat(Map<String, Object> request, CurrentUserService.CurrentUser user) {
+        Map<String, Object> body = request == null ? Map.of() : request;
+        Map<String, Object> build = objectMap(body.get("build"));
+        String sourceBuildId = firstText(text(body.get("sourceBuildId")), text(build.get("id")));
+        if (sourceBuildId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "저장할 챗봇 추천 식별자가 필요합니다.");
+        }
+        List<Map<String, Object>> itemRows = objectMaps(build.get("items"));
+        if (itemRows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "저장할 추천 부품이 필요합니다.");
+        }
+
+        List<PartCandidate> displayPriceParts = new ArrayList<>();
+        Set<String> categories = new LinkedHashSet<>();
+        for (Map<String, Object> item : itemRows) {
+            String partId = text(item.get("partId"));
+            String rawCategory = text(item.get("category"));
+            if (rawCategory == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "저장할 부품 카테고리가 필요합니다.");
+            }
+            String category = normalizeCategory(rawCategory);
+            if (!categories.add(category)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "같은 카테고리 부품을 중복 저장할 수 없습니다.");
+            }
+            if (partId == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "저장할 부품 식별자가 필요합니다.");
+            }
+            PartCandidate part = partByPublicId(partId);
+            if (!category.equals(part.category())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "추천 부품 카테고리와 실제 부품 카테고리가 일치하지 않습니다.");
+            }
+            int quantity = Math.max(1, numberValue(item.get("quantity")) == null ? 1 : numberValue(item.get("quantity")));
+            int unitPrice = Math.max(0, numberValue(item.get("price")) == null ? (part.price() == null ? 0 : part.price()) : numberValue(item.get("price")));
+            displayPriceParts.add(withPrice(part, unitPrice * quantity));
+        }
+
+        int displayTotal = positiveOrDefault(numberValue(build.get("totalPrice")), total(displayPriceParts));
+        Integer budget = numberValue(build.get("budgetWon"));
+        String title = firstText(text(build.get("title")), firstText(text(build.get("name")), "AI 챗봇 추천 Build"));
+        String summary = firstText(text(build.get("summary")), "AI 챗봇 대화에서 생성한 추천 조합입니다.");
+        String confidence = normalizeConfidence(text(build.get("confidence")));
+        String rawMessage = firstText(text(body.get("lastUserMessage")), summary);
+        Map<String, Object> parsedContext = MockData.map(
+                "source", "AI_BUILD_CHAT",
+                "sourceBuildId", sourceBuildId,
+                "title", title,
+                "summary", summary,
+                "tier", text(build.get("tier")),
+                "budgetWon", budget
+        );
+
+        int validationBudget = budget == null || budget <= 0 ? displayTotal : budget;
+        List<Map<String, Object>> toolResults = evaluateTools(displayPriceParts, validationBudget);
+        List<Map<String, Object>> warnings = warningsFor(toolResults, displayTotal, budget == null ? 0 : budget);
+        Long requirementInternalId = insertChatRequirement(user.internalId(), rawMessage, budget, parsedContext);
+        String buildId = insertChatBuild(requirementInternalId, title, displayTotal, confidence, displayPriceParts, warnings);
+        return MockData.map("id", buildId);
+    }
+
     public Map<String, Object> buildDetail(String id, CurrentUserService.CurrentUser user) {
         Map<String, Object> row = buildRow(id, user.internalId());
         Map<String, Object> summary = buildSummary(row);
@@ -282,6 +343,31 @@ public class BuildQueryService {
                     """, buildInternalId, part.internalId(), part.category(), part.price());
         }
         return DbValueMapper.string(row, "public_id");
+    }
+
+    private Long insertChatRequirement(Long userInternalId, String rawMessage, Integer budget, Map<String, Object> parsedContext) {
+        return jdbcTemplate.queryForObject("""
+                INSERT INTO requirements (user_id, raw_message, budget, usage_tags, parsed_context)
+                VALUES (?, ?, ?, string_to_array(?, ','), ?::jsonb)
+                RETURNING id
+                """, Long.class, userInternalId, rawMessage, budget, "", json(parsedContext));
+    }
+
+    private String insertChatBuild(Long requirementInternalId, String name, int totalPrice, String confidence, List<PartCandidate> parts, List<Map<String, Object>> warnings) {
+        String buildId = jdbcTemplate.queryForObject("""
+                INSERT INTO builds (requirement_id, name, total_price, confidence, warnings)
+                VALUES (?, ?, ?, ?, ?::jsonb)
+                RETURNING public_id::text
+                """, String.class, requirementInternalId, name, totalPrice, confidence, json(warnings));
+        for (PartCandidate part : parts) {
+            jdbcTemplate.update("""
+                    INSERT INTO build_items (build_id, part_id, category, price)
+                    SELECT id, ?, ?, ?
+                    FROM builds
+                    WHERE public_id = ?::uuid
+                    """, part.internalId(), part.category(), part.price(), buildId);
+        }
+        return buildId;
     }
 
     private List<PartCandidate> selectBuildParts(
@@ -1149,6 +1235,18 @@ public class BuildQueryService {
         return List.of(text.split(",")).stream().map(String::trim).filter(item -> !item.isBlank()).toList();
     }
 
+    private static PartCandidate withPrice(PartCandidate part, int price) {
+        return new PartCandidate(
+                part.internalId(),
+                part.publicId(),
+                part.category(),
+                part.name(),
+                part.manufacturer(),
+                price,
+                part.attributes()
+        );
+    }
+
     private static List<String> normalizeGpuClasses(List<String> values) {
         return values.stream()
                 .map(value -> value.toUpperCase(Locale.ROOT).replace(" ", "_").replace("-", "_"))
@@ -1174,6 +1272,16 @@ public class BuildQueryService {
         return new LinkedHashMap<>();
     }
 
+    private static List<Map<String, Object>> objectMaps(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+                .filter(item -> item instanceof Map<?, ?>)
+                .map(BuildQueryService::objectMap)
+                .toList();
+    }
+
     private static String text(Object value) {
         if (value == null) {
             return null;
@@ -1184,6 +1292,18 @@ public class BuildQueryService {
 
     private static String firstText(String first, String fallback) {
         return first == null || first.isBlank() ? fallback : first;
+    }
+
+    private static int positiveOrDefault(Integer value, int fallback) {
+        return value == null || value < 0 ? fallback : value;
+    }
+
+    private static String normalizeConfidence(String value) {
+        String confidence = firstText(value, "MEDIUM").toUpperCase(Locale.ROOT);
+        return switch (confidence) {
+            case "LOW", "MEDIUM", "HIGH" -> confidence;
+            default -> "MEDIUM";
+        };
     }
 
     private static Integer numberValue(Object value) {

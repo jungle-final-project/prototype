@@ -14,7 +14,7 @@ export function AsChatPage() {
   const [searchParams] = useSearchParams();
   const initialTicketId = searchParams.get('asTicketId')?.trim() || AS_CHAT_DEFAULT_TICKET_ID;
   const [ticketId, setTicketId] = useState(initialTicketId);
-  const [message, setMessage] = useState('게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요.');
+  const [message, setMessage] = useState('');
   const [latestResponse, setLatestResponse] = useState<AsChatResponse | null>(null);
   const [error, setError] = useState('');
   const [progressMessage, setProgressMessage] = useState('');
@@ -92,7 +92,7 @@ export function AsChatPage() {
 
   return (
     <Screen>
-      <div className="grid grid-cols-[minmax(0,1fr)_430px] gap-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Panel title="AS AI 챗봇" subtitle="AS 접수 후 티켓 증상, RAG 근거, Tool 결과를 사용해 1차 상담 답변을 생성합니다.">
           <form onSubmit={submitTicket} className="mb-4 flex gap-3">
             <input
@@ -108,7 +108,7 @@ export function AsChatPage() {
           {chatQuery.isError ? <StateMessage type="warn" title="챗봇 세션 조회 실패" body="GET /api/ai/as-chat 응답을 불러오지 못했습니다." /> : null}
           {error ? <div className="mb-4"><StateMessage type="warn" title="AS AI 확인 필요" body={error} /></div> : null}
 
-          <div className="h-[560px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
+          <div className="h-[55vh] max-h-[560px] min-h-[320px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
             {chat?.messages.length ? (
               <div className="space-y-3">
                 {chat.messages.map((item) => (
@@ -317,7 +317,7 @@ export function SupportNewPage() {
 
   return (
     <Screen>
-      <form onSubmit={submit} className="grid grid-cols-[minmax(0,1fr)_360px] gap-5">
+      <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
             <div>
@@ -423,7 +423,7 @@ export function SupportTicketPage() {
 
   return (
     <Screen>
-      <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px]">
         <Panel title={`AS 티켓 #${shortTicketId(ticket.id)}`} subtitle="접수 내용과 처리 상태를 확인할 수 있습니다.">
           <div className="mb-4 flex flex-wrap gap-2">
             <StatusBadge status={ticket.status} />
@@ -435,7 +435,8 @@ export function SupportTicketPage() {
           <p className="mt-5 text-sm leading-6 text-slate-700">
             담당자가 증상과 로그를 확인한 뒤 필요한 경우 추가 정보를 요청할 수 있습니다.
           </p>
-          <Link to="/support/new" className="mt-5 block rounded border border-slate-300 px-4 py-3 text-center text-sm font-bold">새 AS 접수</Link>
+          <Link to={`/support/ai-chat?asTicketId=${ticket.id}`} className="mt-5 block rounded bg-brand-blue px-4 py-3 text-center text-sm font-bold text-white hover:bg-blue-700">AI 상담 시작</Link>
+          <Link to="/support/new" className="mt-2 block rounded border border-slate-300 px-4 py-3 text-center text-sm font-bold">새 AS 접수</Link>
         </Panel>
       </div>
     </Screen>

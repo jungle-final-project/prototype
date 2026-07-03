@@ -56,6 +56,15 @@ public class BuildController {
         return Map.of("items", buildQueryService.builds(user));
     }
 
+    @PostMapping("/builds/from-chat")
+    Map<String, Object> saveFromChat(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return buildQueryService.saveFromChat(request == null ? Map.of() : request, user);
+    }
+
     @PostMapping("/builds/{id}/change-part")
     Map<String, Object> changePart(
             @PathVariable String id,

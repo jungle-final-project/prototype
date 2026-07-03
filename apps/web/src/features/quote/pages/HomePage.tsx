@@ -13,7 +13,6 @@ import {
   SearchCheck,
   ShieldCheck,
   ShoppingCart,
-  Star,
   Zap,
   type LucideIcon
 } from 'lucide-react';
@@ -28,6 +27,7 @@ import {
   clearLegacyAiStorage,
   normalizeAiRecommendedBuild,
   readAssistantSession,
+  recentBuildsForChatContext,
   saveSelectedAiBuild,
   type AiAssistantSession,
   type AiRecommendedBuild,
@@ -95,7 +95,7 @@ const featuredBuilds: FeaturedBuild[] = [
   {
     id: 'home-featured-qhd-gaming',
     name: 'QHD 게이밍 추천팩',
-    tag: 'SALE 12%',
+    tag: 'BEST',
     spec: 'RTX 5070 · Ryzen 7 · DDR5 32GB',
     summary: 'QHD 게임과 개발 병행을 위한 균형형 조합입니다.',
     tone: 'from-blue-50 via-white to-white',
@@ -131,7 +131,7 @@ const featuredBuilds: FeaturedBuild[] = [
   {
     id: 'home-featured-low-noise',
     name: '저소음 작업팩',
-    tag: '검증 통과',
+    tag: '저소음',
     spec: '듀얼타워 공랭 · 흡기형 케이스',
     summary: '장시간 개발 작업에서 소음과 발열을 낮추는 구성입니다.',
     tone: 'from-emerald-50 via-white to-white',
@@ -156,6 +156,7 @@ export function HomePage() {
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [applyingFeaturedBuildId, setApplyingFeaturedBuildId] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const latestHomeAiBuilds = recentBuildsForChatContext(assistantSession);
   const featuredBuildPartQueries = useQueries({
     queries: featuredBuilds.map((build) => ({
       queryKey: ['parts', 'home-featured-build', build.id],
@@ -179,7 +180,7 @@ export function HomePage() {
     }))
   });
   const aiBuildCaseQueries = useQueries({
-    queries: assistantSession.latestBuilds.map((build) => {
+    queries: latestHomeAiBuilds.map((build) => {
       const caseItem = build.items.find((item) => item.category === 'CASE');
       return {
         queryKey: ['parts', 'home-ai-build-case', build.id, caseItem?.partId],
@@ -189,7 +190,7 @@ export function HomePage() {
       };
     })
   });
-  const activeAiBuild = activeGraphBuild(assistantSession);
+  const activeAiBuild = activeGraphBuild(assistantSession, latestHomeAiBuilds);
   const activeGraphFocus = assistantSession.latestGraphFocus ?? defaultGraphFocus(activeAiBuild);
   const graphQuery = useQuery({
     queryKey: [
@@ -286,7 +287,7 @@ export function HomePage() {
       void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       navigate('/self-quote');
     } catch {
-      setApplyError('추천상품 견적을 셀프견적 장바구니에 담지 못했습니다. 백엔드 실행 상태를 확인해 주세요.');
+      setApplyError('추천상품 견적을 셀프 견적 장바구니에 담지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setApplyingFeaturedBuildId(null);
     }
@@ -357,10 +358,10 @@ export function HomePage() {
             </div>
           ) : (
             <div data-testid="home-ai-recommendations">
-              {assistantSession.latestBuilds.length > 0 ? (
+              {latestHomeAiBuilds.length > 0 ? (
                 <>
                   <div className="grid gap-3 md:grid-cols-3">
-                    {assistantSession.latestBuilds.map((build, index) => (
+                    {latestHomeAiBuilds.map((build, index) => (
                       <AiRecommendationCard
                         key={build.id}
                         build={build}
@@ -414,12 +415,12 @@ export function HomePage() {
   );
 }
 
-function activeGraphBuild(session: AiAssistantSession) {
-  if (session.latestBuilds.length === 0) {
+function activeGraphBuild(session: AiAssistantSession, displayBuilds: AiRecommendedBuild[]) {
+  if (displayBuilds.length === 0) {
     return null;
   }
-  const storedActiveBuild = session.latestBuilds.find((build) => build.id === session.latestActiveBuildId);
-  return storedActiveBuild ?? session.latestBuilds.find((build) => build.tier === 'balanced') ?? session.latestBuilds[0];
+  const storedActiveBuild = displayBuilds.find((build) => build.id === session.latestActiveBuildId);
+  return storedActiveBuild ?? displayBuilds.find((build) => build.tier === 'balanced') ?? displayBuilds[0];
 }
 
 function defaultGraphFocus(build: AiRecommendedBuild | null): BuildGraphFocus {
@@ -462,15 +463,15 @@ function AiRecommendationCard({
           )}
         </div>
       </div>
-      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-100">
+      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-50">
         {casePart ? (
           <img
             src={partImageUrl(casePart)}
             alt={`${casePart.name} 제품 사진`}
-            className="h-[29.9rem] w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+            className="aspect-[4/3] w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02]"
           />
         ) : (
-          <div className="grid h-[29.9rem] place-items-center bg-slate-50 text-xs font-black text-slate-400">
+          <div className="grid aspect-[4/3] place-items-center bg-slate-50 text-xs font-black text-slate-400">
             케이스 사진 준비 중
           </div>
         )}
@@ -500,7 +501,7 @@ function PromoBanner() {
 
   return (
     <section className="self-start overflow-hidden rounded-lg border border-commerce-line bg-slate-950 shadow-product" aria-label="홈 광고 배너">
-      <div className="relative aspect-[1460/720] min-h-[280px]">
+      <div className="relative aspect-[1460/560] min-h-[240px]">
         <div
           className="flex h-full transition-transform duration-700 ease-out"
           style={{ transform: `translateX(-${activeIndex * 100}%)` }}
@@ -595,29 +596,30 @@ function FeaturedBuildCard({
           <Heart size={17} className="text-slate-400 group-hover:text-commerce-sale" />
         </div>
       </div>
-      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-100">
+      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-50">
         {casePart ? (
           <img
             src={partImageUrl(casePart)}
             alt={`${casePart.name} 제품 사진`}
-            className="h-[29.9rem] w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+            className="aspect-[4/3] w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02]"
           />
         ) : (
-          <div className="grid h-[29.9rem] place-items-center bg-slate-50 text-xs font-black text-slate-400">
+          <div className="grid aspect-[4/3] place-items-center bg-slate-50 text-xs font-black text-slate-400">
             케이스 사진 준비 중
           </div>
         )}
       </div>
-      <div className="flex flex-wrap items-end gap-2">
+      <p className="text-xs font-bold text-slate-600">{build.spec}</p>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
         {assetTotalPrice !== null ? (
           <span className="text-xl font-black tracking-tight text-commerce-sale">{assetTotalPrice.toLocaleString()}원</span>
         ) : (
           <span className="text-sm font-black text-slate-400">가격 계산 중</span>
         )}
       </div>
-      <div className="mt-3 flex items-center gap-2 text-xs font-black text-commerce-green">
-        <PackageCheck size={15} />
-        {isApplying ? '견적 담는 중' : '호환성 통과'}
+      <div className="mt-3 flex items-center gap-2 text-xs font-black text-brand-blue">
+        <ShoppingCart size={15} />
+        {isApplying ? '견적 담는 중' : '셀프 견적에 담기'}
       </div>
     </button>
   );
@@ -718,7 +720,7 @@ function PopularPartsSection() {
                   recordClick(item);
                 }
               }}
-              className={`group rounded-lg border border-commerce-line bg-white p-4 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 ${matchedPart ? '' : 'pointer-events-none cursor-wait opacity-70'}`}
+              className={`group rounded-lg border border-commerce-line bg-white p-4 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 ${matchedPart ? '' : 'pointer-events-none animate-pulse cursor-wait opacity-70'}`}
             >
               <div className="mb-3 flex items-center justify-between">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-commerce-ink text-xs font-black text-white">{index + 1}</span>
@@ -749,10 +751,6 @@ function PopularPartsSection() {
               ) : null}
               <div className="mt-3 flex items-center justify-between gap-2">
                 <span className="text-lg font-black text-commerce-ink">{matchedPart ? `${matchedPart.price.toLocaleString()}원` : '가격 확인 중'}</span>
-                <div className="flex items-center gap-1 text-[11px] font-bold text-amber-600">
-                  <Star size={12} fill="currentColor" />
-                  추천
-                </div>
               </div>
             </Link>
           );
@@ -800,10 +798,10 @@ function homePartDetail(part: PartRow) {
 
 function WorkflowPanel() {
   const rows = [
-    { icon: Bot, title: '챗봇 추천', body: '우하단 AI 챗봇에서 3개 조합을 탭으로 비교합니다.' },
-    { icon: ShoppingCart, title: '셀프 견적 이동', body: '선택한 AI 조합을 실제 견적 장바구니에 한 번에 적용합니다.' },
-    { icon: SearchCheck, title: 'Tool 검증', body: '수동 장바구니의 기존 검증 진입점은 그대로 유지합니다.' },
-    { icon: ShieldCheck, title: '목표가 알림', body: '구매는 결제 없이 구매처 이동 CTA로만 연결합니다.' }
+    { icon: Bot, title: 'AI 추천 받기', body: '우하단 AI 상담에서 예산·용도에 맞는 조합 3개를 비교합니다.' },
+    { icon: ShoppingCart, title: '견적에 담기', body: '마음에 드는 조합을 셀프 견적 장바구니에 한 번에 담습니다.' },
+    { icon: SearchCheck, title: '호환성 확인', body: '담은 부품의 호환성·전력 여유를 자동으로 확인합니다.' },
+    { icon: ShieldCheck, title: '목표가 알림', body: '원하는 가격에 도달하면 이메일로 알려드립니다.' }
   ];
 
   return (
@@ -811,7 +809,7 @@ function WorkflowPanel() {
       <div className="mb-5">
         <div className="text-xs font-black text-brand-blue">Scenario</div>
         <h2 className="mt-1 text-xl font-black text-commerce-ink">추천부터 알림까지</h2>
-        <p className="mt-1 break-keep text-sm leading-6 text-slate-500">홈 추천은 챗봇 API와 셀프 견적 batch 적용 흐름으로 이어집니다.</p>
+        <p className="mt-1 break-keep text-sm leading-6 text-slate-500">추천 → 견적 담기 → 호환성 확인 → 목표가 알림으로 이어집니다.</p>
       </div>
       <div className="space-y-3">
         {rows.map((row) => (

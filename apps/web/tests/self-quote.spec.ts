@@ -901,14 +901,16 @@ test('updates quote dependency graph after self quote cart changes', async ({ pa
   await page.goto('/self-quote?category=GPU');
 
   await expect(page.getByTestId('build-dependency-graph')).toContainText('견적 관계도');
-  await expect(page.getByTestId('build-dependency-graph')).toContainText('파워 여유 확인');
+  await expect(page.getByTestId('build-dependency-graph')).not.toContainText('파워 여유 확인');
+  await expect(page.getByTestId('graph-summary-panel')).toHaveCount(0);
   const initialGraphCalls = graphRequests.length;
 
   await page.getByRole('button', { name: 'RTX 5070 그래프 테스트 견적 담기' }).click();
 
   await expect.poll(() => graphRequests.length).toBeGreaterThan(initialGraphCalls);
   await expect(page.getByRole('link', { name: 'RTX 5070 그래프 테스트', exact: true })).toBeVisible();
-  await expect(page.getByTestId('build-dependency-graph')).toContainText('현재 GPU 선택은 PSU 용량과 케이스 장착 조건');
+  await expect(page.getByTestId('graph-flow-canvas').getByTestId('graph-issue-card')).toContainText('현재 GPU 선택은 PSU 용량과 케이스 장착 조건');
+  await expect(page.getByTestId('build-dependency-graph')).toContainText('890,000원');
   await expect(page.getByTestId('build-dependency-graph')).not.toContainText('선택한 그래픽카드');
   expect((graphRequests[graphRequests.length - 1] as { source?: string }).source).toBe('QUOTE_DRAFT_CURRENT');
 
@@ -2123,12 +2125,18 @@ test('keeps self quote shopping workspace usable on mobile width', async ({ page
   await expect(page.getByRole('heading', { name: '견적 장바구니', exact: true })).toBeVisible();
   await expect(page.getByTestId('graph-flow-canvas').locator('.react-flow__minimap')).toHaveCount(0);
   await expect(page.getByTestId('graph-flow-canvas').locator('.react-flow__controls')).toHaveCount(0);
+  const mobileLegend = page.getByTestId('graph-edge-legend-card');
+  await expect(mobileLegend).toContainText('그래프 읽는 법');
+  await expect(mobileLegend).toContainText('파란 선');
+  const legendBox = await mobileLegend.boundingBox();
+  expect(legendBox).not.toBeNull();
+  expect((legendBox?.width ?? 0)).toBeLessThanOrEqual(370);
 
   const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   expect(hasBodyOverflow).toBe(false);
 });
 
-test('renders quote dependency graph with circular nodes in the reference layout', async ({ page }) => {
+test('renders quote dependency graph with card nodes in the reference layout', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
   });
@@ -2159,18 +2167,51 @@ test('renders quote dependency graph with circular nodes in the reference layout
   await page.goto('/self-quote');
 
   const graphCanvas = page.getByTestId('graph-flow-canvas');
-  await expect(graphCanvas.getByText('소켓 일치')).toBeVisible();
+  await expect(page.getByTestId('graph-summary-panel')).toHaveCount(0);
+  await expect(page.getByTestId('build-dependency-graph')).not.toContainText('영향 요약');
+  const sectionBox = await page.getByTestId('build-dependency-graph').boundingBox();
+  const canvasBox = await graphCanvas.boundingBox();
+  expect(sectionBox).not.toBeNull();
+  expect(canvasBox).not.toBeNull();
+  expect(canvasBox?.width).toBeGreaterThan((sectionBox?.width ?? 0) * 0.94);
+  await expect(graphCanvas.getByTestId('graph-edge-guide-capsule')).toContainText('선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있어요');
+  const legendCard = graphCanvas.getByTestId('graph-edge-legend-card');
+  await expect(legendCard).toContainText('그래프 읽는 법');
+  await expect(legendCard).toContainText('파란 선');
+  await expect(legendCard).toContainText('선택이 영향을 주는 관계');
+  await expect(legendCard).toContainText('노란 선');
+  await expect(legendCard).toContainText('확인이 필요한 관계');
+  await expect(legendCard).toContainText('빨간 선');
+  await expect(legendCard).toContainText('교체 후보를 먼저 봐야 하는 관계');
+  await legendCard.getByRole('button', { name: '그래프 읽는 법 접기' }).click();
+  await expect(legendCard).not.toContainText('선택이 영향을 주는 관계');
+  await legendCard.getByRole('button', { name: '그래프 읽는 법 펼치기' }).click();
+  await expect(legendCard).toContainText('선택이 영향을 주는 관계');
+  const issueCard = graphCanvas.getByTestId('graph-issue-card');
+  await expect(issueCard).toContainText('주의 필요');
+  await expect(issueCard).toContainText('현재 GPU 선택은 PSU 용량과 케이스 장착 조건');
+  await expect(issueCard).toContainText('2개 노드');
+  const issueCardBox = await issueCard.boundingBox();
+  expect(issueCardBox).not.toBeNull();
+  expect(issueCardBox?.x).toBeLessThan((canvasBox?.x ?? 0) + 360);
+  expect(issueCardBox?.y).toBeLessThan((canvasBox?.y ?? 0) + 180);
+  await issueCard.getByRole('button', { name: '문제 노드로 이동' }).click();
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first()).toHaveClass(/buildgraph-flow-node--issue-focus/);
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: '750W 파워' }).first()).toHaveClass(/buildgraph-flow-node--issue-focus/);
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: 'CPU' }).first()).toBeVisible();
 
   const nodeBox = async (label: string, categoryLabel: string) => {
     const node = graphCanvas.locator('.react-flow__node').filter({ hasText: label }).first();
     await expect(node).toHaveClass(/buildgraph-flow-node/);
-    await expect(node).toHaveCSS('border-radius', '50%');
+    await expect(node).not.toHaveClass(/react-flow__node-default/);
+    await expect(node).toHaveCSS('border-radius', '10px');
+    await expect(node.locator('.buildgraph-node-card-main')).toBeVisible();
     await expect(node.locator('.buildgraph-node-category-label')).toHaveText(categoryLabel);
     await expect(node.locator('.buildgraph-node-main-label')).toContainText(label);
     await expect(node.locator('.buildgraph-node-status-label')).toHaveText(/호환됨|간섭 주의|장착 불가/);
     const box = await node.boundingBox();
     expect(box).not.toBeNull();
-    expect(Math.abs((box?.width ?? 0) - (box?.height ?? 0))).toBeLessThanOrEqual(2);
+    expect(box?.width).toBeGreaterThan((box?.height ?? 0) + 40);
     return box!;
   };
   const center = (box: { x: number; y: number; width: number; height: number }) => ({
@@ -2201,6 +2242,318 @@ test('renders quote dependency graph with circular nodes in the reference layout
   expect(storage.x).toBeLessThan(price.x);
   expect(price.x).toBeLessThan(pcCase.x);
   expect(price.y).toBeGreaterThan(cooler.y);
+});
+
+test('removes the quote dependency graph impact summary panel and keeps constraints out of the canvas', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.unroute('**/api/build-graphs/resolve');
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const graph = buildGraphResponse();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...graph,
+        nodes: [
+          ...graph.nodes,
+          {
+            id: 'constraint-PSU-WATTS',
+            type: 'CONSTRAINT',
+            category: 'PSU',
+            label: '정격 1000W',
+            status: 'PASS',
+            detail: '파워 정격 출력 조건'
+          }
+        ],
+        edges: [
+          ...graph.edges,
+          {
+            id: 'edge-gpu-psu-rated-watts',
+            source: 'part-GPU',
+            target: 'constraint-PSU-WATTS',
+            type: 'REQUIRES',
+            status: 'PASS',
+            label: '권장 출력',
+            summary: 'GPU 권장 출력 조건을 확인합니다.'
+          }
+        ]
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-duplicate-category-layout-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [],
+        totalPrice: 1980000,
+        itemCount: 0
+      })
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  const graphCanvas = page.getByTestId('graph-flow-canvas');
+  const psuPart = graphCanvas.locator('.react-flow__node').filter({ hasText: '750W 파워' }).first();
+  await expect(psuPart).toBeVisible();
+  await expect(page.getByTestId('graph-summary-panel')).toHaveCount(0);
+  await expect(page.getByTestId('build-dependency-graph')).not.toContainText('영향 요약');
+  await expect(graphCanvas).not.toContainText('정격 1000W');
+  await expect(graphCanvas).not.toContainText('예산 범위 확인');
+  await expect(graphCanvas).toContainText('총액');
+  const sectionBox = await page.getByTestId('build-dependency-graph').boundingBox();
+  const canvasBox = await graphCanvas.boundingBox();
+  expect(sectionBox).not.toBeNull();
+  expect(canvasBox).not.toBeNull();
+  expect(canvasBox?.width).toBeGreaterThan((sectionBox?.width ?? 0) * 0.94);
+  const guideCapsule = graphCanvas.getByTestId('graph-edge-guide-capsule');
+  await expect(guideCapsule).toContainText('선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있어요');
+
+  await graphCanvas.locator('.react-flow__edge.buildgraph-flow-edge').first().click({ force: true });
+  await expect(graphCanvas).toHaveAttribute('data-active-edge-id', /edge-/);
+  await expect(guideCapsule).toContainText('선택한 관계');
+  await expect(guideCapsule).toContainText(/소켓 일치|DDR 규격|전력 여유|장착 길이|높이 여유/);
+  await expect(guideCapsule).toContainText(/CPU와 메인보드|메인보드와 RAM|GPU 권장|GPU 길이|쿨러 높이/);
+
+  await guideCapsule.getByRole('button', { name: '관계 안내 닫기' }).click();
+  await expect(graphCanvas.getByTestId('graph-edge-guide-capsule')).toHaveCount(0);
+});
+
+test('shows the highest severity issue in the quote dependency graph problem card', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.unroute('**/api/build-graphs/resolve');
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const graph = buildGraphResponse();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...graph,
+        nodes: [
+          ...graph.nodes.map((node) => ({ ...node, status: 'PASS' })),
+          {
+            id: 'constraint-compatibility-fail',
+            type: 'CONSTRAINT',
+            category: 'MOTHERBOARD',
+            label: '소켓 호환성',
+            status: 'FAIL',
+            detail: '소켓 또는 메모리 호환성 확인이 필요합니다.'
+          }
+        ],
+        edges: graph.edges.map((edge) => (
+          edge.id === 'edge-cpu-board-socket'
+            ? {
+                ...edge,
+                status: 'FAIL',
+                label: '소켓 불일치',
+                summary: '소켓 또는 메모리 호환성 확인이 필요합니다.'
+              }
+            : { ...edge, status: 'PASS' }
+        )),
+        insights: [
+          ...graph.insights,
+          {
+            id: 'insight-fail-compatibility',
+            status: 'FAIL',
+            title: '호환성 확인',
+            description: '소켓 또는 메모리 호환성 확인이 필요합니다.',
+            relatedNodeIds: ['part-CPU', 'part-MOTHERBOARD']
+          }
+        ]
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-fail-issue-card-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [],
+        totalPrice: 1980000,
+        itemCount: 0
+      })
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  const graphCanvas = page.getByTestId('graph-flow-canvas');
+  const issueCard = graphCanvas.getByTestId('graph-issue-card');
+  await expect(issueCard).toContainText('장착 불가');
+  await expect(issueCard).toContainText('소켓 또는 메모리 호환성 확인이 필요합니다.');
+  await expect(issueCard).toContainText('2개 노드');
+  await expect(issueCard).not.toContainText('주의 필요');
+
+  await issueCard.getByRole('button', { name: '문제 노드로 이동' }).click();
+  const cpuNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'CPU' }).first();
+  const motherboardNode = graphCanvas.locator('.react-flow__node').filter({ hasText: '메인보드' }).first();
+  await expect(cpuNode).toHaveClass(/buildgraph-flow-node--issue-focus/);
+  await expect(motherboardNode).toHaveClass(/buildgraph-flow-node--issue-focus/);
+  await expect(cpuNode.locator('.buildgraph-node-status-label')).toHaveText('장착 불가');
+  await expect(motherboardNode.locator('.buildgraph-node-status-label')).toHaveText('장착 불가');
+  await expect(cpuNode).toHaveCSS('border-color', 'rgb(239, 68, 68)');
+  await expect(motherboardNode).toHaveCSS('border-color', 'rgb(239, 68, 68)');
+});
+
+test('hides the quote dependency graph problem card when every insight passes', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.unroute('**/api/build-graphs/resolve');
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const graph = buildGraphResponse();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...graph,
+        nodes: graph.nodes.map((node) => ({ ...node, status: 'PASS' })),
+        edges: graph.edges.map((edge) => ({ ...edge, status: 'PASS' })),
+        insights: [
+          {
+            id: 'insight-all-pass',
+            status: 'PASS',
+            title: '검증 통과',
+            description: '현재 조합에서 주요 제약이 모두 통과했습니다.',
+            relatedNodeIds: ['part-GPU', 'part-PSU']
+          }
+        ],
+        toolResults: [
+          { tool: 'power', status: 'PASS', confidence: 'HIGH', summary: 'PSU 정격 출력 여유가 충분합니다.' }
+        ]
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-pass-issue-card-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [],
+        totalPrice: 1980000,
+        itemCount: 0
+      })
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('graph-flow-canvas').getByTestId('graph-issue-card')).toHaveCount(0);
+});
+
+test('uses saved graph layout positions returned by the resolve api', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.unroute('**/api/build-graphs/resolve');
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const graph = buildGraphResponse();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...graph,
+        nodes: graph.nodes.map((node) => {
+          if (node.category === 'CPU') return { ...node, position: { x: 900, y: 120 } };
+          if (node.category === 'GPU') return { ...node, position: { x: 220, y: 420 } };
+          return node;
+        })
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-admin-saved-layout-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [],
+        totalPrice: 1980000,
+        itemCount: 0
+      })
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  const graphCanvas = page.getByTestId('graph-flow-canvas');
+  const cpuNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'CPU' }).first();
+  const gpuNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first();
+  await expect(cpuNode).toBeVisible();
+  await expect(gpuNode).toBeVisible();
+
+  const cpuBox = await cpuNode.boundingBox();
+  const gpuBox = await gpuNode.boundingBox();
+  expect(cpuBox).not.toBeNull();
+  expect(gpuBox).not.toBeNull();
+
+  const cpuCenter = {
+    x: (cpuBox?.x ?? 0) + (cpuBox?.width ?? 0) / 2,
+    y: (cpuBox?.y ?? 0) + (cpuBox?.height ?? 0) / 2
+  };
+  const gpuCenter = {
+    x: (gpuBox?.x ?? 0) + (gpuBox?.width ?? 0) / 2,
+    y: (gpuBox?.y ?? 0) + (gpuBox?.height ?? 0) / 2
+  };
+
+  expect(cpuCenter.x).toBeGreaterThan(gpuCenter.x);
+  expect(cpuCenter.y).toBeLessThan(gpuCenter.y);
 });
 
 test('updates quantity only for repeatable quote draft categories', async ({ page }) => {

@@ -182,6 +182,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildRecommendResponse"
+  /api/builds/from-chat:
+    post:
+      summary: AI 챗봇 임시 추천 Build 저장
+      description: sessionStorage에만 있던 AI 챗봇 추천 조합을 사용자가 저장할 때 requirements, builds, build_items에 저장한다. AI/RAG를 다시 호출하지 않고 partId/category를 서버 DB와 대조한 뒤 Tool 검증은 저장 시 다시 실행한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildSaveFromChatRequest"
+      responses:
+        "200":
+          description: 저장된 Build id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildSaveFromChatResponse"
   /api/builds/{id}:
     get:
       summary: Build 상세 조회
@@ -596,6 +615,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationModelVersionDto"
+  /api/admin/build-graph-layouts/default:
+    get:
+      summary: 기본 견적 관계도 배치 조회
+      description: 관리자 화면에서 고정한 category 기준 견적 관계도 좌표를 조회한다. 저장값이 없으면 기본 좌표를 반환한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
+    put:
+      summary: 기본 견적 관계도 배치 저장
+      description: 관리자 화면에서 드래그로 조정한 category 기준 견적 관계도 좌표를 저장한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildGraphLayoutSaveRequest"
+      responses:
+        "200":
+          description: 저장된 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
+        "400":
+          description: 좌표 request validation 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: 기본 견적 관계도 배치 초기화
+      description: 저장된 견적 관계도 배치를 삭제하고 기본 좌표로 되돌린다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 초기화된 기본 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
   /api/build-graphs/resolve:
     post:
       summary: Build 관계 그래프 계산
@@ -2710,6 +2778,26 @@ components:
           description: Agent worker 완료 전에는 빈 배열일 수 있다.
           items:
             $ref: "#/components/schemas/ToolResultDto"
+    BuildSaveFromChatRequest:
+      type: object
+      required: [sourceBuildId, build]
+      properties:
+        sourceBuildId:
+          type: string
+          description: 프론트 sessionStorage.latestBuilds에 있던 임시 추천 build id
+        lastUserMessage:
+          type: string
+          description: requirement raw_message로 저장할 마지막 사용자 요청. 없으면 build.summary를 사용한다.
+        build:
+          $ref: "#/components/schemas/AiBuildRecommendationDto"
+    BuildSaveFromChatResponse:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 저장된 DB build public id
     BuildDto:
       type: object
       required: [id, name, totalPrice, confidence, items, warnings, evidenceIds, changeableCategories]
@@ -3544,6 +3632,54 @@ components:
         price:
           type: integer
           nullable: true
+        position:
+          $ref: "#/components/schemas/BuildGraphLayoutPositionDto"
+          nullable: true
+    BuildGraphLayoutSaveRequest:
+      type: object
+      required: [positions]
+      properties:
+        positions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/BuildGraphLayoutPositionDto"
+          example:
+            CPU:
+              x: 20
+              y: 170
+            GPU:
+              x: 300
+              y: 270
+    BuildGraphLayoutDto:
+      type: object
+      required: [layoutKey, source, positions]
+      properties:
+        layoutKey:
+          type: string
+          example: DEFAULT
+        source:
+          type: string
+          enum: [DEFAULT, SAVED]
+        positions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/BuildGraphLayoutPositionDto"
+        updatedAt:
+          type: string
+          nullable: true
+          example: "2026-07-03T00:00:00Z"
+    BuildGraphLayoutPositionDto:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: integer
+          minimum: 0
+          maximum: 2400
+        y:
+          type: integer
+          minimum: 0
+          maximum: 2400
     BuildGraphEdgeDto:
       type: object
       required: [id, source, target, type, status, label, summary]

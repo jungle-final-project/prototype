@@ -71,6 +71,59 @@ class BuildControllerTest {
     }
 
     @Test
+    void saveBuildFromChatReturnsUnauthorizedWhenTokenIsMissing() throws Exception {
+        mockMvc.perform(post("/api/builds/from-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "sourceBuildId": "ai-budget-2000000-balanced"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.message").value("로그인이 필요합니다."));
+
+        verifyNoInteractions(buildQueryService);
+    }
+
+    @Test
+    void saveBuildFromChatPersistsTemporaryRecommendationForCurrentUser() throws Exception {
+        when(buildQueryService.saveFromChat(anyMap(), eq(USER))).thenReturn(Map.of(
+                "id", "00000000-0000-4000-8000-000000009001"
+        ));
+
+        mockMvc.perform(post("/api/builds/from-chat")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "sourceBuildId": "ai-budget-2000000-balanced",
+                                  "lastUserMessage": "200만원 PC 추천",
+                                  "build": {
+                                    "id": "ai-budget-2000000-balanced",
+                                    "title": "200만원 균형형",
+                                    "summary": "게임과 개발을 균형 있게 반영했습니다.",
+                                    "totalPrice": 1980000,
+                                    "confidence": "HIGH",
+                                    "items": [
+                                      {
+                                        "partId": "00000000-0000-4000-8000-000000000101",
+                                        "category": "CPU",
+                                        "quantity": 1,
+                                        "price": 420000
+                                      }
+                                    ]
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("00000000-0000-4000-8000-000000009001"));
+
+        verify(currentUserService).requireUser(USER_TOKEN);
+        verify(buildQueryService).saveFromChat(anyMap(), eq(USER));
+    }
+
+    @Test
     void buildChatReturnsDbRuleRecommendationsWithToolResults() throws Exception {
         when(buildChatService.chat(anyMap(), eq(USER))).thenReturn(MockData.map(
                 "answerType", "BUDGET",

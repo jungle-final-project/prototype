@@ -25,7 +25,8 @@ class BuildGraphServiceTest {
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final ToolCheckService toolCheckService = mock(ToolCheckService.class);
     private final CurrentUserService currentUserService = mock(CurrentUserService.class);
-    private final BuildGraphService buildGraphService = new BuildGraphService(jdbcTemplate, toolCheckService, currentUserService);
+    private final BuildGraphLayoutService buildGraphLayoutService = mock(BuildGraphLayoutService.class);
+    private final BuildGraphService buildGraphService = new BuildGraphService(jdbcTemplate, toolCheckService, currentUserService, buildGraphLayoutService);
 
     @Test
     void aiBuildGraphShowsCoreDependenciesAndWarnsForPowerHeadroom() {
@@ -208,6 +209,35 @@ class BuildGraphServiceTest {
         List<Map<String, Object>> nodes = castList(graph.get("nodes"));
         assertThat(nodes).extracting(node -> node.get("id")).contains("part-GPU", "part-PSU", "part-CASE");
         assertThat(graph.get("mode")).isEqualTo("ISSUE_PATH");
+    }
+
+    @Test
+    void resolvedNodesIncludeAdminSavedLayoutPositionByCategory() {
+        stubPart("layout-cpu", part("layout-cpu", 301L, "CPU", "Ryzen 7", 420000, MockData.map("socket", "AM5")));
+        stubPart("layout-gpu", part("layout-gpu", 302L, "GPU", "RTX 5070", 890000, MockData.map("wattage", 250)));
+        when(toolCheckService.checkBuild(anyList(), eq(1_310_000))).thenReturn(List.of());
+        when(buildGraphLayoutService.resolvePositions()).thenReturn(Map.of(
+                "CPU", new BuildGraphLayoutService.GraphPosition(880, 120),
+                "GPU", new BuildGraphLayoutService.GraphPosition(420, 360)
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "items", List.of(
+                        requestItem("layout-cpu", "CPU"),
+                        requestItem("layout-gpu", "GPU")
+                )
+        ));
+
+        List<Map<String, Object>> nodes = castList(graph.get("nodes"));
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-CPU");
+            assertThat(node.get("position")).isEqualTo(Map.of("x", 880, "y", 120));
+        });
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-GPU");
+            assertThat(node.get("position")).isEqualTo(Map.of("x", 420, "y", 360));
+        });
     }
 
     @Test

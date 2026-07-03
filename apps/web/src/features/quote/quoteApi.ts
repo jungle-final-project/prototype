@@ -1,5 +1,5 @@
 import { api } from '../../lib/api';
-import type { AiBuildChatRequest, AiBuildChatResponse, BuildGraphResolveRequest, BuildGraphResolveResponse } from './aiSelection';
+import type { AiBuildChatRequest, AiBuildChatResponse, AiRecommendedBuild, BuildGraphResolveRequest, BuildGraphResolveResponse } from './aiSelection';
 import type { BuildSummary, ChangePartResponse, ParseRequirementPayload, ParsedRequirement, RecommendBuildResponse } from './types';
 
 export type PriceAlert = {
@@ -38,6 +38,19 @@ export function getBuild(buildId: string) {
 
 export function getBuildHistory() {
   return api<{ items: BuildSummary[] }>('/api/builds/history');
+}
+
+export type SaveBuildFromChatPayload = {
+  sourceBuildId: string;
+  lastUserMessage?: string;
+  build: AiRecommendedBuild;
+};
+
+export function saveBuildFromChat(payload: SaveBuildFromChatPayload) {
+  return api<{ id: string }>('/api/builds/from-chat', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 }
 
 export function getPriceAlerts() {

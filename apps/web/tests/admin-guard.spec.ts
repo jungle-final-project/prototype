@@ -10,6 +10,7 @@ const adminRoutes = [
   '/admin/rag-evidence/rag-psu-001',
   '/admin/parts',
   '/admin/price-jobs',
+  '/admin/build-graph-layouts',
   '/admin/load-tests',
   '/admin/as-tickets',
   '/admin/as-tickets/AS-1031'
@@ -870,7 +871,7 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
   await expect(page.locator('main')).toContainText('INACTIVE 초안 생성');
 });
 
-test('renders eight admin shell navigation entries for ADMIN role', async ({ page }) => {
+test('renders nine admin shell navigation entries for ADMIN role', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
@@ -906,7 +907,7 @@ test('renders eight admin shell navigation entries for ADMIN role', async ({ pag
   await page.goto('/admin');
 
   const navigation = page.getByRole('navigation', { name: '관리자 메뉴' });
-  await expect(navigation.getByRole('link')).toHaveCount(8);
+  await expect(navigation.getByRole('link')).toHaveCount(9);
   await expect(navigation.getByRole('link', { name: '대시보드' })).toHaveAttribute('href', '/admin');
   await expect(navigation.getByRole('link', { name: '에이전트 세션' })).toHaveAttribute('href', '/admin/agent-sessions');
   await expect(navigation.getByRole('link', { name: '도구 이력' })).toHaveAttribute('href', '/admin/tool-invocations');
@@ -914,12 +915,107 @@ test('renders eight admin shell navigation entries for ADMIN role', async ({ pag
   await expect(navigation.getByRole('link', { name: '부품/가격' })).toHaveAttribute('href', '/admin/parts');
   await expect(navigation.getByRole('link', { name: 'AS 티켓' })).toHaveAttribute('href', '/admin/as-tickets');
   await expect(navigation.getByRole('link', { name: '가격 작업' })).toHaveAttribute('href', '/admin/price-jobs');
+  await expect(navigation.getByRole('link', { name: '관계도 배치' })).toHaveAttribute('href', '/admin/build-graph-layouts');
   await expect(navigation.getByRole('link', { name: '부하 테스트' })).toHaveAttribute('href', '/admin/load-tests');
   await expect(navigation.getByRole('link', { name: '에이전트 세션' })).toHaveCSS('font-family', /Noto Sans KR/);
 
   await expect(page.getByRole('searchbox', { name: '관리자 검색' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '내보내기' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '작업 실행' })).toHaveCount(0);
+});
+
+test('admin can drag quote graph nodes and save the fixed layout', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+
+  let savedPayload: { positions?: Record<string, { x: number; y: number }> } | null = null;
+  let resetCalled = false;
+  await page.route('**/api/admin/build-graph-layouts/default', async (route) => {
+    const method = route.request().method();
+    if (method === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          layoutKey: 'DEFAULT',
+          source: 'DEFAULT',
+          positions: {
+            CPU: { x: 20, y: 170 },
+            MOTHERBOARD: { x: 300, y: 36 },
+            RAM: { x: 640, y: 56 },
+            GPU: { x: 300, y: 270 },
+            PSU: { x: 640, y: 250 },
+            CASE: { x: 640, y: 440 },
+            COOLER: { x: 300, y: 500 },
+            STORAGE: { x: 20, y: 650 },
+            PRICE: { x: 300, y: 660 }
+          }
+        })
+      });
+      return;
+    }
+    if (method === 'PUT') {
+      savedPayload = JSON.parse(route.request().postData() ?? '{}');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          layoutKey: 'DEFAULT',
+          source: 'SAVED',
+          positions: savedPayload?.positions ?? {}
+        })
+      });
+      return;
+    }
+    if (method === 'DELETE') {
+      resetCalled = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          layoutKey: 'DEFAULT',
+          source: 'DEFAULT',
+          positions: {
+            CPU: { x: 20, y: 170 },
+            GPU: { x: 300, y: 270 }
+          }
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/admin/build-graph-layouts');
+
+  await expect(page.getByRole('heading', { name: '관계도 배치 고정' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '관계도 배치' })).toHaveAttribute('aria-current', 'page');
+
+  const gpuNode = page.getByTestId('admin-layout-node-GPU');
+  await expect(gpuNode).toBeVisible();
+  const before = await gpuNode.boundingBox();
+  expect(before).not.toBeNull();
+  await page.mouse.move((before?.x ?? 0) + 40, (before?.y ?? 0) + 30);
+  await page.mouse.down();
+  await page.mouse.move((before?.x ?? 0) + 180, (before?.y ?? 0) + 80, { steps: 8 });
+  await page.mouse.up();
+
+  await expect(page.getByText('저장되지 않은 변경')).toBeVisible();
+  await page.getByRole('button', { name: '고정하기' }).click();
+  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 0).toBeGreaterThan(300);
+  await expect(page.getByText('저장 완료')).toBeVisible();
+
+  await page.getByRole('button', { name: '기본값으로 초기화' }).click();
+  await expect.poll(() => resetCalled).toBe(true);
+  await expect(page.getByText('기본 배치로 초기화됨')).toBeVisible();
 });
 
 test('renders price job and load test admin menu pages for ADMIN role', async ({ page }) => {

@@ -221,37 +221,24 @@ export function SelfQuotePage() {
   return (
     <Screen>
       <div className="space-y-5">
-        <section className="panel overflow-hidden">
-          <div className="border-b border-commerce-line bg-white px-5 py-3">
-            <div className="flex flex-wrap items-center gap-2 text-xs font-black">
-              <span className="rounded bg-commerce-sale px-2 py-1 text-white">SALE</span>
-              <span className="text-commerce-ink">셀프 견적 쇼핑</span>
-              <span className="text-slate-400">카테고리별 내부 자산 · 저장된 현재가 기준</span>
-            </div>
-          </div>
-          <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-end">
-            <div>
+        <section className="panel px-5 py-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs font-black text-brand-blue">
-                <ShoppingCart size={16} />
-                Build cart workspace
+                <ShoppingCart size={15} />
+                셀프 견적
               </div>
-              <h1 className="mt-2 text-2xl font-black tracking-tight text-commerce-ink sm:text-3xl">부품을 고르고 견적 장바구니에 담으세요</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                다나와식 카테고리 탐색과 쇼핑몰형 상품 목록을 유지하면서, 오른쪽에서 총액과 검증 진입점을 바로 확인합니다.
-              </p>
+              <h1 className="mt-1 text-xl font-black tracking-tight text-commerce-ink sm:text-2xl">부품을 고르고 견적 장바구니에 담으세요</h1>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">카테고리별 내부 자산 · 저장된 현재가 기준. 오른쪽에서 총액을 바로 확인합니다.</p>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="rounded-md border border-commerce-line bg-slate-50 p-3">
-                <div className="font-black text-commerce-ink">{total.toLocaleString()}</div>
-                <div className="mt-1 text-slate-500">상품</div>
+            <div className="flex items-center gap-2 text-xs">
+              <div className="rounded-md border border-commerce-line bg-slate-50 px-3 py-2">
+                <span className="font-black text-commerce-ink">{total.toLocaleString()}</span>
+                <span className="ml-1 text-slate-500">상품</span>
               </div>
-              <div className="rounded-md border border-commerce-line bg-slate-50 p-3">
-                <div className="font-black text-commerce-ink">{draftItems.length}</div>
-                <div className="mt-1 text-slate-500">선택</div>
-              </div>
-              <div className="rounded-md border border-commerce-line bg-slate-50 p-3">
-                <div className="font-black text-commerce-green">PASS</div>
-                <div className="mt-1 text-slate-500">검증</div>
+              <div className="rounded-md border border-commerce-line bg-slate-50 px-3 py-2">
+                <span className="font-black text-commerce-ink">{draftItems.length}</span>
+                <span className="ml-1 text-slate-500">선택</span>
               </div>
             </div>
           </div>
@@ -646,7 +633,7 @@ function partRows(
       product: <PartProductCell part={part} />,
       manufacturer: part.manufacturer ?? '-',
       supplier: <SupplierCell part={part} />,
-      price: `${part.price.toLocaleString()}원`,
+      price: <span className="whitespace-nowrap text-sm font-black text-commerce-ink">{part.price.toLocaleString()}원</span>,
       action: (
         <button
           type="button"
@@ -807,7 +794,6 @@ function PartProductCell({ part }: { part: PartRow }) {
       <div>
         <Link to={`/parts/${part.id}`} className="font-black leading-5 text-commerce-ink hover:text-brand-blue hover:underline">{part.name}</Link>
         <div className="mt-1 text-[11px] font-medium text-slate-500">{partShortSpec(part)}</div>
-        <div className="mt-2 inline-flex rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">호환성 체크 가능</div>
       </div>
     </div>
   );

@@ -10,9 +10,11 @@ import {
   clearLegacyAiStorage,
   createAiMessageId,
   getAiStorageOwnerKey,
+  mergeAiBuildHistory,
   normalizeAiBuilds,
   normalizeAiRecommendedBuild,
   readAssistantSession,
+  recentBuildsForChatContext,
   saveAssistantSession,
   saveSelectedAiBuild,
   type AiAppliedPartPreference,
@@ -172,13 +174,13 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
         : undefined;
       const response = await buildChat({
         message: nextPrompt,
-        currentBuilds: baseSession.latestBuilds,
+        currentBuilds: recentBuildsForChatContext(baseSession),
         appliedPartPreferences: baseSession.appliedPartPreferences,
         currentQuoteDraft
       });
       const responseTime = new Date().toISOString();
       const responseBuilds = response.builds?.length ? normalizeAiBuilds(response.builds) : undefined;
-      const latestBuilds = responseBuilds ?? baseSession.latestBuilds;
+      const latestBuilds = responseBuilds ? mergeAiBuildHistory(responseBuilds, baseSession.latestBuilds) : baseSession.latestBuilds;
       const latestGraphFocus = graphFocusFromResponse(response, nextPrompt);
       const appliedPartPreferences = response.partRecommendation
         ? replaceAppliedPartPreference(baseSession.appliedPartPreferences, {
@@ -203,9 +205,14 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       const nextSession = {
         messages: [...optimisticSession.messages, assistantMessage],
         latestBuilds,
+        savedBuildIds: baseSession.savedBuildIds,
         appliedPartPreferences,
         latestGraphFocus,
-        latestActiveBuildId: latestBuilds[1]?.id ?? latestBuilds[0]?.id,
+        latestActiveBuildId: responseBuilds?.find((build) => build.tier === 'balanced')?.id
+          ?? responseBuilds?.[0]?.id
+          ?? baseSession.latestActiveBuildId
+          ?? latestBuilds[1]?.id
+          ?? latestBuilds[0]?.id,
         updatedAt: responseTime
       };
       setSession(nextSession);

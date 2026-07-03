@@ -5,6 +5,8 @@ export const AI_SELECTED_BUILD_STORAGE_KEY = 'buildgraph.ai.selectedBuild';
 export const AI_SELECTED_BUILD_CHANGED_EVENT = 'buildgraph.ai.selectedBuildChanged';
 export const AI_ASSISTANT_SESSION_STORAGE_KEY = 'buildgraph.ai.assistantSession';
 export const AI_ASSISTANT_SESSION_CHANGED_EVENT = 'buildgraph.ai.assistantSessionChanged';
+export const AI_ASSISTANT_BUILD_HISTORY_LIMIT = 9;
+export const AI_ASSISTANT_BUILD_CONTEXT_LIMIT = 3;
 
 export type AiBuildTier = 'budget' | 'balanced' | 'performance';
 export type PartCategory = 'CPU' | 'MOTHERBOARD' | 'RAM' | 'GPU' | 'STORAGE' | 'PSU' | 'CASE' | 'COOLER';
@@ -158,6 +160,7 @@ export type BuildGraphNode = {
   detail?: string;
   partId?: string;
   price?: number;
+  position?: { x: number; y: number };
 };
 
 export type BuildGraphEdge = {
@@ -213,6 +216,7 @@ export type AiChatMessage = {
 export type AiAssistantSession = {
   messages: AiChatMessage[];
   latestBuilds: AiRecommendedBuild[];
+  savedBuildIds: Record<string, string>;
   appliedPartPreferences: AiAppliedPartPreference[];
   latestGraphFocus?: BuildGraphFocus;
   latestActiveBuildId?: string;
@@ -259,6 +263,7 @@ export function emptyAssistantSession(): AiAssistantSession {
   return {
     messages: [initialAssistantMessage],
     latestBuilds: [],
+    savedBuildIds: {},
     appliedPartPreferences: [],
     latestGraphFocus: undefined,
     latestActiveBuildId: undefined,
@@ -353,7 +358,8 @@ export function readAssistantSession(ownerKey: string | null = getAiStorageOwner
     }
     return {
       messages: normalizeAssistantMessages(parsed.messages.length > 0 ? parsed.messages : [initialAssistantMessage]),
-      latestBuilds: normalizeAiBuilds(parsed.latestBuilds ?? []),
+      latestBuilds: mergeAiBuildHistory(parsed.latestBuilds ?? [], []),
+      savedBuildIds: normalizeSavedBuildIds(parsed.savedBuildIds),
       appliedPartPreferences: parsed.appliedPartPreferences ?? [],
       latestGraphFocus: parsed.latestGraphFocus,
       latestActiveBuildId: parsed.latestActiveBuildId,
@@ -405,14 +411,65 @@ export function normalizeAiBuilds(builds: AiRecommendedBuild[]) {
   return builds.map(normalizeAiRecommendedBuild);
 }
 
+export function mergeAiBuildHistory(incomingBuilds: AiRecommendedBuild[], existingBuilds: AiRecommendedBuild[]) {
+  const result: AiRecommendedBuild[] = [];
+  const seen = new Set<string>();
+  for (const build of [...normalizeAiBuilds(incomingBuilds), ...normalizeAiBuilds(existingBuilds)]) {
+    const fingerprint = buildCompositionFingerprint(build);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    result.push(build);
+    if (result.length >= AI_ASSISTANT_BUILD_HISTORY_LIMIT) break;
+  }
+  return result;
+}
+
+export function recentBuildsForChatContext(session: AiAssistantSession) {
+  const latestAssistantBuilds = [...session.messages]
+    .reverse()
+    .find((message) => message.role === 'assistant' && message.builds?.length)
+    ?.builds;
+  return normalizeAiBuilds(latestAssistantBuilds ?? session.latestBuilds).slice(0, AI_ASSISTANT_BUILD_CONTEXT_LIMIT);
+}
+
 function normalizeAssistantSession(session: AiAssistantSession): AiAssistantSession {
   return {
     ...session,
     messages: normalizeAssistantMessages(session.messages),
-    latestBuilds: normalizeAiBuilds(session.latestBuilds),
+    latestBuilds: mergeAiBuildHistory(session.latestBuilds, []),
+    savedBuildIds: normalizeSavedBuildIds(session.savedBuildIds),
     latestGraphFocus: session.latestGraphFocus,
     latestActiveBuildId: session.latestActiveBuildId
   };
+}
+
+export function markAssistantBuildSaved(sourceBuildId: string, savedBuildId: string, ownerKey: string | null = getAiStorageOwnerKey()) {
+  const session = readAssistantSession(ownerKey);
+  const nextSession: AiAssistantSession = {
+    ...session,
+    savedBuildIds: {
+      ...session.savedBuildIds,
+      [sourceBuildId]: savedBuildId
+    },
+    updatedAt: new Date().toISOString()
+  };
+  saveAssistantSession(nextSession, ownerKey);
+  return nextSession;
+}
+
+function normalizeSavedBuildIds(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    const sourceBuildId = key.trim();
+    const savedBuildId = typeof item === 'string' ? item.trim() : '';
+    if (sourceBuildId && savedBuildId) {
+      result[sourceBuildId] = savedBuildId;
+    }
+  });
+  return result;
 }
 
 function normalizeAssistantMessages(messages: AiChatMessage[]) {
@@ -420,6 +477,13 @@ function normalizeAssistantMessages(messages: AiChatMessage[]) {
     ...message,
     builds: message.builds ? normalizeAiBuilds(message.builds) : undefined
   }));
+}
+
+function buildCompositionFingerprint(build: AiRecommendedBuild) {
+  return build.items
+    .map((item) => `${item.category}:${item.partId}:${Math.max(item.quantity ?? 1, defaultAiBuildQuantity(item.category))}`)
+    .sort()
+    .join('|');
 }
 
 function defaultAiBuildQuantity(category: PartCategory) {

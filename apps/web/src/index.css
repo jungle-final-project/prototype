@@ -42,9 +42,10 @@ background:
 }
 
 .buildgraph-flow-node {
+  box-sizing: border-box;
   overflow: hidden;
   font-family: inherit;
-  border-radius: 50%;
+  border-radius: 10px;
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
@@ -54,8 +55,28 @@ background:
 }
 
 .buildgraph-node-card {
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
+}
+
+.buildgraph-node-card-main {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  padding: 14px 16px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.buildgraph-node-card-main-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .buildgraph-node-circle {
@@ -64,7 +85,7 @@ background:
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border-radius: 50%;
+  /* border-radius: 50%; */
   padding: 14px;
   text-align: center;
 }
@@ -84,9 +105,9 @@ background:
   display: -webkit-box;
   overflow: hidden;
   color: #111827;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
-  line-height: 1.18;
+  line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   word-break: keep-all;
@@ -104,9 +125,10 @@ background:
 }
 
 .buildgraph-node-status-label {
+  flex: 0 0 auto;
   max-width: 100%;
   border-radius: 999px;
-  padding: 2px 6px;
+  padding: 4px 8px;
   font-size: 9px;
   font-weight: 900;
   line-height: 1.2;
@@ -126,11 +148,18 @@ background:
 }
 
 .buildgraph-flow-node--focus {
-  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.13), 0 14px 32px rgba(15, 23, 42, 0.14) !important;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.18), 0 14px 28px rgba(15, 23, 42, 0.12) !important;
 }
 
 .buildgraph-flow-node--mini-active {
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18), 0 12px 28px rgba(15, 23, 42, 0.14) !important;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.18), 0 12px 24px rgba(15, 23, 42, 0.12) !important;
+}
+
+.buildgraph-flow-node--issue-focus {
+  box-shadow:
+    inset 0 0 0 3px rgba(239, 68, 68, 0.34),
+    0 18px 34px rgba(239, 68, 68, 0.18) !important;
+  transform: translateY(-2px);
 }
 
 .react-flow__handle {
@@ -138,4 +167,13 @@ background:
   height: 7px;
   border: 2px solid #ffffff;
   background: #2563eb;
+}
+
+.buildgraph-flow-node .react-flow__handle {
+  width: 1px;
+  height: 1px;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
 }
