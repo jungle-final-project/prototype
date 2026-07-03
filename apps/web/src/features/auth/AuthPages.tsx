@@ -74,6 +74,9 @@ function safeRedirect(value: string | null) {
   if (!value || !value.startsWith('/') || value.startsWith('//')) {
     return '/';
   }
+  if (value === '/parts' || value.startsWith('/parts/')) {
+    return '/';
+  }
   return value;
 }
 
