@@ -1515,6 +1515,75 @@ test('keeps recommendation cards full width while the detail drawer overlays on 
   await expect(drawer).toBeVisible();
 });
 
+test('shows a read-only build graph preview on recommendation card hover and reuses cached graph data', async ({ page }) => {
+  const buildGraphRequests = await mockBuildGraphApi(page);
+  const latestBuilds = budgetBuilds(2_000_000);
+  await openHomeAsUser(page);
+  await page.evaluate(({ session }) => {
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-1004', JSON.stringify(session));
+  }, { session: storedAssistantSessionWithBuilds('200만원 PC 추천', latestBuilds) });
+  await page.getByRole('navigation').getByRole('link', { name: '추천 결과' }).click();
+
+  await page.getByRole('button', { name: /200만원 실속형/ }).hover();
+  const preview = page.getByTestId('latest-build-graph-preview');
+  await expect(preview).toBeVisible();
+  await expect(preview.getByRole('heading', { name: '견적 관계도 프리뷰' })).toBeVisible();
+  await expect(preview.getByText('200만원 실속형')).toBeVisible();
+  await expect(preview.locator('.react-flow__node').filter({ hasText: 'RTX 5070' })).toBeVisible();
+  await expect.poll(() => buildGraphRequests.length).toBe(1);
+  expect(buildGraphRequests[0]).toMatchObject({
+    source: 'AI_BUILD',
+    budgetWon: 2_000_000
+  });
+  expect((buildGraphRequests[0] as { items?: unknown[] }).items?.length).toBe(8);
+
+  await page.getByRole('heading', { name: '추천 결과' }).hover();
+  await expect(preview).toHaveCount(0);
+  await page.getByRole('button', { name: /200만원 실속형/ }).hover();
+  await expect(page.getByTestId('latest-build-graph-preview')).toBeVisible();
+  await expect.poll(() => buildGraphRequests.length).toBe(1);
+
+  await page.getByRole('button', { name: /200만원 균형형/ }).hover();
+  await expect(page.getByTestId('latest-build-graph-preview').getByText('200만원 균형형')).toBeVisible();
+  await expect.poll(() => buildGraphRequests.length).toBe(2);
+});
+
+test('shows the graph preview on card focus and suppresses hover preview while the detail drawer is open', async ({ page }) => {
+  await mockBuildGraphApi(page);
+  const latestBuilds = budgetBuilds(2_000_000);
+  await openHomeAsUser(page);
+  await page.evaluate(({ session }) => {
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-1004', JSON.stringify(session));
+  }, { session: storedAssistantSessionWithBuilds('200만원 PC 추천', latestBuilds) });
+  await page.getByRole('navigation').getByRole('link', { name: '추천 결과' }).click();
+
+  await page.getByRole('button', { name: /200만원 실속형/ }).focus();
+  await expect(page.getByTestId('latest-build-graph-preview')).toBeVisible();
+
+  await page.getByRole('button', { name: '상세 보기' }).first().click();
+  const drawer = page.getByRole('dialog', { name: '추천 조합 상세' });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: '견적 관계도' })).toBeVisible();
+  await expect(drawer.locator('.react-flow__node').filter({ hasText: 'RTX 5070' })).toBeVisible();
+
+  await page.getByRole('button', { name: /200만원 실속형/ }).hover();
+  await expect(page.getByTestId('latest-build-graph-preview')).toHaveCount(0);
+});
+
+test('does not show hover graph preview on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockBuildGraphApi(page);
+  const latestBuilds = budgetBuilds(2_000_000);
+  await openHomeAsUser(page);
+  await page.evaluate(({ session }) => {
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-1004', JSON.stringify(session));
+  }, { session: storedAssistantSessionWithBuilds('200만원 PC 추천', latestBuilds) });
+  await page.getByRole('navigation').getByRole('link', { name: '추천 결과' }).click();
+
+  await page.getByRole('button', { name: /200만원 실속형/ }).hover();
+  await expect(page.getByTestId('latest-build-graph-preview')).toHaveCount(0);
+});
+
 test('closes the recommendation detail drawer with close button, escape, and outside click', async ({ page }) => {
   const latestBuilds = budgetBuilds(2_000_000);
   await openHomeAsUser(page);

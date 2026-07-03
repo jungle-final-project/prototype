@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import {
+  Background,
+  Handle,
+  MarkerType,
+  Position,
+  ReactFlow,
+  type Edge,
+  type Node,
+  type NodeProps
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
@@ -9,18 +20,43 @@ import {
   markAssistantBuildSaved,
   readAssistantSession,
   type AiBuildTier,
-  type AiRecommendedBuild
+  type AiRecommendedBuild,
+  type BuildGraphResolveResponse,
+  type BuildGraphStatus
 } from '../aiSelection';
-import { saveBuildFromChat } from '../quoteApi';
+import { resolveBuildGraph, saveBuildFromChat } from '../quoteApi';
 
 type RecommendationFilter = 'all' | AiBuildTier;
+type CompactGraphNodeData = {
+  label: string;
+  category?: string;
+  status: BuildGraphStatus;
+};
+
+const compactGraphNodeTypes = { compactGraphNode: CompactGraphNode };
+const COMPACT_GRAPH_STALE_TIME_MS = 5 * 60 * 1000;
+const compactCategoryPositions: Record<string, { x: number; y: number }> = {
+  CPU: { x: 0, y: 122 },
+  MOTHERBOARD: { x: 210, y: 24 },
+  RAM: { x: 430, y: 32 },
+  GPU: { x: 210, y: 158 },
+  PSU: { x: 430, y: 150 },
+  CASE: { x: 430, y: 264 },
+  COOLER: { x: 210, y: 288 },
+  STORAGE: { x: 0, y: 292 },
+  PRICE: { x: 0, y: 392 }
+};
 
 export function LatestBuildResultPage() {
   const assistantSession = readAssistantSession();
   const builds = assistantSession.latestBuilds;
   const [selectedBuildId, setSelectedBuildId] = useState<string | null>(null);
+  const [previewBuildId, setPreviewBuildId] = useState<string | null>(null);
   const [tierFilter, setTierFilter] = useState<RecommendationFilter>('all');
   const [savedBuildIds, setSavedBuildIds] = useState(assistantSession.savedBuildIds);
+  const [canShowGraphPreview, setCanShowGraphPreview] = useState(false);
+  const previewOpenTimerRef = useRef<number | null>(null);
+  const previewCloseTimerRef = useRef<number | null>(null);
   const visibleBuilds = useMemo(
     () => tierFilter === 'all' ? builds : builds.filter((build) => build.tier === tierFilter),
     [builds, tierFilter]
@@ -28,9 +64,47 @@ export function LatestBuildResultPage() {
   const selectedBuild = selectedBuildId && visibleBuilds.some((build) => build.id === selectedBuildId)
     ? builds.find((build) => build.id === selectedBuildId)
     : undefined;
+  const previewBuild = !selectedBuild && canShowGraphPreview && previewBuildId && visibleBuilds.some((build) => build.id === previewBuildId)
+    ? builds.find((build) => build.id === previewBuildId)
+    : undefined;
   const selectedSavedBuildId = selectedBuild ? savedBuildIds[selectedBuild.id] : undefined;
   const lastUserMessage = latestUserMessage(assistantSession);
   const closeDetail = useCallback(() => setSelectedBuildId(null), []);
+  const clearPreviewOpenTimer = useCallback(() => {
+    if (previewOpenTimerRef.current !== null) {
+      window.clearTimeout(previewOpenTimerRef.current);
+      previewOpenTimerRef.current = null;
+    }
+  }, []);
+  const clearPreviewCloseTimer = useCallback(() => {
+    if (previewCloseTimerRef.current !== null) {
+      window.clearTimeout(previewCloseTimerRef.current);
+      previewCloseTimerRef.current = null;
+    }
+  }, []);
+  const openPreview = useCallback((buildId: string) => {
+    if (!canShowGraphPreview) return;
+    clearPreviewOpenTimer();
+    clearPreviewCloseTimer();
+    previewOpenTimerRef.current = window.setTimeout(() => {
+      setPreviewBuildId(buildId);
+      previewOpenTimerRef.current = null;
+    }, 180);
+  }, [canShowGraphPreview, clearPreviewCloseTimer, clearPreviewOpenTimer]);
+  const schedulePreviewClose = useCallback(() => {
+    clearPreviewOpenTimer();
+    clearPreviewCloseTimer();
+    previewCloseTimerRef.current = window.setTimeout(() => {
+      setPreviewBuildId(null);
+      previewCloseTimerRef.current = null;
+    }, 120);
+  }, [clearPreviewCloseTimer, clearPreviewOpenTimer]);
+  const selectBuild = useCallback((buildId: string) => {
+    clearPreviewOpenTimer();
+    clearPreviewCloseTimer();
+    setPreviewBuildId(null);
+    setSelectedBuildId(buildId);
+  }, [clearPreviewCloseTimer, clearPreviewOpenTimer]);
   const saveMutation = useMutation({
     mutationFn: (build: AiRecommendedBuild) => saveBuildFromChat({
       sourceBuildId: build.id,
@@ -44,10 +118,34 @@ export function LatestBuildResultPage() {
   });
 
   useEffect(() => {
+    const mediaQuery = window.matchMedia('(min-width: 768px)');
+    const syncPreviewAvailability = () => setCanShowGraphPreview(mediaQuery.matches);
+    syncPreviewAvailability();
+    mediaQuery.addEventListener('change', syncPreviewAvailability);
+    return () => mediaQuery.removeEventListener('change', syncPreviewAvailability);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearPreviewOpenTimer();
+      clearPreviewCloseTimer();
+    };
+  }, [clearPreviewCloseTimer, clearPreviewOpenTimer]);
+
+  useEffect(() => {
     if (selectedBuildId && !visibleBuilds.some((build) => build.id === selectedBuildId)) {
       setSelectedBuildId(null);
     }
-  }, [selectedBuildId, visibleBuilds]);
+    if (previewBuildId && !visibleBuilds.some((build) => build.id === previewBuildId)) {
+      setPreviewBuildId(null);
+    }
+  }, [previewBuildId, selectedBuildId, visibleBuilds]);
+
+  useEffect(() => {
+    if (!canShowGraphPreview || selectedBuild) {
+      setPreviewBuildId(null);
+    }
+  }, [canShowGraphPreview, selectedBuild]);
 
   return (
     <Screen>
@@ -79,7 +177,9 @@ export function LatestBuildResultPage() {
                       build={build}
                       selected={build.id === selectedBuildId}
                       savedBuildId={savedBuildIds[build.id]}
-                      onSelect={() => setSelectedBuildId(build.id)}
+                      onSelect={() => selectBuild(build.id)}
+                      onPreviewOpen={() => openPreview(build.id)}
+                      onPreviewClose={schedulePreviewClose}
                     />
                   ))}
                 </div>
@@ -112,6 +212,13 @@ export function LatestBuildResultPage() {
             saveError={saveMutation.isError && saveMutation.variables?.id === selectedBuild.id}
             onSave={() => saveMutation.mutate(selectedBuild)}
             onClose={closeDetail}
+          />
+        ) : null}
+        {previewBuild ? (
+          <BuildGraphPreviewPanel
+            build={previewBuild}
+            onMouseEnter={clearPreviewCloseTimer}
+            onMouseLeave={schedulePreviewClose}
           />
         ) : null}
       </div>
@@ -167,7 +274,7 @@ function LatestBuildDetailDrawer({
         aria-modal="false"
         aria-label="추천 조합 상세"
         data-testid="latest-build-detail-drawer"
-        className="fixed right-0 top-0 z-40 flex h-dvh w-full max-w-[520px] flex-col border-l border-commerce-line bg-white shadow-2xl"
+        className="fixed inset-y-0 right-0 z-[80] flex h-dvh w-full max-w-[520px] flex-col border-l border-commerce-line bg-white shadow-2xl"
       >
         <LatestBuildDetailPanelContent
           build={build}
@@ -229,6 +336,8 @@ function LatestBuildDetailPanelContent({
         <div className="rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-brand-blue">
           저장 전 AI 챗봇 추천
         </div>
+
+        <BuildGraphInlineSection build={build} />
 
         <section className="rounded-md border border-commerce-line bg-white">
           <div className="border-b border-commerce-line px-4 py-3">
@@ -392,18 +501,34 @@ function TemporaryBuildCard({
   build,
   savedBuildId,
   selected,
-  onSelect
+  onSelect,
+  onPreviewOpen,
+  onPreviewClose
 }: {
   build: AiRecommendedBuild;
   savedBuildId?: string;
   selected: boolean;
   onSelect: () => void;
+  onPreviewOpen: () => void;
+  onPreviewClose: () => void;
 }) {
   const primaryWarning = build.warnings?.[0];
   const mainItems = build.items.slice(0, 5);
 
   return (
-    <article data-latest-build-card="true" className={`rounded-lg border bg-white p-4 shadow-product transition ${selected ? 'border-brand-blue ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-200'}`}>
+    <article
+      data-latest-build-card="true"
+      onMouseEnter={onPreviewOpen}
+      onMouseLeave={onPreviewClose}
+      onFocus={onPreviewOpen}
+      onBlur={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+          onPreviewClose();
+        }
+      }}
+      className={`rounded-lg border bg-white p-4 shadow-product transition ${selected ? 'border-brand-blue ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-200'}`}
+    >
       <button
         type="button"
         onClick={onSelect}
@@ -416,7 +541,6 @@ function TemporaryBuildCard({
               <div className="text-xs font-black text-brand-blue">{build.tierLabel}</div>
               <h3 className="mt-1 text-lg font-black text-commerce-ink">{build.title}</h3>
             </div>
-            
           </div>
           <p className="mt-2 min-h-10 text-xs leading-5 text-slate-600">{build.summary}</p>
         </div>
@@ -445,6 +569,264 @@ function TemporaryBuildCard({
       </div>
     </article>
   );
+}
+
+function BuildGraphPreviewPanel({
+  build,
+  onMouseEnter,
+  onMouseLeave
+}: {
+  build: AiRecommendedBuild;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  const graphQuery = useRecommendationBuildGraph(build);
+
+  return (
+    <aside
+      data-testid="latest-build-graph-preview"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      className="fixed right-0 top-0 z-30 hidden h-dvh w-full max-w-[520px] flex-col border-l border-commerce-line bg-white shadow-2xl md:flex"
+    >
+      <div className="border-b border-commerce-line px-5 py-4">
+        <div className="text-xs font-black text-brand-blue">견적 관계도 프리뷰</div>
+        <h2 className="mt-1 text-lg font-black text-commerce-ink">{build.title}</h2>
+        <p className="mt-1 text-xs font-semibold text-slate-500">
+          hover 중인 추천 조합의 부품 관계를 읽기 전용으로 확인합니다.
+        </p>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="rounded-md border border-blue-100 bg-blue-50 px-4 py-3">
+          <div className="text-xs font-black text-slate-500">총액</div>
+          <div className="mt-1 text-2xl font-black text-brand-blue">{build.totalPrice.toLocaleString()}원</div>
+        </div>
+        <section className="rounded-md border border-commerce-line bg-white">
+          <div className="border-b border-commerce-line px-4 py-3">
+            <h3 className="text-sm font-black text-commerce-ink">견적 관계도 프리뷰</h3>
+          </div>
+          <CompactBuildGraph
+            graph={graphQuery.data}
+            isLoading={graphQuery.isLoading}
+            isError={graphQuery.isError}
+            heightClassName="h-[300px]"
+          />
+        </section>
+        <GraphToolSummary graph={graphQuery.data} />
+      </div>
+    </aside>
+  );
+}
+
+function BuildGraphInlineSection({ build }: { build: AiRecommendedBuild }) {
+  const graphQuery = useRecommendationBuildGraph(build);
+
+  return (
+    <section className="rounded-md border border-commerce-line bg-white" data-testid="latest-build-detail-graph">
+      <div className="border-b border-commerce-line px-4 py-3">
+        <h3 className="text-sm font-black text-commerce-ink">견적 관계도</h3>
+        <p className="mt-1 text-xs font-semibold text-slate-500">선택한 추천 조합의 부품 관계를 읽기 전용으로 확인합니다.</p>
+      </div>
+      <CompactBuildGraph
+        graph={graphQuery.data}
+        isLoading={graphQuery.isLoading}
+        isError={graphQuery.isError}
+        heightClassName="h-[280px]"
+      />
+    </section>
+  );
+}
+
+function CompactBuildGraph({
+  graph,
+  isLoading,
+  isError,
+  heightClassName
+}: {
+  graph?: BuildGraphResolveResponse;
+  isLoading: boolean;
+  isError: boolean;
+  heightClassName: string;
+}) {
+  const flowElements = useMemo(() => graph ? toCompactFlowElements(graph) : { nodes: [], edges: [] }, [graph]);
+
+  if (isLoading && !graph) {
+    return (
+      <div className={`${heightClassName} grid place-items-center bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] text-sm font-bold text-slate-500`}>
+        관계도를 불러오는 중입니다.
+      </div>
+    );
+  }
+
+  if (isError && !graph) {
+    return (
+      <div className={`${heightClassName} grid place-items-center bg-orange-50 p-4 text-center text-sm font-bold text-orange-700`}>
+        관계도를 불러오지 못했습니다.
+      </div>
+    );
+  }
+
+  if (flowElements.nodes.length === 0) {
+    return (
+      <div className={`${heightClassName} grid place-items-center bg-slate-50 p-4 text-center text-sm font-bold text-slate-500`}>
+        표시할 관계도 노드가 없습니다.
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${heightClassName} bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)]`}>
+      <ReactFlow
+        nodes={flowElements.nodes}
+        edges={flowElements.edges}
+        nodeTypes={compactGraphNodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.18 }}
+        minZoom={0.18}
+        maxZoom={1.1}
+        zoomOnScroll={false}
+        zoomOnPinch={false}
+        panOnDrag={false}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="#dbe4f0" gap={16} />
+      </ReactFlow>
+    </div>
+  );
+}
+
+function CompactGraphNode({ data }: NodeProps) {
+  const nodeData = data as CompactGraphNodeData;
+
+  return (
+    <div className={`relative flex h-16 w-36 flex-col justify-center rounded-lg border bg-white px-3 text-left shadow-sm ${compactNodeClasses(nodeData.status)}`}>
+      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-white !bg-blue-500" />
+      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-white !bg-blue-500" />
+      <div className="truncate text-[10px] font-black text-brand-blue">{nodeData.category ?? '부품'}</div>
+      <div className="mt-1 line-clamp-2 text-[11px] font-black leading-4 text-commerce-ink" title={nodeData.label}>
+        {nodeData.label}
+      </div>
+    </div>
+  );
+}
+
+function GraphToolSummary({ graph }: { graph?: BuildGraphResolveResponse }) {
+  const toolResults = graph?.toolResults ?? [];
+  if (toolResults.length === 0) return null;
+  const passCount = toolResults.filter((row) => row.status === 'PASS').length;
+
+  return (
+    <section className="rounded-md border border-commerce-line bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-black text-commerce-ink">Tool 검증 요약</h3>
+        <span className="text-xs font-black text-slate-500">{passCount}/{toolResults.length} 통과</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {toolResults.map((row) => (
+          <span key={`${row.tool}-${row.summary}`} className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-1 text-[11px] font-black text-slate-600">
+            {toolDisplayLabel(row.tool)}
+            <StatusBadge status={row.status} />
+          </span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function useRecommendationBuildGraph(build: AiRecommendedBuild) {
+  return useQuery({
+    queryKey: ['build-graph-preview', build.id, buildGraphSignature(build)],
+    queryFn: () => resolveBuildGraph({
+      source: 'AI_BUILD',
+      items: build.items.map((item) => ({
+        partId: item.partId,
+        category: item.category,
+        quantity: item.quantity
+      })),
+      budgetWon: build.budgetWon
+    }),
+    staleTime: COMPACT_GRAPH_STALE_TIME_MS
+  });
+}
+
+function buildGraphSignature(build: AiRecommendedBuild) {
+  return build.items
+    .map((item) => `${item.category}:${item.partId}:${item.quantity}`)
+    .sort()
+    .join('|');
+}
+
+function toCompactFlowElements(graph: BuildGraphResolveResponse): { nodes: Node[]; edges: Edge[] } {
+  const graphNodes = graph.nodes.filter((node) => node.type === 'PART' || node.category === 'PRICE');
+  const nodeIds = new Set(graphNodes.map((node) => node.id));
+
+  return {
+    nodes: graphNodes.map((node, index) => ({
+      id: node.id,
+      type: 'compactGraphNode',
+      position: compactNodePosition(node.category, index),
+      data: {
+        label: node.label,
+        category: labelForCategory(String(node.category ?? '')),
+        status: node.status
+      } satisfies CompactGraphNodeData,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left
+    })),
+    edges: graph.edges
+      .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+      .map((edge) => {
+        const color = compactEdgeColor(edge.status);
+        return {
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          type: 'smoothstep',
+          label: edge.label,
+          style: { stroke: color, strokeWidth: 1.8 },
+          markerEnd: { type: MarkerType.ArrowClosed, color },
+          labelStyle: { fill: color, fontWeight: 800, fontSize: 10 },
+          labelBgPadding: [4, 2],
+          labelBgBorderRadius: 4,
+          labelBgStyle: { fill: '#ffffff', fillOpacity: 0.9 }
+        } satisfies Edge;
+      })
+  };
+}
+
+function compactNodePosition(category: string | undefined, index: number) {
+  const key = String(category ?? '');
+  const base = compactCategoryPositions[key];
+  if (base) return base;
+  return {
+    x: (index % 3) * 210,
+    y: Math.floor(index / 3) * 118
+  };
+}
+
+function compactNodeClasses(status: BuildGraphStatus) {
+  switch (status) {
+    case 'FAIL':
+      return 'border-red-300 bg-red-50';
+    case 'WARN':
+      return 'border-amber-300 bg-amber-50';
+    default:
+      return 'border-blue-100';
+  }
+}
+
+function compactEdgeColor(status: BuildGraphStatus) {
+  switch (status) {
+    case 'FAIL':
+      return '#ef4444';
+    case 'WARN':
+      return '#f59e0b';
+    default:
+      return '#2563eb';
+  }
 }
 
 function toolDisplayLabel(tool: string) {
