@@ -3827,7 +3827,7 @@ components:
         payload:
           type: object
           additionalProperties: true
-          description: route 또는 partId, category, quantity 등 사용자 화면 이동/quote draft API 실행에 필요한 값. OPEN_ROUTE route는 /self-quote, /self-quote?category=..., /self-quote?category=...&q=..., /my/quotes, /requirements/new, /support/new, /support/ai-chat, /checkout, 단일 고확신 ACTIVE 부품의 /parts/{partId}만 허용한다.
+          description: route 또는 partId, category, quantity 등 사용자 화면 이동/quote draft API 실행에 필요한 값. OPEN_ROUTE route는 /self-quote, /self-quote?category=..., /self-quote?category=...&q=..., /my/quotes, /requirements/new, /support/new, /support/ai-chat, /checkout, 단일 고확신 ACTIVE 부품의 /parts/{partId}만 허용한다. 견적초안 변경 action은 자동 실행 안전 판단용 intentConfidence와 sideEffectRisk를 포함할 수 있으며, 프론트는 HIGH/LOW 조합만 자동 실행한다.
         requiresConfirmation:
           type: boolean
           default: false

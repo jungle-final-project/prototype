@@ -1062,6 +1062,41 @@ Embedding 정책:
 - `metadata.embeddingModel`, `metadata.embeddingDimensions`, `metadata.embeddingTextHash`, `metadata.embeddingUpdatedAt`으로 백필 상태를 추적한다.
 - Agent 실행 중 복사된 세션별 evidence에는 원본 chunk의 `source_id`, `summary`, `chunk_text`와 함께 `metadata.sourceEvidenceId`, `metadata.retrievalMode`, `metadata.vectorScore`, `metadata.keywordScore`를 남긴다.
 
+### build_chat_semantic_cache
+
+목적: 문맥 없는 Build Chat 읽기/추천 요청의 의미적으로 같은 반복 질문을 pgvector similarity로 재사용한다. Redis exact cache와 별도이며, 장바구니 변경/시뮬레이션/라우팅/문맥 있는 요청에는 사용하지 않는다.
+
+Owner: 3번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `profile` | `VARCHAR(80)` | no | - | Build Chat profile 또는 `DEFAULT` |
+| `intent` | `VARCHAR(60)` | no | - | `BUILD_RECOMMEND`, `PART_RECOMMEND` 등 router intent |
+| `constraint_signature` | `TEXT` | no | - | 예산/카테고리/부품 class 등 안전 제약 fingerprint |
+| `message` | `TEXT` | no | - | 원본 사용자 메시지 |
+| `embedding` | `VECTOR(1536)` | no | - | 사용자 메시지 embedding |
+| `response_payload` | `JSONB` | no | - | 재사용할 Build Chat 응답 payload. 이전 agent trace id는 저장하지 않는다. |
+| `data_version_hash` | `VARCHAR(120)` | no | - | parts/benchmark/FPS/RAG/alias version hash |
+| `expires_at` | `TIMESTAMPTZ` | no | - | 만료 시각 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `last_hit_at` | `TIMESTAMPTZ` | yes | - | 마지막 hit 시각 |
+| `hit_count` | `INTEGER` | no | - | hit 횟수 |
+
+Index:
+
+- hnsw vector index: `embedding vector_cosine_ops`
+- index: `(profile, intent, constraint_signature, data_version_hash, expires_at)`
+- index: `expires_at`
+
+정책:
+
+- 기본 설정은 `BUILD_CHAT_SEMANTIC_CACHE_ENABLED=true`, threshold `0.94`, TTL `600`초다.
+- 적용 대상은 router decision의 `cachePolicy=SEMANTIC_READ_ONLY`, `sideEffectRisk=NONE`, `semanticConstraintSignature`가 있는 `BUILD_RECOMMEND`/문맥 없는 `PART_RECOMMEND`다.
+- `currentQuoteDraft`, `currentBuilds`, `selectedCategory`, mutation 표현이 있으면 lookup/store를 모두 하지 않는다.
+- `constraint_signature`가 다르면 similarity가 높아도 hit로 보지 않는다. 예: `300만원`과 `800만원`, `5090`과 `5080`, `바꾸면`과 `바꿔줘`.
+- OpenAI embedding 또는 DB 오류는 사용자 응답 실패로 전파하지 않고 기존 LLM/RAG 흐름으로 우회한다.
+
 ### agent_log_uploads
 
 목적: PC Agent JSONL 로그 업로드와 보관 정책을 저장한다.
@@ -1934,7 +1969,7 @@ V62__recommendation_learning_pipeline.sql
 |---|---|
 | `llm_cache` | Redis/runtime 처리 |
 | `rag_cache` | Redis/runtime 처리 |
-| `build_chat_cache` | `POST /api/ai/build-chat` 성공 응답은 Redis key-value와 TTL로 관리한다. DB row를 만들지 않는다. cache key에는 사용자 내부 id, profile, message, draft fingerprint, parts/benchmark/FPS/RAG/alias version을 포함하고, cache payload에는 이전 실행의 `agentSessionId`, `evidenceIds`, `toolInvocationIds`를 저장하지 않는다. |
+| `build_chat_cache` | Redis exact/shared cache는 DB row를 만들지 않는다. cache key에는 사용자 내부 id 또는 shared, profile, message, draft fingerprint, parts/benchmark/FPS/RAG/alias version을 포함하고, cache payload에는 이전 실행의 `agentSessionId`, `evidenceIds`, `toolInvocationIds`를 저장하지 않는다. 의미 기반 재사용은 별도 실제 테이블 `build_chat_semantic_cache`로 관리한다. |
 | `quota` | Redis/runtime 처리 |
 | OAuth one-time code 테이블 | Redis/runtime 처리 |
 | 부하 테스트 결과 테이블 | k6 리포트 파일로 관리 |
