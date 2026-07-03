@@ -2668,8 +2668,8 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
     panel.configure(background="#f8fbfc")
     panel.resizable(False, False)
     panel.attributes("-topmost", True)
-    width = 360
-    height = 376
+    width = 386
+    height = 432
     screen_width = panel.winfo_screenwidth()
     screen_height = panel.winfo_screenheight()
     x = max(20, screen_width - width - 28)
@@ -2702,8 +2702,14 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
         pady=12,
     )
     card.pack(fill="both", expand=True)
+    card.grid_columnconfigure(0, weight=1)
+    card.grid_rowconfigure(0, weight=1)
+    body = tk.Frame(card, background=colors["card"])
+    body.grid(row=0, column=0, sticky="nsew")
+    footer = tk.Frame(card, background=colors["card"])
+    footer.grid(row=1, column=0, sticky="ew", pady=(10, 0))
 
-    header = tk.Frame(card, background=colors["card"])
+    header = tk.Frame(body, background=colors["card"])
     header.pack(fill="x")
     icon = tk.Canvas(header, width=28, height=28, background=colors["card"], highlightthickness=0)
     icon.pack(side="left", padx=(0, 8))
@@ -2737,7 +2743,7 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
     )
     close_label.pack(side="right", padx=(8, 0))
 
-    meta = tk.Frame(card, background=colors["soft"], padx=10, pady=8)
+    meta = tk.Frame(body, background=colors["soft"], padx=10, pady=8)
     meta.pack(fill="x", pady=(12, 10))
 
     def add_meta_row(label: str, value: str) -> None:
@@ -2768,7 +2774,7 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
     add_meta_row("전송 구간", str(model["windowText"]))
 
     tk.Label(
-        card,
+        body,
         text="PC Agent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다.",
         font=("Segoe UI", 9),
         foreground=colors["deep"],
@@ -2778,7 +2784,7 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
         wraplength=318,
     ).pack(fill="x")
 
-    mode_row = tk.Frame(card, background=colors["card"])
+    mode_row = tk.Frame(body, background=colors["card"])
     mode_row.pack(fill="x", pady=(8, 0))
     tk.Label(
         mode_row,
@@ -2803,7 +2809,7 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
         ).pack(side="left", padx=(0, 10))
 
     tk.Label(
-        card,
+        body,
         textvariable=status_text,
         font=("Segoe UI", 8),
         foreground=colors["teal"],
@@ -2836,8 +2842,8 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
 
     close_label.bind("<Button-1>", lambda event: close_panel())
 
-    button_row = tk.Frame(card, background=colors["card"])
-    button_row.pack(fill="x", pady=(2, 0))
+    button_row = tk.Frame(footer, background=colors["card"])
+    button_row.pack(fill="x")
 
     def make_button(parent: tk.Frame, text: str, command: Any, primary: bool = False) -> tk.Button:
         button = tk.Button(
@@ -2858,13 +2864,13 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
         )
         return button
 
-    send_button = make_button(button_row, "AS 접수하기", request_review, True)
+    send_button = make_button(button_row, "접수하기", request_review, True)
     send_button.pack(side="left", fill="x", expand=True, padx=(0, 8))
     make_button(button_row, "무시하기", close_panel).pack(side="left", fill="x", expand=True)
 
     link = tk.Label(
-        card,
-        text="로그 보기 ↗",
+        footer,
+        text="로그 확인하기 ↗",
         font=("Segoe UI", 8, "underline"),
         foreground=colors["teal"],
         background=colors["card"],
