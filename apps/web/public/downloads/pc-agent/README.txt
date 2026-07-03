@@ -27,21 +27,22 @@ Config fields:
 When register saves agentToken, the agent attempts to restrict the config file
 ACL to the current Windows user, Administrators, and SYSTEM.
 
-For Windows CLI packaging, rebuild agent.exe from the repository:
+For Windows packaging, rebuild agent.exe from the repository:
 
   cd apps\pc-agent
   build-agent-exe.cmd
 
 The build creates:
 
-  apps\pc-agent\dist\agent.exe
+  apps\pc-agent\dist\agent.exe      silent tray/viewer executable
+  apps\pc-agent\dist\agent-cli.exe  console executable for status/doctor
 
 Run examples:
 
   agent.exe
-  agent.exe doctor --config agent-config.json
-  agent.exe collect --config agent-config.json --iterations 1
-  agent.exe upload --config agent-config.json --no-open
+  agent-cli.exe doctor --config agent-config.json
+  agent-cli.exe collect --config agent-config.json --iterations 1
+  agent-cli.exe upload --config agent-config.json --no-open
 
 Not included yet:
 

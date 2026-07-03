@@ -3,3 +3,4 @@ out/
 build/
 dist/
 agent.spec
+agent-cli.spec
