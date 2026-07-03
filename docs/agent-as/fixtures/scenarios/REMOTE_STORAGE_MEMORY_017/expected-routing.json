@@ -1,0 +1,18 @@
+{
+  "recommendedDecision": "REMOTE_POSSIBLE",
+  "supportDecision": "REMOTE_POSSIBLE",
+  "riskLevel": "MEDIUM",
+  "confidence": "MEDIUM",
+  "reasonCodes": [
+    "MEMORY_PRESSURE"
+  ],
+  "remoteActions": [
+    "CHECK_EVENT_VIEWER"
+  ],
+  "visitReasons": [],
+  "blockingFactors": [],
+  "safetyAdviceLevel": "LOW",
+  "safetyNotices": [],
+  "requiresAdminApproval": true,
+  "allowAutoResponse": false
+}

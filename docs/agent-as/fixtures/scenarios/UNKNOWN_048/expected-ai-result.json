@@ -1,0 +1,51 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "NEEDS_MORE_INFO",
+  "riskLevel": "LOW",
+  "confidence": "MEDIUM",
+  "reasonCodes": [
+    "INSUFFICIENT_EVIDENCE"
+  ],
+  "causeCandidates": [
+    {
+      "label": "INSUFFICIENT_EVIDENCE",
+      "confidence": "MEDIUM",
+      "reason": "로그 범위 부족"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "MEDIUM",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [],
+  "visitReasons": [],
+  "blockingFactors": [
+    "INSUFFICIENT_EVIDENCE"
+  ],
+  "requiredAdditionalLogs": [
+    "더 긴 incident window 로그"
+  ],
+  "evidenceRefs": [
+    "UNKNOWN_048:raw:SYSTEM_METRIC"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "로그 범위 부족",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": [
+      "문제가 발생한 정확한 시간대를 알려주세요."
+    ]
+  },
+  "proposedTicketPatch": {}
+}

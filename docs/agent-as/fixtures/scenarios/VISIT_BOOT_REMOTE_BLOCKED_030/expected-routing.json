@@ -1,0 +1,23 @@
+{
+  "recommendedDecision": "VISIT_REQUIRED",
+  "supportDecision": "VISIT_REQUIRED",
+  "riskLevel": "HIGH",
+  "confidence": "HIGH",
+  "reasonCodes": [
+    "REMOTE_HELP_NOT_AVAILABLE"
+  ],
+  "remoteActions": [],
+  "visitReasons": [
+    "REMOTE_HELP_NOT_AVAILABLE"
+  ],
+  "blockingFactors": [],
+  "safetyAdviceLevel": "HIGH",
+  "safetyNotices": [
+    {
+      "code": "STOP_USE_UNTIL_ADMIN_REVIEW",
+      "message": "추가 손상을 막기 위해 관리자 확인 전 고부하 사용을 중단하세요."
+    }
+  ],
+  "requiresAdminApproval": true,
+  "allowAutoResponse": false
+}

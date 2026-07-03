@@ -153,6 +153,7 @@ test.beforeEach(async ({ page }) => {
 
 test('filters internal assets by sidebar category on self quote page', async ({ page }) => {
   const requestedCategories: string[] = [];
+  const requestedQueries: string[] = [];
   const emptyDraft = {
     id: 'draft-test',
     status: 'ACTIVE',
@@ -240,7 +241,9 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
       return;
     }
     const category = url.searchParams.get('category') ?? '';
+    const query = url.searchParams.get('q') ?? '';
     requestedCategories.push(category);
+    requestedQueries.push(query);
 
     const items = category === 'GPU'
       ? [
@@ -318,6 +321,12 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
 
   await gpuListRow.getByRole('button', { name: 'RTX 4070 SUPER 테스트 견적에서 제거' }).click();
   await expect(page.getByText('왼쪽 목록에서 부품을 담으면 이곳에 내 견적이 쌓입니다.')).toBeVisible();
+
+  await page.goto('/self-quote?category=GPU&q=5090');
+  await expect(page.getByRole('textbox', { name: '부품 검색' })).toHaveValue('5090');
+  await expect(page.getByText('GPU 부품 목록')).toBeVisible();
+  expect(requestedCategories).toContain('GPU');
+  expect(requestedQueries).toContain('5090');
 });
 
 test('shows only latest cart price trend delta when price history changed', async ({ page }) => {
@@ -1221,6 +1230,11 @@ test('self quote chatbot sends current draft and automatically applies a remove 
   await page.goto('/self-quote');
   await expect(page.getByText('RTX 5070 챗봇 테스트')).toBeVisible();
   await page.getByRole('button', { name: 'AI 견적 챗봇 열기' }).click();
+  const chatbotPanel = page.getByTestId('ai-chatbot-panel');
+  await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '내 견적함' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: 'GPU 추천상담' })).toBeVisible();
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('GPU 빼줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
 
@@ -2847,4 +2861,116 @@ test('goes home after login from product detail redirect', async ({ page }) => {
   await expect(page.getByRole('button', { name: '로그아웃' })).toBeVisible();
 
   expect(savedToDraft).toBe(false);
+});
+
+test('records home recommendation detail and draft add events on product detail page', async ({ page }) => {
+  const events: Array<{ eventType?: string; sourceSurface?: string; recommendationId?: string; rankPosition?: number; partId?: string }> = [];
+
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.route('**/api/parts/part-home-rec-test**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/price-history')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          partId: 'part-home-rec-test',
+          partName: '홈 추천 상세 이벤트 GPU',
+          currentPrice: 1500000,
+          days: 3650,
+          items: [{ price: 1500000, source: 'NAVER_SHOPPING_SEARCH', collectedAt: '2026-07-03T00:00:00Z' }],
+          summary: {
+            sampleCount: 1,
+            currentPrice: 1500000,
+            minPrice: 1500000,
+            maxPrice: 1500000,
+            firstPrice: 1500000,
+            lastPrice: 1500000,
+            changeAmount: 0,
+            changeRatePercent: 0
+          }
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'part-home-rec-test',
+        category: 'GPU',
+        name: '홈 추천 상세 이벤트 GPU',
+        manufacturer: 'NVIDIA',
+        price: 1500000,
+        status: 'ACTIVE',
+        attributes: { shortSpec: '추천 이벤트 저장 테스트', toolReady: true },
+        externalOffer: {
+          imageUrl: 'https://example.test/home-rec-gpu.png',
+          supplierName: '추천테스트몰',
+          offerUrl: null,
+          lowPrice: 1500000,
+          source: 'NAVER_SHOPPING_SEARCH'
+        }
+      })
+    });
+  });
+
+  await page.route('**/api/recommendation-events', async (route) => {
+    const body = route.request().postDataJSON() as { eventType?: string; sourceSurface?: string; recommendationId?: string; rankPosition?: number; partId?: string };
+    events.push(body);
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: `event-${events.length}`,
+        eventType: body.eventType,
+        labelScore: body.eventType === 'ADD_PART_TO_DRAFT' ? 3 : 1,
+        sourceSurface: body.sourceSurface,
+        recommendationId: body.recommendationId,
+        rankPosition: body.rankPosition,
+        createdAt: '2026-07-03T10:00:00Z'
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current/items/part-home-rec-test', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-home-rec-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [],
+        totalPrice: 1500000,
+        itemCount: 1
+      })
+    });
+  });
+
+  await page.goto('/parts/part-home-rec-test?recId=home-part-part-home-rec-test&recSurface=HOME_RECOMMENDED_PARTS&rank=2');
+  await expect(page.getByRole('heading', { name: '홈 추천 상세 이벤트 GPU' })).toBeVisible();
+  await expect.poll(() => events.some((event) => event.eventType === 'DETAIL_VIEW')).toBe(true);
+
+  await page.getByRole('button', { name: '견적에 담기' }).click();
+  await expect.poll(() => events.some((event) => event.eventType === 'ADD_PART_TO_DRAFT')).toBe(true);
+  expect(events).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      eventType: 'DETAIL_VIEW',
+      sourceSurface: 'HOME_RECOMMENDED_PARTS',
+      recommendationId: 'home-part-part-home-rec-test',
+      rankPosition: 2,
+      partId: 'part-home-rec-test'
+    }),
+    expect.objectContaining({
+      eventType: 'ADD_PART_TO_DRAFT',
+      sourceSurface: 'HOME_RECOMMENDED_PARTS',
+      recommendationId: 'home-part-part-home-rec-test',
+      rankPosition: 2,
+      partId: 'part-home-rec-test'
+    })
+  ]));
 });

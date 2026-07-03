@@ -1,0 +1,18 @@
+{
+  "recommendedDecision": "NEEDS_MORE_INFO",
+  "supportDecision": "NEEDS_MORE_INFO",
+  "riskLevel": "LOW",
+  "confidence": "MEDIUM",
+  "reasonCodes": [
+    "OUT_OF_PC_SCOPE"
+  ],
+  "remoteActions": [],
+  "visitReasons": [],
+  "blockingFactors": [
+    "OUT_OF_PC_SCOPE"
+  ],
+  "safetyAdviceLevel": "LOW",
+  "safetyNotices": [],
+  "requiresAdminApproval": true,
+  "allowAutoResponse": false
+}

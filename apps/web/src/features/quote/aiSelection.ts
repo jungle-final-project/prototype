@@ -74,6 +74,51 @@ export type AiPartRecommendation = {
   options: AiBuildItem[];
 };
 
+export type AiSimulationPart = {
+  partId?: string | null;
+  category: PartCategory;
+  name: string;
+  manufacturer?: string | null;
+  price?: number | null;
+};
+
+export type AiSimulationScoreComparison = {
+  label: string;
+  currentScore?: number | null;
+  targetScore?: number | null;
+  delta?: number | null;
+};
+
+export type AiSimulationFpsComparison = {
+  gameTitle: string;
+  resolution: string;
+  graphicsPreset?: string | null;
+  currentFps?: number | null;
+  targetFps?: number | null;
+  deltaFps?: number | null;
+  source?: string | null;
+};
+
+export type AiSimulationSpecComparison = {
+  label: string;
+  currentValue?: string | null;
+  targetValue?: string | null;
+  deltaText?: string | null;
+};
+
+export type AiPerformanceSimulation = {
+  type: 'PERFORMANCE_COMPARISON';
+  category: PartCategory;
+  currentPart: AiSimulationPart;
+  targetPart: AiSimulationPart;
+  summary: string;
+  scoreComparison?: AiSimulationScoreComparison | null;
+  fpsComparisons?: AiSimulationFpsComparison[];
+  specComparisons?: AiSimulationSpecComparison[];
+  warnings?: string[];
+  disclaimer?: string;
+};
+
 export type AiDraftAction = {
   id: string;
   type: AiDraftActionType;
@@ -164,6 +209,7 @@ export type AiChatMessage = {
   builds?: AiRecommendedBuild[];
   partRecommendation?: AiPartRecommendation | null;
   actions?: AiDraftAction[];
+  simulation?: AiPerformanceSimulation | null;
   warnings?: string[];
 };
 
@@ -190,6 +236,7 @@ export type AiBuildChatResponse = {
   builds: AiRecommendedBuild[];
   partRecommendation?: AiPartRecommendation | null;
   actions?: AiDraftAction[];
+  simulation?: AiPerformanceSimulation | null;
   warnings?: string[];
 };
 
@@ -207,7 +254,7 @@ export const PART_CATEGORY_LABELS: Record<PartCategory, string> = {
 const initialAssistantMessage: AiChatMessage = {
   id: 'ai-intro',
   role: 'assistant',
-  text: '예산은 “200만원 PC 추천”처럼, 부품은 “GPU 추천해줘”처럼 물어보세요. 추천은 서버의 실제 부품 DB와 룰 기반 검증 결과로 계산됩니다.',
+  text: '예산은 “800만원 PC 추천”처럼, 상세 이동은 “9950X3D 상세페이지로 이동해”처럼 물어보세요. 추천은 서버의 실제 부품 DB와 룰 기반 검증 결과로 계산됩니다.',
   createdAt: '2026-06-30T00:00:00.000Z',
   kind: 'intro'
 };

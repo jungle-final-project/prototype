@@ -84,7 +84,7 @@
 - 서버는 `shouldNavigate=true`이고 `confidence=HIGH`일 때만 `OPEN_ROUTE` action으로 변환한다.
 - route는 사용자 화면 allowlist만 허용한다. 관리자 화면, 임의 URL, 결제 확정/주문 확정 route는 자동 실행하지 않는다.
 - 상품 상세 이동은 `PART_DETAIL` routeIntent가 오더라도 서버 `PartRouteResolver`가 단일 고확신 `ACTIVE` 부품을 찾은 경우에만 `/parts/{partId}`로 변환한다.
-- `5090 보여줘`, `MSI 보드 보여줘`처럼 후보가 여러 개인 표현은 `/parts/{partId}`로 자동 이동하지 않는다. 카테고리가 명확하면 `/self-quote?category=...`로 낮추거나 일반 답변으로 처리한다.
+- `5090 보여줘`, `MSI 보드 보여줘`처럼 후보가 여러 개인 표현은 `/parts/{partId}`로 자동 이동하지 않는다. 카테고리가 명확하면 `/self-quote?category=...&q=...` 후보 필터 화면으로 이동한다.
 - UI는 서버가 내려준 `OPEN_ROUTE`도 반드시 프론트 allowlist로 재검증한 뒤 `navigate()`해야 한다.
 
 ## 소유권 원칙

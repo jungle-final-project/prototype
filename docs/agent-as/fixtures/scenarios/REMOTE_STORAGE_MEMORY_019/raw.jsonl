@@ -1,0 +1,1 @@
+{"schemaVersion": "1", "collectedAt": "2026-07-03T01:19:01Z", "agentId": "fixture-agent-019", "deviceIdHash": "device-019", "sequence": 1, "kind": "STORAGE_HEALTH", "payload": {"diskIdHash": "disk-remote_storage_memory_019", "smartStatus": "WARN", "criticalWarnings": 1, "ioLatencyMs": 235, "freeSpacePercent": 3}, "privacyFlags": {"masked": true, "containsRawPath": false}}

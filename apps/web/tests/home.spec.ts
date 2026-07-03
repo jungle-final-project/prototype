@@ -261,7 +261,7 @@ function storedAssistantSession(messageText: string) {
       {
         id: 'ai-intro',
         role: 'assistant',
-        text: '예산은 “200만원 PC 추천”처럼, 부품은 “GPU 추천해줘”처럼 물어보세요. 추천은 서버의 실제 부품 DB와 룰 기반 검증 결과로 계산됩니다.',
+        text: '예산은 “800만원 PC 추천”처럼, 상세 이동은 “9950X3D 상세페이지로 이동해”처럼 물어보세요. 추천은 서버의 실제 부품 DB와 룰 기반 검증 결과로 계산됩니다.',
         createdAt: '2026-06-30T00:00:00.000Z',
         kind: 'intro'
       },
@@ -305,6 +305,63 @@ async function mockAiBuildChatApi(page: Page) {
     const body = JSON.parse(route.request().postData() ?? '{}') as { message?: string; currentBuilds?: unknown[] };
     const message = body.message ?? '';
     requests.push({ message, currentBuilds: body.currentBuilds });
+
+    if (message.includes('프레임') || message.includes('시뮬레이션') || message.includes('어떻게')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answerType: 'GENERAL',
+          message: 'RTX 5080에서 RTX 5090으로 바꾸면 배그 FPS가 해상도별로 상승하는 것으로 보입니다. 아래 벤치마크 표를 참고하세요.',
+          builds: [],
+          partRecommendation: null,
+          actions: [],
+          warnings: [],
+          simulation: {
+            type: 'PERFORMANCE_COMPARISON',
+            category: 'GPU',
+            currentPart: {
+              partId: 'part-rtx5080',
+              category: 'GPU',
+              name: 'RTX 5080',
+              manufacturer: 'MSI',
+              price: 1700000
+            },
+            targetPart: {
+              partId: 'part-rtx5090',
+              category: 'GPU',
+              name: 'RTX 5090',
+              manufacturer: 'ZOTAC',
+              price: 3400000
+            },
+            summary: 'RTX 5080에서 RTX 5090으로 바꿨을 때 확인 가능한 벤치마크입니다.',
+            scoreComparison: {
+              label: '벤치마크 기반 점수',
+              currentScore: 95,
+              targetScore: 100,
+              delta: 5
+            },
+            fpsComparisons: [
+              {
+                gameTitle: "PlayerUnknown's Battlegrounds",
+                resolution: 'QHD',
+                graphicsPreset: 'HIGH',
+                currentFps: 223,
+                targetFps: 243,
+                deltaFps: 20,
+                source: 'HowManyFPS'
+              }
+            ],
+            specComparisons: [
+              { label: 'VRAM', currentValue: '16GB', targetValue: '32GB', deltaText: '+16GB' }
+            ],
+            warnings: [],
+            disclaimer: '실제 FPS는 게임 버전, 옵션, 드라이버, 냉각 상태에 따라 달라질 수 있습니다.'
+          }
+        })
+      });
+      return;
+    }
 
     if (/gpu/i.test(message) || message.includes('GPU')) {
       const baseBudget = 2_000_000;
@@ -671,7 +728,13 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   await expect(main.getByText('AI에게 예산이나 부품을 물어보면 추천상품 3개가 여기에 표시됩니다.')).toBeVisible();
   await expect(main.getByRole('heading', { name: '인기 부품 랭킹' })).toBeVisible();
   await expect(main.getByRole('img', { name: /Home RTX 5070 GPU/ })).toBeVisible();
-  await expect(main.getByRole('link', { name: '인기 부품 1번 보기' })).toHaveAttribute('href', '/parts/home-gpu-rtx5070');
+  const firstPartCard = main.getByRole('link', { name: '인기 부품 1번 보기' });
+  await expect(firstPartCard.getByText('성능 근거')).toBeVisible();
+  await expect(firstPartCard.getByText('상품 정보 확인')).toBeVisible();
+  await expect(firstPartCard).toHaveAttribute(
+    'href',
+    '/parts/home-gpu-rtx5070?recId=home-part-home-gpu-rtx5070&recSurface=HOME_RECOMMENDED_PARTS&rank=0'
+  );
 
   for (const label of ['CPU', '메인보드', 'RAM', 'GPU', 'SSD', '파워', '케이스', '쿨러']) {
     await expect(main.getByRole('link', { name: label, exact: true })).toBeVisible();
@@ -706,8 +769,18 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
 
   await expect(page.getByTestId('ai-chatbot-panel')).toHaveCount(0);
   await page.getByRole('button', { name: 'AI 견적 챗봇 열기' }).click();
+  const chatbotPanel = page.getByTestId('ai-chatbot-panel');
+  const chatbotInput = page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' });
 
-  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('200만원 PC 추천');
+  await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '내 견적함' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: 'GPU 추천상담' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '쿨러 추천해줘' })).toHaveCount(0);
+  await chatbotPanel.getByRole('button', { name: '800만원 PC 추천' }).click();
+  await expect(chatbotInput).toHaveValue('800만원으로 최고급 PC 추천해줘');
+
+  await chatbotInput.fill('200만원 PC 추천');
   await page.getByRole('button', { name: '질문 보내기' }).click();
 
   await expect.poll(() => buildChatRequests.length).toBe(1);
@@ -876,6 +949,26 @@ test('chatbot part questions show backend parts and apply them to home AI builds
   expect(latestGraphRequest.focus?.category).toBe('GPU');
 });
 
+test('chatbot renders performance simulation as a benchmark card', async ({ page }) => {
+  await mockBuildGraphApi(page);
+  await mockAiBuildChatApi(page);
+  await openHomeAsUser(page);
+
+  await page.getByRole('button', { name: 'AI 견적 챗봇 열기' }).click();
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('지금 견적에 그래픽카드 5090 바꾸면 배그에서 어떻게 되나요?');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  const messages = page.getByTestId('ai-chat-messages');
+  await expect(messages).toContainText('성능 시뮬레이션');
+  await expect(messages).toContainText('RTX 5080 → RTX 5090');
+  await expect(messages).toContainText('벤치마크 기반 점수');
+  await expect(messages).toContainText("PlayerUnknown's Battlegrounds");
+  await expect(messages).toContainText('223fps → 243fps');
+  await expect(messages).toContainText('+20fps');
+  await expect(messages).not.toContainText('AI DB 답변');
+  await expect(messages).not.toContainText('내부 normalized');
+});
+
 test('chatbot only shows the current user scoped assistant session', async ({ page }) => {
   await page.addInitScript(({ otherUserSession, legacySession }) => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
@@ -969,7 +1062,6 @@ test('chatbot routes simple part screen commands without build-chat API call', a
   await page.getByRole('button', { name: '질문 보내기' }).click();
 
   await page.waitForURL(/\/self-quote\?category=GPU$/);
-  await page.getByRole('button', { name: 'AI 견적 챗봇 열기' }).click();
   await expect(page.getByTestId('ai-chat-messages')).toContainText('GPU 부품 화면으로 이동했습니다.');
   expect(buildChatCalls).toBe(0);
 });
@@ -1155,12 +1247,12 @@ test('selects a home AI recommendation through batch API and shows applied cart 
   expect((applyRequests[0] as { conflictPolicy?: string; items?: unknown[] }).conflictPolicy).toBe('REPLACE');
   expect((applyRequests[0] as { items?: unknown[] }).items).toHaveLength(8);
   await expect(page).toHaveURL('/self-quote');
-  await expect(page.getByTestId('ai-selected-build-panel')).toBeVisible();
+  const selectedBuildPanel = page.getByTestId('ai-selected-build-panel');
+  await expect(selectedBuildPanel).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI 선택 조합' })).toBeVisible();
-  await expect(page.getByText('200만원 균형형')).toBeVisible();
-  await expect(page.getByTestId('ai-selected-build-panel').getByText(`${expectedTotal}원`)).toBeVisible();
-  await expect(page.getByText(`${expectedTotal}원`)).toHaveCount(3);
-  await expect(page.getByText('GPU 반영됨')).toBeVisible();
+  await expect(selectedBuildPanel.getByText('200만원 균형형')).toBeVisible();
+  await expect(selectedBuildPanel.getByText(`${expectedTotal}원`)).toBeVisible();
+  await expect(selectedBuildPanel.getByText('GPU 반영됨')).toBeVisible();
   await expect(page.getByText('서버 반영 RTX 5070 서버 GPU').first()).toBeVisible();
   await expect(page.getByRole('heading', { name: '견적 장바구니', exact: true })).toBeVisible();
 });

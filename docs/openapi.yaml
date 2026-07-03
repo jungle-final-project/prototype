@@ -337,6 +337,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationEventDto"
+  /api/admin/recommendation-feedback/home-parts:
+    post:
+      summary: 홈 추천부품 관리자 라벨 저장
+      description: 관리자가 홈 추천부품 학습용 promote/demote 라벨을 저장한다. 부품 상태나 사용자 노출 여부는 변경하지 않는다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminHomePartRecommendationFeedbackRequest"
+      responses:
+        "201":
+          description: 저장된 관리자 홈 추천부품 피드백 이벤트
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEventDto"
   /api/admin/recommendation-models:
     get:
       summary: 추천 reranker 모델 버전 조회
@@ -350,6 +369,233 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationModelVersionsResponse"
+  /api/admin/recommendation-models/summary:
+    get:
+      summary: 추천 모델 운영 요약
+      description: 홈 추천부품 XGBoost scorer 운영 상태, 최근 HOME 추천 이벤트, score source 비율과 shadow score 수를 관리자 대시보드용으로 반환한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 추천 모델 운영 요약
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationModelSummaryResponse"
+  /api/admin/recommendation-training/overview:
+    get:
+      summary: 추천 학습 운영 요약
+      description: HOME 추천 이벤트 중 학습 eligible, 성공 학습 투입, 미투입, 제외, 최근 Job과 활성 모델을 집계한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 추천 학습 운영 요약
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingOverviewResponse"
+  /api/admin/recommendation-training-datasets:
+    get:
+      summary: 추천 학습 데이터셋 목록
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 데이터셋 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetsResponse"
+    post:
+      summary: 추천 학습 데이터셋 생성
+      description: HOME 추천 이벤트와 관리자 HOME 라벨을 필터 기준으로 snapshot한다. 생성 상태는 DRAFT다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationTrainingDatasetCreateRequest"
+      responses:
+        "201":
+          description: 생성된 데이터셋
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+  /api/admin/recommendation-training-datasets/{id}:
+    patch:
+      summary: 추천 학습 데이터셋 수정
+      description: DRAFT 데이터셋 이름만 수정한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "200":
+          description: 수정된 데이터셋
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+  /api/admin/recommendation-training-datasets/{id}/lock:
+    post:
+      summary: 추천 학습 데이터셋 잠금
+      description: DRAFT 데이터셋을 학습 Job 생성 가능한 LOCKED 상태로 바꾼다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 잠긴 데이터셋
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+  /api/admin/recommendation-training-datasets/{id}/archive:
+    post:
+      summary: 추천 학습 데이터셋 보관
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 보관된 데이터셋
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+  /api/admin/recommendation-training-datasets/{id}/items:
+    get:
+      summary: 추천 학습 데이터셋 item 목록
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 데이터셋 item 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetItemsResponse"
+  /api/admin/recommendation-training-datasets/{id}/items/bulk-include:
+    post:
+      summary: 추천 학습 데이터셋 item 일괄 포함
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationTrainingDatasetBulkUpdateRequest"
+      responses:
+        "200":
+          description: 갱신된 데이터셋
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+  /api/admin/recommendation-training-datasets/{id}/items/bulk-exclude:
+    post:
+      summary: 추천 학습 데이터셋 item 일괄 제외
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationTrainingDatasetBulkUpdateRequest"
+      responses:
+        "200":
+          description: 갱신된 데이터셋
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+  /api/admin/recommendation-training-jobs:
+    get:
+      summary: 추천 학습 Job 목록
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 학습 Job 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingJobsResponse"
+    post:
+      summary: 추천 학습 Job 생성
+      description: LOCKED dataset으로 QUEUED Job을 생성한다. 실제 학습은 xgb-reranker worker가 수행한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [datasetId]
+              properties:
+                datasetId:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: 생성된 학습 Job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationTrainingJobDto"
+  /api/admin/recommendation-models/{id}/activate:
+    post:
+      summary: 추천 모델 활성화
+      description: scorer reload 성공 후 선택 모델을 ACTIVE로, 기존 ACTIVE 모델을 RETIRED로 변경한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 활성화된 모델
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationModelVersionDto"
+  /api/admin/recommendation-models/{id}/retire:
+    post:
+      summary: 추천 모델 은퇴
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 은퇴한 모델
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationModelVersionDto"
   /api/admin/build-graph-layouts/default:
     get:
       summary: 기본 견적 관계도 배치 조회
@@ -2643,9 +2889,14 @@ components:
             - $ref: "#/components/schemas/AiPartRecommendationDto"
         actions:
           type: array
-          description: 사용자 화면 이동 또는 견적초안 변경 action. OPEN_ROUTE는 fast route 또는 LLM routeIntent가 고확신일 때만 내려오며, 프론트는 route allowlist를 재검증해야 한다. 견적초안 저장은 quote-drafts API가 수행한다.
+          description: 사용자 화면 이동 또는 견적초안 변경 action. OPEN_ROUTE는 fast route 또는 LLM routeIntent가 고확신일 때만 내려오며, 프론트는 route allowlist를 재검증해야 한다. 애매한 상품 상세 요청은 /self-quote?category=...&q=... 후보 필터 화면으로 이동할 수 있다. 견적초안 저장은 quote-drafts API가 수행한다.
           items:
             $ref: "#/components/schemas/AiDraftActionDto"
+        simulation:
+          nullable: true
+          description: 부품을 실제로 바꾸지 않고 성능/FPS/스펙 변화를 보여주는 읽기 전용 시뮬레이션 결과.
+          allOf:
+            - $ref: "#/components/schemas/AiPerformanceSimulationDto"
         warnings:
           type: array
           items:
@@ -2659,9 +2910,113 @@ components:
           type: string
           nullable: true
           description: 저장 가능한 Agent root가 있을 때만 채워진다. 홈 챗봇 단독 대화는 null일 수 있다.
+    AiPerformanceSimulationDto:
+      type: object
+      required: [type, category, currentPart, targetPart, summary]
+      properties:
+        type:
+          type: string
+          enum: [PERFORMANCE_COMPARISON]
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        currentPart:
+          $ref: "#/components/schemas/AiSimulationPartDto"
+        targetPart:
+          $ref: "#/components/schemas/AiSimulationPartDto"
+        summary:
+          type: string
+        scoreComparison:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AiSimulationScoreComparisonDto"
+        fpsComparisons:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiSimulationFpsComparisonDto"
+        specComparisons:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiSimulationSpecComparisonDto"
+        warnings:
+          type: array
+          items:
+            type: string
+        disclaimer:
+          type: string
+    AiSimulationPartDto:
+      type: object
+      required: [category, name]
+      properties:
+        partId:
+          type: string
+          nullable: true
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        name:
+          type: string
+        manufacturer:
+          type: string
+          nullable: true
+        price:
+          type: integer
+          nullable: true
+    AiSimulationScoreComparisonDto:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+        currentScore:
+          type: number
+          nullable: true
+        targetScore:
+          type: number
+          nullable: true
+        delta:
+          type: number
+          nullable: true
+    AiSimulationFpsComparisonDto:
+      type: object
+      required: [gameTitle, resolution]
+      properties:
+        gameTitle:
+          type: string
+        resolution:
+          type: string
+        graphicsPreset:
+          type: string
+          nullable: true
+        currentFps:
+          type: number
+          nullable: true
+        targetFps:
+          type: number
+          nullable: true
+        deltaFps:
+          type: number
+          nullable: true
+        source:
+          type: string
+          nullable: true
+    AiSimulationSpecComparisonDto:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+        currentValue:
+          type: string
+          nullable: true
+        targetValue:
+          type: string
+          nullable: true
+        deltaText:
+          type: string
+          nullable: true
     RecommendationEventType:
       type: string
-      enum: [IMPRESSION, CLICK, DETAIL_VIEW, SAVE, CHANGE_ADOPTED, ADD_BUILD_TO_DRAFT, ORDER_INTENT, REJECT, CHANGE_REVERTED]
+      description: 저장 가능한 추천 학습 이벤트 타입. Public `/api/recommendation-events`는 관리자 전용 이벤트인 AS_CONFIRMED_NEGATIVE, ADMIN_PROMOTE, ADMIN_DEMOTE를 거부한다.
+      enum: [IMPRESSION, CLICK, DETAIL_VIEW, SAVE, CHANGE_ADOPTED, ADD_BUILD_TO_DRAFT, ADD_PART_TO_DRAFT, ORDER_INTENT, REJECT, CHANGE_REVERTED, AS_CONFIRMED_NEGATIVE, ADMIN_PROMOTE, ADMIN_DEMOTE]
     RecommendationEventRequest:
       type: object
       required: [eventType]
@@ -2717,6 +3072,27 @@ components:
         metadata:
           type: object
           additionalProperties: true
+    AdminHomePartRecommendationFeedbackRequest:
+      type: object
+      required: [partId, label]
+      properties:
+        partId:
+          type: string
+          format: uuid
+        label:
+          type: string
+          enum: [PROMOTE, DEMOTE]
+        reason:
+          type: string
+          nullable: true
+        recommendationId:
+          type: string
+          nullable: true
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        rankPosition:
+          type: integer
+          nullable: true
     RecommendationEventDto:
       type: object
       required: [id, eventType, labelScore, sourceSurface, createdAt]
@@ -2826,6 +3202,304 @@ components:
         createdAt:
           type: string
           format: date-time
+    RecommendationModelSummaryResponse:
+      type: object
+      required: [homeParts, generatedAt]
+      properties:
+        latestModel:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RecommendationModelVersionDto"
+        homeParts:
+          type: object
+          required: [windowDays, impressions, clicks, ctr, scoreSources, recentShadowScores, recentCandidates]
+          properties:
+            windowDays:
+              type: integer
+              example: 7
+            impressions:
+              type: integer
+              format: int64
+            clicks:
+              type: integer
+              format: int64
+            ctr:
+              type: number
+              format: double
+            recentShadowScores:
+              type: integer
+              format: int64
+            scoreSources:
+              type: array
+              items:
+                type: object
+                required: [scoreSource, count, share]
+                properties:
+                  scoreSource:
+                    type: string
+                    example: XGBOOST
+                  count:
+                    type: integer
+                    format: int64
+                  share:
+                    type: number
+                    format: double
+            recentCandidates:
+              type: array
+              items:
+                type: object
+                required: [partId, category, name]
+                properties:
+                  partId:
+                    type: string
+                    format: uuid
+                  category:
+                    $ref: "#/components/schemas/PartCategory"
+                  name:
+                    type: string
+                  manufacturer:
+                    type: string
+                    nullable: true
+                  price:
+                    type: integer
+                    nullable: true
+                  score:
+                    type: number
+                    nullable: true
+                  rankPosition:
+                    type: integer
+                    nullable: true
+                  modelVersion:
+                    type: string
+                    nullable: true
+                  createdAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+        generatedAt:
+          type: string
+          format: date-time
+    RecommendationTrainingOverviewResponse:
+      type: object
+      required: [eligibleEvents, trainedDistinctEvents, untrainedEligibleEvents, excludedDatasetItems, recentSevenDayEvents, generatedAt]
+      properties:
+        eligibleEvents:
+          type: integer
+          format: int64
+        trainedDistinctEvents:
+          type: integer
+          format: int64
+        untrainedEligibleEvents:
+          type: integer
+          format: int64
+          description: 성공한 학습 Job dataset에 포함된 적 없는 eligible event 수
+        excludedDatasetItems:
+          type: integer
+          format: int64
+        recentSevenDayEvents:
+          type: integer
+          format: int64
+        activeModel:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RecommendationModelVersionDto"
+        latestJob:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RecommendationTrainingJobDto"
+        generatedAt:
+          type: string
+          format: date-time
+    RecommendationTrainingDatasetCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        eventTypes:
+          type: array
+          items:
+            type: string
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartCategory"
+    RecommendationTrainingDatasetBulkUpdateRequest:
+      type: object
+      properties:
+        itemIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        eventType:
+          type: string
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        reason:
+          type: string
+    RecommendationTrainingDatasetsResponse:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendationTrainingDatasetDto"
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+    RecommendationTrainingDatasetDto:
+      type: object
+      required: [id, name, sourceSurface, filters, status, eligibleCount, includedCount, excludedCount, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        sourceSurface:
+          type: string
+        filters:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [DRAFT, LOCKED, TRAINED, ARCHIVED]
+        eligibleCount:
+          type: integer
+          format: int64
+        includedCount:
+          type: integer
+          format: int64
+        excludedCount:
+          type: integer
+          format: int64
+        lockedAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        updatedItems:
+          type: integer
+          description: bulk include/exclude 응답에서만 제공된다.
+    RecommendationTrainingDatasetItemsResponse:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendationTrainingDatasetItemDto"
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+    RecommendationTrainingDatasetItemDto:
+      type: object
+      required: [id, eventId, eventType, sourceSurface, included, labelScoreSnapshot, featuresSnapshot, eventSnapshot, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+        sourceSurface:
+          type: string
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        rankPosition:
+          type: integer
+          nullable: true
+        eventCreatedAt:
+          type: string
+          nullable: true
+        included:
+          type: boolean
+        excludedReason:
+          type: string
+          nullable: true
+        labelScoreSnapshot:
+          type: number
+        featuresSnapshot:
+          type: object
+          additionalProperties: true
+        eventSnapshot:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    RecommendationTrainingJobsResponse:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendationTrainingJobDto"
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+    RecommendationTrainingJobDto:
+      type: object
+      required: [id, datasetId, datasetName, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        datasetId:
+          type: string
+          format: uuid
+        datasetName:
+          type: string
+        status:
+          type: string
+          enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED, SKIPPED_LOW_DATASET]
+        workerId:
+          type: string
+          nullable: true
+        modelVersion:
+          type: string
+          nullable: true
+        artifactPath:
+          type: string
+          nullable: true
+        metrics:
+          type: object
+          additionalProperties: true
+        logSummary:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          nullable: true
+        finishedAt:
+          type: string
+          nullable: true
     BuildGraphResolveRequest:
       type: object
       required: [source]
@@ -3114,7 +3788,7 @@ components:
         payload:
           type: object
           additionalProperties: true
-          description: route 또는 partId, category, quantity 등 사용자 화면 이동/quote draft API 실행에 필요한 값. OPEN_ROUTE route는 /self-quote, /self-quote?category=..., /my/quotes, /requirements/new, /support/new, /support/ai-chat, /checkout, 단일 고확신 ACTIVE 부품의 /parts/{partId}만 허용한다.
+          description: route 또는 partId, category, quantity 등 사용자 화면 이동/quote draft API 실행에 필요한 값. OPEN_ROUTE route는 /self-quote, /self-quote?category=..., /self-quote?category=...&q=..., /my/quotes, /requirements/new, /support/new, /support/ai-chat, /checkout, 단일 고확신 ACTIVE 부품의 /parts/{partId}만 허용한다.
         requiresConfirmation:
           type: boolean
           default: false

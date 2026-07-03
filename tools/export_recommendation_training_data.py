@@ -31,6 +31,14 @@ FIELDS = [
     "part_has_offer",
     "part_price_age_days",
     "part_has_fps_coverage",
+    "category_CPU",
+    "category_GPU",
+    "category_RAM",
+    "category_MOTHERBOARD",
+    "category_STORAGE",
+    "category_PSU",
+    "category_CASE",
+    "category_COOLER",
     "build_total_price",
     "created_at",
 ]
@@ -50,7 +58,7 @@ def connect(database_url: str):
             raise SystemExit("Install psycopg or psycopg2 to export training data.") from exc
 
 
-def rows(conn):
+def rows(conn, source_surface: str | None):
     sql = """
         SELECT e.public_id::text AS event_id,
                e.event_type,
@@ -73,6 +81,14 @@ def rows(conn):
                  FROM game_fps_benchmarks fps
                  WHERE fps.cpu_part_id = p.id OR fps.gpu_part_id = p.id
                ) AS part_has_fps_coverage,
+               CASE WHEN e.category = 'CPU' THEN 1 ELSE 0 END AS category_cpu,
+               CASE WHEN e.category = 'GPU' THEN 1 ELSE 0 END AS category_gpu,
+               CASE WHEN e.category = 'RAM' THEN 1 ELSE 0 END AS category_ram,
+               CASE WHEN e.category = 'MOTHERBOARD' THEN 1 ELSE 0 END AS category_motherboard,
+               CASE WHEN e.category = 'STORAGE' THEN 1 ELSE 0 END AS category_storage,
+               CASE WHEN e.category = 'PSU' THEN 1 ELSE 0 END AS category_psu,
+               CASE WHEN e.category = 'CASE' THEN 1 ELSE 0 END AS category_case,
+               CASE WHEN e.category = 'COOLER' THEN 1 ELSE 0 END AS category_cooler,
                b.total_price AS build_total_price,
                e.created_at
         FROM recommendation_events e
@@ -109,10 +125,15 @@ def rows(conn):
           LIMIT 1
         ) peo ON true
         LEFT JOIN builds b ON b.id = e.build_id
+        WHERE (
+          %s::text IS NULL
+          OR (%s::text = '__HOME_PARTS__' AND e.source_surface IN ('HOME_RECOMMENDED_PARTS', 'ADMIN_HOME_PART_FEEDBACK'))
+          OR e.source_surface = %s::text
+        )
         ORDER BY e.created_at, e.id
     """
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, (source_surface, source_surface, source_surface))
         for row in cur.fetchall():
             yield dict(zip(FIELDS, row))
 
@@ -121,6 +142,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL", "postgresql://buildgraph:buildgraph@localhost:5432/buildgraph"))
     parser.add_argument("--output", default="artifacts/recommendation/training.csv")
+    parser.add_argument("--source-surface", default=None, help="Optional source_surface filter, for example HOME_RECOMMENDED_PARTS")
+    parser.add_argument("--home-parts", action="store_true", help="Export HOME_RECOMMENDED_PARTS and ADMIN_HOME_PART_FEEDBACK events together.")
     args = parser.parse_args()
 
     output = Path(args.output)
@@ -129,7 +152,10 @@ def main() -> int:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader()
         count = 0
-        for row in rows(conn):
+        source_surface = None if not args.source_surface or args.source_surface.upper() == "ALL" else args.source_surface
+        if args.home_parts:
+            source_surface = "__HOME_PARTS__"
+        for row in rows(conn, source_surface):
             writer.writerow(row)
             count += 1
     print(f"exported_rows={count} output={output}")

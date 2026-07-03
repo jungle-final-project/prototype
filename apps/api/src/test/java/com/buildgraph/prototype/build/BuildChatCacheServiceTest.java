@@ -58,6 +58,7 @@ class BuildChatCacheServiceTest {
         assertThat(cache.service.lookup(request(2), "BUILD_CHAT_54_MINI_FAST", 42L)).isEmpty();
 
         cache.versions.set(versions("parts-v2"));
+        cache.service.clearDataVersionCacheForTest();
         assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 42L)).isEmpty();
     }
 
@@ -162,6 +163,57 @@ class BuildChatCacheServiceTest {
         )).isPresent();
     }
 
+    @Test
+    void standaloneBuildRecommendationCacheIsSharedAcrossUsers() {
+        Map<String, String> redisStore = new LinkedHashMap<>();
+        TestCache cache = cache(redisStore);
+        Map<String, Object> firstRequest = standaloneBuildRequest();
+        Map<String, Object> secondRequest = standaloneBuildRequest();
+        Map<String, Object> response = Map.of(
+                "answerType", "BUDGET",
+                "message", "300만원 견적입니다.",
+                "builds", List.of(Map.of("id", "build-result"))
+        );
+
+        cache.service.store(firstRequest, "BUILD_CHAT_54_MINI_FAST", 42L, response);
+
+        assertThat(cache.service.lookup(secondRequest, "BUILD_CHAT_54_MINI_FAST", 42L)).isPresent();
+        assertThat(cache.service.lookup(secondRequest, "BUILD_CHAT_54_MINI_FAST", 7L)).isPresent();
+    }
+
+    @Test
+    void contextualPartRecommendationCacheKeepsLatestBuildContextInKey() {
+        Map<String, String> redisStore = new LinkedHashMap<>();
+        TestCache cache = cache(redisStore);
+        Map<String, Object> firstRequest = partContextRequest("build-a", "gpu-a");
+        Map<String, Object> secondRequest = partContextRequest("build-b", "gpu-b");
+        Map<String, Object> response = Map.of(
+                "answerType", "PART",
+                "message", "GPU 후보입니다.",
+                "builds", List.of(Map.of("id", "build-result"))
+        );
+
+        cache.service.store(firstRequest, "BUILD_CHAT_54_MINI_FAST", 42L, response);
+
+        assertThat(cache.service.lookup(secondRequest, "BUILD_CHAT_54_MINI_FAST", 42L)).isEmpty();
+    }
+
+    @Test
+    void standalonePartRecommendationCacheIsSharedAcrossUsers() {
+        Map<String, String> redisStore = new LinkedHashMap<>();
+        TestCache cache = cache(redisStore);
+        Map<String, Object> request = Map.of("message", "고성능 GPU 추천해줘");
+        Map<String, Object> response = Map.of(
+                "answerType", "PART",
+                "message", "GPU 후보입니다.",
+                "partRecommendation", Map.of("category", "GPU")
+        );
+
+        cache.service.store(request, "BUILD_CHAT_54_MINI_FAST", 42L, response);
+
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 7L)).isPresent();
+    }
+
     private static TestCache cache(Map<String, String> redisStore) {
         @SuppressWarnings("unchecked")
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
@@ -254,6 +306,26 @@ class BuildChatCacheServiceTest {
                         "partId", "part-gpu-1",
                         "category", "GPU",
                         "quantity", quantity
+                ))
+        );
+    }
+
+    private static Map<String, Object> standaloneBuildRequest() {
+        return Map.of(
+                "message", "300만원 견적 추천해줘"
+        );
+    }
+
+    private static Map<String, Object> partContextRequest(String buildId, String gpuPartId) {
+        return Map.of(
+                "message", "GPU 추천해줘",
+                "currentBuilds", List.of(Map.of(
+                        "id", buildId,
+                        "items", List.of(Map.of(
+                                "partId", gpuPartId,
+                                "category", "GPU",
+                                "quantity", 1
+                        ))
                 ))
         );
     }

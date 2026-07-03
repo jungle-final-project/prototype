@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { CategorySidebar, DataTable, Panel, Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
-import { AiBuildAssistant } from '../../quote/components/AiBuildAssistant';
 import { BuildDependencyGraph } from '../../quote/components/BuildDependencyGraph';
 import {
   AI_SELECTED_BUILD_CHANGED_EVENT,
@@ -41,8 +40,9 @@ export function SelfQuotePage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialCategory = normalizeCategory(searchParams.get('category'));
+  const initialQuery = searchParams.get('q') ?? '';
   const [category, setCategory] = useState<string>(() => initialCategory);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(() => initialQuery);
   const [sort, setSort] = useState<PartSearchParams['sort']>(() => defaultSortForCategory(initialCategory));
   const [page, setPage] = useState(() => normalizePage(searchParams.get('page')));
   const [aiBuild, setAiBuild] = useState<AiSelectedBuild | null>(() => readSelectedAiBuild());
@@ -107,6 +107,8 @@ export function SelfQuotePage() {
     });
     const nextPage = normalizePage(searchParams.get('page'));
     setPage((current) => current === nextPage ? current : nextPage);
+    const nextQuery = searchParams.get('q') ?? '';
+    setQuery((current) => current === nextQuery ? current : nextQuery);
   }, [searchParams]);
 
   const selectCategory = (nextCategory: string) => {
@@ -131,6 +133,12 @@ export function SelfQuotePage() {
     setPage(0);
     setSearchParams((current) => {
       const nextParams = new URLSearchParams(current);
+      const trimmedQuery = nextQuery.trim();
+      if (trimmedQuery) {
+        nextParams.set('q', trimmedQuery);
+      } else {
+        nextParams.delete('q');
+      }
       nextParams.delete('page');
       return nextParams;
     });
@@ -396,7 +404,6 @@ export function SelfQuotePage() {
           </aside>
         </div>
       </div>
-      <AiBuildAssistant surface="self-quote" />
     </Screen>
   );
 }

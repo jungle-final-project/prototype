@@ -108,11 +108,26 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | 담당 화면 route | `/support/ai-chat`, `/admin/agent-sessions`, `/admin/agent-sessions/:id`, `/admin/tool-invocations`, `/admin/tool-invocations/:id`, `/admin/rag-evidence`, `/admin/rag-evidence/:id` |
 | frontend files | `features/support/**` 중 AS AI Chat 화면/API, `features/admin/agent/**`, `features/admin/evidence/**` |
 | backend packages | `agent`, `rag`, `recommendation` |
-| DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages`, `llm_generations`, `recommendation_events`, `recommendation_model_versions`, `recommendation_shadow_scores` |
-| API endpoints | `POST /api/ai/build-chat`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events`, `POST /api/admin/recommendation-feedback/as-tickets/{id}`, `GET /api/admin/recommendation-models`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
+| DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages`, `llm_generations`, `recommendation_events`, `recommendation_model_versions`, `recommendation_shadow_scores`, `recommendation_training_datasets`, `recommendation_training_dataset_items`, `recommendation_training_jobs` |
+| API endpoints | `POST /api/ai/build-chat`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events`, `POST /api/admin/recommendation-feedback/as-tickets/{id}`, `POST /api/admin/recommendation-feedback/home-parts`, `GET /api/admin/recommendation-models`, `GET /api/admin/recommendation-models/summary`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
 | 협업자 | 추천 결과 UI는 1번, Tool 판정 로직은 2번, AS 원인 후보는 4번 |
 
-XGBoost reranker 1차는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 추천부품은 `GET /api/recommendations/home-parts`에서 보이는 랭킹으로 사용한다. 3번은 추천 이벤트 수집, 모델 버전/점수 기록, Python batch 도구를 담당한다. Tool `FAIL` 후보를 되살리거나 기존 견적 추천 순서를 바꾸지 않는다. AS feedback은 4번의 `as_tickets`를 읽어 관리자 확정 negative 이벤트만 남기며, 티켓 상태와 후보 JSON은 수정하지 않는다.
+XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 추천부품은 `GET /api/recommendations/home-parts`에서 보이는 랭킹으로 사용한다. 3번은 추천 이벤트 수집, 홈 추천부품 관리자 라벨, 모델 버전/점수 기록, 학습 dataset/job 운영 API, Python worker/scorer, Docker scorer 운영 설정을 담당한다. 관리자 라벨은 학습 이벤트만 남기며 `parts.status`나 사용자 노출 여부를 직접 바꾸지 않는다. Tool `FAIL` 후보를 되살리거나 기존 견적 추천 순서를 바꾸지 않는다. AS feedback은 4번의 `as_tickets`를 읽어 관리자 확정 negative 이벤트만 남기며, 티켓 상태와 후보 JSON은 수정하지 않는다.
+
+홈 추천부품 XGBoost 학습 운영 endpoint:
+
+- `GET /api/admin/recommendation-training/overview`
+- `GET|POST|PATCH /api/admin/recommendation-training-datasets`
+- `POST /api/admin/recommendation-training-datasets/{id}/lock`
+- `POST /api/admin/recommendation-training-datasets/{id}/archive`
+- `GET /api/admin/recommendation-training-datasets/{id}/items`
+- `POST /api/admin/recommendation-training-datasets/{id}/items/bulk-include`
+- `POST /api/admin/recommendation-training-datasets/{id}/items/bulk-exclude`
+- `GET|POST /api/admin/recommendation-training-jobs`
+- `POST /api/admin/recommendation-models/{id}/activate`
+- `POST /api/admin/recommendation-models/{id}/retire`
+
+학습 Job 생성은 API 서버가 DB에 `QUEUED` row를 만드는 것까지만 담당한다. 실제 Python 학습은 `xgb-reranker` worker가 수행한다. 학습 성공 모델은 `SHADOW` 상태이며, 관리자 수동 activate가 scorer reload에 성공해야 `ACTIVE`로 바뀐다.
 
 ### 4번: PC Agent/AS
 

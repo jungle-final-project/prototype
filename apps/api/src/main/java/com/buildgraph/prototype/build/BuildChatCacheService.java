@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 public class BuildChatCacheService {
     private static final Logger log = LoggerFactory.getLogger(BuildChatCacheService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final long DATA_VERSION_TTL_NANOS = Duration.ofMinutes(5).toNanos();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
     private enum CacheScope {
@@ -38,6 +39,8 @@ public class BuildChatCacheService {
     private final AiProfileConfig aiProfileConfig;
     private final boolean enabled;
     private final Duration ttl;
+    private volatile Map<String, Object> cachedDataVersions;
+    private volatile long cachedDataVersionsAtNanos;
 
     @Autowired
     public BuildChatCacheService(
@@ -103,6 +106,10 @@ public class BuildChatCacheService {
     }
 
     public void store(Map<String, Object> request, String requestedAiProfile, Long userId, Map<String, Object> response) {
+        store(request, requestedAiProfile, userId, response, ttl);
+    }
+
+    public void store(Map<String, Object> request, String requestedAiProfile, Long userId, Map<String, Object> response, Duration ttlOverride) {
         log.debug("Build Chat cache store entered: enabled={}, userId={}, requestedAiProfile={}", enabled, userId, requestedAiProfile);
         if (!enabled) {
             log.info("Build Chat cache store skipped: disabled");
@@ -120,28 +127,32 @@ public class BuildChatCacheService {
             }
             CacheScope scope = scopeFor(request);
             String key = cacheKey(request, requestedAiProfile, userId, scope);
-            redisTemplate.opsForValue().set(key, OBJECT_MAPPER.writeValueAsString(cacheableResponse(response)), ttl);
-            log.info("Build Chat cache stored: scope={}, key={}", scope, key);
+            Duration effectiveTtl = ttlOverride == null || ttlOverride.isZero() || ttlOverride.isNegative() ? ttl : ttlOverride;
+            redisTemplate.opsForValue().set(key, OBJECT_MAPPER.writeValueAsString(cacheableResponse(response)), effectiveTtl);
+            log.info("Build Chat cache stored: scope={}, key={}, ttlSeconds={}", scope, key, effectiveTtl.toSeconds());
         } catch (Exception error) {
             log.warn("Build Chat cache store failed; response returned without caching: {}", error.getMessage());
         }
     }
 
     private String cacheKey(Map<String, Object> request, String requestedAiProfile, Long userId, CacheScope scope) throws Exception {
+        Map<String, Object> body = request == null ? Map.of() : request;
+        boolean sharedRecommendation = scope == CacheScope.RECOMMENDATION && isStandaloneRecommendation(body);
         Map<String, Object> fingerprint = new LinkedHashMap<>();
         fingerprint.put("scope", scope.name());
         fingerprint.put("profile", effectiveProfile(requestedAiProfile));
-        fingerprint.put("userId", userId == null ? "anonymous" : userId);
-        fingerprint.put("message", normalizeText(request.get("message")));
-        fingerprint.put("selectedCategory", normalizeText(request.get("selectedCategory")));
-        fingerprint.put("currentQuoteDraft", quoteDraftFingerprint(request.get("currentQuoteDraft")));
+        fingerprint.put("userId", sharedRecommendation ? "shared" : (userId == null ? "anonymous" : userId));
+        fingerprint.put("message", normalizeText(body.get("message")));
+        fingerprint.put("selectedCategory", normalizeText(body.get("selectedCategory")));
+        fingerprint.put("cacheMode", sharedRecommendation ? "SHARED_STANDALONE_RECOMMENDATION" : scope.name());
+        fingerprint.put("currentQuoteDraft", quoteDraftFingerprint(body.get("currentQuoteDraft")));
         if (scope != CacheScope.RECOMMENDATION) {
-            fingerprint.put("currentBuilds", currentBuildsFingerprint(request.get("currentBuilds")));
-            fingerprint.put("appliedPartPreferences", appliedPartPreferencesFingerprint(request.get("appliedPartPreferences")));
+            fingerprint.put("currentBuilds", currentBuildsFingerprint(body.get("currentBuilds")));
+            fingerprint.put("appliedPartPreferences", appliedPartPreferencesFingerprint(body.get("appliedPartPreferences")));
         }
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        return "buildgraph:build-chat:v8:" + sha256(json);
+        return "buildgraph:build-chat:v16:" + sha256(json);
     }
 
     private static CacheScope scopeFor(Map<String, Object> request) {
@@ -150,7 +161,13 @@ public class BuildChatCacheService {
         if (hasModifySignal(message)) {
             return CacheScope.CONTEXTUAL;
         }
-        boolean hasPartCategory = normalizeText(body.get("selectedCategory")) != null
+        boolean hasSelectedCategory = normalizeText(body.get("selectedCategory")) != null;
+        boolean hasQuoteDraftItems = !objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty();
+        boolean hasCurrentBuilds = !objectMaps(body.get("currentBuilds")).isEmpty();
+        if (hasCurrentBuilds && !hasSelectedCategory && !hasQuoteDraftItems) {
+            return CacheScope.CONTEXTUAL;
+        }
+        boolean hasPartCategory = hasSelectedCategory
                 || BuildChatService.detectPartCategory(message) != null;
         if (hasPartCategory && hasRecommendationSignal(message)) {
             return CacheScope.RECOMMENDATION;
@@ -159,6 +176,32 @@ public class BuildChatCacheService {
             return CacheScope.RECOMMENDATION;
         }
         return CacheScope.DEFAULT;
+    }
+
+    private static boolean isStandaloneRecommendation(Map<String, Object> request) {
+        Map<String, Object> body = request == null ? Map.of() : request;
+        String normalized = normalizeCommand(body.get("message"));
+        if (normalized.isBlank()) {
+            return false;
+        }
+        if (normalizeText(body.get("selectedCategory")) != null) {
+            return false;
+        }
+        if (!objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()) {
+            return false;
+        }
+        if (!objectMaps(body.get("currentBuilds")).isEmpty() || !objectMaps(body.get("appliedPartPreferences")).isEmpty()) {
+            return false;
+        }
+        if (containsAnyNormalized(
+                normalized,
+                "이견적", "그견적", "저견적", "현재견적", "기존견적", "방금", "최근", "아까", "위조합", "이조합", "그조합", "저조합",
+                "장바구니", "담긴", "선택한", "바꿔", "교체", "빼", "삭제", "제거", "담아", "넣어", "추가", "적용", "수량", "변경",
+                "더싼", "저렴", "낮춰", "더좋", "업그레이드", "비슷한가격"
+        )) {
+            return false;
+        }
+        return containsAnyNormalized(normalized, "견적", "pc", "컴퓨터", "본체", "조립pc", "조립컴", "추천상담", "추천해줘", "추천");
     }
 
     private String effectiveProfile(String requestedAiProfile) {
@@ -246,8 +289,13 @@ public class BuildChatCacheService {
         if (jdbcTemplate == null) {
             return Map.of();
         }
+        Map<String, Object> cached = cachedDataVersions;
+        long now = System.nanoTime();
+        if (cached != null && now - cachedDataVersionsAtNanos < DATA_VERSION_TTL_NANOS) {
+            return cached;
+        }
         try {
-            return jdbcTemplate.queryForMap("""
+            Map<String, Object> versions = jdbcTemplate.queryForMap("""
                     SELECT
                       coalesce((SELECT max(coalesce(updated_at, created_at))::text FROM parts WHERE deleted_at IS NULL), 'none') AS parts_version,
                       coalesce((SELECT max(created_at)::text FROM benchmark_summaries WHERE deleted_at IS NULL), 'none') AS benchmark_version,
@@ -255,9 +303,17 @@ public class BuildChatCacheService {
                       coalesce((SELECT max(created_at)::text FROM rag_evidence WHERE agent_session_id IS NULL), 'none') AS rag_version,
                       coalesce((SELECT max(coalesce(updated_at, created_at))::text FROM part_alias_rules WHERE deleted_at IS NULL), 'none') AS alias_version
                     """);
+            cachedDataVersions = versions;
+            cachedDataVersionsAtNanos = now;
+            return versions;
         } catch (Exception error) {
             return Map.of("versionError", error.getClass().getSimpleName());
         }
+    }
+
+    void clearDataVersionCacheForTest() {
+        cachedDataVersions = null;
+        cachedDataVersionsAtNanos = 0L;
     }
 
     @SuppressWarnings("unchecked")
@@ -306,13 +362,15 @@ public class BuildChatCacheService {
         if (value == null) {
             return null;
         }
-        String text = value.toString().trim().replaceAll("\\s+", " ");
+        String text = value.toString().trim()
+                .replaceAll("(?<=\\d),(?=\\d)", "")
+                .replaceAll("\\s+", " ");
         return text.isEmpty() ? null : text.toLowerCase(java.util.Locale.ROOT);
     }
 
     private static boolean hasModifySignal(String message) {
-        return containsAnySignal(
-                message,
+        return containsAnyNormalized(
+                normalizeCommand(message),
                 "바꿔",
                 "변경",
                 "교체",
@@ -335,29 +393,24 @@ public class BuildChatCacheService {
     }
 
     private static boolean hasRecommendationSignal(String message) {
-        return containsAnySignal(message, "추천", "맞춰", "짜줘", "구성", "골라");
+        return containsAnyNormalized(normalizeCommand(message), "추천", "맞춰", "짜줘", "구성", "골라");
     }
 
     private static boolean hasBuildSignal(String message) {
-        return containsAnySignal(message, "pc", "컴퓨터", "본체", "견적", "맞춰");
+        return containsAnyNormalized(normalizeCommand(message), "pc", "컴퓨터", "본체", "견적", "맞춰");
     }
 
-    private static boolean containsAnySignal(String message, String... keywords) {
-        if (message == null) {
-            return false;
-        }
-        String compactMessage = compact(message);
+    private static String normalizeCommand(Object value) {
+        return value == null ? "" : value.toString().toLowerCase(java.util.Locale.ROOT).replaceAll("\\s+", "");
+    }
+
+    private static boolean containsAnyNormalized(String normalized, String... keywords) {
         for (String keyword : keywords) {
-            String normalizedKeyword = normalizeText(keyword);
-            if (normalizedKeyword != null && (message.contains(normalizedKeyword) || compactMessage.contains(compact(normalizedKeyword)))) {
+            if (normalized.contains(normalizeCommand(keyword))) {
                 return true;
             }
         }
         return false;
-    }
-
-    private static String compact(String value) {
-        return value == null ? "" : value.toLowerCase(java.util.Locale.ROOT).replaceAll("\\s+", "");
     }
 
     @SuppressWarnings("unchecked")

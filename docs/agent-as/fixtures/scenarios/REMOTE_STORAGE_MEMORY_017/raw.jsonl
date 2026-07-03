@@ -1,0 +1,1 @@
+{"schemaVersion": "1", "collectedAt": "2026-07-03T01:17:01Z", "agentId": "fixture-agent-017", "deviceIdHash": "device-017", "sequence": 1, "kind": "SYSTEM_METRIC", "payload": {"cpuUsagePercent": 67.4, "memoryUsedPercent": 88.1, "diskActivePercent": 92.3, "gpuUsagePercent": 74.9, "sampleIntervalSeconds": 5}, "privacyFlags": {"masked": true, "containsRawPath": false}}

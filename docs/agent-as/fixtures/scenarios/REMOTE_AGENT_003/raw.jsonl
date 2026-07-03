@@ -1,0 +1,1 @@
+{"schemaVersion": "1", "collectedAt": "2026-07-03T01:03:01Z", "agentId": "fixture-agent-003", "deviceIdHash": "device-003", "sequence": 1, "kind": "AGENT_HEALTH", "payload": {"agentVersion": "0.1.0", "serviceStatus": "WARN", "trayStatus": "RUNNING", "lastUploadErrorCode": null, "configSchemaVersion": "1"}, "privacyFlags": {"masked": true, "containsRawPath": false}}

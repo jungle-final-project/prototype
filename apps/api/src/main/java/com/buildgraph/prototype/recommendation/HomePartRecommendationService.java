@@ -68,7 +68,7 @@ public class HomePartRecommendationService {
                     "part", partMap(candidate.row()),
                     "scoreSource", scoring.scoreSource(),
                     "modelVersion", scoring.modelVersion(),
-                    "reasonTags", reasonTags(candidate)
+                    "reasonTags", reasonTags(candidate, scoring)
             ));
         }
         return MockData.map(
@@ -168,6 +168,7 @@ public class HomePartRecommendationService {
             List<Map<String, Object>> payloadCandidates = new ArrayList<>();
             for (int index = 0; index < candidates.size(); index += 1) {
                 HomePartCandidate candidate = candidates.get(index);
+                candidate.withRankPosition(index);
                 payloadCandidates.add(MockData.map(
                         "candidateType", "PART",
                         "candidateId", candidate.publicId(),
@@ -187,6 +188,7 @@ public class HomePartRecommendationService {
                 return new ScoringOutcome("FALLBACK", null, true);
             }
             Long modelVersionId = modelRegistry.upsertShadowModelVersion(scorerResponse);
+            boolean matchedAnyScore = false;
             Map<String, HomePartCandidate> byPartId = new LinkedHashMap<>();
             for (HomePartCandidate candidate : candidates) {
                 byPartId.put(candidate.publicId(), candidate);
@@ -197,6 +199,7 @@ public class HomePartRecommendationService {
                 if (candidate == null || score == null) {
                     continue;
                 }
+                matchedAnyScore = true;
                 candidate.score(score);
                 jdbcTemplate.update("""
                         INSERT INTO recommendation_shadow_scores (
@@ -225,7 +228,14 @@ public class HomePartRecommendationService {
                         OBJECT_MAPPER.writeValueAsString(scoreRow)
                 );
             }
-            return new ScoringOutcome("XGBOOST", text(scorerResponse.get("modelVersion")), false);
+            if (!matchedAnyScore) {
+                return new ScoringOutcome("FALLBACK", null, true);
+            }
+            String modelVersion = text(scorerResponse.get("modelVersion"));
+            if ("baseline-shadow".equals(modelVersion)) {
+                return new ScoringOutcome("FALLBACK", null, true);
+            }
+            return new ScoringOutcome("XGBOOST", modelVersion, false);
         } catch (Exception error) {
             log.warn("Home part XGBoost scoring skipped: {}", error.getMessage());
             return new ScoringOutcome("FALLBACK", null, true);
@@ -273,7 +283,7 @@ public class HomePartRecommendationService {
         return score;
     }
 
-    private static List<String> reasonTags(HomePartCandidate candidate) {
+    private static List<String> reasonTags(HomePartCandidate candidate, ScoringOutcome scoring) {
         List<String> tags = new ArrayList<>();
         if (number(candidate.row().get("benchmark_score"), 0.0) > 0) {
             tags.add("benchmark");
@@ -286,6 +296,15 @@ public class HomePartRecommendationService {
         }
         if (toolReady(candidate.row())) {
             tags.add("toolReady");
+        }
+        Double priceAgeDays = decimal(candidate.row().get("price_age_days"));
+        if (priceAgeDays != null && priceAgeDays <= 7.0) {
+            tags.add("freshPrice");
+        }
+        if ("XGBOOST".equals(scoring.scoreSource())
+                && scoring.modelVersion() != null
+                && !"baseline-shadow".equals(scoring.modelVersion())) {
+            tags.add("userReaction");
         }
         if (tags.isEmpty()) {
             tags.add("internalAsset");
@@ -473,7 +492,7 @@ public class HomePartRecommendationService {
 
         private Map<String, Object> features(int rankPosition) {
             Integer price = DbValueMapper.integer(row, "price");
-            return MockData.map(
+            Map<String, Object> features = new LinkedHashMap<>(MockData.map(
                     "rank_position", rankPosition,
                     "part_price", price,
                     "price", price,
@@ -490,7 +509,11 @@ public class HomePartRecommendationService {
                     "tool_ready", toolReady(row),
                     "part_has_fps_coverage", booleanValue(row.get("has_fps_coverage")),
                     "fps_coverage", booleanValue(row.get("has_fps_coverage"))
-            );
+            ));
+            for (String category : List.of("CPU", "GPU", "RAM", "MOTHERBOARD", "STORAGE", "PSU", "CASE", "COOLER")) {
+                features.put("category_" + category, category.equals(category()) ? 1 : 0);
+            }
+            return features;
         }
 
         @Override

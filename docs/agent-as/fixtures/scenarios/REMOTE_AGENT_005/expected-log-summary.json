@@ -1,0 +1,23 @@
+{
+  "summaryVersion": "1",
+  "scenarioId": "REMOTE_AGENT_005",
+  "symptomType": "REMOTE_AGENT",
+  "summaryText": "heartbeat 누락 후 tray 재시작",
+  "incidentWindow": {
+    "startedAt": "2026-07-03T01:00:00Z",
+    "endedAt": "2026-07-03T01:30:00Z",
+    "rangeMinutes": 30
+  },
+  "signalKinds": [
+    "AGENT_HEALTH"
+  ],
+  "reasonCodes": [
+    "AGENT_INSTALL_OR_UPLOAD_FAILURE"
+  ],
+  "safetyNotices": [],
+  "dataQuality": "ENOUGH",
+  "rawSamplePolicy": {
+    "maxSamples": 20,
+    "rawFullLogIncluded": false
+  }
+}

@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { getToken } from '../../../lib/api';
 import { partImageUrl, partShortSpec, specRows } from '../partDisplay';
-import { getPart, getPartPriceHistory, putQuoteDraftItem } from '../partsApi';
+import { getPart, getPartPriceHistory, putQuoteDraftItem, recordRecommendationEvent } from '../partsApi';
 import type { PartPriceHistory, PartPriceHistoryPoint } from '../types';
 
 export function PartDetailPage() {
@@ -16,6 +16,8 @@ export function PartDetailPage() {
   const [quantity, setQuantity] = useState(1);
   const [added, setAdded] = useState(false);
   const hasToken = Boolean(getToken());
+  const recommendationContext = useMemo(() => readRecommendationContext(location.search), [location.search]);
+  const detailViewRecorded = useRef(false);
   const { data: part, isLoading, isError } = useQuery({
     queryKey: ['parts', partId],
     queryFn: () => getPart(partId),
@@ -32,12 +34,27 @@ export function PartDetailPage() {
     onSuccess: () => {
       setAdded(true);
       queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+      if (recommendationContext && part) {
+        void recordRecommendationEvent({
+          eventType: 'ADD_PART_TO_DRAFT',
+          sourceSurface: recommendationContext.surface,
+          recommendationId: recommendationContext.recommendationId,
+          partId,
+          category: part.category,
+          rankPosition: recommendationContext.rankPosition,
+          idempotencyKey: `${recommendationContext.surface}:${recommendationContext.recommendationId}:add:${partId}`,
+          eventPayload: {
+            quantity,
+            source: 'PART_DETAIL'
+          }
+        }).catch(() => undefined);
+      }
     }
   });
 
   const addToDraft = () => {
     if (!hasToken) {
-      navigate(`/login?redirect=${encodeURIComponent(location.pathname)}`);
+      navigate(`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`);
       return;
     }
     setAdded(false);
@@ -47,6 +64,25 @@ export function PartDetailPage() {
   useEffect(() => {
     setQuantity((value) => Math.min(value, maxQuantity));
   }, [maxQuantity]);
+
+  useEffect(() => {
+    if (!part || !hasToken || !recommendationContext || detailViewRecorded.current) {
+      return;
+    }
+    detailViewRecorded.current = true;
+    void recordRecommendationEvent({
+      eventType: 'DETAIL_VIEW',
+      sourceSurface: recommendationContext.surface,
+      recommendationId: recommendationContext.recommendationId,
+      partId,
+      category: part.category,
+      rankPosition: recommendationContext.rankPosition,
+      idempotencyKey: `${recommendationContext.surface}:${recommendationContext.recommendationId}:detail:${partId}`,
+      eventPayload: {
+        source: 'PART_DETAIL'
+      }
+    }).catch(() => undefined);
+  }, [hasToken, part, partId, recommendationContext]);
 
   if (isLoading) {
     return (
@@ -185,6 +221,22 @@ function priceDiffLabel(current: number, min: number) {
   const sign = diff > 0 ? '+' : '';
   const percent = (diff / min) * 100;
   return `${sign}${diff.toLocaleString()}원 (${sign}${percent.toFixed(1)}%)`;
+}
+
+function readRecommendationContext(search: string) {
+  const params = new URLSearchParams(search);
+  const recommendationId = params.get('recId');
+  const surface = params.get('recSurface');
+  const rank = params.get('rank');
+  if (!recommendationId || surface !== 'HOME_RECOMMENDED_PARTS') {
+    return null;
+  }
+  const parsedRank = rank === null ? undefined : Number(rank);
+  return {
+    recommendationId,
+    surface,
+    rankPosition: Number.isFinite(parsedRank) ? parsedRank : undefined
+  };
 }
 
 function formatDate(value: string) {
