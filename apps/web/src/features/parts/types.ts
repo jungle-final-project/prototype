@@ -55,7 +55,7 @@ export type HomeRecommendedPartsResponse = {
 };
 
 export type RecommendationEventRequest = {
-  eventType: 'IMPRESSION' | 'CLICK' | 'DETAIL_VIEW' | 'SAVE' | 'CHANGE_ADOPTED' | 'ADD_BUILD_TO_DRAFT' | 'ORDER_INTENT' | 'REJECT' | 'CHANGE_REVERTED';
+  eventType: 'IMPRESSION' | 'CLICK' | 'DETAIL_VIEW' | 'SAVE' | 'CHANGE_ADOPTED' | 'ADD_BUILD_TO_DRAFT' | 'ADD_PART_TO_DRAFT' | 'ORDER_INTENT' | 'REJECT' | 'CHANGE_REVERTED';
   sourceSurface: string;
   recommendationId?: string;
   partId?: string;

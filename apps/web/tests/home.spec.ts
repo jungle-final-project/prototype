@@ -616,7 +616,13 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   await expect(main.getByText('AI에게 예산이나 부품을 물어보면 추천상품 3개가 여기에 표시됩니다.')).toBeVisible();
   await expect(main.getByRole('heading', { name: '인기 부품 랭킹' })).toBeVisible();
   await expect(main.getByRole('img', { name: /Home RTX 5070 GPU/ })).toBeVisible();
-  await expect(main.getByRole('link', { name: '인기 부품 1번 보기' })).toHaveAttribute('href', '/parts/home-gpu-rtx5070');
+  const firstPartCard = main.getByRole('link', { name: '인기 부품 1번 보기' });
+  await expect(firstPartCard.getByText('성능 근거')).toBeVisible();
+  await expect(firstPartCard.getByText('상품 정보 확인')).toBeVisible();
+  await expect(firstPartCard).toHaveAttribute(
+    'href',
+    '/parts/home-gpu-rtx5070?recId=home-part-home-gpu-rtx5070&recSurface=HOME_RECOMMENDED_PARTS&rank=0'
+  );
 
   for (const label of ['CPU', '메인보드', 'RAM', 'GPU', 'SSD', '파워', '케이스', '쿨러']) {
     await expect(main.getByRole('link', { name: label, exact: true })).toBeVisible();

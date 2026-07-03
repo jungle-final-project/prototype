@@ -1,0 +1,862 @@
+package com.buildgraph.prototype.recommendation;
+
+import com.buildgraph.prototype.common.DbValueMapper;
+import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.user.CurrentUserService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class RecommendationTrainingService {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
+    };
+    private static final Set<String> ELIGIBLE_SURFACES = Set.of("HOME_RECOMMENDED_PARTS", "ADMIN_HOME_PART_FEEDBACK");
+
+    private final JdbcTemplate jdbcTemplate;
+    private final RecommendationScoringClient scoringClient;
+
+    public RecommendationTrainingService(JdbcTemplate jdbcTemplate, RecommendationScoringClient scoringClient) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.scoringClient = scoringClient;
+    }
+
+    public Map<String, Object> overview() {
+        long eligibleEvents = count("""
+                SELECT count(*)
+                FROM recommendation_events
+                WHERE source_surface IN ('HOME_RECOMMENDED_PARTS', 'ADMIN_HOME_PART_FEEDBACK')
+                """);
+        long trainedDistinctEvents = count("""
+                SELECT count(DISTINCT item.event_id)
+                FROM recommendation_training_dataset_items item
+                JOIN recommendation_training_jobs job ON job.dataset_id = item.dataset_id
+                WHERE item.included = true
+                  AND job.status = 'SUCCEEDED'
+                """);
+        long excludedItems = count("""
+                SELECT count(*)
+                FROM recommendation_training_dataset_items
+                WHERE included = false
+                """);
+        long recentSevenDays = count("""
+                SELECT count(*)
+                FROM recommendation_events
+                WHERE source_surface IN ('HOME_RECOMMENDED_PARTS', 'ADMIN_HOME_PART_FEEDBACK')
+                  AND created_at >= now() - interval '7 days'
+                """);
+        Map<String, Object> activeModel = jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id,
+                               model_name,
+                               model_version,
+                               status,
+                               artifact_path,
+                               activated_at,
+                               created_at
+                        FROM recommendation_model_versions
+                        WHERE deleted_at IS NULL
+                          AND status = 'ACTIVE'
+                        ORDER BY activated_at DESC NULLS LAST, created_at DESC
+                        LIMIT 1
+                        """)
+                .stream()
+                .findFirst()
+                .map(this::modelDto)
+                .orElse(null);
+        Map<String, Object> latestJob = jdbcTemplate.queryForList("""
+                        SELECT job.public_id::text AS id,
+                               ds.public_id::text AS dataset_id,
+                               ds.name AS dataset_name,
+                               job.status,
+                               job.model_version,
+                               job.artifact_path,
+                               job.metrics,
+                               job.log_summary,
+                               job.created_at,
+                               job.started_at,
+                               job.finished_at
+                        FROM recommendation_training_jobs job
+                        JOIN recommendation_training_datasets ds ON ds.id = job.dataset_id
+                        WHERE job.deleted_at IS NULL
+                        ORDER BY job.created_at DESC, job.id DESC
+                        LIMIT 1
+                        """)
+                .stream()
+                .findFirst()
+                .map(this::jobDto)
+                .orElse(null);
+        return MockData.map(
+                "eligibleEvents", eligibleEvents,
+                "trainedDistinctEvents", trainedDistinctEvents,
+                "untrainedEligibleEvents", Math.max(0, eligibleEvents - trainedDistinctEvents),
+                "excludedDatasetItems", excludedItems,
+                "recentSevenDayEvents", recentSevenDays,
+                "activeModel", activeModel,
+                "latestJob", latestJob,
+                "generatedAt", Instant.now().toString()
+        );
+    }
+
+    public Map<String, Object> datasets() {
+        List<Map<String, Object>> items = jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id,
+                               name,
+                               source_surface,
+                               filters,
+                               status,
+                               eligible_count,
+                               included_count,
+                               excluded_count,
+                               locked_at,
+                               created_at,
+                               updated_at
+                        FROM recommendation_training_datasets
+                        WHERE deleted_at IS NULL
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 50
+                        """)
+                .stream()
+                .map(this::datasetDto)
+                .toList();
+        return MockData.map("items", items, "page", 0, "size", 50, "total", items.size());
+    }
+
+    @Transactional
+    public Map<String, Object> createDataset(Map<String, Object> request, CurrentUserService.CurrentUser admin) {
+        Map<String, Object> filters = normalizeFilters(request);
+        String name = firstText(text(request.get("name")), "홈 추천부품 학습 데이터셋 " + java.time.LocalDate.now());
+        Map<String, Object> dataset = jdbcTemplate.queryForMap("""
+                INSERT INTO recommendation_training_datasets (
+                  name,
+                  source_surface,
+                  filters,
+                  status,
+                  created_by
+                )
+                VALUES (?, 'HOME_PARTS', ?::jsonb, 'DRAFT', ?)
+                RETURNING id, public_id::text AS public_id
+                """,
+                name,
+                writeJson(filters),
+                admin.internalId()
+        );
+        Long datasetId = longValue(dataset, "id");
+        for (Map<String, Object> event : eligibleEvents(filters)) {
+            jdbcTemplate.update("""
+                    INSERT INTO recommendation_training_dataset_items (
+                      dataset_id,
+                      event_id,
+                      included,
+                      label_score_snapshot,
+                      features_snapshot,
+                      event_snapshot
+                    )
+                    VALUES (?, ?, true, ?, ?::jsonb, ?::jsonb)
+                    ON CONFLICT (dataset_id, event_id) DO NOTHING
+                    """,
+                    datasetId,
+                    longValue(event, "event_id"),
+                    event.get("label_score"),
+                    writeJson(featureSnapshot(event)),
+                    writeJson(eventSnapshot(event))
+            );
+        }
+        refreshDatasetCounts(datasetId);
+        return datasetById(datasetId);
+    }
+
+    @Transactional
+    public Map<String, Object> updateDataset(String datasetPublicId, Map<String, Object> request) {
+        Map<String, Object> dataset = requireDataset(datasetPublicId);
+        requireDraft(dataset);
+        String name = text(request.get("name"));
+        if (name == null) {
+            return datasetById(longValue(dataset, "id"));
+        }
+        jdbcTemplate.update("""
+                UPDATE recommendation_training_datasets
+                SET name = ?,
+                    updated_at = now()
+                WHERE id = ?
+                """, name, longValue(dataset, "id"));
+        return datasetById(longValue(dataset, "id"));
+    }
+
+    @Transactional
+    public Map<String, Object> lockDataset(String datasetPublicId) {
+        Map<String, Object> dataset = requireDataset(datasetPublicId);
+        requireDraft(dataset);
+        Long datasetId = longValue(dataset, "id");
+        refreshDatasetCounts(datasetId);
+        jdbcTemplate.update("""
+                UPDATE recommendation_training_datasets
+                SET status = 'LOCKED',
+                    locked_at = now(),
+                    updated_at = now()
+                WHERE id = ?
+                """, datasetId);
+        return datasetById(datasetId);
+    }
+
+    @Transactional
+    public Map<String, Object> archiveDataset(String datasetPublicId) {
+        Map<String, Object> dataset = requireDataset(datasetPublicId);
+        jdbcTemplate.update("""
+                UPDATE recommendation_training_datasets
+                SET status = 'ARCHIVED',
+                    updated_at = now()
+                WHERE id = ?
+                """, longValue(dataset, "id"));
+        return datasetById(longValue(dataset, "id"));
+    }
+
+    public Map<String, Object> datasetItems(String datasetPublicId) {
+        Map<String, Object> dataset = requireDataset(datasetPublicId);
+        List<Map<String, Object>> items = jdbcTemplate.queryForList("""
+                        SELECT item.public_id::text AS id,
+                               event.public_id::text AS event_id,
+                               event.event_type,
+                               event.source_surface,
+                               event.category,
+                               event.rank_position,
+                               event.created_at AS event_created_at,
+                               item.included,
+                               item.excluded_reason,
+                               item.label_score_snapshot,
+                               item.features_snapshot,
+                               item.event_snapshot,
+                               item.created_at
+                        FROM recommendation_training_dataset_items item
+                        JOIN recommendation_events event ON event.id = item.event_id
+                        WHERE item.dataset_id = ?
+                        ORDER BY item.created_at DESC, item.id DESC
+                        LIMIT 200
+                        """, longValue(dataset, "id"))
+                .stream()
+                .map(this::datasetItemDto)
+                .toList();
+        return MockData.map("items", items, "page", 0, "size", 200, "total", items.size());
+    }
+
+    @Transactional
+    public Map<String, Object> bulkInclude(String datasetPublicId, Map<String, Object> request) {
+        return bulkSetIncluded(datasetPublicId, request, true);
+    }
+
+    @Transactional
+    public Map<String, Object> bulkExclude(String datasetPublicId, Map<String, Object> request) {
+        return bulkSetIncluded(datasetPublicId, request, false);
+    }
+
+    @Transactional
+    public Map<String, Object> createJob(Map<String, Object> request, CurrentUserService.CurrentUser admin) {
+        String datasetPublicId = text(request.get("datasetId"));
+        if (datasetPublicId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "datasetId는 필수입니다.");
+        }
+        Map<String, Object> dataset = requireDataset(datasetPublicId);
+        if (!"LOCKED".equals(text(dataset.get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "LOCKED dataset만 학습 Job을 만들 수 있습니다.");
+        }
+        Long included = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM recommendation_training_dataset_items
+                WHERE dataset_id = ?
+                  AND included = true
+                """, Long.class, longValue(dataset, "id"));
+        if (included == null || included <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "포함된 학습 데이터가 없습니다.");
+        }
+        Map<String, Object> job = jdbcTemplate.queryForMap("""
+                INSERT INTO recommendation_training_jobs (
+                  dataset_id,
+                  status,
+                  queued_by,
+                  log_summary
+                )
+                VALUES (?, 'QUEUED', ?, '관리자 요청으로 학습 대기열에 등록되었습니다.')
+                RETURNING id
+                """, longValue(dataset, "id"), admin.internalId());
+        return jobById(longValue(job, "id"));
+    }
+
+    public Map<String, Object> jobs() {
+        List<Map<String, Object>> items = jdbcTemplate.queryForList("""
+                        SELECT job.public_id::text AS id,
+                               ds.public_id::text AS dataset_id,
+                               ds.name AS dataset_name,
+                               job.status,
+                               job.worker_id,
+                               job.model_version,
+                               job.artifact_path,
+                               job.metrics,
+                               job.log_summary,
+                               job.created_at,
+                               job.started_at,
+                               job.finished_at
+                        FROM recommendation_training_jobs job
+                        JOIN recommendation_training_datasets ds ON ds.id = job.dataset_id
+                        WHERE job.deleted_at IS NULL
+                        ORDER BY job.created_at DESC, job.id DESC
+                        LIMIT 50
+                        """)
+                .stream()
+                .map(this::jobDto)
+                .toList();
+        return MockData.map("items", items, "page", 0, "size", 50, "total", items.size());
+    }
+
+    @Transactional
+    public Map<String, Object> activateModel(String modelPublicId) {
+        Map<String, Object> model = requireModel(modelPublicId);
+        String status = text(model.get("status"));
+        if ("ACTIVE".equals(status)) {
+            return modelById(longValue(model, "id"));
+        }
+        if (!"SHADOW".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "SHADOW 모델만 활성화할 수 있습니다.");
+        }
+        String artifactPath = text(model.get("artifact_path"));
+        if (artifactPath == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "artifactPath가 없는 모델은 활성화할 수 없습니다.");
+        }
+        Map<String, Object> reload = scoringClient.reload(artifactPath);
+        Object loaded = reload.get("modelLoaded");
+        if (!(loaded instanceof Boolean bool && bool)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "scorer reload에 실패했습니다.");
+        }
+        jdbcTemplate.update("""
+                UPDATE recommendation_model_versions
+                SET status = 'RETIRED'
+                WHERE status = 'ACTIVE'
+                  AND deleted_at IS NULL
+                  AND id <> ?
+                """, longValue(model, "id"));
+        jdbcTemplate.update("""
+                UPDATE recommendation_model_versions
+                SET status = 'ACTIVE',
+                    activated_at = now()
+                WHERE id = ?
+                """, longValue(model, "id"));
+        return modelById(longValue(model, "id"));
+    }
+
+    @Transactional
+    public Map<String, Object> retireModel(String modelPublicId) {
+        Map<String, Object> model = requireModel(modelPublicId);
+        jdbcTemplate.update("""
+                UPDATE recommendation_model_versions
+                SET status = 'RETIRED'
+                WHERE id = ?
+                """, longValue(model, "id"));
+        if ("ACTIVE".equals(text(model.get("status")))) {
+            try {
+                scoringClient.reload(null);
+            } catch (Exception ignored) {
+                // Retiring the DB model must not fail only because the optional scorer is unavailable.
+            }
+        }
+        return modelById(longValue(model, "id"));
+    }
+
+    private Map<String, Object> bulkSetIncluded(String datasetPublicId, Map<String, Object> request, boolean included) {
+        Map<String, Object> dataset = requireDataset(datasetPublicId);
+        requireDraft(dataset);
+        Long datasetId = longValue(dataset, "id");
+        Set<String> itemIds = new LinkedHashSet<>(stringList(request.get("itemIds")));
+        String reason = firstText(text(request.get("reason")), included ? null : "관리자 제외");
+        int updated;
+        if (!itemIds.isEmpty()) {
+            updated = 0;
+            for (String itemId : itemIds) {
+                updated += jdbcTemplate.update("""
+                        UPDATE recommendation_training_dataset_items
+                        SET included = ?,
+                            excluded_reason = ?,
+                            updated_at = now()
+                        WHERE dataset_id = ?
+                          AND public_id = ?::uuid
+                        """, included, included ? null : reason, datasetId, itemId);
+            }
+        } else {
+            String eventType = text(request.get("eventType"));
+            String category = text(request.get("category"));
+            updated = jdbcTemplate.update("""
+                    UPDATE recommendation_training_dataset_items item
+                    SET included = ?,
+                        excluded_reason = ?,
+                        updated_at = now()
+                    FROM recommendation_events event
+                    WHERE item.event_id = event.id
+                      AND item.dataset_id = ?
+                      AND (? IS NULL OR event.event_type = ?)
+                      AND (? IS NULL OR event.category = ?)
+                    """,
+                    included,
+                    included ? null : reason,
+                    datasetId,
+                    eventType,
+                    eventType,
+                    category,
+                    category);
+        }
+        refreshDatasetCounts(datasetId);
+        Map<String, Object> response = datasetById(datasetId);
+        response.put("updatedItems", updated);
+        return response;
+    }
+
+    private List<Map<String, Object>> eligibleEvents(Map<String, Object> filters) {
+        String from = text(filters.get("from"));
+        String to = text(filters.get("to"));
+        Set<String> eventTypes = upperSet(filters.get("eventTypes"));
+        Set<String> categories = upperSet(filters.get("categories"));
+        StringBuilder sql = new StringBuilder("""
+                        SELECT e.id AS event_id,
+                               e.public_id::text AS event_public_id,
+                               e.event_type,
+                               e.label_score,
+                               e.source_surface,
+                               e.recommendation_id,
+                               e.category,
+                               e.rank_position,
+                               e.event_payload,
+                               e.created_at,
+                               p.id AS part_internal_id,
+                               p.public_id::text AS part_id,
+                               p.name AS part_name,
+                               p.manufacturer,
+                               p.price AS part_price,
+                               p.category AS part_category,
+                               p.attributes AS part_attributes,
+                               bs.score AS benchmark_score,
+                               peo.image_url AS external_offer_image_url,
+                               peo.offer_url AS external_offer_url,
+                               ps.collected_at AS price_collected_at,
+                               CASE
+                                 WHEN ps.collected_at IS NULL THEN NULL
+                                 ELSE extract(epoch FROM (now() - ps.collected_at)) / 86400.0
+                               END AS price_age_days,
+                               EXISTS (
+                                 SELECT 1
+                                 FROM game_fps_benchmarks fps
+                                 WHERE fps.cpu_part_id = p.id OR fps.gpu_part_id = p.id
+                               ) AS has_fps_coverage
+                        FROM recommendation_events e
+                        LEFT JOIN parts p ON p.id = e.part_id
+                        LEFT JOIN LATERAL (
+                          SELECT b.score
+                          FROM benchmark_summaries b
+                          WHERE b.part_id = p.id
+                            AND b.deleted_at IS NULL
+                          ORDER BY b.created_at DESC, b.id DESC
+                          LIMIT 1
+                        ) bs ON true
+                        LEFT JOIN LATERAL (
+                          SELECT offer.image_url, offer.offer_url
+                          FROM part_external_offers offer
+                          WHERE offer.part_id = p.id
+                            AND offer.deleted_at IS NULL
+                          ORDER BY offer.refreshed_at DESC NULLS LAST, offer.id DESC
+                          LIMIT 1
+                        ) peo ON true
+                        LEFT JOIN LATERAL (
+                          SELECT snapshot.collected_at
+                          FROM price_snapshots snapshot
+                          WHERE snapshot.part_id = p.id
+                            AND snapshot.collected_at <= now()
+                          ORDER BY snapshot.collected_at DESC, snapshot.id DESC
+                          LIMIT 1
+                        ) ps ON true
+                        WHERE e.source_surface IN ('HOME_RECOMMENDED_PARTS', 'ADMIN_HOME_PART_FEEDBACK')
+                        """);
+        List<Object> args = new ArrayList<>();
+        if (from != null) {
+            sql.append(" AND e.created_at >= CAST(? AS timestamptz)\n");
+            args.add(from);
+        }
+        if (to != null) {
+            sql.append(" AND e.created_at <= CAST(? AS timestamptz)\n");
+            args.add(to);
+        }
+        sql.append(" ORDER BY e.created_at DESC, e.id DESC");
+        return jdbcTemplate.queryForList(sql.toString(), args.toArray())
+                .stream()
+                .filter(row -> eventTypes.isEmpty() || eventTypes.contains(text(row.get("event_type"))))
+                .filter(row -> categories.isEmpty() || categories.contains(firstText(text(row.get("category")), text(row.get("part_category")))))
+                .toList();
+    }
+
+    private Map<String, Object> featureSnapshot(Map<String, Object> row) {
+        String category = firstText(text(row.get("category")), text(row.get("part_category")));
+        Map<String, Object> features = new LinkedHashMap<>();
+        features.put("rank_position", integer(row.get("rank_position"), 0));
+        features.put("part_price", integer(row.get("part_price"), 0));
+        features.put("build_total_price", 0);
+        features.put("part_benchmark_score", number(row.get("benchmark_score"), 0.0));
+        features.put("part_tool_ready", toolReady(row.get("part_attributes")) ? 1 : 0);
+        features.put("part_has_image", text(row.get("external_offer_image_url")) == null ? 0 : 1);
+        features.put("part_has_offer", text(row.get("external_offer_url")) == null ? 0 : 1);
+        features.put("part_price_age_days", number(row.get("price_age_days"), 999.0));
+        features.put("part_has_fps_coverage", booleanValue(row.get("has_fps_coverage")) ? 1 : 0);
+        for (String partCategory : List.of("CPU", "GPU", "RAM", "MOTHERBOARD", "STORAGE", "PSU", "CASE", "COOLER")) {
+            features.put("category_" + partCategory, partCategory.equals(category) ? 1 : 0);
+        }
+        return features;
+    }
+
+    private Map<String, Object> eventSnapshot(Map<String, Object> row) {
+        return MockData.map(
+                "eventId", text(row.get("event_public_id")),
+                "eventType", text(row.get("event_type")),
+                "sourceSurface", text(row.get("source_surface")),
+                "recommendationId", text(row.get("recommendation_id")),
+                "category", firstText(text(row.get("category")), text(row.get("part_category"))),
+                "partId", text(row.get("part_id")),
+                "partName", text(row.get("part_name")),
+                "createdAt", DbValueMapper.timestamp(row, "created_at")
+        );
+    }
+
+    private Map<String, Object> normalizeFilters(Map<String, Object> request) {
+        return MockData.map(
+                "from", text(request.get("from")),
+                "to", text(request.get("to")),
+                "eventTypes", stringList(request.get("eventTypes")),
+                "categories", stringList(request.get("categories"))
+        );
+    }
+
+    private void requireDraft(Map<String, Object> dataset) {
+        if (!"DRAFT".equals(text(dataset.get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "DRAFT dataset만 수정할 수 있습니다.");
+        }
+    }
+
+    private Map<String, Object> requireDataset(String publicId) {
+        if (publicId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "dataset id는 필수입니다.");
+        }
+        return jdbcTemplate.queryForList("""
+                        SELECT id,
+                               public_id::text AS public_id,
+                               name,
+                               source_surface,
+                               filters,
+                               status,
+                               eligible_count,
+                               included_count,
+                               excluded_count,
+                               locked_at,
+                               created_at,
+                               updated_at
+                        FROM recommendation_training_datasets
+                        WHERE public_id = ?::uuid
+                          AND deleted_at IS NULL
+                        """, publicId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "학습 데이터셋을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> datasetById(Long id) {
+        return jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id,
+                               name,
+                               source_surface,
+                               filters,
+                               status,
+                               eligible_count,
+                               included_count,
+                               excluded_count,
+                               locked_at,
+                               created_at,
+                               updated_at
+                        FROM recommendation_training_datasets
+                        WHERE id = ?
+                        """, id)
+                .stream()
+                .findFirst()
+                .map(this::datasetDto)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "학습 데이터셋을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> jobById(Long id) {
+        return jdbcTemplate.queryForList("""
+                        SELECT job.public_id::text AS id,
+                               ds.public_id::text AS dataset_id,
+                               ds.name AS dataset_name,
+                               job.status,
+                               job.worker_id,
+                               job.model_version,
+                               job.artifact_path,
+                               job.metrics,
+                               job.log_summary,
+                               job.created_at,
+                               job.started_at,
+                               job.finished_at
+                        FROM recommendation_training_jobs job
+                        JOIN recommendation_training_datasets ds ON ds.id = job.dataset_id
+                        WHERE job.id = ?
+                        """, id)
+                .stream()
+                .findFirst()
+                .map(this::jobDto)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "학습 Job을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> requireModel(String publicId) {
+        if (publicId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "model id는 필수입니다.");
+        }
+        return jdbcTemplate.queryForList("""
+                        SELECT id,
+                               public_id::text AS public_id,
+                               model_name,
+                               model_version,
+                               algorithm,
+                               artifact_path,
+                               status,
+                               metrics,
+                               feature_schema,
+                               activated_at,
+                               created_at
+                        FROM recommendation_model_versions
+                        WHERE public_id = ?::uuid
+                          AND deleted_at IS NULL
+                        """, publicId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "모델 버전을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> modelById(Long id) {
+        return jdbcTemplate.queryForList("""
+                        SELECT id,
+                               public_id::text AS public_id,
+                               model_name,
+                               model_version,
+                               algorithm,
+                               artifact_path,
+                               status,
+                               metrics,
+                               feature_schema,
+                               activated_at,
+                               created_at
+                        FROM recommendation_model_versions
+                        WHERE id = ?
+                        """, id)
+                .stream()
+                .findFirst()
+                .map(this::modelDto)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "모델 버전을 찾을 수 없습니다."));
+    }
+
+    private void refreshDatasetCounts(Long datasetId) {
+        Map<String, Object> counts = jdbcTemplate.queryForMap("""
+                SELECT count(*) AS eligible_count,
+                       count(*) FILTER (WHERE included = true) AS included_count,
+                       count(*) FILTER (WHERE included = false) AS excluded_count
+                FROM recommendation_training_dataset_items
+                WHERE dataset_id = ?
+                """, datasetId);
+        jdbcTemplate.update("""
+                UPDATE recommendation_training_datasets
+                SET eligible_count = ?,
+                    included_count = ?,
+                    excluded_count = ?,
+                    updated_at = now()
+                WHERE id = ?
+                """,
+                longValue(counts, "eligible_count"),
+                longValue(counts, "included_count"),
+                longValue(counts, "excluded_count"),
+                datasetId);
+    }
+
+    private long count(String sql) {
+        Long value = jdbcTemplate.queryForObject(sql, Long.class);
+        return value == null ? 0L : value;
+    }
+
+    private Map<String, Object> datasetDto(Map<String, Object> row) {
+        return MockData.map(
+                "id", firstText(text(row.get("id")), text(row.get("public_id"))),
+                "name", text(row.get("name")),
+                "sourceSurface", text(row.get("source_surface")),
+                "filters", json(row.get("filters")),
+                "status", text(row.get("status")),
+                "eligibleCount", longValue(row, "eligible_count"),
+                "includedCount", longValue(row, "included_count"),
+                "excludedCount", longValue(row, "excluded_count"),
+                "lockedAt", DbValueMapper.timestamp(row, "locked_at"),
+                "createdAt", DbValueMapper.timestamp(row, "created_at"),
+                "updatedAt", DbValueMapper.timestamp(row, "updated_at")
+        );
+    }
+
+    private Map<String, Object> datasetItemDto(Map<String, Object> row) {
+        return MockData.map(
+                "id", text(row.get("id")),
+                "eventId", text(row.get("event_id")),
+                "eventType", text(row.get("event_type")),
+                "sourceSurface", text(row.get("source_surface")),
+                "category", text(row.get("category")),
+                "rankPosition", row.get("rank_position"),
+                "eventCreatedAt", DbValueMapper.timestamp(row, "event_created_at"),
+                "included", row.get("included"),
+                "excludedReason", text(row.get("excluded_reason")),
+                "labelScoreSnapshot", row.get("label_score_snapshot"),
+                "featuresSnapshot", json(row.get("features_snapshot")),
+                "eventSnapshot", json(row.get("event_snapshot")),
+                "createdAt", DbValueMapper.timestamp(row, "created_at")
+        );
+    }
+
+    private Map<String, Object> jobDto(Map<String, Object> row) {
+        return MockData.map(
+                "id", text(row.get("id")),
+                "datasetId", text(row.get("dataset_id")),
+                "datasetName", text(row.get("dataset_name")),
+                "status", text(row.get("status")),
+                "workerId", text(row.get("worker_id")),
+                "modelVersion", text(row.get("model_version")),
+                "artifactPath", text(row.get("artifact_path")),
+                "metrics", json(row.get("metrics")),
+                "logSummary", text(row.get("log_summary")),
+                "createdAt", DbValueMapper.timestamp(row, "created_at"),
+                "startedAt", DbValueMapper.timestamp(row, "started_at"),
+                "finishedAt", DbValueMapper.timestamp(row, "finished_at")
+        );
+    }
+
+    private Map<String, Object> modelDto(Map<String, Object> row) {
+        return MockData.map(
+                "id", firstText(text(row.get("id")), text(row.get("public_id"))),
+                "modelName", text(row.get("model_name")),
+                "modelVersion", text(row.get("model_version")),
+                "algorithm", text(row.get("algorithm")),
+                "artifactPath", text(row.get("artifact_path")),
+                "status", text(row.get("status")),
+                "metrics", json(row.get("metrics")),
+                "featureSchema", json(row.get("feature_schema")),
+                "activatedAt", DbValueMapper.timestamp(row, "activated_at"),
+                "createdAt", DbValueMapper.timestamp(row, "created_at")
+        );
+    }
+
+    private static String firstText(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static String text(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isBlank() ? null : text;
+    }
+
+    private static Integer integer(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return value == null ? fallback : Integer.parseInt(value.toString());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static double number(Object value, double fallback) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return value == null ? fallback : Double.parseDouble(value.toString());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static long longValue(Map<String, Object> row, String key) {
+        Object value = row.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return value == null ? 0L : Long.parseLong(value.toString());
+    }
+
+    private static boolean booleanValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        return value != null && Set.of("1", "true", "yes", "y").contains(value.toString().toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean toolReady(Object attributes) {
+        Map<String, Object> map = json(attributes);
+        return booleanValue(map.get("toolReady"));
+    }
+
+    private static Set<String> upperSet(Object value) {
+        return stringList(value).stream()
+                .map(item -> item.toUpperCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private static List<String> stringList(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof Iterable<?> iterable) {
+            List<String> result = new ArrayList<>();
+            iterable.forEach(item -> {
+                String text = text(item);
+                if (text != null) {
+                    result.add(text);
+                }
+            });
+            return result;
+        }
+        String text = text(value);
+        return text == null ? List.of() : List.of(text);
+    }
+
+    private static Map<String, Object> json(Object value) {
+        if (value == null) {
+            return Map.of();
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, mapValue) -> result.put(String.valueOf(key), mapValue));
+            return result;
+        }
+        try {
+            return OBJECT_MAPPER.readValue(value.toString(), MAP_TYPE);
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private static String writeJson(Object value) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value == null ? Map.of() : value);
+        } catch (Exception error) {
+            throw new IllegalStateException("JSON 직렬화 실패", error);
+        }
+    }
+}
