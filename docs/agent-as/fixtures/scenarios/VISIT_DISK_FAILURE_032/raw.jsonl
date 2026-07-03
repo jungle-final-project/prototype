@@ -1,0 +1,1 @@
+{"schemaVersion": "1", "collectedAt": "2026-07-03T01:32:01Z", "agentId": "fixture-agent-032", "deviceIdHash": "device-032", "sequence": 1, "kind": "STORAGE_HEALTH", "payload": {"diskIdHash": "disk-visit_disk_failure_032", "smartStatus": "WARN", "criticalWarnings": 1, "ioLatencyMs": 235, "freeSpacePercent": 18}, "privacyFlags": {"masked": true, "containsRawPath": false}}

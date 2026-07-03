@@ -1157,7 +1157,7 @@ class DefaultAiChatEngineTest {
         assertThat(response.actions())
                 .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
                 .singleElement()
-                .satisfies(action -> assertThat(action.payload()).containsEntry("route", "/self-quote?category=GPU"));
+                .satisfies(action -> assertThat(action.payload()).containsEntry("route", "/self-quote?category=GPU&q=5090"));
         verifyNoJdbcWrites();
     }
 

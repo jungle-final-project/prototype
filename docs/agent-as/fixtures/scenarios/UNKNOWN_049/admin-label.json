@@ -1,0 +1,10 @@
+{
+  "reviewStatus": "APPROVED",
+  "finalSupportDecision": "NEEDS_MORE_INFO",
+  "diagnosticAccuracy": "ACCURATE",
+  "actualResolution": "NEEDS_MORE_INFO",
+  "eligibleForTraining": true,
+  "rawFullLogIncluded": false,
+  "labelSource": "fixture",
+  "notes": "Raw gzip/full JSONL 대신 ticket-level summary/routing/result label만 학습에 사용한다."
+}

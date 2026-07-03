@@ -567,7 +567,7 @@ const PART_CATEGORIES: PartCategory[] = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'ST
 function fastRouteIntent(prompt: string): FastRouteIntent | null {
   const normalized = normalizePrompt(prompt);
   const category = routeCategoryFromPrompt(normalized);
-  if (category && hasRouteVerb(normalized) && !isProductDetailIntent(normalized)) {
+  if (category && hasRouteVerb(normalized) && !isProductDetailIntent(normalized) && !hasProductFilterHint(normalized)) {
     return {
       route: `/self-quote?category=${category}`,
       message: `${PART_CATEGORY_LABELS[category]} 부품 화면으로 이동했습니다.`,
@@ -615,7 +615,7 @@ function isAllowedUserRoute(route: string) {
     || route === '/checkout') {
     return true;
   }
-  if (/^\/self-quote\?category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)$/.test(route)) {
+  if (/^\/self-quote\?category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)(?:&q=[^#\s]+)?$/.test(route)) {
     return true;
   }
   return /^\/parts\/[0-9a-fA-F-]{8,}$/.test(route);
@@ -654,6 +654,15 @@ function isProductDetailIntent(normalized: string) {
   const concreteProductHint = /\d{3,5}/.test(normalized)
     || containsAnyNormalized(normalized, ['asus', 'msi', 'gigabyte', 'lianli', '리안리', 'samsung', '삼성', 'corsair', '커세어', 'noctua', '녹투아', 'arctic']);
   return detailWord && concreteProductHint;
+}
+
+function hasProductFilterHint(normalized: string) {
+  return /\d{3,5}/.test(normalized)
+    || containsAnyNormalized(normalized, [
+      'asus', 'msi', 'gigabyte', '기가바이트', 'lianli', '리안리', 'samsung', '삼성',
+      'corsair', '커세어', 'noctua', '녹투아', 'arctic', 'nvidia', '엔비디아', 'amd', 'intel', '인텔',
+      '라이젠', 'ddr5', 'ddr4', 'nvme', '수랭', '공랭', 'aio'
+    ]);
 }
 
 function containsAnyNormalized(value: string, needles: string[]) {

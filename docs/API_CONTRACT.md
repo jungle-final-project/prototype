@@ -225,7 +225,9 @@ Google OAuth 정책:
 - 순수 화면 이동 명령은 사용자 체감 속도를 위해 프론트가 먼저 처리한다. API 직접 호출에 대해서는 서버도 LLM 전에 `OPEN_ROUTE` fast path를 제공한다.
 - fast route는 전체 자연어 이해가 아니라 명확한 이동 표현만 처리하는 shortcut이다. `GPU 추천해줘`, `GPU 더 싼 걸로`, `이 견적 담아줘` 같은 추천/교체/삭제/담기 명령은 fast route로 처리하지 않고 Build Chat으로 보낸다.
 - fast route가 잡지 못한 이동 의도는 LLM structured output의 `routeIntent`로 판단한다. 내부 `routeIntent`는 `shouldNavigate`, `routeType`, `category`, `partQuery`, `confidence`, `reason`을 가지며, 서버는 `shouldNavigate=true`이고 `confidence=HIGH`일 때만 `OPEN_ROUTE` action으로 변환한다.
-- `OPEN_ROUTE` payload는 `{ route, source, reason? }`이며 route는 사용자 화면 allowlist(`/self-quote`, `/self-quote?category=...`, `/my/quotes`, `/requirements/new`, `/support/new`, `/support/ai-chat`, `/checkout`, 서버가 구체 id를 반환한 `/parts/{partId}`)만 허용한다. 관리자 경로 자동 이동은 금지한다.
+- `OPEN_ROUTE` payload는 `{ route, source, reason? }`이며 route는 사용자 화면 allowlist(`/self-quote`, `/self-quote?category=...`, `/self-quote?category=...&q=...`, `/my/quotes`, `/requirements/new`, `/support/new`, `/support/ai-chat`, `/checkout`, 서버가 구체 id를 반환한 `/parts/{partId}`)만 허용한다. 관리자 경로 자동 이동은 금지한다.
+- 구체 상품 상세 이동은 단일 고확신 `ACTIVE` 부품일 때만 `/parts/{partId}`로 이동한다. `5090 보여줘`처럼 복수 후보 가능성이 있으면 `/self-quote?category=GPU&q=5090` 같은 후보 필터 화면으로 이동한다.
+- 명시 예산은 LLM `parsedContext`와 별개로 서버가 raw message에서 다시 판정한다. 하드 부품 조건이 없으면 target budget은 `±12.5%`, max budget은 상한 이하, min budget은 하한 이상으로 최종 추천을 거른다.
 - 상품 상세 이동은 public id 직접 입력, normalized name exact match, 제조사+모델명 조합이 단일 `ACTIVE` 부품으로 매칭되는 경우에만 `/parts/{partId}`를 반환한다. `5090 보여줘`처럼 후보가 여러 개일 수 있는 표현은 상품 상세로 자동 이동하지 않고 카테고리 화면 또는 일반 응답으로 낮춘다.
 - `currentQuoteDraft`가 전달된 `/self-quote` 챗봇 요청은 `actions`로 변경안을 반환한다. AI API는 `quote_drafts`, `quote_draft_items`를 직접 쓰지 않고, 프론트가 응답 수신 즉시 기존 quote draft API를 자동 호출한다.
 - action 종류는 `OPEN_ROUTE`, `ADD_BUILD_TO_DRAFT`, `ADD_PART_TO_DRAFT`, `REPLACE_DRAFT_PART`, `REMOVE_DRAFT_PART`, `UPDATE_DRAFT_QUANTITY`, `ASK_FOLLOW_UP`이다. 저장 action은 `{ partId, category, quantity?, source }` 또는 `{ buildId, items, source }`를 payload에 담고 기본적으로 `requiresConfirmation=false`로 내려간다.

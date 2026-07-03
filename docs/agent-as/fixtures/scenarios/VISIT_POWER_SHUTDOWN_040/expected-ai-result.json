@@ -1,0 +1,48 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "VISIT_REQUIRED",
+  "riskLevel": "HIGH",
+  "confidence": "HIGH",
+  "reasonCodes": [
+    "PSU_OR_POWER_PATH_RISK"
+  ],
+  "causeCandidates": [
+    {
+      "label": "PSU_OR_POWER_PATH_RISK",
+      "confidence": "HIGH",
+      "reason": "게임 중 전원 꺼짐"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "HIGH",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [],
+  "visitReasons": [
+    "PSU_OR_POWER_PATH_RISK"
+  ],
+  "blockingFactors": [],
+  "requiredAdditionalLogs": [],
+  "evidenceRefs": [
+    "VISIT_POWER_SHUTDOWN_040:raw:BOOT_SHUTDOWN",
+    "VISIT_POWER_SHUTDOWN_040:raw:SYSTEM_METRIC"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "게임 중 전원 꺼짐",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": []
+  },
+  "proposedTicketPatch": {}
+}

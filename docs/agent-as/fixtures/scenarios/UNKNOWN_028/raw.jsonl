@@ -1,0 +1,1 @@
+{"schemaVersion": "1", "collectedAt": "2026-07-03T01:28:01Z", "agentId": "fixture-agent-028", "deviceIdHash": "device-028", "sequence": 1, "kind": "NETWORK_DIAGNOSTIC", "payload": {"adapterStatus": "UP", "gatewayReachable": true, "dnsLookupOk": true, "packetLossPercent": 0, "latencyMs": 44}, "privacyFlags": {"masked": true, "containsRawPath": false}}

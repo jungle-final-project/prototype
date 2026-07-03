@@ -1,0 +1,29 @@
+{
+  "summaryVersion": "1",
+  "scenarioId": "VISIT_BOOT_REMOTE_BLOCKED_029",
+  "symptomType": "VISIT_BOOT_REMOTE_BLOCKED",
+  "summaryText": "부팅 불가, heartbeat 장기 누락",
+  "incidentWindow": {
+    "startedAt": "2026-07-03T01:00:00Z",
+    "endedAt": "2026-07-03T01:30:00Z",
+    "rangeMinutes": 30
+  },
+  "signalKinds": [
+    "BOOT_SHUTDOWN",
+    "AGENT_HEALTH"
+  ],
+  "reasonCodes": [
+    "DEVICE_OFFLINE"
+  ],
+  "safetyNotices": [
+    {
+      "code": "STOP_USE_UNTIL_ADMIN_REVIEW",
+      "message": "추가 손상을 막기 위해 관리자 확인 전 고부하 사용을 중단하세요."
+    }
+  ],
+  "dataQuality": "ENOUGH",
+  "rawSamplePolicy": {
+    "maxSamples": 20,
+    "rawFullLogIncluded": false
+  }
+}

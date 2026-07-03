@@ -1,0 +1,24 @@
+{
+  "summaryVersion": "1",
+  "scenarioId": "REMOTE_STARTUP_SERVICE_021",
+  "symptomType": "REMOTE_STARTUP_SERVICE",
+  "summaryText": "부팅 직후 CPU/RAM 높음",
+  "incidentWindow": {
+    "startedAt": "2026-07-03T01:00:00Z",
+    "endedAt": "2026-07-03T01:30:00Z",
+    "rangeMinutes": 30
+  },
+  "signalKinds": [
+    "SYSTEM_METRIC",
+    "PROCESS_CATEGORY"
+  ],
+  "reasonCodes": [
+    "BACKGROUND_SERVICE_PRESSURE"
+  ],
+  "safetyNotices": [],
+  "dataQuality": "ENOUGH",
+  "rawSamplePolicy": {
+    "maxSamples": 20,
+    "rawFullLogIncluded": false
+  }
+}

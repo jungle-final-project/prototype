@@ -1,0 +1,50 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "VISIT_REQUIRED",
+  "riskLevel": "HIGH",
+  "confidence": "HIGH",
+  "reasonCodes": [
+    "DATA_LOSS_RISK"
+  ],
+  "causeCandidates": [
+    {
+      "label": "DATA_LOSS_RISK",
+      "confidence": "HIGH",
+      "reason": "filesystem write failure 반복"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "HIGH",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [],
+  "visitReasons": [
+    "DATA_RECOVERY_REQUIRED"
+  ],
+  "blockingFactors": [
+    "DATA_RECOVERY_REQUIRED"
+  ],
+  "requiredAdditionalLogs": [],
+  "evidenceRefs": [
+    "VISIT_DISK_FAILURE_034:raw:EVENT_LOG",
+    "VISIT_DISK_FAILURE_034:raw:STORAGE_HEALTH"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "filesystem write failure 반복",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": []
+  },
+  "proposedTicketPatch": {}
+}

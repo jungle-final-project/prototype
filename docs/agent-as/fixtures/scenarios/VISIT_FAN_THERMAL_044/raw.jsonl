@@ -1,0 +1,1 @@
+{"schemaVersion": "1", "collectedAt": "2026-07-03T01:44:01Z", "agentId": "fixture-agent-044", "deviceIdHash": "device-044", "sequence": 1, "kind": "THERMAL_SENSOR", "payload": {"cpuTemperatureCelsius": 92.0, "gpuTemperatureCelsius": 96.0, "fanRpm": 0, "thermalThrottle": true, "unavailableReason": null}, "privacyFlags": {"masked": true, "containsRawPath": false}}

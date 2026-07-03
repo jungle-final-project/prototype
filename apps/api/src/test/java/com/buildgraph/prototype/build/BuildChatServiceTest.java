@@ -41,6 +41,9 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.parseBudgetWon("200만원 PC 추천")).isEqualTo(200 * 10_000);
         assertThat(BuildChatService.parseBudgetWon("300만원대로 맞춰줘")).isEqualTo(3_000_000);
         assertThat(BuildChatService.parseBudgetWon("2,000,000원 안에서")).isEqualTo(200 * 10_000);
+        assertThat(BuildChatService.budgetIntent("800만원으로 최고급 PC 추천해줘").mode()).isEqualTo("TARGET");
+        assertThat(BuildChatService.budgetIntent("300만원 이하 RTX 5090 PC").mode()).isEqualTo("MAX");
+        assertThat(BuildChatService.budgetIntent("300만원 이상으로 게임용 PC 맞춰줘").mode()).isEqualTo("MIN");
     }
 
     @Test
@@ -93,6 +96,26 @@ class BuildChatServiceTest {
         )));
 
         Map<String, Object> response = service.chat(Map.of("message", "800만원으로 최고급 PC 추천해줘"));
+
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("warnings")).asList().contains("명시 예산 범위를 벗어난 추천 조합을 제외했습니다.");
+    }
+
+    @Test
+    void buildChatUsesRawMessageBudgetWhenLlmParsedContextMissesBudget() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(overBudgetNoParsedBudgetResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of(Map.of(
+                "tool", "price",
+                "status", "PASS",
+                "confidence", "HIGH",
+                "summary", "Tool 자체는 통과했습니다."
+        )));
+
+        Map<String, Object> response = service.chat(Map.of("message", "800만원짜리 컴퓨터 추천해줘"));
 
         assertThat(response.get("builds")).asList().isEmpty();
         assertThat(response.get("warnings")).asList().contains("명시 예산 범위를 벗어난 추천 조합을 제외했습니다.");
@@ -377,7 +400,7 @@ class BuildChatServiceTest {
         List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
         assertThat(actions).singleElement()
                 .satisfies(action -> assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                        .containsEntry("route", "/self-quote?category=GPU"));
+                        .containsEntry("route", "/self-quote?category=GPU&q=5090"));
         verifyNoInteractions(aiChatEngine, cacheService);
     }
 
@@ -653,6 +676,31 @@ class BuildChatServiceTest {
                                 "budgetPolicy", "USER_BUDGET",
                                 "hardConstraintPolicy", "NONE"
                         ),
+                List.of("evidence-1"),
+                List.of(),
+                null
+        );
+    }
+
+    private static AiChatEngineResponse overBudgetNoParsedBudgetResponse() {
+        return new AiChatEngineResponse(
+                "조건을 분석해 추천 조합을 만들었습니다.",
+                AiChatIntent.FULL_BUILD_RECOMMEND,
+                List.<AiChatAction>of(),
+                List.of(new AiChatEngineResponse.BuildRecommendation(
+                        "고가 추천 조합",
+                        "예산 누락",
+                        "LLM이 예산을 누락한 과예산 조합입니다.",
+                        12_000_000,
+                        "MEDIUM",
+                        List.of(
+                                part("CPU", "cpu-expensive", 1_500_000),
+                                part("RAM", "ram-expensive", 1_000_000),
+                                part("GPU", "gpu-expensive", 8_500_000)
+                        )
+                )),
+                List.of(),
+                Map.of("hardConstraintPolicy", "NONE"),
                 List.of("evidence-1"),
                 List.of(),
                 null
