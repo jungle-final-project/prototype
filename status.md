@@ -1,3 +1,63 @@
+# 2026-07-03 FINAL_SUPPORT_SCENARIOS 100% 구현 Goal
+
+## Current goal
+
+- `docs/agent-as/FINAL_SUPPORT_SCENARIOS.md`의 최종 기획을 기준으로 PC Agent AS 기능을 구현한다.
+- 기존 공통 계약(`docs/API_CONTRACT.md`, `docs/DB_SCHEMA.md`, `docs/openapi.yaml`, Flyway, Java public enum/DTO/API 계약)은 삭제/변경/축소하지 않고, 필요한 항목만 additive로 확장한다.
+- 원격 push는 하지 않는다.
+
+## Done
+
+- Goal objective 파일 `C:\Users\whqja\.codex\attachments\ee35ec0c-ac83-440c-8454-58287709c08d\goal-objective.md`를 UTF-8로 읽었다.
+- `skill-router` 기준 primary skill을 `goal-handoff`로 선택했고, `git-workflow`, `code-review`, `wiki-writing`을 보조로 확인했다.
+- 기준 원격 `https://github.com/jungle-final-project/PCagent.git`가 `pcagent` remote임을 확인했다.
+- 기존 작업트리 변경은 `pre-final-support-complete-20260703-131037` stash로 백업했다.
+- `git fetch pcagent --prune` 성공 후 `pcagent/main`이 `6e2ba0b docs(agent-as): add final support scenarios`임을 확인했다.
+- 기존 `qa/final-support-scenarios-complete` 브랜치를 덮어쓰지 않고 `qa/final-support-scenarios-complete-20260703-131130` 브랜치를 `pcagent/main` 기준으로 생성했다.
+- `docs/agent-as/FINAL_SUPPORT_SCENARIOS.md` 존재를 확인했다.
+- clean main 기준 baseline 검증을 실행했다.
+
+## Baseline verification
+
+- `python tools\validate_openapi.py`: 성공, `OpenAPI validation passed: 67 paths`.
+- `apps\web`: `npm run build` 성공.
+- `apps\api`: `.\gradlew.bat compileTestJava --no-daemon` 성공.
+- `apps\api`: 한글 경로 `C:\나만무\prototype`에서 `.\gradlew.bat test --no-daemon` 실패. 원인은 여러 테스트 클래스 `ClassNotFoundException`으로, assertion 실패 전 단계다.
+- ASCII junction `C:\codex\pcagent-prototype`에서 `.\gradlew.bat test --no-daemon` 실패. clean main baseline failure는 `AgentAsMigrationContractTest.logSummaryMigrationAddsLogSummaryRoutingAndExceptionApprovalFields()` line 92 assertion 1건이다.
+- `apps\web`: `npm run test -- --reporter=dot`는 300초 timeout. 실행 중 1개 실패 표시와 Vite proxy `EACCES` 로그가 반복됐다.
+
+## Done in current implementation pass
+
+- 최종 시나리오 기준으로 analyzer가 신규 흐름에서는 `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`만 생성하도록 보정했다. 기존 `REPAIR_OR_REPLACE`, `MONITOR_ONLY`, `UNSUPPORTED` enum은 호환성 때문에 삭제하지 않았다.
+- 원격 6종, 방문 5종, 기본 미지원 항목의 reason/action/visit/blocking enum을 additive로 확장했다.
+- `safetyAdviceLevel`, `safetyNotices`, 단계별 consent type, 사용자 원격지원 요청 API, 사용자 feedback API, 관리자 `diagnosticAccuracy`를 코드/OpenAPI/API/DB 문서/Flyway에 추가했다.
+- 사용자 `/support/{ticketId}` 화면에 위험 안내, 원격지원 요청, 처리 피드백 저장을 연결했다.
+- 관리자 AS 상세 화면에 진단 적중 여부 저장과 사용자 피드백 표시를 연결했다.
+- Playwright visual fixture와 QA screenshots를 최종 IncidentWindow/안전 안내/원격지원 요청/피드백 흐름 기준으로 갱신했다.
+
+## Final verification
+
+- `python tools\validate_openapi.py`: 성공, `OpenAPI validation passed: 69 paths`.
+- `C:\codex\pcagent-prototype\apps\api` `.\gradlew.bat test --tests com.buildgraph.prototype.agent.PcAgentLogAnalyzerTest --tests com.buildgraph.prototype.agent.PcAgentAsServiceTest --tests com.buildgraph.prototype.agent.persistence.AgentAsJpaMappingTest --tests com.buildgraph.prototype.agent.persistence.AgentAsMigrationContractTest --tests com.buildgraph.prototype.ticket.contract.SupportContractSerializationTest --tests com.buildgraph.prototype.ticket.TicketQueryServiceTest --tests com.buildgraph.prototype.ticket.TicketControllerTest --no-daemon`: 성공.
+- `C:\codex\pcagent-prototype\apps\api` `.\gradlew.bat test --no-daemon`: 성공.
+- `apps\web` `npm run build`: 성공.
+- `apps\web` `npm run test -- --reporter=dot`: escalated 실행에서 74 passed.
+- `git diff --check`: 성공.
+
+## Remaining risks
+
+- 한글 경로 `C:\나만무\prototype`에서 Gradle full test가 `ClassNotFoundException`으로 실패하는 baseline/environment 문제가 있어 backend test는 ASCII junction `C:\codex\pcagent-prototype`에서 검증했다.
+- sandbox 기본 권한에서는 Playwright가 Vite proxy `EACCES`로 timeout될 수 있어, 최종 프론트 테스트는 escalated 환경에서 검증했다.
+- 원격 push와 커밋은 하지 않았다.
+
+## Runtime check
+
+- `docker --version`: Docker CLI 확인됨. 단, `C:\Users\whqja\.docker\config.json` 접근 경고가 표시됐다.
+- `docker compose config --quiet`: 성공.
+- `localhost:8080`, `localhost:5173`: 현재 포트는 비어 있음.
+- `docker compose up --build -d`: 실패. 원인은 Docker Desktop Linux engine daemon 미실행(`npipe:////./pipe/dockerDesktopLinuxEngine` 없음).
+- 바로 화면 확인하려면 Docker Desktop을 켠 뒤 `docker compose up --build`를 다시 실행해야 한다.
+
 # 2026-07-03 Agent AS B 서버 LogSummary/routing 구현
 
 ## Current goal
@@ -155,3 +215,32 @@ npm run test -- --reporter=dot
 - 제외/주의:
   - Quick Assist 직접 실행, Windows Service, signed installer, auto-update, release channel 운영은 범위 밖으로 유지.
   - sandbox 내부에서 Gradle wrapper와 Playwright proxy가 네트워크 권한에 막혀, 필요한 테스트는 승인된 escalated 실행으로 검증했다.
+
+## PC Agent exe runtime wiring check
+
+Updated: 2026-07-03
+
+- 확인 목표: `agent.exe`가 PC metric JSONL을 만들고 `/api/agent/log-uploads`로 올린 뒤, 생성된 AS ticket이 웹 `/support/{ticketId}`에서 조회되는지 확인.
+- 실행 상태:
+  - 기존 compose DB는 Flyway checksum mismatch로 API가 실패했다.
+  - 기존 DB 볼륨은 삭제하지 않고, 임시 컨테이너 `pcagent-demo-postgres`, `pcagent-demo-api`, `pcagent-demo-web`로 런타임을 확인했다.
+  - `http://localhost:8080/api/health`: pass
+  - `http://localhost:5173/api/health`: pass
+  - 웹 다운로드 `http://localhost:5173/downloads/pc-agent/agent.exe` SHA256이 repo 파일과 일치: `44791862BD8A33869F7D33891078FDACAFC180AC11EC87F801EE0EE6EE198456`
+- 수정 내용:
+  - `apps/pc-agent/buildgraph_agent.py`: Agent JSONL row에 서버 필수 envelope(`schemaVersion`, `collectedAt`, `agentId`, `sequence`, `kind`, `payload`, `privacyFlags`)를 추가.
+  - `apps/pc-agent/buildgraph_agent.py`: multipart text field에 `Content-Type: text/plain; charset=utf-8` 추가.
+  - `apps/api/src/main/java/com/buildgraph/prototype/agent/PcAgentAsService.java`: Spring multipart text decoding 후 깨진 UTF-8로 보이는 값을 한글로 복원.
+  - `apps/web/public/downloads/pc-agent/agent.exe`: 수정된 PC Agent로 재빌드 후 교체.
+- 검증:
+  - `python -m pytest apps\pc-agent -q`: pass, 24 tests
+  - `.\gradlew.bat test --tests com.buildgraph.prototype.agent.PcAgentAsServiceTest --no-daemon`: pass
+  - `agent.exe register --config artifacts\runtime\pcagent-demo\agent-config.json`: pass
+  - `agent.exe collect --config ... --iterations 1`: pass
+  - `POST /api/agent/consents`: pass
+  - `POST /api/agent/heartbeat`: pass
+  - `agent.exe upload --config ... --symptom-type REMOTE_DRIVER_OS --no-open`: pass, latest ticket `2116e340-6534-4769-a773-d0e90d36f8bb`
+  - DB 직접 확인: latest ticket `symptom` is stored as `게임 중 화면 드라이버 경고와 발열이 있습니다.`
+- 남은 주의:
+  - 현재 PC Agent는 Windows Service/installer가 아니라 MVP용 CLI/트레이 실행이다.
+  - 더블클릭 트레이의 로그 뷰어는 PyInstaller 빌드 중 tkinter broken 경고가 있어 별도 GUI 확인이 필요하다. CLI register/collect/upload는 정상 확인했다.

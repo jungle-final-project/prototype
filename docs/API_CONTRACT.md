@@ -418,12 +418,16 @@ PC Agent token lifecycle API:
 
 Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버는 raw `agentToken`을 저장하지 않고 hash만 저장한다. `/api/agent-logs/upload`는 웹 사용자가 JWT로 업로드하는 legacy/manual 경로이고, `/api/agent/log-uploads`는 PC Agent가 Agent token으로 업로드하는 경로다.
 
+`POST /api/agent/consents`의 `consentType`은 기존 `LOCAL_COLLECTION`, `SERVER_UPLOAD`, `QUALITY_IMPROVEMENT`를 유지하고, 최종 AS 시나리오를 위해 `REMOTE_CONNECTION`, `REMOTE_FULL_CONTROL`, `HIGH_RISK_REMOTE_ACTION`을 additive로 허용한다. 원격 연결, 전체 제어, 고위험 원격 조치는 각각 별도 동의 row로 남기며, ticket/session/action/playbook/risk notice 연결 정보는 V57 migration의 nullable 컬럼에 저장할 수 있다.
+
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/agent-logs/upload` | USER | 4번 | `multipart/form-data` | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "fileSize": 12000, "rangeMinutes": 30, "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
 | `GET` | `/api/agent-logs/{id}` | USER | 4번 | - | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "rangeMinutes": 30, "summary": "GPU driver error 반복", "createdAt": "2026-06-29T10:40:00Z", "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
 | `POST` | `/api/as-tickets` | USER | 4번 | `{ "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "symptom": "화면이 멈춤" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets`, `agent_log_uploads` |
 | `GET` | `/api/as-tickets/{id}` | USER | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "adminNote": null, "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets` |
+| `POST` | `/api/as-tickets/{id}/remote-support-requests` | USER | 4번 | `{ "reason": "화면 공유로 확인이 필요합니다.", "contactPhone": "010-0000-0000" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "reviewStatus": "REQUIRED", "remoteSupportStatus": "REQUESTED" }` | `as_tickets`, `remote_support_sessions` |
+| `POST` | `/api/as-tickets/{id}/feedback` | USER | 4번 | `{ "rating": 5, "comment": "원격지원 후 해결됐습니다." }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "feedbackRating": 5, "feedbackComment": "원격지원 후 해결됐습니다." }` | `as_tickets` |
 | `GET` | `/api/admin/as-tickets` | ADMIN | 4번 | `?page=0&size=20` | `{ "items": [{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "userId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "assignedAdminId": null, "createdAt": "2026-06-29T10:42:00Z" }], "page": 0, "size": 20, "total": 1 }` | `as_tickets` |
 | `GET` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "assignedAdminId": null, "causeCandidates": [], "upgradeCandidates": [], "adminNote": null }` | `as_tickets`, `agent_log_uploads` |
 | `PATCH` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | `{ "status": "IN_PROGRESS", "assignedAdminId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "adminNote": "확인 중" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "IN_PROGRESS", "assignedAdminId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "adminNote": "확인 중", "resolvedAt": null, "updatedAt": "2026-06-29T10:45:00Z" }` | `as_tickets`, `users`, `admin_audit_logs` |
@@ -439,6 +443,10 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 `consentAccepted=false`이면 `400`을 반환한다. `true`일 때 서버가 `consent_accepted_at`을 저장한다.
 
 파일 검증 실패는 `400 FILE_VALIDATION_ERROR`를 반환하고 `agent_log_uploads` row를 만들지 않는다. 기준은 `DB_SCHEMA.md`의 로그 업로드 보안 정책을 따른다.
+
+`POST /api/as-tickets/{id}/remote-support-requests`는 사용자가 원격지원 검토를 요청하는 신규 endpoint다. 서버는 티켓 소유자만 허용하고, `reason`이 비어 있으면 `400`을 반환한다. 같은 ticket에 `REQUESTED`, `LINK_SENT`, `IN_PROGRESS` 상태의 원격 세션이 이미 있으면 `409 CONFLICT_STATE`로 중복 생성을 막는다. 생성 시 `remote_support_sessions.status='REQUESTED'` row를 만들고 `as_tickets.review_status='REQUIRED'`로 올린다.
+
+`POST /api/as-tickets/{id}/feedback`은 티켓 소유 사용자의 처리 피드백을 저장한다. `rating`은 1~5 정수이며, 서버는 `feedback_rating`, `feedback_comment`, `feedback_created_at`을 갱신한다. 피드백은 raw log를 다시 열지 않고 ticket 처리 결과와 `LogSummary`/`supportRouting` 개선 데이터로만 사용한다.
 
 `POST /api/agent/log-uploads`는 PC Agent 서버 업로드 경로다. 서버는 `rangeMinutes=30` 고정값을 사용하지 않고 `symptomType`과 incident metadata로 `incidentWindow`를 계산한다.
 
@@ -489,6 +497,7 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `reviewStatus` | `NOT_REQUIRED`, `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` | 관리자 검토 상태다. |
 | `supportDecision` | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `REPAIR_OR_REPLACE`, `NEEDS_MORE_INFO`, `MONITOR_ONLY`, `UNSUPPORTED` | DB/API는 영어 enum만 사용하고, UI 라벨은 `SupportDecision` 계약의 한국어 라벨 매핑을 사용한다. 사용자 `/support/{ticketId}` 화면에도 노출된다. |
 | `riskLevel` | `LOW`, `MEDIUM`, `HIGH` | 데모 화면 표시용 위험도다. |
+| `diagnosticAccuracy` | `ACCURATE`, `PARTIAL`, `MISSED`, `UNKNOWN` | 관리자/운영자가 기록하는 진단 적중 여부다. |
 | `autoResponseAllowed` | boolean | 자동 안내 가능 여부다. |
 | `adminNote` | string | 사용자와 관리자 화면에 표시되는 관리자 메모다. |
 | `remoteSupportLink` | URI string | 외부 원격 지원 링크를 저장한다. Quick Assist 직접 연동은 MVP 제외다. |
@@ -516,7 +525,7 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 }
 ```
 
-사용자 `GET /api/as-tickets/{id}`와 관리자 `GET /api/admin/as-tickets/{id}` 응답은 `analysisStatus`, `reviewStatus`, `supportDecision`, `riskLevel`, `autoResponseAllowed`, `incidentWindow`, `logSummary`, `logSummaryText`, `supportRouting`, `aiDiagnosisRequest`, 예외 승인 필드, `adminNote`, `remoteSupportLink`, `remoteSupportStatus`, `visitSupportRequired`, `visitSupportStatus`, `visitPreferredDate`, `visitTimeSlot`을 포함할 수 있다.
+사용자 `GET /api/as-tickets/{id}`와 관리자 `GET /api/admin/as-tickets/{id}` 응답은 `analysisStatus`, `reviewStatus`, `supportDecision`, `riskLevel`, `autoResponseAllowed`, `incidentWindow`, `logSummary`, `logSummaryText`, `supportRouting`, `safetyAdviceLevel`, `safetyNotices`, `feedbackRating`, `feedbackComment`, `feedbackCreatedAt`, `diagnosticAccuracy`, `aiDiagnosisRequest`, 예외 승인 필드, `adminNote`, `remoteSupportLink`, `remoteSupportStatus`, `visitSupportRequired`, `visitSupportStatus`, `visitPreferredDate`, `visitTimeSlot`을 포함할 수 있다.
 
 #### Agent AS 최종 지원 계약
 
@@ -533,6 +542,8 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `NEEDS_MORE_INFO` | 추가 정보 필요 |
 | `MONITOR_ONLY` | 관찰 필요 |
 | `UNSUPPORTED` | 지원 범위 밖 |
+
+최종 `FINAL_SUPPORT_SCENARIOS.md`의 신규 analyzer/routing 흐름은 coarse decision 4개(`SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`)만 생성한다. 다만 기존 공통 계약과 Java/OpenAPI/DB 호환성을 깨지 않기 위해 `REPAIR_OR_REPLACE`, `MONITOR_ONLY`, `UNSUPPORTED` 값은 삭제하지 않는다. 신규 구현에서는 교체 가능성은 `visitReasons`/`reasonCodes`, 관찰 필요는 `nextActions` 또는 관리자 메모, 지원 범위 밖 사유는 `blockingFactors`와 예외 승인 metadata로 표현한다.
 
 `IncidentWindowDto` 필드:
 
@@ -577,7 +588,18 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `remoteActions` | `RemoteAction[]` | no | 가능한 원격 조치 후보 |
 | `visitReasons` | `VisitReason[]` | no | 방문 필요 근거 |
 | `blockingFactors` | `BlockingFactor[]` | no | 원격/방문 진행 차단 요인 |
+| `safetyAdviceLevel` | `NONE`, `CAUTION`, `STOP_USE_UNTIL_REVIEW` | yes | 위험 신호 감지 시 사용자 안전 안내 수준 |
+| `safetyNotices` | `SafetyNoticeDto[]` | yes | 위험 안내 코드와 사용자 표시 메시지 |
+| `allowAutoResponse` | boolean | yes | 관리자 승인 전 자동 응답 실행 가능 여부. 기본은 false |
+| `adminApprovalRequired` | boolean | yes | `requiresAdminApproval`의 additive alias |
 | `requiresAdminApproval` | boolean | no | 최종 결정은 관리자 승인 필요 |
+
+`SafetyNoticeDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `code` | string | no | `PHYSICAL_DAMAGE_RISK`, `DATA_LOSS_RISK`, `THERMAL_DAMAGE_RISK`, `POWER_PATH_RISK`, `HARDWARE_ERROR_RISK` 등 |
+| `message` | string | no | 사용자에게 표시할 안전 안내 문구 |
 
 `AiDiagnosisRequestDto` 필드:
 
@@ -805,6 +827,8 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `AgentLogUploadDto` | `fileSize` | `number` | yes | `12000` |
 | `AgentLogUploadDto` | `rangeMinutes` | `number` | no | `30` |
 | `AgentLogUploadDto` | `summary` | `string` | yes | `GPU driver error 반복` |
+| `AgentLogUploadDto` | `safetyAdviceLevel` | `SafetyAdviceLevel` | yes | `STOP_USE_UNTIL_REVIEW` |
+| `AgentLogUploadDto` | `safetyNotices` | `SafetyNoticeDto[]` | yes | `[{ "code": "THERMAL_DAMAGE_RISK" }]` |
 | `AgentLogUploadDto` | `deleteAfter` | `string` | no | `2026-07-29T10:40:00Z` |
 | `AsTicketDto` | `id` | `string` | no | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |
 | `AsTicketDto` | `status` | `string` | no | `OPEN` |
@@ -812,6 +836,7 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `AsTicketDto` | `reviewStatus` | `string` | yes | `APPROVED` |
 | `AsTicketDto` | `supportDecision` | `SupportDecision` | yes | `REMOTE_POSSIBLE` |
 | `AsTicketDto` | `riskLevel` | `string` | yes | `MEDIUM` |
+| `AsTicketDto` | `autoResponseAllowed` | `boolean` | yes | `false` |
 | `AsTicketDto` | `symptom` | `string` | no | `화면이 멈춤` |
 | `AsTicketDto` | `logUploadId` | `string` | yes | `1b363bcb-42be-4428-b625-54a6b267d66f` |
 | `AsTicketDto` | `assignedAdminId` | `string` | yes | `c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd` |
@@ -821,6 +846,12 @@ Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버
 | `AsTicketDto` | `logSummary` | `LogSummaryDto` | yes | `{ "summaryVersion": "1" }` |
 | `AsTicketDto` | `logSummaryText` | `string` | yes | `IncidentWindow summary: 2/3 logs used...` |
 | `AsTicketDto` | `supportRouting` | `SupportRoutingDto` | yes | `{ "recommendedDecision": "REMOTE_POSSIBLE" }` |
+| `AsTicketDto` | `safetyAdviceLevel` | `SafetyAdviceLevel` | yes | `STOP_USE_UNTIL_REVIEW` |
+| `AsTicketDto` | `safetyNotices` | `SafetyNoticeDto[]` | yes | `[{ "code": "DATA_LOSS_RISK", "message": "중요 데이터 백업 전까지 사용을 중지해 주세요." }]` |
+| `AsTicketDto` | `feedbackRating` | `number` | yes | `5` |
+| `AsTicketDto` | `feedbackComment` | `string` | yes | `원격지원 후 해결됐습니다.` |
+| `AsTicketDto` | `feedbackCreatedAt` | `string` | yes | `2026-07-03T10:20:00Z` |
+| `AsTicketDto` | `diagnosticAccuracy` | `DiagnosticAccuracy` | yes | `ACCURATE` |
 | `AsTicketDto` | `adminNote` | `string` | yes | `확인 중` |
 | `AsTicketDto` | `aiDiagnosisRequest` | `object` | yes | `{ "ticketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "rawSamples": [] }` |
 | `AsTicketDto` | `exceptionApprovalReason` | `string` | yes | `Customer paid exception support.` |

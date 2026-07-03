@@ -20,6 +20,10 @@ const beforeDecisionTicket = {
   adminNote: null,
   remoteSupportLink: null,
   remoteSupportStatus: null,
+  safetyAdviceLevel: 'STOP_USE_UNTIL_REVIEW',
+  safetyNotices: [
+    { code: 'THERMAL_DAMAGE_RISK', message: '담당자 검토 전까지 고부하 작업을 중지해 주세요.' }
+  ],
   visitSupportRequired: false,
   createdAt: '2026-07-02T06:30:00Z'
 };
@@ -44,6 +48,8 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     [afterDecisionTicket.id, afterDecisionTicket]
   ]);
   let decisionPatchPayload: Record<string, unknown> | undefined;
+  let remoteRequestPayload: Record<string, unknown> | undefined;
+  let feedbackPayload: Record<string, unknown> | undefined;
 
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -72,6 +78,34 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());
     await fulfillTicket(route, tickets.get(ticketId));
+  });
+  await page.route(/\/api\/as-tickets\/[^/]+\/remote-support-requests$/, async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const match = new URL(route.request().url()).pathname.match(/\/api\/as-tickets\/([^/]+)\/remote-support-requests$/);
+    const ticketId = match?.[1] ?? beforeDecisionTicket.id;
+    remoteRequestPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const current = tickets.get(ticketId) ?? beforeDecisionTicket;
+    const updated = {
+      ...current,
+      remoteSupportStatus: 'REQUESTED',
+      reviewStatus: 'REQUIRED'
+    };
+    tickets.set(ticketId, updated);
+    await fulfillTicket(route, updated);
+  });
+  await page.route(/\/api\/as-tickets\/[^/]+\/feedback$/, async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const match = new URL(route.request().url()).pathname.match(/\/api\/as-tickets\/([^/]+)\/feedback$/);
+    const ticketId = match?.[1] ?? beforeDecisionTicket.id;
+    feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const current = tickets.get(ticketId) ?? beforeDecisionTicket;
+    const updated = {
+      ...current,
+      feedbackRating: feedbackPayload.rating,
+      feedbackComment: feedbackPayload.comment
+    };
+    tickets.set(ticketId, updated);
+    await fulfillTicket(route, updated);
   });
   await page.route('**/api/admin/as-tickets', async (route) => {
     recordApiCall(apiCalls, route.request());
@@ -102,7 +136,8 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
 
   await page.goto('/support/new');
   await expect(page.getByRole('main')).toContainText('AS 접수');
-  await expect(page.getByRole('main')).toContainText('최근 30분 로그 파일');
+  await expect(page.getByRole('main')).toContainText('IncidentWindow 확인');
+  await expect(page.getByRole('main')).toContainText('선택 구간 로그 파일');
   await page.screenshot({ path: `${screenshotDir}/01-support-new.png`, fullPage: true });
 
   await page.goto('/support/qa-ticket-before');
@@ -110,6 +145,18 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('검토 필요');
   await expect(page.getByRole('main')).toContainText('추가 정보 필요');
   await expect(page.getByRole('main')).toContainText('GPU thermal throttling');
+  await expect(page.getByRole('main')).toContainText('안전 안내');
+  await expect(page.getByRole('main')).toContainText('고부하 작업을 중지');
+  await page.getByRole('button', { name: '원격지원 요청' }).click();
+  await expect(page.getByRole('main')).toContainText('원격지원 상태: 신청됨');
+  expect(remoteRequestPayload).toMatchObject({
+    reason: '원격지원으로 화면을 함께 확인하고 싶습니다.'
+  });
+  await page.getByRole('button', { name: '피드백 저장' }).click();
+  await expect(page.getByRole('main')).toContainText('저장된 평점 5/5');
+  expect(feedbackPayload).toMatchObject({
+    rating: 5
+  });
   await expect(page.getByRole('main')).not.toContainText('undefined');
   await page.screenshot({ path: `${screenshotDir}/02-support-ticket-before-decision.png`, fullPage: true });
 
@@ -121,6 +168,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.getByLabel('검토 상태').selectOption('APPROVED');
   await page.getByLabel('지원 결정').selectOption('REMOTE_POSSIBLE');
   await page.getByLabel('위험도').selectOption('HIGH');
+  await page.getByLabel('진단 적중 여부').selectOption('ACCURATE');
   await page.getByLabel('원격 지원 링크').fill('https://support.example.test/session/qa-ticket-before');
   await page.getByLabel('관리자 메모').fill('Remote support link sent.');
   await page.getByRole('button', { name: '결정 저장' }).click();
@@ -132,6 +180,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     reviewStatus: 'APPROVED',
     supportDecision: 'REMOTE_POSSIBLE',
     riskLevel: 'HIGH',
+    diagnosticAccuracy: 'ACCURATE',
     remoteSupportLink: 'https://support.example.test/session/qa-ticket-before',
     adminNote: 'Remote support link sent.'
   });

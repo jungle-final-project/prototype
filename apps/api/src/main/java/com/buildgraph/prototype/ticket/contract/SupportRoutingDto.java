@@ -10,6 +10,9 @@ public record SupportRoutingDto(
         @NotNull List<RemoteAction> remoteActions,
         @NotNull List<VisitReason> visitReasons,
         @NotNull List<BlockingFactor> blockingFactors,
+        SafetyAdviceLevel safetyAdviceLevel,
+        List<SafetyNoticeDto> safetyNotices,
+        Boolean allowAutoResponse,
         boolean requiresAdminApproval
 ) {
 }

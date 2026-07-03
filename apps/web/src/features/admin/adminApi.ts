@@ -90,6 +90,12 @@ export type AdminAsTicket = {
   supportDecision?: string | null;
   riskLevel?: string | null;
   autoResponseAllowed?: boolean | null;
+  safetyAdviceLevel?: string | null;
+  safetyNotices?: Record<string, unknown>[] | null;
+  feedbackRating?: number | null;
+  feedbackComment?: string | null;
+  feedbackCreatedAt?: string | null;
+  diagnosticAccuracy?: string | null;
   symptom: string;
   title?: string | null;
   description?: string | null;
@@ -129,6 +135,7 @@ export type AdminAsTicketUpdateRequest = {
   reviewStatus?: string | null;
   riskLevel?: string | null;
   autoResponseAllowed?: boolean | null;
+  diagnosticAccuracy?: string | null;
   remoteSupportLink?: string | null;
   remoteSupportUrl?: string | null;
   visitSupportRequired?: boolean | null;

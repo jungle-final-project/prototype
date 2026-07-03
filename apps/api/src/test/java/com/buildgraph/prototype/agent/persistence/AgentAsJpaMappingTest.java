@@ -57,7 +57,7 @@ class AgentAsJpaMappingTest {
     @Test
     void enumsUseDbSchemaValues() {
         assertEnumValues(AgentDeviceStatus.class, "PENDING_REGISTERED", "ACTIVE", "UPDATE_REQUIRED", "BLOCKED", "REVOKED", "UNINSTALLED");
-        assertEnumValues(AgentConsentType.class, "LOCAL_COLLECTION", "SERVER_UPLOAD", "QUALITY_IMPROVEMENT");
+        assertEnumValues(AgentConsentType.class, "LOCAL_COLLECTION", "SERVER_UPLOAD", "QUALITY_IMPROVEMENT", "REMOTE_CONNECTION", "REMOTE_FULL_CONTROL", "HIGH_RISK_REMOTE_ACTION");
         assertEnumValues(AgentUpdateChannel.class, "STABLE");
         assertEnumValues(AgentRolloutStatus.class, "ACTIVE", "PAUSED", "ROLLED_BACK");
         assertEnumValues(AgentUploadJobStatus.class, "QUEUED", "UPLOADING", "UPLOADED", "FAILED_RETRYABLE", "FAILED_FINAL", "CANCELLED", "EXPIRED");

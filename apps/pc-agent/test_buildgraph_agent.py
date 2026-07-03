@@ -33,6 +33,13 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertIn("memoryUsage", row)
             self.assertIn("eventType", row)
             self.assertIn("message", row)
+            self.assertEqual(row["schemaVersion"], 1)
+            self.assertIn("collectedAt", row)
+            self.assertEqual(row["agentId"], "fingerprint")
+            self.assertEqual(row["sequence"], 0)
+            self.assertEqual(row["kind"], row["eventType"])
+            self.assertEqual(row["payload"]["eventType"], row["eventType"])
+            self.assertEqual(row["privacyFlags"], {"containsRawPath": False, "masked": True})
 
     def test_gzip_recent_selects_recent_rows_and_writes_non_empty_gzip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -106,6 +113,7 @@ class AgentGoal1112Test(unittest.TestCase):
 
             self.assertIn("multipart/form-data", content_type)
             self.assertIn(b'name="rangeMinutes"', body)
+            self.assertIn(b"Content-Type: text/plain; charset=utf-8", body)
             self.assertIn(b"\r\n30\r\n", body)
             self.assertIn(b'name="schemaVersion"', body)
             self.assertIn(b'name="symptom"', body)

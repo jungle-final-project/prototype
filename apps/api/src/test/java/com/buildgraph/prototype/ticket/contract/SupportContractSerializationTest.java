@@ -46,6 +46,8 @@ class SupportContractSerializationTest {
         assertThat(parsed.locale()).isEqualTo("ko-KR");
         assertThat(parsed.rawSamples()).hasSize(1);
         assertThat(parsed.supportRouting().recommendedDecision()).isEqualTo(SupportDecision.REMOTE_POSSIBLE);
+        assertThat(parsed.supportRouting().safetyAdviceLevel()).isEqualTo(SafetyAdviceLevel.NONE);
+        assertThat(parsed.supportRouting().allowAutoResponse()).isFalse();
         assertThat(parsed.logSummary().incidentWindow().symptomType()).isEqualTo(SymptomType.REMOTE_DRIVER_OS);
         assertThat(VALIDATOR.validate(parsed)).isEmpty();
     }
@@ -114,6 +116,9 @@ class SupportContractSerializationTest {
                 List.of(RemoteAction.DRIVER_ROLLBACK, RemoteAction.WINDOWS_UPDATE_CHECK),
                 List.of(),
                 List.of(BlockingFactor.ADMIN_APPROVAL_REQUIRED),
+                SafetyAdviceLevel.NONE,
+                List.of(),
+                false,
                 true
         );
         return new AiDiagnosisRequestDto(

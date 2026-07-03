@@ -14,8 +14,15 @@ export type AgentLogUploadDto = {
   fileSize?: number;
   rangeMinutes: number;
   summary?: string;
+  safetyAdviceLevel?: string | null;
+  safetyNotices?: SafetyNoticeDto[] | null;
   createdAt?: string;
   deleteAfter: string;
+};
+
+export type SafetyNoticeDto = {
+  code?: string;
+  message?: string;
 };
 
 export type CauseCandidate = {
@@ -40,6 +47,12 @@ export type AsTicketDto = {
   supportDecision?: string | null;
   riskLevel?: string | null;
   autoResponseAllowed?: boolean | null;
+  safetyAdviceLevel?: string | null;
+  safetyNotices?: SafetyNoticeDto[] | null;
+  feedbackRating?: number | null;
+  feedbackComment?: string | null;
+  feedbackCreatedAt?: string | null;
+  diagnosticAccuracy?: string | null;
   symptom: string;
   logUploadId?: string | null;
   assignedAdminId?: string | null;

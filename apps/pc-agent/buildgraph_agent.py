@@ -463,12 +463,34 @@ def metric_snapshot(ts: datetime, index: int) -> dict:
     }
 
 
+def metric_log_row(ts: datetime, index: int, schema_version: int, agent_id: str) -> dict:
+    payload = metric_snapshot(ts, index)
+    return {
+        **payload,
+        "schemaVersion": schema_version,
+        "collectedAt": ts.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "agentId": agent_id,
+        "sequence": index,
+        "kind": payload.get("eventType") or "DEMO_METRIC",
+        "payload": payload,
+        "privacyFlags": {
+            "containsRawPath": False,
+            "masked": True,
+        },
+    }
+
+
 def write_sample(out: Path, count: int, interval_seconds: int) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     start = datetime.now(KST) - timedelta(seconds=count * interval_seconds)
     with out.open("w", encoding="utf-8") as file:
         for index in range(count):
-            row = metric_snapshot(start + timedelta(seconds=index * interval_seconds), index)
+            row = metric_log_row(
+                start + timedelta(seconds=index * interval_seconds),
+                index,
+                DEFAULT_SCHEMA_VERSION,
+                "sample-agent",
+            )
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
@@ -613,7 +635,12 @@ def export_window(source: Path, out: Path, window: IncidentWindow) -> None:
 def append_metric(config: AgentConfig, index: int = 0) -> Path:
     path = log_file(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    row = metric_snapshot(datetime.now(KST), index)
+    row = metric_log_row(
+        datetime.now(KST),
+        index,
+        config.schema_version,
+        config.device_fingerprint_hash,
+    )
     row["agentVersion"] = config.agent_version
     row["policyVersion"] = config.policy_version
     with path.open("a", encoding="utf-8") as file:
@@ -667,7 +694,8 @@ def build_multipart(fields: dict[str, str], file_field: str, file_path: Path) ->
         parts.append(
             (
                 f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                f'Content-Disposition: form-data; name="{name}"\r\n'
+                "Content-Type: text/plain; charset=utf-8\r\n\r\n"
                 f"{value}\r\n"
             ).encode("utf-8")
         )

@@ -17,6 +17,7 @@ import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
@@ -25,6 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.http.HttpStatus;
@@ -332,6 +335,44 @@ class PcAgentAsServiceTest {
         assertThat(response.get("revokedAt")).isEqualTo(Instant.parse("2026-07-02T00:00:00Z"));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"REMOTE_CONNECTION", "REMOTE_FULL_CONTROL", "HIGH_RISK_REMOTE_ACTION"})
+    void saveConsentAcceptsFinalScenarioStepConsentTypes(String consentType) {
+        when(jdbcTemplate.queryForMap(
+                contains("INSERT INTO agent_consents"),
+                eq(20L),
+                eq(10L),
+                eq(consentType),
+                eq("policy-v1"),
+                eq("consent-key-" + consentType),
+                eq(true),
+                eq(true),
+                eq(true)
+        )).thenReturn(MockData.map(
+                "id", "consent-public-id",
+                "consent_type", consentType,
+                "policy_version", "policy-v1",
+                "accepted", true,
+                "accepted_at", Instant.parse("2026-07-02T00:00:00Z"),
+                "revoked_at", null
+        ));
+
+        Map<String, Object> response = service.saveConsent(
+                AGENT,
+                MockData.map(
+                        "consentType", consentType,
+                        "policyVersion", "policy-v1",
+                        "accepted", true,
+                        "asTicketId", "ticket-public-id",
+                        "remoteSessionId", "remote-session-public-id"
+                ),
+                "consent-key-" + consentType
+        );
+
+        assertThat(response.get("consentType")).isEqualTo(consentType);
+        assertThat(response.get("accepted")).isEqualTo(true);
+    }
+
     @Test
     void saveConsentRejectsUnknownConsentType() {
         assertThatThrownBy(() -> service.saveConsent(
@@ -483,6 +524,8 @@ class PcAgentAsServiceTest {
 
     @Test
     void uploadLogsCreatesUploadJobLogUploadAndTicketWithDiagnosisStatus() {
+        String symptom = "게임 중 화면 드라이버 경고와 발열이 있습니다.";
+        String multipartDecodedSymptom = iso88591Mojibake(symptom);
         when(jdbcTemplate.queryForObject(contains("FROM agent_consents"), eq(Integer.class), eq(10L)))
                 .thenReturn(1);
         when(jdbcTemplate.queryForMap(contains("INSERT INTO agent_upload_jobs"), eq(10L), eq("upload-key"), any(), any()))
@@ -528,7 +571,7 @@ class PcAgentAsServiceTest {
                 any(String.class),
                 eq(20L),
                 eq(200L),
-                eq("GPU temperature spike"),
+                eq(symptom),
                 eq("REMOTE_POSSIBLE"),
                 eq("MEDIUM"),
                 any(String.class),
@@ -537,6 +580,8 @@ class PcAgentAsServiceTest {
                 any(String.class),
                 any(String.class),
                 any(String.class),
+                any(String.class),
+                eq("NONE"),
                 any(String.class)
         )).thenReturn(MockData.map(
                 "ticket_id", "ticket-public-id",
@@ -550,7 +595,7 @@ class PcAgentAsServiceTest {
         Map<String, Object> response = service.uploadLogs(
                 AGENT,
                 new MockMultipartFile("file", "agent-log.jsonl.gz", "application/gzip", gzip(driverErrorLogs())),
-                MockData.map("symptomType", "REMOTE_DRIVER_OS", "symptom", "GPU temperature spike"),
+                MockData.map("symptomType", "REMOTE_DRIVER_OS", "symptom", multipartDecodedSymptom),
                 "upload-key"
         );
 
@@ -585,7 +630,7 @@ class PcAgentAsServiceTest {
                 any(String.class),
                 eq(20L),
                 eq(200L),
-                eq("GPU temperature spike"),
+                eq(symptom),
                 eq("REMOTE_POSSIBLE"),
                 eq("MEDIUM"),
                 any(String.class),
@@ -594,6 +639,8 @@ class PcAgentAsServiceTest {
                 any(String.class),
                 any(String.class),
                 any(String.class),
+                any(String.class),
+                eq("NONE"),
                 any(String.class)
         );
     }
@@ -756,6 +803,10 @@ class PcAgentAsServiceTest {
         return """
                 {"schemaVersion":"1","collectedAt":"%s","agentId":"agent-public-id","sequence":%d,"kind":"%s","payload":{"message":"%s"},"privacyFlags":{"masked":true,"containsRawPath":false}}
                 """.formatted(collectedAt, sequence, kind, message.replace("\\", "\\\\").replace("\"", "\\\""));
+    }
+
+    private static String iso88591Mojibake(String value) {
+        return new String(value.getBytes(StandardCharsets.UTF_8), StandardCharsets.ISO_8859_1);
     }
 
     private static Map<String, Object> validActivationRow(Long existingDeviceInternalId, Instant usedAt) {

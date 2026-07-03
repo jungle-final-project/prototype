@@ -12,7 +12,10 @@ enum AgentDeviceStatus {
 enum AgentConsentType {
     LOCAL_COLLECTION,
     SERVER_UPLOAD,
-    QUALITY_IMPROVEMENT
+    QUALITY_IMPROVEMENT,
+    REMOTE_CONNECTION,
+    REMOTE_FULL_CONTROL,
+    HIGH_RISK_REMOTE_ACTION
 }
 
 enum AgentUpdateChannel {

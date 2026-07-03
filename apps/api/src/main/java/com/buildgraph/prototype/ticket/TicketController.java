@@ -41,4 +41,25 @@ public class TicketController {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
         return ticketQueryService.ticket(id, user);
     }
+
+    @PostMapping("/as-tickets/{id}/remote-support-requests")
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> requestRemoteSupport(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return ticketQueryService.requestRemoteSupport(id, request == null ? Map.of() : request, user);
+    }
+
+    @PostMapping("/as-tickets/{id}/feedback")
+    Map<String, Object> submitFeedback(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return ticketQueryService.submitFeedback(id, request == null ? Map.of() : request, user);
+    }
 }

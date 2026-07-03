@@ -10,6 +10,7 @@ const editableStatuses: AsTicketStatus[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', '
 const reviewStatuses = ['', 'NOT_REQUIRED', 'REQUIRED', 'IN_REVIEW', 'APPROVED', 'REJECTED'];
 const supportDecisions = ['', 'SELF_SOLVABLE', 'REMOTE_POSSIBLE', 'VISIT_REQUIRED', 'NEEDS_MORE_INFO'];
 const riskLevels = ['', 'LOW', 'MEDIUM', 'HIGH'];
+const diagnosticAccuracies = ['', 'ACCURATE', 'PARTIAL', 'MISSED', 'UNKNOWN'];
 const visitTimeSlots = ['', 'MORNING', 'AFTERNOON', 'EVENING'];
 const remoteTimeSlots = buildRemoteTimeSlots();
 
@@ -19,6 +20,7 @@ type DecisionForm = {
   supportDecision: string;
   reviewStatus: string;
   riskLevel: string;
+  diagnosticAccuracy: string;
   autoResponseAllowed: 'UNCHANGED' | 'true' | 'false';
   remoteSupportLink: string;
   quickAssistCode: string;
@@ -38,6 +40,7 @@ const emptyDecisionForm: DecisionForm = {
   supportDecision: '',
   reviewStatus: '',
   riskLevel: '',
+  diagnosticAccuracy: '',
   autoResponseAllowed: 'UNCHANGED',
   remoteSupportLink: '',
   quickAssistCode: '',
@@ -78,6 +81,7 @@ export function AdminTicketDetailPage() {
       supportDecision: ticket.supportDecision ?? '',
       reviewStatus: ticket.reviewStatus ?? '',
       riskLevel: ticket.riskLevel ?? '',
+      diagnosticAccuracy: ticket.diagnosticAccuracy ?? '',
       autoResponseAllowed: ticket.autoResponseAllowed == null ? 'UNCHANGED' : String(ticket.autoResponseAllowed) as 'true' | 'false',
       remoteSupportLink: ticket.remoteSupportLink ?? '',
       quickAssistCode: extractQuickAssistCode(ticket.remoteSupportLink ?? ''),
@@ -171,6 +175,16 @@ export function AdminTicketDetailPage() {
                 onChange={(event) => setDecisionForm({ ...decisionForm, riskLevel: event.target.value })}
               >
                 {riskLevels.map((riskLevel) => <option key={riskLevel || 'empty'} value={riskLevel}>{riskLevel || '변경 없음'}</option>)}
+              </select>
+            </Field>
+            <Field label="진단 적중 여부" htmlFor="diagnostic-accuracy">
+              <select
+                id="diagnostic-accuracy"
+                className="w-full rounded border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-800"
+                value={decisionForm.diagnosticAccuracy}
+                onChange={(event) => setDecisionForm({ ...decisionForm, diagnosticAccuracy: event.target.value })}
+              >
+                {diagnosticAccuracies.map((accuracy) => <option key={accuracy || 'empty'} value={accuracy}>{accuracy || '변경 없음'}</option>)}
               </select>
             </Field>
             <Field label="자동 안내 허용" htmlFor="auto-response-allowed">
@@ -364,6 +378,7 @@ function buildUpdateRequest(
   assignIfChanged(request, 'supportDecision', ticket.supportDecision, form.supportDecision);
   assignIfChanged(request, 'reviewStatus', ticket.reviewStatus, form.reviewStatus);
   assignIfChanged(request, 'riskLevel', ticket.riskLevel, form.riskLevel);
+  assignIfChanged(request, 'diagnosticAccuracy', ticket.diagnosticAccuracy, form.diagnosticAccuracy);
   assignIfChanged(request, 'remoteSupportLink', ticket.remoteSupportLink, remoteSupportLink);
   const currentAuto = ticket.autoResponseAllowed == null ? 'UNCHANGED' : String(ticket.autoResponseAllowed);
   if (form.autoResponseAllowed !== currentAuto && form.autoResponseAllowed !== 'UNCHANGED') {
@@ -446,6 +461,7 @@ type StringUpdateKey =
   | 'supportDecision'
   | 'reviewStatus'
   | 'riskLevel'
+  | 'diagnosticAccuracy'
   | 'remoteSupportLink'
   | 'visitPreferredDate'
   | 'visitTimeSlot';
@@ -469,6 +485,8 @@ function ticketDetailRows(ticket: AdminAsTicket) {
     { 항목: '검토 상태', 내용: ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
     { 항목: '지원 결정', 내용: ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
     { 항목: '위험도', 내용: ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
+    { 항목: '진단 적중 여부', 내용: ticket.diagnosticAccuracy ?? '-' },
+    { 항목: '사용자 피드백', 내용: ticket.feedbackRating ? `${ticket.feedbackRating}/5 ${ticket.feedbackComment ?? ''}`.trim() : '-' },
     { 항목: '제목/증상', 내용: ticket.title ?? ticket.symptom },
     { 항목: '상세 설명', 내용: ticket.description ?? ticket.detailDescription ?? '상세 설명 응답 없음' },
     { 항목: '로그 요약', 내용: logSummary(ticket) },

@@ -12,6 +12,16 @@ export type UploadAgentLogMetadata = {
   consentId?: string;
 };
 
+export type RemoteSupportRequestCreateRequest = {
+  reason: string;
+  contactPhone?: string;
+};
+
+export type SupportFeedbackRequest = {
+  rating: number;
+  comment?: string;
+};
+
 export function uploadAgentLog(rangeMinutes: number, consentAccepted: boolean, file: File, metadata: UploadAgentLogMetadata = {}) {
   const body = new FormData();
   body.append('file', file);
@@ -38,4 +48,18 @@ export function createSupportTicket(symptom: string, logUploadId: string) {
 
 export function getSupportTicket(ticketId: string) {
   return api<AsTicketDto>(`/api/as-tickets/${ticketId}`);
+}
+
+export function requestRemoteSupport(ticketId: string, request: RemoteSupportRequestCreateRequest) {
+  return api<AsTicketDto>(`/api/as-tickets/${ticketId}/remote-support-requests`, {
+    method: 'POST',
+    body: JSON.stringify(request)
+  });
+}
+
+export function submitSupportFeedback(ticketId: string, request: SupportFeedbackRequest) {
+  return api<AsTicketDto>(`/api/as-tickets/${ticketId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(request)
+  });
 }

@@ -992,6 +992,86 @@ PC Agent 서버 업로드 IncidentWindow 정책:
 | BSOD/디스크/전원/thermal/방문 5종 | 발생 전 30분, 후 10분 |
 | 부팅 불가/원격 불가 | 마지막 정상 부팅 이후 critical event 요약. `lastNormalBootAt`이 없으면 서버 감지 시각 기준 최근 24시간 fallback |
 
+### agent_consents
+
+목적: PC Agent 수집/업로드/원격지원 단계별 사용자 동의를 저장한다.
+
+Owner: 4번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `user_id` | `BIGINT` | no | `users.id` | 사용자 |
+| `device_id` | `BIGINT` | yes | `agent_devices.id` | PC Agent 장치 |
+| `as_ticket_id` | `BIGINT` | yes | `as_tickets.id` | 원격지원/고위험 조치 동의가 연결된 AS 티켓 |
+| `remote_session_id` | `BIGINT` | yes | `remote_support_sessions.id` | 원격지원 세션 |
+| `consent_type` | `VARCHAR(50)` | no | - | `LOCAL_COLLECTION`, `SERVER_UPLOAD`, `QUALITY_IMPROVEMENT`, `REMOTE_CONNECTION`, `REMOTE_FULL_CONTROL`, `HIGH_RISK_REMOTE_ACTION` |
+| `policy_version` | `VARCHAR(80)` | no | - | 동의 정책 버전 |
+| `source` | `VARCHAR(50)` | no | - | 동의 수집 경로 |
+| `idempotency_key` | `VARCHAR(160)` | no | - | Agent idempotency key |
+| `accepted` | `BOOLEAN` | no | - | 동의 여부 |
+| `accepted_at` | `TIMESTAMPTZ` | yes | - | 동의 시각 |
+| `revoked_at` | `TIMESTAMPTZ` | yes | - | 철회 시각 |
+| `action_code` | `VARCHAR(80)` | yes | - | 고위험 원격 조치 코드 |
+| `playbook_id` | `VARCHAR(120)` | yes | - | 승인된 원격 조치 playbook |
+| `risk_notice_version` | `VARCHAR(80)` | yes | - | 사용자 위험 재확인 안내 버전 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+
+Index:
+
+- unique: `agent_consents.public_id`
+- unique: `(device_id, idempotency_key)`
+- index: `agent_consents.user_id`
+- index: `agent_consents.device_id`
+- index: `(user_id, consent_type, created_at)`
+- index: `(as_ticket_id, consent_type, created_at)`
+- index: `(remote_session_id, consent_type, created_at)`
+
+### remote_support_sessions
+
+목적: Quick Assist 또는 외부 원격지원 링크/코드 흐름과 사용자 요청, 단계별 동의, 감사 metadata를 저장한다.
+
+Owner: 4번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `as_ticket_id` | `BIGINT` | no | `as_tickets.id` | AS 티켓 |
+| `device_id` | `BIGINT` | yes | `agent_devices.id` | PC Agent 장치 |
+| `provider` | `VARCHAR(80)` | no | - | `EXTERNAL_LINK`, `ANYDESK`, `TEAMVIEWER`, `ZOOM`, `GOOGLE_MEET` |
+| `session_url` | `TEXT` | yes | - | Quick Assist 또는 외부 원격지원 링크 |
+| `status` | `VARCHAR(30)` | no | - | `REQUESTED`, `LINK_SENT`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
+| `requested_by_admin_id` | `BIGINT` | yes | `users.id` | 링크/세션을 생성한 관리자 |
+| `requested_by_user_id` | `BIGINT` | yes | `users.id` | 원격지원 요청 사용자 |
+| `request_reason` | `TEXT` | yes | - | 사용자 원격지원 요청 사유 |
+| `contact_phone_snapshot` | `VARCHAR(50)` | yes | - | 사용자가 제공한 연락처 snapshot |
+| `user_requested_at` | `TIMESTAMPTZ` | yes | - | 사용자 요청 시각 |
+| `connection_consent_id` | `BIGINT` | yes | `agent_consents.id` | 원격 연결 동의 |
+| `full_control_consent_id` | `BIGINT` | yes | `agent_consents.id` | 전체 제어 동의 |
+| `high_risk_consent_id` | `BIGINT` | yes | `agent_consents.id` | 고위험 원격 조치 동의 |
+| `action_code` | `VARCHAR(80)` | yes | - | 원격 조치 코드 |
+| `playbook_id` | `VARCHAR(120)` | yes | - | 승인된 playbook |
+| `risk_notice_version` | `VARCHAR(80)` | yes | - | 사용자 위험 재확인 안내 버전 |
+| `full_control_allowed_at` | `TIMESTAMPTZ` | yes | - | 전체 제어 허용 시각 |
+| `full_control_revoked_at` | `TIMESTAMPTZ` | yes | - | 전체 제어 철회 시각 |
+| `started_at` | `TIMESTAMPTZ` | yes | - | 원격지원 시작 시각 |
+| `ended_at` | `TIMESTAMPTZ` | yes | - | 원격지원 종료 시각 |
+| `ended_reason` | `TEXT` | yes | - | 종료 사유 |
+| `audit_metadata` | `JSONB` | no | - | 링크 전달/연결/동의 확인 등 감사 metadata, 기본 `{}` |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+
+Index:
+
+- unique: `remote_support_sessions.public_id`
+- index: `remote_support_sessions.as_ticket_id`
+- index: `remote_support_sessions.device_id`
+- index: `remote_support_sessions.status`
+- index: `remote_support_sessions.created_at`
+- index: `(requested_by_user_id, user_requested_at)`
+- index: `(as_ticket_id, status)`
+
 ### as_tickets
 
 목적: AS 접수와 관리자 처리 상태를 저장한다.
@@ -1018,11 +1098,17 @@ Owner: 4번
 | `log_summary` | `JSONB` | yes | - | `LogSummaryDto` 계약. rawSamples는 최대 20개 |
 | `support_routing` | `JSONB` | yes | - | `SupportRoutingDto` 계약 |
 | `ai_diagnosis_request` | `JSONB` | yes | - | `AiDiagnosisRequestDto` 계약. 원본 gzip/전체 JSONL/전체 프로세스 목록 금지 |
+| `safety_advice_level` | `VARCHAR(40)` | yes | - | `NONE`, `CAUTION`, `STOP_USE_UNTIL_REVIEW` |
+| `safety_notices` | `JSONB` | no | - | `SafetyNoticeDto[]`, 기본 `[]` |
 | `exception_approval_reason` | `TEXT` | yes | - | `UNSUPPORTED` 예외 승인 사유 |
 | `exception_responsibility_scope` | `TEXT` | yes | - | 예외 승인 책임 범위 |
 | `exception_user_message` | `TEXT` | yes | - | 사용자 안내 문구 |
 | `exception_approved_at` | `TIMESTAMPTZ` | yes | - | 예외 승인 시각 |
 | `exception_approved_by` | `BIGINT` | yes | `users.id` | 예외 승인 관리자 |
+| `feedback_rating` | `INTEGER` | yes | - | 사용자 처리 결과 평점. 운영 고도화 입력 |
+| `feedback_comment` | `TEXT` | yes | - | 사용자 처리 결과 코멘트 |
+| `feedback_created_at` | `TIMESTAMPTZ` | yes | - | 피드백 생성 시각 |
+| `diagnostic_accuracy` | `VARCHAR(40)` | yes | - | `ACCURATE`, `PARTIAL`, `MISSED`, `UNKNOWN` |
 | `admin_note` | `TEXT` | yes | - | 관리자 메모 |
 | `resolved_at` | `TIMESTAMPTZ` | yes | - | 해결 시각 |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
@@ -1194,7 +1280,13 @@ JSONB 허용 대상:
 - `rag_evidence.metadata`
 - `as_tickets.cause_candidates`
 - `as_tickets.upgrade_candidates`
+- `as_tickets.incident_window`
+- `as_tickets.log_summary`
+- `as_tickets.support_routing`
+- `as_tickets.ai_diagnosis_request`
+- `as_tickets.safety_notices`
 - `as_chat_messages.structured_payload`
+- `remote_support_sessions.audit_metadata`
 - `admin_audit_logs.metadata`
 
 JSONB 금지 대상:

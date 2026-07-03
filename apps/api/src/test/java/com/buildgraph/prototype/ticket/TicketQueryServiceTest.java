@@ -10,7 +10,6 @@ import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -40,7 +39,7 @@ class TicketQueryServiceTest {
 
     @Test
     void userTicketLookupRestrictsTicketByOwner() {
-        when(jdbcTemplate.queryForList(contains("t.user_id = ?"), eq("ticket-public-id"), eq(20L)))
+        when(jdbcTemplate.queryForList(contains("SELECT t.public_id::text AS id"), eq("ticket-public-id"), eq(20L)))
                 .thenReturn(List.of(MockData.map(
                         "id", "ticket-public-id",
                         "status", "OPEN",
@@ -65,7 +64,7 @@ class TicketQueryServiceTest {
     }
 
     @Test
-    void updateStoresSupportDecisionRemoteLinkVisitRequestAndAuditLog() {
+    void updateStoresApprovedRemoteDecisionLinkAndAuditLog() {
         when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
                 .thenReturn(List.of(MockData.map(
                         "internal_id", 100L,
@@ -83,6 +82,7 @@ class TicketQueryServiceTest {
                         "support_decision", "REMOTE_POSSIBLE",
                         "risk_level", "HIGH",
                         "auto_response_allowed", true,
+                        "diagnostic_accuracy", "ACCURATE",
                         "symptom", "GPU temperature spike",
                         "log_upload_id", "log-upload-public-id",
                         "assigned_admin_id", "admin-public-id",
@@ -90,11 +90,7 @@ class TicketQueryServiceTest {
                         "upgrade_candidates", "[]",
                         "admin_note", "Remote support link sent.",
                         "remote_support_link", "https://support.example/session/1",
-                        "remote_support_status", "LINK_SENT",
-                        "visit_support_id", "visit-public-id",
-                        "visit_support_status", "REQUESTED",
-                        "visit_preferred_date", LocalDate.parse("2026-07-03"),
-                        "visit_time_slot", "AFTERNOON"
+                        "remote_support_status", "LINK_SENT"
                 )));
 
         Map<String, Object> response = service.update("ticket-public-id", MockData.map(
@@ -103,21 +99,19 @@ class TicketQueryServiceTest {
                 "reviewStatus", "APPROVED",
                 "riskLevel", "HIGH",
                 "autoResponseAllowed", true,
+                "diagnosticAccuracy", "ACCURATE",
                 "adminNote", "Remote support link sent.",
-                "remoteSupportLink", "https://support.example/session/1",
-                "visitSupportRequired", true,
-                "visitPreferredDate", "2026-07-03",
-                "visitTimeSlot", "AFTERNOON"
+                "remoteSupportLink", "https://support.example/session/1"
         ), admin);
 
         assertThat(response.get("supportDecision")).isEqualTo("REMOTE_POSSIBLE");
         assertThat(response.get("reviewStatus")).isEqualTo("APPROVED");
         assertThat(response.get("riskLevel")).isEqualTo("HIGH");
         assertThat(response.get("autoResponseAllowed")).isEqualTo(true);
+        assertThat(response.get("diagnosticAccuracy")).isEqualTo("ACCURATE");
         assertThat(response.get("remoteSupportLink")).isEqualTo("https://support.example/session/1");
         assertThat(response.get("remoteSupportStatus")).isEqualTo("LINK_SENT");
-        assertThat(response.get("visitSupportRequired")).isEqualTo(true);
-        assertThat(response.get("visitSupportStatus")).isEqualTo("REQUESTED");
+        assertThat(response.get("visitSupportRequired")).isEqualTo(false);
 
         verify(jdbcTemplate).update(contains("UPDATE as_tickets"), eq("IN_PROGRESS"), eq("ticket-public-id"));
         verify(jdbcTemplate).update(
@@ -128,16 +122,8 @@ class TicketQueryServiceTest {
                 eq(true),
                 eq("ticket-public-id")
         );
+        verify(jdbcTemplate).update(contains("diagnostic_accuracy"), eq("ACCURATE"), eq("ticket-public-id"));
         verify(jdbcTemplate).update(contains("remote_support_sessions"), eq("https://support.example/session/1"), eq(1L), eq("ticket-public-id"));
-        verify(jdbcTemplate).update(
-                contains("visit_support_reservations"),
-                eq(100L),
-                eq(20L),
-                eq(LocalDate.parse("2026-07-03")),
-                eq("AFTERNOON"),
-                isNull(),
-                isNull()
-        );
         verify(jdbcTemplate).update(
                 contains("admin_audit_logs"),
                 eq(1L),
@@ -152,6 +138,86 @@ class TicketQueryServiceTest {
                 isNull(),
                 isNull()
         );
+    }
+
+    @Test
+    void updateRejectsRemoteLinkBeforeApprovedRemoteDecision() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN",
+                        "review_status", "REQUIRED",
+                        "support_decision", "NEEDS_MORE_INFO"
+                )));
+
+        assertThatThrownBy(() -> service.update("ticket-public-id", MockData.map(
+                "remoteSupportLink", "https://support.example/session/not-approved"
+        ), admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void updateRejectsVisitBookingWithoutApprovedVisitDecision() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN",
+                        "review_status", "REQUIRED",
+                        "support_decision", "REMOTE_POSSIBLE"
+                )));
+
+        assertThatThrownBy(() -> service.update("ticket-public-id", MockData.map(
+                "reviewStatus", "APPROVED",
+                "visitSupportRequired", true
+        ), admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void updateRejectsAutoResponseBeforeApproval() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN",
+                        "review_status", "REQUIRED",
+                        "support_decision", "REMOTE_POSSIBLE"
+                )));
+
+        assertThatThrownBy(() -> service.update("ticket-public-id", MockData.map(
+                "autoResponseAllowed", true
+        ), admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void updateRejectsRemoteAndVisitBookingInOneDecision() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "OPEN",
+                        "review_status", "REQUIRED",
+                        "support_decision", "NEEDS_MORE_INFO"
+                )));
+
+        assertThatThrownBy(() -> service.update("ticket-public-id", MockData.map(
+                "supportDecision", "REMOTE_POSSIBLE",
+                "reviewStatus", "APPROVED",
+                "remoteSupportLink", "https://support.example/session/1",
+                "visitSupportRequired", true
+        ), admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.CONFLICT));
     }
 
     @Test
@@ -226,7 +292,7 @@ class TicketQueryServiceTest {
     }
 
     @Test
-    void updateAcceptsFinalScenarioSupportDecisionEnums() {
+    void updateKeepsLegacySupportDecisionForBackwardCompatibility() {
         when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
                 .thenReturn(List.of(MockData.map(
                         "internal_id", 100L,
@@ -262,6 +328,92 @@ class TicketQueryServiceTest {
                 isNull(),
                 eq("ticket-public-id")
         );
+    }
+
+    @Test
+    void requestRemoteSupportCreatesRequestedSessionForTicketOwner() {
+        when(jdbcTemplate.queryForList(contains("SELECT t.id AS internal_id"), eq("ticket-public-id"), eq(20L)))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "device_id", 10L
+                )));
+        when(jdbcTemplate.queryForObject(contains("remote_support_sessions"), eq(Integer.class), eq(100L)))
+                .thenReturn(0);
+        when(jdbcTemplate.queryForList(contains("SELECT t.public_id::text AS id"), eq("ticket-public-id"), eq(20L)))
+                .thenReturn(List.of(MockData.map(
+                        "id", "ticket-public-id",
+                        "status", "OPEN",
+                        "analysis_status", "RULE_READY",
+                        "review_status", "REQUIRED",
+                        "support_decision", "REMOTE_POSSIBLE",
+                        "risk_level", "MEDIUM",
+                        "auto_response_allowed", false,
+                        "symptom", "driver issue",
+                        "cause_candidates", "[]",
+                        "upgrade_candidates", "[]",
+                        "remote_support_status", "REQUESTED"
+                )));
+
+        Map<String, Object> response = service.requestRemoteSupport("ticket-public-id", MockData.map(
+                "reason", "드라이버 오류를 원격으로 확인해 주세요.",
+                "contactPhone", "010-1234-5678"
+        ), user);
+
+        assertThat(response.get("remoteSupportStatus")).isEqualTo("REQUESTED");
+        verify(jdbcTemplate).update(
+                contains("remote_support_sessions"),
+                eq(100L),
+                eq(10L),
+                eq(20L),
+                eq("드라이버 오류를 원격으로 확인해 주세요."),
+                eq("010-1234-5678")
+        );
+    }
+
+    @Test
+    void requestRemoteSupportRejectsDuplicateActiveRequest() {
+        when(jdbcTemplate.queryForList(contains("SELECT t.id AS internal_id"), eq("ticket-public-id"), eq(20L)))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "device_id", 10L
+                )));
+        when(jdbcTemplate.queryForObject(contains("remote_support_sessions"), eq(Integer.class), eq(100L)))
+                .thenReturn(1);
+
+        assertThatThrownBy(() -> service.requestRemoteSupport("ticket-public-id", MockData.map(
+                "reason", "원격지원이 필요합니다."
+        ), user))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void submitFeedbackStoresRatingAndCommentForTicketOwner() {
+        when(jdbcTemplate.queryForList(contains("UPDATE as_tickets"), eq(5), eq("원격지원 후 해결됐습니다."), eq("ticket-public-id"), eq(20L)))
+                .thenReturn(List.of(MockData.map("id", "ticket-public-id")));
+        when(jdbcTemplate.queryForList(contains("SELECT t.public_id::text AS id"), eq("ticket-public-id"), eq(20L)))
+                .thenReturn(List.of(MockData.map(
+                        "id", "ticket-public-id",
+                        "status", "RESOLVED",
+                        "analysis_status", "RULE_READY",
+                        "review_status", "APPROVED",
+                        "support_decision", "REMOTE_POSSIBLE",
+                        "risk_level", "LOW",
+                        "auto_response_allowed", false,
+                        "symptom", "driver issue",
+                        "cause_candidates", "[]",
+                        "upgrade_candidates", "[]",
+                        "feedback_rating", 5,
+                        "feedback_comment", "원격지원 후 해결됐습니다."
+                )));
+
+        Map<String, Object> response = service.submitFeedback("ticket-public-id", MockData.map(
+                "rating", 5,
+                "comment", "원격지원 후 해결됐습니다."
+        ), user);
+
+        assertThat(response.get("feedbackRating")).isEqualTo(5);
+        assertThat(response.get("feedbackComment")).isEqualTo("원격지원 후 해결됐습니다.");
     }
 
     @Test

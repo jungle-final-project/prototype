@@ -50,6 +50,8 @@ REQUIRED_PATHS = [
     "/api/agent-logs/{id}",
     "/api/as-tickets",
     "/api/as-tickets/{id}",
+    "/api/as-tickets/{id}/remote-support-requests",
+    "/api/as-tickets/{id}/feedback",
     "/api/admin/dashboard",
     "/api/admin/audit-logs/recent",
     "/api/admin/agent-sessions",
@@ -77,6 +79,8 @@ POST_JSON_REQUEST_SCHEMAS = {
     "/api/agent/heartbeat": "PcAgentHeartbeatRequest",
     "/api/agent/sessions": "AgentSessionCreateRequest",
     "/api/as-tickets": "AsTicketCreateRequest",
+    "/api/as-tickets/{id}/remote-support-requests": "RemoteSupportRequestCreateRequest",
+    "/api/as-tickets/{id}/feedback": "SupportFeedbackRequest",
 }
 
 REQUIRED_SCHEMAS = [
@@ -95,11 +99,16 @@ REQUIRED_SCHEMAS = [
     "PcAgentLogUploadRequest",
     "PcAgentLogUploadResponse",
     "SupportDecision",
+    "SafetyAdviceLevel",
+    "DiagnosticAccuracy",
+    "SafetyNoticeDto",
     "IncidentWindowDto",
     "LogSummaryDto",
     "SupportRoutingDto",
     "AiDiagnosisRequestDto",
     "AsTicketDto",
+    "RemoteSupportRequestCreateRequest",
+    "SupportFeedbackRequest",
     "AdminAsTicketUpdateRequest",
     "AgentSessionDto",
     "ToolInvocationDto",
@@ -197,6 +206,22 @@ def main() -> None:
     if agent_upload_schema != "PcAgentLogUploadRequest":
         raise SystemExit("/api/agent/log-uploads must use multipart/form-data PcAgentLogUploadRequest")
 
+    consent_types = set(
+        schemas["PcAgentConsentRequest"]
+        .get("properties", {})
+        .get("consentType", {})
+        .get("enum", [])
+    )
+    required_consent_types = {
+        "SERVER_UPLOAD",
+        "REMOTE_CONNECTION",
+        "REMOTE_FULL_CONTROL",
+        "HIGH_RISK_REMOTE_ACTION",
+    }
+    missing_consent_types = required_consent_types - consent_types
+    if missing_consent_types:
+        raise SystemExit(f"PcAgentConsentRequest missing consent types: {', '.join(sorted(missing_consent_types))}")
+
     admin_ticket_patch = paths["/api/admin/as-tickets/{id}"].get("patch", {})
     if request_schema_ref(admin_ticket_patch) != "AdminAsTicketUpdateRequest":
         raise SystemExit("/api/admin/as-tickets/{id} PATCH must reference AdminAsTicketUpdateRequest")
@@ -215,6 +240,12 @@ def main() -> None:
         "visitSupportStatus",
         "visitPreferredDate",
         "visitTimeSlot",
+        "safetyAdviceLevel",
+        "safetyNotices",
+        "feedbackRating",
+        "feedbackComment",
+        "feedbackCreatedAt",
+        "diagnosticAccuracy",
     ]:
         if field not in as_ticket_properties:
             raise SystemExit(f"AsTicketDto missing {field}")
@@ -227,6 +258,7 @@ def main() -> None:
         "supportDecision",
         "reviewStatus",
         "riskLevel",
+        "diagnosticAccuracy",
         "autoResponseAllowed",
         "remoteSupportLink",
         "visitSupportRequired",
@@ -272,6 +304,11 @@ def main() -> None:
     ai_required = set(schemas["AiDiagnosisRequestDto"].get("required", []))
     if "supportRouting" not in ai_required:
         raise SystemExit("AiDiagnosisRequestDto must require supportRouting")
+
+    support_routing_properties = schemas["SupportRoutingDto"].get("properties", {})
+    for field in ["safetyAdviceLevel", "safetyNotices", "allowAutoResponse", "adminApprovalRequired"]:
+        if field not in support_routing_properties:
+            raise SystemExit(f"SupportRoutingDto missing {field}")
 
     auth_properties = schemas["AuthResponse"].get("properties", {})
     for field in ["accessToken", "refreshToken", "user"]:

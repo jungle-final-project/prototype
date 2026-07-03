@@ -1,11 +1,11 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
-import { createSupportTicket, getSupportTicket, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getSupportTicket, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
 import type { AsTicketDto, CauseCandidate } from './types';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
@@ -574,9 +574,51 @@ function uploadFailureMessage(cause: unknown) {
 
 export function SupportTicketPage() {
   const { ticketId = '00000000-0000-4000-8000-000000006001' } = useParams();
+  const queryClient = useQueryClient();
+  const [remoteRequestReason, setRemoteRequestReason] = useState('원격지원으로 화면을 함께 확인하고 싶습니다.');
+  const [remoteRequestError, setRemoteRequestError] = useState('');
+  const [feedbackRating, setFeedbackRating] = useState('5');
+  const [feedbackComment, setFeedbackComment] = useState('');
+  const [feedbackError, setFeedbackError] = useState('');
   const { data: ticket, isError, isLoading } = useQuery({
     queryKey: ['support-ticket', ticketId],
     queryFn: () => getSupportTicket(ticketId)
+  });
+  const remoteRequestMutation = useMutation({
+    mutationFn: async () => {
+      const reason = remoteRequestReason.trim();
+      return requestRemoteSupport(ticketId, {
+        reason: reason || '사용자가 원격지원을 요청했습니다.'
+      });
+    },
+    onSuccess: (updatedTicket) => {
+      setRemoteRequestError('');
+      queryClient.setQueryData(['support-ticket', ticketId], updatedTicket);
+    },
+    onError: (cause) => {
+      if (cause instanceof ApiError && cause.status === 409) {
+        setRemoteRequestError('이미 진행 중인 원격지원 요청이 있습니다.');
+        return;
+      }
+      if (cause instanceof ApiError && cause.status === 400) {
+        setRemoteRequestError('원격지원 요청 사유를 입력해 주세요.');
+        return;
+      }
+      setRemoteRequestError('원격지원 요청을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+  });
+  const feedbackMutation = useMutation({
+    mutationFn: async () => submitSupportFeedback(ticketId, {
+      rating: Number(feedbackRating),
+      comment: feedbackComment.trim() || undefined
+    }),
+    onSuccess: (updatedTicket) => {
+      setFeedbackError('');
+      queryClient.setQueryData(['support-ticket', ticketId], updatedTicket);
+    },
+    onError: () => {
+      setFeedbackError('피드백을 저장하지 못했습니다. 평점 값을 확인한 뒤 다시 시도해 주세요.');
+    }
   });
 
   if (isLoading) {
@@ -595,6 +637,8 @@ export function SupportTicketPage() {
     );
   }
 
+  const remoteRequestLocked = isActiveRemoteSupportStatus(ticket.remoteSupportStatus);
+
   return (
     <Screen>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px]">
@@ -605,6 +649,7 @@ export function SupportTicketPage() {
             {ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : null}
             {ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : null}
           </div>
+          {hasSafetyAdvice(ticket) ? <SafetyNoticePanel ticket={ticket} /> : null}
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
         </Panel>
         <Panel title="담당자 확인 자료" subtitle="업로드한 로그를 바탕으로 담당자가 접수 내용을 확인합니다.">
@@ -619,6 +664,69 @@ export function SupportTicketPage() {
               <p className="mt-2 text-xs text-blue-700">원격 연결 전 사용자 추가 확인이 필요합니다. Quick Assist는 사용자가 직접 코드를 입력해 연결합니다.</p>
             </div>
           ) : null}
+          {!ticket.remoteSupportLink ? (
+            <form
+              className="mt-5 rounded border border-slate-200 bg-slate-50 p-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                remoteRequestMutation.mutate();
+              }}
+            >
+              <label className="mb-2 block text-sm font-bold text-slate-800">원격지원 요청</label>
+              <textarea
+                className="h-20 w-full rounded border border-slate-300 bg-white p-3 text-sm"
+                value={remoteRequestReason}
+                onChange={(event) => setRemoteRequestReason(event.target.value)}
+                disabled={remoteRequestMutation.isPending || remoteRequestLocked}
+              />
+              {remoteRequestError ? <p className="mt-2 text-xs font-semibold text-red-600">{remoteRequestError}</p> : null}
+              {remoteRequestLocked ? (
+                <p className="mt-2 text-xs font-semibold text-brand-blue">원격지원 상태: {statusLabel(ticket.remoteSupportStatus ?? 'REQUESTED')}</p>
+              ) : null}
+              <button
+                className="mt-3 rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={remoteRequestMutation.isPending || remoteRequestLocked}
+              >
+                {remoteRequestMutation.isPending ? '요청 저장 중...' : '원격지원 요청'}
+              </button>
+            </form>
+          ) : null}
+          <form
+            className="mt-5 rounded border border-slate-200 bg-white p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              feedbackMutation.mutate();
+            }}
+          >
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <label className="text-sm font-bold text-slate-800">처리 피드백</label>
+              {ticket.feedbackRating ? <span className="text-xs font-semibold text-slate-500">저장된 평점 {ticket.feedbackRating}/5</span> : null}
+            </div>
+            <div className="grid gap-3 md:grid-cols-[120px_minmax(0,1fr)]">
+              <select
+                className="h-10 rounded border border-slate-300 bg-white px-3 text-sm"
+                value={feedbackRating}
+                onChange={(event) => setFeedbackRating(event.target.value)}
+              >
+                {[5, 4, 3, 2, 1].map((rating) => (
+                  <option key={rating} value={rating}>{rating}점</option>
+                ))}
+              </select>
+              <input
+                className="h-10 rounded border border-slate-300 px-3 text-sm"
+                value={feedbackComment}
+                onChange={(event) => setFeedbackComment(event.target.value)}
+                placeholder={ticket.feedbackComment || '처리 결과에 대한 의견을 남겨 주세요.'}
+              />
+            </div>
+            {feedbackError ? <p className="mt-2 text-xs font-semibold text-red-600">{feedbackError}</p> : null}
+            <button
+              className="mt-3 rounded border border-slate-300 px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:bg-slate-100"
+              disabled={feedbackMutation.isPending}
+            >
+              {feedbackMutation.isPending ? '피드백 저장 중...' : '피드백 저장'}
+            </button>
+          </form>
           <p className="mt-5 text-sm leading-6 text-slate-700">
             담당자가 증상과 로그를 확인한 뒤 필요한 경우 추가 정보를 요청할 수 있습니다.
           </p>
@@ -627,6 +735,44 @@ export function SupportTicketPage() {
       </div>
     </Screen>
   );
+}
+
+function SafetyNoticePanel({ ticket }: { ticket: AsTicketDto }) {
+  const notices = ticket.safetyNotices?.length ? ticket.safetyNotices : [{ message: safetyAdviceMessage(ticket.safetyAdviceLevel) }];
+  return (
+    <div className="mb-4 rounded border border-red-200 bg-red-50 p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <p className="text-sm font-bold text-red-900">안전 안내</p>
+        {ticket.safetyAdviceLevel ? <StatusBadge status={ticket.safetyAdviceLevel} /> : null}
+      </div>
+      <ul className="space-y-1 text-sm leading-6 text-red-800">
+        {notices.map((notice, index) => (
+          <li key={`${notice.code ?? 'notice'}-${index}`}>{notice.message || safetyAdviceMessage(ticket.safetyAdviceLevel)}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function hasSafetyAdvice(ticket: AsTicketDto) {
+  return Boolean(
+    (ticket.safetyAdviceLevel && ticket.safetyAdviceLevel !== 'NONE')
+    || ticket.safetyNotices?.length
+  );
+}
+
+function isActiveRemoteSupportStatus(status?: string | null) {
+  return status === 'REQUESTED' || status === 'LINK_SENT' || status === 'IN_PROGRESS';
+}
+
+function safetyAdviceMessage(level?: string | null) {
+  if (level === 'STOP_USE_UNTIL_REVIEW') {
+    return '담당자 검토 전까지 해당 PC 사용을 중지하거나 중요한 작업을 피해주세요.';
+  }
+  if (level === 'CAUTION') {
+    return '하드웨어 오류 가능성이 있어 추가 조치 전 상태를 주의 깊게 확인해 주세요.';
+  }
+  return '담당자가 위험 신호를 확인하고 있습니다.';
 }
 
 function ticketTimeline(ticket: AsTicketDto) {

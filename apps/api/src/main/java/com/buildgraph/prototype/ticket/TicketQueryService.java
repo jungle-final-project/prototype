@@ -28,6 +28,7 @@ public class TicketQueryService {
     private static final Set<String> SUPPORT_DECISIONS = SupportDecision.names();
     private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH");
     private static final Set<String> VISIT_TIME_SLOTS = Set.of("MORNING", "AFTERNOON", "EVENING");
+    private static final Set<String> DIAGNOSTIC_ACCURACIES = Set.of("ACCURATE", "PARTIAL", "MISSED", "UNKNOWN");
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -123,6 +124,105 @@ public class TicketQueryService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
     }
 
+    @Transactional
+    public Map<String, Object> requestRemoteSupport(
+            String id,
+            Map<String, Object> request,
+            CurrentUserService.CurrentUser user
+    ) {
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
+        String reason = request == null ? null : stringOrNull(request.get("reason"));
+        if (reason == null || reason.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reason 값이 필요합니다.");
+        }
+        String contactPhone = request == null ? null : stringOrNull(request.get("contactPhone"));
+        Map<String, Object> row = userTicketInternalRow(id, user.internalId());
+        Long ticketInternalId = longValue(row, "internal_id");
+        Integer activeRequests = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM remote_support_sessions
+                WHERE as_ticket_id = ?
+                  AND status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                """, Integer.class, ticketInternalId);
+        if (activeRequests != null && activeRequests > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 진행 중인 원격지원 요청이 있습니다.");
+        }
+        jdbcTemplate.update("""
+                INSERT INTO remote_support_sessions (
+                  as_ticket_id,
+                  device_id,
+                  provider,
+                  status,
+                  requested_by_user_id,
+                  request_reason,
+                  contact_phone_snapshot,
+                  user_requested_at
+                )
+                VALUES (?, ?, 'EXTERNAL_LINK', 'REQUESTED', ?, ?, ?, now())
+                """,
+                ticketInternalId,
+                longValue(row, "device_id"),
+                user.internalId(),
+                reason,
+                contactPhone
+        );
+        jdbcTemplate.update("""
+                UPDATE as_tickets
+                SET review_status = 'REQUIRED',
+                    updated_at = now()
+                WHERE id = ?
+                """, ticketInternalId);
+        return ticket(id, user);
+    }
+
+    private Map<String, Object> userTicketInternalRow(String id, Long userInternalId) {
+        return jdbcTemplate.queryForList("""
+                        SELECT t.id AS internal_id,
+                               lu.device_id
+                        FROM as_tickets t
+                        LEFT JOIN agent_log_uploads lu ON lu.id = t.log_upload_id
+                        WHERE t.deleted_at IS NULL
+                          AND t.public_id = ?::uuid
+                          AND t.user_id = ?
+                        """, id, userInternalId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    @Transactional
+    public Map<String, Object> submitFeedback(
+            String id,
+            Map<String, Object> request,
+            CurrentUserService.CurrentUser user
+    ) {
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
+        int rating = parseInteger("rating", request == null ? null : request.get("rating"));
+        if (rating < 1 || rating > 5) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "rating 값은 1~5 사이여야 합니다.");
+        }
+        String comment = request == null ? null : stringOrNull(request.get("comment"));
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                UPDATE as_tickets
+                SET feedback_rating = ?,
+                    feedback_comment = ?,
+                    feedback_created_at = now(),
+                    updated_at = now()
+                WHERE public_id = ?::uuid
+                  AND user_id = ?
+                  AND deleted_at IS NULL
+                RETURNING public_id::text AS id
+                """, rating, comment, id, user.internalId());
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다.");
+        }
+        return ticket(id, user);
+    }
+
     private Long resolveUserLogUploadId(String logUploadId, Long userInternalId) {
         if (logUploadId == null) {
             return null;
@@ -174,11 +274,14 @@ public class TicketQueryService {
         String supportDecision = request == null ? null : stringOrNull(request.get("supportDecision"));
         String reviewStatus = request == null ? null : stringOrNull(request.get("reviewStatus"));
         String riskLevel = request == null ? null : stringOrNull(request.get("riskLevel"));
+        String diagnosticAccuracy = request == null ? null : stringOrNull(request.get("diagnosticAccuracy"));
         validateNullable("supportDecision", supportDecision, SUPPORT_DECISIONS);
         validateNullable("reviewStatus", reviewStatus, REVIEW_STATUSES);
         validateNullable("riskLevel", riskLevel, RISK_LEVELS);
+        validateNullable("diagnosticAccuracy", diagnosticAccuracy, DIAGNOSTIC_ACCURACIES);
         String currentDecision = DbValueMapper.string(current, "support_decision");
-        boolean unsupportedException = isUnsupportedException(currentDecision, supportDecision);
+        boolean unsupportedException = isUnsupportedException(currentDecision, supportDecision)
+                || isRoutingException(current, supportDecision, request);
         String exceptionReason = request == null ? null : stringOrNull(request.get("exceptionApprovalReason"));
         String exceptionScope = request == null ? null : stringOrNull(request.get("exceptionResponsibilityScope"));
         String exceptionUserMessage = request == null ? null : stringOrNull(request.get("exceptionUserMessage"));
@@ -187,10 +290,11 @@ public class TicketQueryService {
             requireExceptionField("exceptionResponsibilityScope", exceptionScope);
             requireExceptionField("exceptionUserMessage", exceptionUserMessage);
         }
-        validateUnsupportedBookingPolicy(currentDecision, supportDecision, request, unsupportedException);
         Boolean autoResponseAllowed = request == null || request.get("autoResponseAllowed") == null
                 ? null
                 : parseBoolean("autoResponseAllowed", request.get("autoResponseAllowed"));
+        validateRemoteSupportLinkIfPresent(request);
+        validateSupportExecutionPolicy(current, supportDecision, reviewStatus, autoResponseAllowed, request, unsupportedException);
         if (supportDecision != null || reviewStatus != null || riskLevel != null || autoResponseAllowed != null) {
             jdbcTemplate.update("""
                     UPDATE as_tickets
@@ -207,6 +311,14 @@ public class TicketQueryService {
                     autoResponseAllowed,
                     id
             );
+        }
+        if (diagnosticAccuracy != null) {
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET diagnostic_accuracy = ?,
+                        updated_at = now()
+                    WHERE public_id = ?::uuid
+                    """, diagnosticAccuracy, id);
         }
         if (unsupportedException) {
             jdbcTemplate.update("""
@@ -241,6 +353,7 @@ public class TicketQueryService {
                                status,
                                review_status,
                                support_decision,
+                               support_routing,
                                exception_approval_reason,
                                exception_responsibility_scope,
                                exception_user_message
@@ -289,6 +402,19 @@ public class TicketQueryService {
                 WHERE t.public_id = ?::uuid
                   AND t.deleted_at IS NULL
                 """, remoteSupportLink, admin == null ? null : admin.internalId(), ticketId);
+    }
+
+    private static void validateRemoteSupportLinkIfPresent(Map<String, Object> request) {
+        if (request == null) {
+            return;
+        }
+        String remoteSupportLink = stringOrNull(request.get("remoteSupportLink"));
+        if (remoteSupportLink == null) {
+            remoteSupportLink = stringOrNull(request.get("remoteSupportUrl"));
+        }
+        if (remoteSupportLink != null) {
+            validateRemoteSupportLink(remoteSupportLink);
+        }
     }
 
     private void saveVisitSupportIfRequested(Map<String, Object> current, Map<String, Object> request) {
@@ -379,11 +505,25 @@ public class TicketQueryService {
                 && !"UNSUPPORTED".equals(requestedDecision);
     }
 
-    private static void validateUnsupportedBookingPolicy(
-            String currentDecision,
+    private static boolean isRoutingException(Map<String, Object> current, String requestedDecision, Map<String, Object> request) {
+        if (!hasOutOfScopeBlockingFactor(current)) {
+            return false;
+        }
+        boolean remoteRequested = request != null && (stringOrNull(request.get("remoteSupportLink")) != null
+                || stringOrNull(request.get("remoteSupportUrl")) != null);
+        boolean visitRequested = request != null && Boolean.TRUE.equals(booleanOrNull(request.get("visitSupportRequired")));
+        return remoteRequested
+                || visitRequested
+                || Set.of("REMOTE_POSSIBLE", "VISIT_REQUIRED", "REPAIR_OR_REPLACE").contains(requestedDecision);
+    }
+
+    private static void validateSupportExecutionPolicy(
+            Map<String, Object> current,
             String requestedDecision,
+            String requestedReviewStatus,
+            Boolean autoResponseAllowed,
             Map<String, Object> request,
-            boolean unsupportedException
+            boolean exceptionApproved
     ) {
         if (request == null) {
             return;
@@ -391,13 +531,53 @@ public class TicketQueryService {
         boolean remoteRequested = stringOrNull(request.get("remoteSupportLink")) != null
                 || stringOrNull(request.get("remoteSupportUrl")) != null;
         boolean visitRequested = Boolean.TRUE.equals(booleanOrNull(request.get("visitSupportRequired")));
-        if (!remoteRequested && !visitRequested) {
-            return;
+        if (remoteRequested && visitRequested) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "원격지원과 방문지원은 한 번에 동시에 생성할 수 없습니다.");
         }
+        String currentDecision = DbValueMapper.string(current, "support_decision");
         String targetDecision = requestedDecision == null ? currentDecision : requestedDecision;
-        if ("UNSUPPORTED".equals(targetDecision) || ("UNSUPPORTED".equals(currentDecision) && !unsupportedException)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "UNSUPPORTED 티켓은 예외 승인 전 원격/방문 예약을 만들 수 없습니다.");
+        String effectiveReviewStatus = requestedReviewStatus;
+        if (effectiveReviewStatus == null && requestedDecision != null) {
+            effectiveReviewStatus = "APPROVED";
         }
+        if (effectiveReviewStatus == null) {
+            effectiveReviewStatus = DbValueMapper.string(current, "review_status");
+        }
+        if (Boolean.TRUE.equals(autoResponseAllowed) && !"APPROVED".equals(effectiveReviewStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "관리자 승인 전 자동 응답을 허용할 수 없습니다.");
+        }
+        if (remoteRequested && (!"APPROVED".equals(effectiveReviewStatus) || !"REMOTE_POSSIBLE".equals(targetDecision))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "원격지원 링크는 승인된 REMOTE_POSSIBLE 티켓에만 저장할 수 있습니다.");
+        }
+        if (visitRequested && (!"APPROVED".equals(effectiveReviewStatus) || !Set.of("VISIT_REQUIRED", "REPAIR_OR_REPLACE").contains(targetDecision))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "방문 예약은 승인된 VISIT_REQUIRED 티켓에만 생성할 수 있습니다.");
+        }
+        if ((remoteRequested || visitRequested)
+                && ("UNSUPPORTED".equals(targetDecision) || "UNSUPPORTED".equals(currentDecision) || hasOutOfScopeBlockingFactor(current))
+                && !exceptionApproved) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "지원 범위 밖 티켓은 예외 승인 전 원격/방문 예약을 만들 수 없습니다.");
+        }
+    }
+
+    private static boolean hasOutOfScopeBlockingFactor(Map<String, Object> current) {
+        Object value = DbValueMapper.json(current, "support_routing", Map.of());
+        if (!(value instanceof Map<?, ?> routing)) {
+            return false;
+        }
+        Object factors = routing.get("blockingFactors");
+        if (!(factors instanceof List<?> blockingFactors)) {
+            return false;
+        }
+        return blockingFactors.stream()
+                .map(String::valueOf)
+                .anyMatch(Set.of(
+                        "OUT_OF_SCOPE",
+                        "UNSUPPORTED_SCOPE",
+                        "OUT_OF_PC_SCOPE",
+                        "DATA_RECOVERY_REQUIRED",
+                        "UNSUPPORTED_SOFTWARE",
+                        "PHYSICAL_DAMAGE_POLICY_REQUIRED"
+                )::contains);
     }
 
     private static void requireExceptionField(String fieldName, String value) {
@@ -441,6 +621,8 @@ public class TicketQueryService {
                        t.incident_window,
                        t.log_summary,
                        t.support_routing,
+                       t.safety_advice_level,
+                       t.safety_notices,
                        COALESCE(t.log_summary->>'summaryText', lu.summary) AS log_summary_text,
                        t.admin_note,
                        t.ai_diagnosis_request,
@@ -448,6 +630,10 @@ public class TicketQueryService {
                        t.exception_responsibility_scope,
                        t.exception_user_message,
                        t.exception_approved_at,
+                       t.feedback_rating,
+                       t.feedback_comment,
+                       t.feedback_created_at,
+                       t.diagnostic_accuracy,
                        t.resolved_at,
                        t.created_at,
                        rs.session_url AS remote_support_link,
@@ -493,6 +679,8 @@ public class TicketQueryService {
                 "incidentWindow", DbValueMapper.json(row, "incident_window", null),
                 "logSummary", DbValueMapper.json(row, "log_summary", null),
                 "supportRouting", DbValueMapper.json(row, "support_routing", null),
+                "safetyAdviceLevel", DbValueMapper.string(row, "safety_advice_level"),
+                "safetyNotices", DbValueMapper.json(row, "safety_notices", List.of()),
                 "logSummaryText", DbValueMapper.string(row, "log_summary_text"),
                 "adminNote", DbValueMapper.string(row, "admin_note"),
                 "aiDiagnosisRequest", DbValueMapper.json(row, "ai_diagnosis_request", Map.of()),
@@ -500,6 +688,10 @@ public class TicketQueryService {
                 "exceptionResponsibilityScope", DbValueMapper.string(row, "exception_responsibility_scope"),
                 "exceptionUserMessage", DbValueMapper.string(row, "exception_user_message"),
                 "exceptionApprovedAt", DbValueMapper.timestamp(row, "exception_approved_at"),
+                "feedbackRating", row.get("feedback_rating"),
+                "feedbackComment", DbValueMapper.string(row, "feedback_comment"),
+                "feedbackCreatedAt", DbValueMapper.timestamp(row, "feedback_created_at"),
+                "diagnosticAccuracy", DbValueMapper.string(row, "diagnostic_accuracy"),
                 "remoteSupportLink", DbValueMapper.string(row, "remote_support_link"),
                 "remoteSupportStatus", DbValueMapper.string(row, "remote_support_status"),
                 "visitSupportRequired", row.get("visit_support_id") != null,
@@ -543,6 +735,17 @@ public class TicketQueryService {
             return false;
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " 값이 올바르지 않습니다.");
+    }
+
+    private static int parseInteger(String fieldName, Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " 값이 올바르지 않습니다.", exception);
+        }
     }
 
     private static LocalDate parseDate(String fieldName, Object value) {

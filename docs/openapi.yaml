@@ -1186,6 +1186,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AsTicketDto"
+  /api/as-tickets/{id}/remote-support-requests:
+    post:
+      summary: 사용자 원격지원 요청 생성
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteSupportRequestCreateRequest"
+      responses:
+        "201":
+          description: 원격지원 요청이 반영된 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
+        "409":
+          description: 이미 진행 중인 원격지원 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/as-tickets/{id}/feedback:
+    post:
+      summary: 사용자 AS 처리 피드백 저장
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupportFeedbackRequest"
+      responses:
+        "200":
+          description: 피드백이 반영된 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
   /api/ai/as-chat:
     get:
       summary: AS AI 챗봇 세션과 메시지 조회
@@ -1637,6 +1683,7 @@ components:
     SupportDecision:
       type: string
       enum: [SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, REPAIR_OR_REPLACE, NEEDS_MORE_INFO, MONITOR_ONLY, UNSUPPORTED]
+      description: FINAL_SUPPORT_SCENARIOS 신규 analyzer는 SELF_SOLVABLE, REMOTE_POSSIBLE, VISIT_REQUIRED, NEEDS_MORE_INFO만 생성한다. REPAIR_OR_REPLACE, MONITOR_ONLY, UNSUPPORTED는 기존 계약 호환을 위해 유지한다.
       x-ui-labels:
         SELF_SOLVABLE: 자가 조치 가능
         REMOTE_POSSIBLE: 원격지원 가능
@@ -1645,6 +1692,21 @@ components:
         NEEDS_MORE_INFO: 추가 정보 필요
         MONITOR_ONLY: 관찰 필요
         UNSUPPORTED: 지원 범위 밖
+    SafetyAdviceLevel:
+      type: string
+      enum: [NONE, CAUTION, STOP_USE_UNTIL_REVIEW]
+    DiagnosticAccuracy:
+      type: string
+      enum: [ACCURATE, PARTIAL, MISSED, UNKNOWN]
+    SafetyNoticeDto:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [PHYSICAL_DAMAGE_RISK, DATA_LOSS_RISK, THERMAL_DAMAGE_RISK, POWER_PATH_RISK, HARDWARE_ERROR_RISK]
+        message:
+          type: string
     IncidentTriggerType:
       type: string
       enum: [USER_REQUEST, AGENT_ANOMALY]
@@ -1694,6 +1756,18 @@ components:
         - FAN_RPM_ZERO
         - UNSUPPORTED_SCOPE
         - INSUFFICIENT_EVIDENCE
+        - GPU_THERMAL_THROTTLE
+        - DRIVER_CRASH_LOG
+        - STORAGE_IO_BOTTLENECK
+        - PSU_POWER_EVENT
+        - UNEXPECTED_REBOOT_PATTERN
+        - DEVICE_NOT_DETECTED
+        - BSOD_SIGNATURE
+        - APP_SPECIFIC_FAILURE
+        - UNSUPPORTED_CATEGORY
+        - AGENT_INSTALL_OR_UPLOAD_FAILURE
+        - BACKGROUND_SERVICE_PRESSURE
+        - LOCAL_NETWORK_CONFIG
     RemoteAction:
       type: string
       enum:
@@ -1718,6 +1792,16 @@ components:
         - DNS_RESET
         - ADAPTER_RESET
         - NETWORK_DIAGNOSTIC
+        - CHECK_EVENT_VIEWER
+        - REINSTALL_GRAPHICS_DRIVER
+        - DISABLE_OVERCLOCK
+        - RUN_MEMORY_DIAGNOSTIC
+        - CHECK_STORAGE_HEALTH
+        - MONITOR_TEMPERATURE
+        - CHECK_AGENT_CONFIG
+        - CHECK_ADAPTER_DRIVER
+        - CHECK_RUNTIME_OR_PERMISSION
+        - CHECK_STARTUP_APPS
     VisitReason:
       type: string
       enum:
@@ -1734,6 +1818,14 @@ components:
         - FAN_NOT_WORKING
         - THERMAL_SHUTDOWN
         - HARDWARE_DEVICE_NOT_DETECTED
+        - SUSPECTED_HARDWARE_FAILURE
+        - PSU_OR_POWER_PATH_RISK
+        - THERMAL_SERVICE_REQUIRED
+        - STORAGE_REPLACEMENT_SUSPECTED
+        - NEEDS_BENCH_REPRODUCTION
+        - DEVICE_OFFLINE
+        - REMOTE_HELP_NOT_AVAILABLE
+        - BSOD_SIGNATURE
     BlockingFactor:
       type: string
       enum:
@@ -1747,6 +1839,18 @@ components:
         - RAW_LOG_UNAVAILABLE
         - BACKUP_REQUIRED
         - RESTORE_POINT_REQUIRED
+        - NO_UPLOAD_CONSENT
+        - INSUFFICIENT_LOG_RANGE
+        - DEVICE_OFFLINE
+        - REMOTE_HELP_NOT_AVAILABLE
+        - ADMIN_APPROVAL_PENDING
+        - HIGH_RISK_HARDWARE_DAMAGE
+        - CUSTOMER_UNAVAILABLE
+        - UNSUPPORTED_SCOPE
+        - OUT_OF_PC_SCOPE
+        - DATA_RECOVERY_REQUIRED
+        - UNSUPPORTED_SOFTWARE
+        - PHYSICAL_DAMAGE_POLICY_REQUIRED
     DataQualityLevel:
       type: string
       enum: [ENOUGH, PARTIAL, INSUFFICIENT]
@@ -3212,6 +3316,14 @@ components:
           enum: [LOW, MEDIUM, HIGH]
         autoResponseAllowed:
           type: boolean
+        safetyAdviceLevel:
+          $ref: "#/components/schemas/SafetyAdviceLevel"
+        safetyNotices:
+          type: array
+          items:
+            $ref: "#/components/schemas/SafetyNoticeDto"
+        diagnosticAccuracy:
+          $ref: "#/components/schemas/DiagnosticAccuracy"
         symptom:
           type: string
         logSummary:
@@ -3461,8 +3573,16 @@ components:
       type: object
       required: [recommendedDecision, confidence, reasonCodes, remoteActions, visitReasons, blockingFactors, requiresAdminApproval]
       properties:
+        supportDecision:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/SupportDecision"
+          description: recommendedDecision과 같은 값으로 내려가는 additive alias다.
         recommendedDecision:
           $ref: "#/components/schemas/SupportDecision"
+        riskLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
         confidence:
           $ref: "#/components/schemas/Confidence"
         reasonCodes:
@@ -3481,6 +3601,18 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BlockingFactor"
+        safetyAdviceLevel:
+          $ref: "#/components/schemas/SafetyAdviceLevel"
+        safetyNotices:
+          type: array
+          items:
+            $ref: "#/components/schemas/SafetyNoticeDto"
+        allowAutoResponse:
+          type: boolean
+          description: 관리자 승인 전 자동 응답 실행 가능 여부. 신규 analyzer는 기본 false로 둔다.
+        adminApprovalRequired:
+          type: boolean
+          description: requiresAdminApproval의 additive alias다.
         requiresAdminApproval:
           type: boolean
     AiDiagnosisRequestDto:
@@ -3556,7 +3688,7 @@ components:
       properties:
         consentType:
           type: string
-          enum: [SERVER_UPLOAD]
+          enum: [LOCAL_COLLECTION, SERVER_UPLOAD, QUALITY_IMPROVEMENT, REMOTE_CONNECTION, REMOTE_FULL_CONTROL, HIGH_RISK_REMOTE_ACTION]
         policyVersion:
           type: string
         accepted:
@@ -3570,6 +3702,7 @@ components:
           format: uuid
         consentType:
           type: string
+          enum: [LOCAL_COLLECTION, SERVER_UPLOAD, QUALITY_IMPROVEMENT, REMOTE_CONNECTION, REMOTE_FULL_CONTROL, HIGH_RISK_REMOTE_ACTION]
         policyVersion:
           type: string
         accepted:
@@ -3680,6 +3813,12 @@ components:
           $ref: "#/components/schemas/IncidentWindowDto"
         supportRouting:
           $ref: "#/components/schemas/SupportRoutingDto"
+        safetyAdviceLevel:
+          $ref: "#/components/schemas/SafetyAdviceLevel"
+        safetyNotices:
+          type: array
+          items:
+            $ref: "#/components/schemas/SafetyNoticeDto"
         rawSamplesCount:
           type: integer
           maximum: 20
@@ -3714,6 +3853,12 @@ components:
           type: integer
         summary:
           type: string
+        safetyAdviceLevel:
+          $ref: "#/components/schemas/SafetyAdviceLevel"
+        safetyNotices:
+          type: array
+          items:
+            $ref: "#/components/schemas/SafetyNoticeDto"
         createdAt:
           type: string
           format: date-time
@@ -3729,6 +3874,29 @@ components:
           format: uuid
         symptom:
           type: string
+    RemoteSupportRequestCreateRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: 사용자가 원격지원을 요청하는 이유.
+        contactPhone:
+          type: string
+          nullable: true
+          description: 사용자가 연락처를 제공한 경우 snapshot으로 저장한다.
+    SupportFeedbackRequest:
+      type: object
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        comment:
+          type: string
+          nullable: true
     AsTicketDto:
       type: object
       required: [id, status, symptom, causeCandidates, upgradeCandidates]
@@ -3781,6 +3949,25 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/SupportRoutingDto"
+        safetyAdviceLevel:
+          $ref: "#/components/schemas/SafetyAdviceLevel"
+        safetyNotices:
+          type: array
+          items:
+            $ref: "#/components/schemas/SafetyNoticeDto"
+        feedbackRating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        feedbackComment:
+          type: string
+          nullable: true
+        feedbackCreatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        diagnosticAccuracy:
+          $ref: "#/components/schemas/DiagnosticAccuracy"
         adminNote:
           type: string
         logSummaryText:
@@ -3838,6 +4025,8 @@ components:
         riskLevel:
           type: string
           enum: [LOW, MEDIUM, HIGH]
+        diagnosticAccuracy:
+          $ref: "#/components/schemas/DiagnosticAccuracy"
         autoResponseAllowed:
           type: boolean
         remoteSupportLink:

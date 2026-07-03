@@ -42,15 +42,16 @@ class PcAgentLogAnalyzerTest {
     @ParameterizedTest
     @CsvSource({
             "VISIT_BOOT_REMOTE_BLOCKED,VISIT_REQUIRED",
-            "VISIT_DISK_FAILURE,REPAIR_OR_REPLACE",
+            "VISIT_DISK_FAILURE,VISIT_REQUIRED",
             "VISIT_WHEA_BSOD,VISIT_REQUIRED",
             "VISIT_POWER_SHUTDOWN,VISIT_REQUIRED",
             "VISIT_FAN_THERMAL,VISIT_REQUIRED"
     })
-    void visitFiveFixturesRouteToVisitOrRepair(String symptomType, String expectedDecision) {
+    void visitFiveFixturesRouteToVisitRequired(String symptomType, String expectedDecision) {
         PcAgentLogAnalyzer.AnalysisResult result = analyze(symptomType, "visit symptom", visitLogFor(symptomType));
 
         assertThat(result.supportRouting().get("recommendedDecision")).isEqualTo(expectedDecision);
+        assertThat(result.supportRouting().get("supportDecision")).isEqualTo(expectedDecision);
     }
 
     @ParameterizedTest
@@ -63,22 +64,27 @@ class PcAgentLogAnalyzerTest {
             "ILLEGAL_SOFTWARE",
             "PHYSICAL_DAMAGE"
     })
-    void unsupportedFixturesRouteToUnsupported(String symptomType) {
+    void unsupportedFixturesRouteToNeedsMoreInfoWithBlockingFactors(String symptomType) {
         PcAgentLogAnalyzer.AnalysisResult result = analyze(symptomType, "unsupported symptom", rawLog(1, "2026-07-02T09:55:00Z", "USER_EVENT", "unsupported issue"));
 
-        assertThat(result.supportRouting().get("recommendedDecision")).isEqualTo("UNSUPPORTED");
-        assertThat(result.supportRouting().get("blockingFactors").toString()).contains("OUT_OF_SCOPE");
+        assertThat(result.supportRouting().get("recommendedDecision")).isEqualTo("NEEDS_MORE_INFO");
+        assertThat(result.supportRouting().get("supportDecision")).isEqualTo("NEEDS_MORE_INFO");
+        assertThat(result.supportRouting().get("blockingFactors").toString())
+                .containsAnyOf("UNSUPPORTED_SCOPE", "OUT_OF_PC_SCOPE", "DATA_RECOVERY_REQUIRED", "UNSUPPORTED_SOFTWARE", "PHYSICAL_DAMAGE_POLICY_REQUIRED");
     }
 
     @Test
-    void storageMemoryRoutesToRepairWhenDiskFailureSignalExists() {
+    void storageMemoryRoutesToVisitWithSafetyAdviceWhenDiskFailureSignalExists() {
         PcAgentLogAnalyzer.AnalysisResult result = analyze(
                 "REMOTE_STORAGE_MEMORY",
                 "slow storage",
                 rawLog(1, "2026-07-02T09:50:00Z", "WINDOWS_EVENT", "SMART critical predictive failure")
         );
 
-        assertThat(result.supportRouting().get("recommendedDecision")).isEqualTo("REPAIR_OR_REPLACE");
+        assertThat(result.supportRouting().get("recommendedDecision")).isEqualTo("VISIT_REQUIRED");
+        assertThat(result.supportRouting().get("visitReasons").toString()).contains("STORAGE_REPLACEMENT_SUSPECTED");
+        assertThat(result.supportRouting().get("safetyAdviceLevel")).isEqualTo("STOP_USE_UNTIL_REVIEW");
+        assertThat(result.supportRouting().get("safetyNotices").toString()).contains("DATA_LOSS_RISK");
     }
 
     @Test
@@ -99,7 +105,7 @@ class PcAgentLogAnalyzerTest {
         assertThat(bundle.windowRecords()).hasSize(2);
         assertThat(dataQuality.get("filteredOutOfWindow")).isEqualTo(1);
         assertThat(result.supportRouting().get("recommendedDecision")).isEqualTo("REMOTE_POSSIBLE");
-        assertThat(result.supportRouting().get("reasonCodes").toString()).contains("DRIVER_ERROR_REPEAT");
+        assertThat(result.supportRouting().get("reasonCodes").toString()).contains("DRIVER_CRASH_LOG");
         assertThat(result.supportRouting().get("reasonCodes").toString()).doesNotContain("SMART_CRITICAL");
     }
 

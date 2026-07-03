@@ -49,7 +49,10 @@ public class PcAgentAsService {
     private static final Set<String> CONSENT_TYPES = Set.of(
             "LOCAL_COLLECTION",
             "SERVER_UPLOAD",
-            "QUALITY_IMPROVEMENT"
+            "QUALITY_IMPROVEMENT",
+            "REMOTE_CONNECTION",
+            "REMOTE_FULL_CONTROL",
+            "HIGH_RISK_REMOTE_ACTION"
     );
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -617,6 +620,8 @@ public class PcAgentAsService {
         );
         String recommendedDecision = string(supportRouting, "recommendedDecision", "NEEDS_MORE_INFO");
         String riskLevel = riskLevelForRouting(recommendedDecision, supportRouting);
+        String safetyAdviceLevel = string(supportRouting, "safetyAdviceLevel", "NONE");
+        Object safetyNotices = supportRouting.getOrDefault("safetyNotices", List.of());
         Map<String, Object> ticket = jdbcTemplate.queryForMap("""
                 INSERT INTO as_tickets (
                   public_id,
@@ -636,6 +641,8 @@ public class PcAgentAsService {
                   log_summary,
                   support_routing,
                   ai_diagnosis_request,
+                  safety_advice_level,
+                  safety_notices,
                   updated_at
                 )
                 VALUES (
@@ -655,6 +662,8 @@ public class PcAgentAsService {
                   ?::jsonb,
                   ?::jsonb,
                   ?::jsonb,
+                  ?::jsonb,
+                  ?,
                   ?::jsonb,
                   now()
                 )
@@ -677,7 +686,9 @@ public class PcAgentAsService {
                 incidentWindowJson,
                 toJson(logSummary),
                 toJson(supportRouting),
-                toJson(aiDiagnosisRequest)
+                toJson(aiDiagnosisRequest),
+                safetyAdviceLevel,
+                toJson(safetyNotices)
         );
 
         return MockData.map(
@@ -689,6 +700,8 @@ public class PcAgentAsService {
                 "reviewStatus", DbValueMapper.string(ticket, "review_status"),
                 "supportDecision", DbValueMapper.string(ticket, "support_decision"),
                 "riskLevel", DbValueMapper.string(ticket, "risk_level"),
+                "safetyAdviceLevel", safetyAdviceLevel,
+                "safetyNotices", safetyNotices,
                 "rangeMinutes", rangeMinutes,
                 "incidentWindow", incidentWindow.toMap(),
                 "supportRouting", supportRouting,
@@ -891,8 +904,35 @@ public class PcAgentAsService {
         if (request == null || request.get(key) == null) {
             return fallback;
         }
-        String value = request.get(key).toString();
+        String value = restoreUtf8MultipartText(request.get(key).toString());
         return value.isBlank() ? fallback : value;
+    }
+
+    private static String restoreUtf8MultipartText(String value) {
+        if (!looksLikeUtf8Mojibake(value)) {
+            return value;
+        }
+        String restored = new String(value.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+        return containsHangul(restored) ? restored : value;
+    }
+
+    private static boolean looksLikeUtf8Mojibake(String value) {
+        return value.indexOf('Ã') >= 0
+                || value.indexOf('Â') >= 0
+                || value.indexOf('ê') >= 0
+                || value.indexOf('ì') >= 0
+                || value.indexOf('í') >= 0
+                || value.indexOf('ë') >= 0;
+    }
+
+    private static boolean containsHangul(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character >= '\uAC00' && character <= '\uD7AF') {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String requiredString(Map<String, Object> request, String key) {
