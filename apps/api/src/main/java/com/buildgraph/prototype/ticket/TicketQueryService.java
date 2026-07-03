@@ -2,8 +2,10 @@ package com.buildgraph.prototype.ticket;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.support.AsLogRagAnalysisService;
 import com.buildgraph.prototype.ticket.contract.SupportDecision;
 import com.buildgraph.prototype.user.CurrentUserService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
@@ -19,6 +21,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class TicketQueryService {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private static final Set<String> TICKET_STATUSES = Set.of(
             "OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED", "CANCELLED"
     );
@@ -46,25 +50,59 @@ public class TicketQueryService {
     public Map<String, Object> create(Map<String, Object> request) {
         String symptom = request == null ? "게임 중 프레임 급락" : String.valueOf(request.getOrDefault("symptom", "게임 중 프레임 급락"));
         String logUploadId = request == null ? null : stringOrNull(request.get("logUploadId"));
+        Map<String, Object> logUpload = resolvePrototypeLogUploadRow(logUploadId);
+        String ticketPublicId = UUID.randomUUID().toString();
+        TicketAnalysisDraft draft = ticketAnalysisDraft(ticketPublicId, symptom, asRagAnalysis(logUpload));
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO as_tickets (
+                  public_id,
                   user_id,
                   log_upload_id,
                   symptom,
                   status,
+                  analysis_status,
+                  review_status,
+                  support_decision,
+                  risk_level,
                   cause_candidates,
-                  upgrade_candidates
+                  upgrade_candidates,
+                  admin_note,
+                  log_summary,
+                  support_routing,
+                  ai_diagnosis_request
                 )
                 VALUES (
+                  ?::uuid,
                   (SELECT id FROM users WHERE email = 'user@example.com'),
-                  (SELECT id FROM agent_log_uploads WHERE public_id = ?::uuid),
+                  ?,
                   ?,
                   'OPEN',
-                  '[]'::jsonb,
-                  '[]'::jsonb
+                  ?,
+                  ?,
+                  ?,
+                  ?,
+                  ?::jsonb,
+                  ?::jsonb,
+                  ?,
+                  ?::jsonb,
+                  ?::jsonb,
+                  ?::jsonb
                 )
                 RETURNING public_id::text AS id
-                """, logUploadId, symptom);
+                """,
+                ticketPublicId,
+                longValue(logUpload, "id"),
+                symptom,
+                draft.analysisStatus(),
+                draft.reviewStatus(),
+                draft.supportDecision(),
+                draft.riskLevel(),
+                toJson(draft.causeCandidates()),
+                toJson(draft.upgradeCandidates()),
+                draft.adminNote(),
+                toJson(draft.logSummary()),
+                toJson(draft.supportRouting()),
+                toJson(draft.aiDiagnosisRequest()));
         return ticket(DbValueMapper.string(row, "id"));
     }
 
@@ -75,29 +113,63 @@ public class TicketQueryService {
         String symptom = request == null
                 ? "게임 중 프레임 급락"
                 : String.valueOf(request.getOrDefault("symptom", "게임 중 프레임 급락"));
-        Long logUploadInternalId = resolveUserLogUploadId(
+        Map<String, Object> logUpload = resolveUserLogUploadRow(
                 request == null ? null : stringOrNull(request.get("logUploadId")),
                 user.internalId()
         );
+        String ticketPublicId = UUID.randomUUID().toString();
+        TicketAnalysisDraft draft = ticketAnalysisDraft(ticketPublicId, symptom, asRagAnalysis(logUpload));
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO as_tickets (
+                  public_id,
                   user_id,
                   log_upload_id,
                   symptom,
                   status,
+                  analysis_status,
+                  review_status,
+                  support_decision,
+                  risk_level,
                   cause_candidates,
-                  upgrade_candidates
+                  upgrade_candidates,
+                  admin_note,
+                  log_summary,
+                  support_routing,
+                  ai_diagnosis_request
                 )
                 VALUES (
+                  ?::uuid,
                   ?,
                   ?,
                   ?,
                   'OPEN',
-                  '[]'::jsonb,
-                  '[]'::jsonb
+                  ?,
+                  ?,
+                  ?,
+                  ?,
+                  ?::jsonb,
+                  ?::jsonb,
+                  ?,
+                  ?::jsonb,
+                  ?::jsonb,
+                  ?::jsonb
                 )
                 RETURNING public_id::text AS id
-                """, user.internalId(), logUploadInternalId, symptom);
+                """,
+                ticketPublicId,
+                user.internalId(),
+                longValue(logUpload, "id"),
+                symptom,
+                draft.analysisStatus(),
+                draft.reviewStatus(),
+                draft.supportDecision(),
+                draft.riskLevel(),
+                toJson(draft.causeCandidates()),
+                toJson(draft.upgradeCandidates()),
+                draft.adminNote(),
+                toJson(draft.logSummary()),
+                toJson(draft.supportRouting()),
+                toJson(draft.aiDiagnosisRequest()));
         return ticket(DbValueMapper.string(row, "id"), user);
     }
 
@@ -223,20 +295,92 @@ public class TicketQueryService {
         return ticket(id, user);
     }
 
-    private Long resolveUserLogUploadId(String logUploadId, Long userInternalId) {
+    private Map<String, Object> resolveUserLogUploadRow(String logUploadId, Long userInternalId) {
         if (logUploadId == null) {
-            return null;
+            return Map.of();
         }
         return jdbcTemplate.queryForList("""
-                        SELECT id
+                        SELECT id,
+                               public_id::text AS log_upload_id,
+                               summary,
+                               as_rag_analysis::text AS as_rag_analysis
                         FROM agent_log_uploads
                         WHERE public_id = ?::uuid
                           AND user_id = ?
                         """, logUploadId, userInternalId)
                 .stream()
                 .findFirst()
-                .map(row -> longValue(row, "id"))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "로그 업로드를 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> resolvePrototypeLogUploadRow(String logUploadId) {
+        if (logUploadId == null) {
+            return Map.of();
+        }
+        return jdbcTemplate.queryForList("""
+                        SELECT id,
+                               public_id::text AS log_upload_id,
+                               summary,
+                               as_rag_analysis::text AS as_rag_analysis
+                        FROM agent_log_uploads
+                        WHERE public_id = ?::uuid
+                          AND user_id = (SELECT id FROM users WHERE email = 'user@example.com')
+                        """, logUploadId)
+                .stream()
+                .findFirst()
+                .orElse(Map.of());
+    }
+
+    private static TicketAnalysisDraft ticketAnalysisDraft(String ticketPublicId, String symptom, Map<String, Object> asRagAnalysis) {
+        if (asRagAnalysis == null || asRagAnalysis.isEmpty()) {
+            return new TicketAnalysisDraft(
+                    "NOT_STARTED",
+                    "NOT_REQUIRED",
+                    null,
+                    null,
+                    List.of(),
+                    List.of(),
+                    null,
+                    null,
+                    null,
+                    null
+            );
+        }
+        Map<String, Object> supportRouting = AsLogRagAnalysisService.supportRouting(asRagAnalysis);
+        Map<String, Object> logSummary = AsLogRagAnalysisService.logSummary(ticketPublicId, symptom, asRagAnalysis);
+        return new TicketAnalysisDraft(
+                "RULE_READY",
+                "REQUIRED",
+                AsLogRagAnalysisService.supportDecision(asRagAnalysis),
+                AsLogRagAnalysisService.riskLevel(asRagAnalysis),
+                AsLogRagAnalysisService.causeCandidates(asRagAnalysis),
+                List.of(),
+                stringOrNull(asRagAnalysis.get("summaryText")),
+                logSummary,
+                supportRouting,
+                AsLogRagAnalysisService.aiDiagnosisRequest(ticketPublicId, symptom, logSummary, supportRouting)
+        );
+    }
+
+    private static Map<String, Object> asRagAnalysis(Map<String, Object> logUpload) {
+        Object value = DbValueMapper.json(logUpload, "as_rag_analysis", Map.of());
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new java.util.LinkedHashMap<>();
+            map.forEach((key, mapValue) -> result.put(String.valueOf(key), mapValue));
+            return result;
+        }
+        return Map.of();
+    }
+
+    private static String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new IllegalStateException("JSON serialization failed", exception);
+        }
     }
 
     public Map<String, Object> update(String id, Map<String, Object> request) {
@@ -701,6 +845,20 @@ public class TicketQueryService {
                 "resolvedAt", DbValueMapper.timestamp(row, "resolved_at"),
                 "createdAt", DbValueMapper.timestamp(row, "created_at")
         );
+    }
+
+    private record TicketAnalysisDraft(
+            String analysisStatus,
+            String reviewStatus,
+            String supportDecision,
+            String riskLevel,
+            List<Map<String, Object>> causeCandidates,
+            List<Map<String, Object>> upgradeCandidates,
+            String adminNote,
+            Map<String, Object> logSummary,
+            Map<String, Object> supportRouting,
+            Map<String, Object> aiDiagnosisRequest
+    ) {
     }
 
     private static void validateStatusTransition(String before, String after) {

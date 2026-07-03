@@ -1,5 +1,5 @@
 import { api } from '../../lib/api';
-import type { AgentLogUploadDto, AsTicketDto } from './types';
+import type { AgentLogUploadDto, AsRagAnalysisDto, AsTicketDto } from './types';
 
 export type UploadAgentLogMetadata = {
   rangeStartedAt?: string;
@@ -34,6 +34,17 @@ export function uploadAgentLog(rangeMinutes: number, consentAccepted: boolean, f
   });
 
   return api<AgentLogUploadDto>('/api/agent-logs/upload', {
+    method: 'POST',
+    body
+  });
+}
+
+export function previewAgentLogRag(rangeMinutes: number, file: File) {
+  const body = new FormData();
+  body.append('file', file);
+  body.append('rangeMinutes', String(rangeMinutes));
+
+  return api<AsRagAnalysisDto>('/api/agent-logs/as-rag-preview', {
     method: 'POST',
     body
   });

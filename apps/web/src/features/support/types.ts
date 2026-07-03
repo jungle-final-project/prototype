@@ -14,10 +14,25 @@ export type AgentLogUploadDto = {
   fileSize?: number;
   rangeMinutes: number;
   summary?: string;
+  asRagAnalysis?: AsRagAnalysisDto | null;
   safetyAdviceLevel?: string | null;
   safetyNotices?: SafetyNoticeDto[] | null;
   createdAt?: string;
   deleteAfter: string;
+};
+
+export type AsRagAnalysisDto = {
+  analysisVersion?: string;
+  retrievalMode?: string;
+  recommendedService?: string;
+  recommendedServiceLabel?: string;
+  supportDecision?: string;
+  supportDecisionLabel?: string;
+  recommendationMessage?: string;
+  confidence?: string;
+  summaryText?: string;
+  evidence?: Record<string, unknown>[];
+  supportRouting?: Record<string, unknown>;
 };
 
 export type SafetyNoticeDto = {
@@ -29,6 +44,7 @@ export type CauseCandidate = {
   code?: string;
   label?: string;
   confidence?: string;
+  reason?: string;
   evidenceIds?: string[];
 };
 

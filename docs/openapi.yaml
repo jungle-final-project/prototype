@@ -1140,6 +1140,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentLogUploadDto"
+  /api/agent-logs/as-rag-preview:
+    post:
+      summary: AS 접수 로그 RAG 추천 미리보기
+      description: 로그 업로드 row를 만들지 않고 AS 접수 전용 RAG로 추천 서비스만 미리 계산한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/AgentLogUploadRequest"
+      responses:
+        "200":
+          description: AS 접수 전용 RAG 추천 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsRagAnalysisDto"
   /api/agent-logs/{id}:
     get:
       summary: Agent 로그 업로드 상세
@@ -3853,6 +3872,10 @@ components:
           type: integer
         summary:
           type: string
+        asRagAnalysis:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AsRagAnalysisDto"
         safetyAdviceLevel:
           $ref: "#/components/schemas/SafetyAdviceLevel"
         safetyNotices:
@@ -3865,6 +3888,77 @@ components:
         deleteAfter:
           type: string
           format: date-time
+    AsRagAnalysisDto:
+      type: object
+      description: AS 접수 페이지 로그 업로드 전용 RAG 분석 결과. 기존 챗봇/Agent RAG 계약과 분리된다.
+      properties:
+        analysisVersion:
+          type: string
+        retrievalMode:
+          type: string
+          enum: [AS_RAG_KEYWORD]
+        source:
+          type: string
+          enum: [AS_PAGE_LOG_UPLOAD]
+        recommendedService:
+          type: string
+          enum: [DIAGNOSIS_ONLY, REMOTE_SUPPORT, VISIT_SUPPORT]
+        recommendedServiceLabel:
+          type: string
+        supportDecision:
+          $ref: "#/components/schemas/SupportDecision"
+        supportDecisionLabel:
+          type: string
+        recommendationMessage:
+          type: string
+          description: 확정 판정이 아니라 로그 기반 보수적 지원 방식 추천 문구다.
+        confidence:
+          $ref: "#/components/schemas/Confidence"
+        summaryText:
+          type: string
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsRagEvidenceDto"
+        supportRouting:
+          $ref: "#/components/schemas/SupportRoutingDto"
+        rawSamples:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: true
+    AsRagEvidenceDto:
+      type: object
+      description: AS 접수 RAG 전용 근거. 기존 rag_evidence ID가 아니라 as_rag_evidence ID를 사용한다.
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+        sourceType:
+          type: string
+        symptomType:
+          type: string
+          nullable: true
+        recommendedService:
+          type: string
+          enum: [DIAGNOSIS_ONLY, REMOTE_SUPPORT, VISIT_SUPPORT]
+        supportDecision:
+          $ref: "#/components/schemas/SupportDecision"
+        reasonCode:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        score:
+          type: number
+        matchedKeywords:
+          type: array
+          items:
+            type: string
     AsTicketCreateRequest:
       type: object
       required: [symptom]

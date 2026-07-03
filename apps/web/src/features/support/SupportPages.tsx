@@ -5,10 +5,11 @@ import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from
 import { ApiError } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
-import { createSupportTicket, getSupportTicket, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
-import type { AsTicketDto, CauseCandidate } from './types';
+import { createSupportTicket, getSupportTicket, previewAgentLogRag, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import type { AsRagAnalysisDto, AsTicketDto, CauseCandidate } from './types';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
+type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
 
 const remoteSymptomTypes = new Set([
@@ -261,6 +262,9 @@ export function SupportNewPage() {
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [logPreview, setLogPreview] = useState('');
+  const [asRagPreview, setAsRagPreview] = useState<AsRagAnalysisDto | null>(null);
+  const [asRagPreviewState, setAsRagPreviewState] = useState<AsRagPreviewState>('idle');
+  const [asRagPreviewError, setAsRagPreviewError] = useState('');
   const [submitState, setSubmitState] = useState<SubmitState>('default');
   const [error, setError] = useState('');
 
@@ -296,6 +300,9 @@ export function SupportNewPage() {
     setError('');
     setSelectedFile(null);
     setLogPreview('');
+    setAsRagPreview(null);
+    setAsRagPreviewState('idle');
+    setAsRagPreviewError('');
     setSubmitState('default');
 
     if (!file) return;
@@ -308,6 +315,17 @@ export function SupportNewPage() {
     }
 
     setSelectedFile(file);
+    setAsRagPreviewState('loading');
+    previewAgentLogRag(incidentRangeMinutes(windowStartedAt, windowEndedAt), file)
+      .then((analysis) => {
+        setAsRagPreview(analysis);
+        setAsRagPreviewState('ready');
+        setSupportRequestKind(supportKindFromRecommendation(analysis.recommendedService));
+      })
+      .catch((cause) => {
+        setAsRagPreviewState('error');
+        setAsRagPreviewError(cause instanceof Error && cause.message ? cause.message : 'AS RAG 추천을 불러오지 못했습니다.');
+      });
     file.text()
       .then((text) => {
         const lines = text.split(/\r?\n/).filter(Boolean).slice(0, 8);
@@ -535,6 +553,9 @@ export function SupportNewPage() {
               />
               {selectedFile ? <p className="mt-2 text-xs text-slate-500">{selectedFile.name} · {selectedFile.size.toLocaleString()} bytes</p> : null}
             </div>
+            {asRagPreviewState === 'loading' ? <StateMessage type="info" title="AS RAG 분석 중" body="업로드한 로그를 바탕으로 적절한 지원 방식을 찾고 있습니다." /> : null}
+            {asRagPreviewState === 'error' ? <StateMessage type="warn" title="AS RAG 추천 실패" body={asRagPreviewError || '추천 결과를 불러오지 못했습니다. 로그 미리보기와 접수는 계속 진행할 수 있습니다.'} /> : null}
+            {asRagPreview ? <AsRagRecommendation analysis={asRagPreview} /> : null}
             <div className="min-h-32 rounded bg-slate-900 p-4 font-mono text-xs leading-6 text-slate-200">
               {logPreview ? <pre className="whitespace-pre-wrap">{logPreview}</pre> : '선택한 로그 파일의 일부가 여기에 표시됩니다.'}
             </div>
@@ -564,6 +585,35 @@ export function SupportNewPage() {
 }
 
 class TicketCreateError extends Error {}
+
+function AsRagRecommendation({ analysis }: { analysis: AsRagAnalysisDto }) {
+  return (
+    <div className="rounded border border-blue-200 bg-blue-50 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-bold text-blue-950">추천 서비스</span>
+        <StatusBadge status={analysis.supportDecision ?? 'NEEDS_MORE_INFO'} />
+        {analysis.confidence ? <StatusBadge status={analysis.confidence} /> : null}
+      </div>
+      <p className="mt-2 text-base font-bold text-blue-950">
+        {analysis.recommendationMessage ?? `이 증상은 ${analysis.recommendedServiceLabel ?? '우선 진단만 받기'} 서비스를 받는 것이 좋습니다.`}
+      </p>
+      {analysis.summaryText ? <p className="mt-2 text-sm leading-6 text-blue-900">{analysis.summaryText}</p> : null}
+      {analysis.evidence?.length ? (
+        <div className="mt-3 space-y-1 text-xs leading-5 text-blue-800">
+          {analysis.evidence.slice(0, 2).map((item, index) => (
+            <p key={`${item.sourceId ?? index}`}>근거 {index + 1}. {String(item.summary ?? item.title ?? item.sourceId ?? 'AS RAG 근거')}</p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function supportKindFromRecommendation(value?: string): SupportRequestKind {
+  if (value === 'REMOTE_SUPPORT') return 'REMOTE_REQUESTED';
+  if (value === 'VISIT_SUPPORT') return 'VISIT_REQUESTED';
+  return 'DIAGNOSIS_ONLY';
+}
 
 function uploadFailureMessage(cause: unknown) {
   if (cause instanceof ApiError && cause.status === 400) {
@@ -813,7 +863,7 @@ function causeRows(candidates: CauseCandidate[]) {
   }
   return candidates.map((candidate) => ({
     '확인 항목': candidate.label ?? candidate.code ?? '로그 확인 항목',
-    내용: candidate.evidenceIds?.length ? candidate.evidenceIds.join(', ') : '업로드한 로그 기반 참고 자료',
+    내용: candidate.reason ?? (candidate.evidenceIds?.length ? candidate.evidenceIds.join(', ') : '업로드한 로그 기반 참고 자료'),
     상태: <StatusBadge status={candidate.confidence ?? 'MEDIUM'} />
   }));
 }
