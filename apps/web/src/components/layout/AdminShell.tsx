@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, Bot, Cpu, Download, Gauge, Home, LifeBuoy, Play, RefreshCw, Search } from 'lucide-react';
+import { Activity, Bot, Cpu, Download, Gauge, GitBranch, Home, LifeBuoy, Play, RefreshCw, Search } from 'lucide-react';
 
 type ExportValue = string | number | boolean | null | undefined;
 
@@ -24,7 +24,7 @@ export function AdminShell({ children, title, exportRows = [], exportFileName = 
   return (
     <div className="screen-shell flex bg-slate-100 font-['Noto_Sans_KR']">
       <AdminSidebar />
-      <div className="flex-1">
+      <div className="min-w-[1024px] flex-1">
         <div className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-7">
           <div className="text-lg font-bold text-brand-navy">{title}</div>
           <div className="flex gap-2">
@@ -68,6 +68,7 @@ function AdminSidebar() {
     { to: '/admin/parts', label: '부품/가격', Icon: Cpu, match: (path: string) => path === '/admin/parts' },
     { to: '/admin/as-tickets', label: 'AS 티켓', Icon: LifeBuoy, match: (path: string) => path.startsWith('/admin/as-tickets') },
     { to: '/admin/price-jobs', label: '가격 작업', Icon: RefreshCw, match: (path: string) => path.startsWith('/admin/price-jobs') },
+    { to: '/admin/build-graph-layouts', label: '관계도 배치', Icon: GitBranch, match: (path: string) => path.startsWith('/admin/build-graph-layouts') },
     { to: '/admin/load-tests', label: '부하 테스트', Icon: Gauge, match: (path: string) => path.startsWith('/admin/load-tests') }
   ];
 

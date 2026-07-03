@@ -24,6 +24,7 @@ const routes = [
   '/admin/rag-evidence/00000000-0000-4000-8000-000000004001',
   '/admin/parts',
   '/admin/price-jobs',
+  '/admin/build-graph-layouts',
   '/admin/load-tests',
   '/admin/as-tickets',
   '/admin/as-tickets/00000000-0000-4000-8000-000000006001'

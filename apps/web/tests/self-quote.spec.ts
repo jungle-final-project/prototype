@@ -2281,6 +2281,77 @@ test('spreads duplicate quote dependency graph category nodes instead of overlap
   expect(overlapX * overlapY).toBe(0);
 });
 
+test('uses saved graph layout positions returned by the resolve api', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.unroute('**/api/build-graphs/resolve');
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const graph = buildGraphResponse();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...graph,
+        nodes: graph.nodes.map((node) => {
+          if (node.category === 'CPU') return { ...node, position: { x: 900, y: 120 } };
+          if (node.category === 'GPU') return { ...node, position: { x: 220, y: 420 } };
+          return node;
+        })
+      })
+    });
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-admin-saved-layout-test',
+        status: 'ACTIVE',
+        name: '셀프 견적',
+        items: [],
+        totalPrice: 1980000,
+        itemCount: 0
+      })
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  const graphCanvas = page.getByTestId('graph-flow-canvas');
+  const cpuNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'CPU' }).first();
+  const gpuNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first();
+  await expect(cpuNode).toBeVisible();
+  await expect(gpuNode).toBeVisible();
+
+  const cpuBox = await cpuNode.boundingBox();
+  const gpuBox = await gpuNode.boundingBox();
+  expect(cpuBox).not.toBeNull();
+  expect(gpuBox).not.toBeNull();
+
+  const cpuCenter = {
+    x: (cpuBox?.x ?? 0) + (cpuBox?.width ?? 0) / 2,
+    y: (cpuBox?.y ?? 0) + (cpuBox?.height ?? 0) / 2
+  };
+  const gpuCenter = {
+    x: (gpuBox?.x ?? 0) + (gpuBox?.width ?? 0) / 2,
+    y: (gpuBox?.y ?? 0) + (gpuBox?.height ?? 0) / 2
+  };
+
+  expect(cpuCenter.x).toBeGreaterThan(gpuCenter.x);
+  expect(cpuCenter.y).toBeLessThan(gpuCenter.y);
+});
+
 test('updates quantity only for repeatable quote draft categories', async ({ page }) => {
   let ramQuantity = 1;
   const ramItem = {

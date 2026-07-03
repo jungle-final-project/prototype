@@ -20,6 +20,18 @@ export type AdminAuditLogsResponse = {
   items: AdminAuditLog[];
 };
 
+export type BuildGraphLayoutPosition = {
+  x: number;
+  y: number;
+};
+
+export type BuildGraphLayout = {
+  layoutKey: 'DEFAULT' | string;
+  source?: 'DEFAULT' | 'SAVED' | string;
+  positions: Record<string, BuildGraphLayoutPosition>;
+  updatedAt?: string | null;
+};
+
 export type AgentTimelineItem = {
   from: string | null;
   to: string;
@@ -518,6 +530,23 @@ export function getAdminDashboard() {
 
 export function getRecentAdminAuditLogs() {
   return api<AdminAuditLogsResponse>('/api/admin/audit-logs/recent');
+}
+
+export function getDefaultBuildGraphLayout() {
+  return api<BuildGraphLayout>('/api/admin/build-graph-layouts/default');
+}
+
+export function saveDefaultBuildGraphLayout(positions: Record<string, BuildGraphLayoutPosition>) {
+  return api<BuildGraphLayout>('/api/admin/build-graph-layouts/default', {
+    method: 'PUT',
+    body: JSON.stringify({ positions })
+  });
+}
+
+export function resetDefaultBuildGraphLayout() {
+  return api<BuildGraphLayout>('/api/admin/build-graph-layouts/default', {
+    method: 'DELETE'
+  });
 }
 
 export function getAdminAgentSessions() {

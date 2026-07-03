@@ -239,6 +239,8 @@ export function BuildDependencyGraph({
                 zoomOnScroll
                 zoomOnPinch
                 panOnDrag
+                nodesDraggable={false}
+                nodesConnectable={false}
                 proOptions={{ hideAttribution: true }}
                 onNodeClick={(_, node: Node) => handleNodeClick(node)}
                 onEdgeClick={(_, edge: Edge) => handleEdgeClick(edge)}
@@ -581,7 +583,7 @@ function toFlowElements(graph?: BuildGraphResolveResponse | null): { nodes: Node
     }
     const category = String(node.category ?? node.id).toUpperCase();
     const isPriceNode = isPriceGraphNode(node);
-    const basePosition = categoryPositions[category] ?? {
+    const basePosition = graphNodePosition(node.position) ?? categoryPositions[category] ?? {
       x: 20 + (index % 3) * 300,
       y: 80 + Math.floor(index / 3) * 210
     };
@@ -641,6 +643,16 @@ function toFlowElements(graph?: BuildGraphResolveResponse | null): { nodes: Node
     labelBgBorderRadius: 8
   } satisfies Edge));
   return { nodes, edges };
+}
+
+function graphNodePosition(position: BuildGraphNode['position']) {
+  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+    return null;
+  }
+  return {
+    x: Math.max(0, position.x),
+    y: Math.max(0, position.y)
+  };
 }
 
 function withDisplayTotalPrice(

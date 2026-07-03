@@ -113,6 +113,7 @@ export type BuildGraphNode = {
   detail?: string;
   partId?: string;
   price?: number;
+  position?: { x: number; y: number };
 };
 
 export type BuildGraphEdge = {
