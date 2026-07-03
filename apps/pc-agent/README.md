@@ -61,6 +61,8 @@ build-agent-exe.cmd
 
 `agent.exe`를 인자 없이 더블클릭하면 `%LOCALAPPDATA%\BuildGraphAgent` 아래에 기본 config/log 폴더를 만들고, Windows 시작프로그램에 등록한 뒤 트레이 아이콘으로 백그라운드 수집을 시작합니다. 트레이 메뉴에서는 로그 뷰어 열기, 로그 폴더 열기, AS 페이지 열기, 종료를 사용할 수 있습니다. 로그 뷰어는 날짜와 시간을 선택해 1시간 단위 JSONL row를 가볍게 보여주는 창입니다. 이것은 Windows Service가 아니라 MVP용 시작프로그램 기반 백그라운드 실행입니다.
 
+현재 로그 뷰어의 첫 화면은 상태 홈입니다. 상태 홈은 Agent 상태, 서버 연결 표시값, 마지막 업로드 표시값, 버전, 최근 감지 신호, 1시간 로그 테이블을 보여줍니다. 이번 1차 UI는 프론트 표시만 바꾸며 heartbeat 호출, 로그 업로드 마법사, 위험 모달, AS 접수 마법사는 추가하지 않습니다. `tkinter`가 없는 패키징 환경에서는 PowerShell fallback 창이 같은 개인정보 기준으로 표시됩니다.
+
 로컬 웹 데모에서 내려받는 파일은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다.
 
 ## 출력 예시
@@ -93,7 +95,7 @@ agentToken: present
 - Agent token 기반 `POST /api/agent/log-uploads` 업로드
 - 업로드 응답 `ticketId`로 `/support/{ticketId}` URL 생성
 - 더블클릭 시 시작프로그램 등록과 트레이 기반 백그라운드 demo metric 수집
-- 트레이 아이콘에서 날짜/시간별 1시간 로그 뷰어 열기
+- 트레이 아이콘에서 상태 홈과 날짜/시간별 1시간 로그 뷰어 열기
 
 ## 구현 시 지켜야 할 점
 

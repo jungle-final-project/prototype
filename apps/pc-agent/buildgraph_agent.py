@@ -8,6 +8,7 @@ import mimetypes
 import os
 import platform
 import random
+import re
 import socket
 import subprocess
 import sys
@@ -70,6 +71,163 @@ UNREGISTERED_STATUS = "UNREGISTERED"
 APP_NAME = "BuildGraphAgent"
 DEFAULT_AGENT_VERSION = "0.1.0"
 DEFAULT_POLICY_VERSION = "policy-v1"
+STATUS_HOME_SIGNAL_LIMIT = 3
+LOG_TABLE_LIMIT = 500
+FINAL_SIGNAL_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "code": "REMOTE_AGENT",
+        "title": "Agent 등록/업로드 오류",
+        "level": "주의",
+        "keywords": (
+            "remote_agent",
+            "agent_health",
+            "register failed",
+            "registration failed",
+            "upload failed",
+            "auth 401",
+            "auth 409",
+            "token error",
+            "config parse",
+            "acl",
+            "permission",
+            "heartbeat missing",
+        ),
+    },
+    {
+        "code": "REMOTE_DRIVER_OS",
+        "title": "드라이버/OS 오류",
+        "level": "주의",
+        "keywords": (
+            "remote_driver_os",
+            "display_driver_warning",
+            "display driver",
+            "nvlddmkm",
+            "driver reset",
+            "windows update",
+            "pnp",
+            "device manager",
+        ),
+    },
+    {
+        "code": "REMOTE_APP_LAUNCHER",
+        "title": "앱/런처 실행 오류",
+        "level": "주의",
+        "keywords": (
+            "remote_app_launcher",
+            "application error",
+            "windows error reporting",
+            ".net runtime",
+            "sidebyside",
+            "launcher crash",
+            "app crash",
+            "runtime error",
+        ),
+    },
+    {
+        "code": "REMOTE_STORAGE_MEMORY",
+        "title": "저장공간/메모리 압박",
+        "level": "주의",
+        "keywords": (
+            "remote_storage_memory",
+            "memory pressure",
+            "out of memory",
+            "storage low",
+            "disk full",
+            "pagefile",
+            "free space low",
+        ),
+    },
+    {
+        "code": "REMOTE_STARTUP_SERVICE",
+        "title": "시작프로그램/서비스 부하",
+        "level": "주의",
+        "keywords": (
+            "remote_startup_service",
+            "startup app",
+            "startup service",
+            "service crash loop",
+            "background service",
+            "idle high cpu",
+        ),
+    },
+    {
+        "code": "REMOTE_LOCAL_NETWORK",
+        "title": "로컬 네트워크 문제",
+        "level": "주의",
+        "keywords": (
+            "remote_local_network",
+            "dns failure",
+            "gateway unreachable",
+            "adapter disabled",
+            "nic driver",
+            "network diagnostic",
+        ),
+    },
+    {
+        "code": "VISIT_BOOT_REMOTE_BLOCKED",
+        "title": "부팅/원격 연결 불가",
+        "level": "검토",
+        "keywords": (
+            "visit_boot_remote_blocked",
+            "device offline",
+            "remote help not available",
+            "boot failure",
+            "heartbeat long missing",
+        ),
+    },
+    {
+        "code": "VISIT_DISK_FAILURE",
+        "title": "디스크 장애 의심",
+        "level": "위험",
+        "keywords": (
+            "visit_disk_failure",
+            "smart critical",
+            "bad block",
+            "filesystem write failure",
+            "disk event 7",
+            "disk event 51",
+            "disk event 55",
+            "disk event 129",
+            "disk event 153",
+        ),
+    },
+    {
+        "code": "VISIT_WHEA_BSOD",
+        "title": "WHEA/블루스크린 반복",
+        "level": "위험",
+        "keywords": (
+            "visit_whea_bsod",
+            "whea-logger",
+            "bugcheck",
+            "bsod",
+            "minidump",
+        ),
+    },
+    {
+        "code": "VISIT_POWER_SHUTDOWN",
+        "title": "전원 꺼짐 반복",
+        "level": "위험",
+        "keywords": (
+            "visit_power_shutdown",
+            "kernel-power",
+            "eventlog 6008",
+            "unexpected shutdown",
+            "power event",
+        ),
+    },
+    {
+        "code": "VISIT_FAN_THERMAL",
+        "title": "과열/팬 이상",
+        "level": "위험",
+        "keywords": (
+            "visit_fan_thermal",
+            "thermal shutdown",
+            "thermal throttle",
+            "fan rpm 0",
+            "thermal_service_required",
+        ),
+    },
+)
 
 
 class ConfigError(ValueError):
@@ -507,9 +665,8 @@ def read_recent_rows(source: Path, minutes: int) -> list[dict]:
                 continue
             if not isinstance(row, dict):
                 continue
-            try:
-                ts = datetime.fromisoformat(row["timestamp"])
-            except (KeyError, TypeError, ValueError):
+            ts = parse_log_timestamp(row)
+            if ts is None:
                 continue
             if ts >= cutoff:
                 rows.append(row)
@@ -857,14 +1014,62 @@ def read_log_tail(path: Path, limit: int = 100) -> list[dict[str, Any]]:
     return rows[-limit:]
 
 
-def parse_log_timestamp(row: dict[str, Any]) -> datetime | None:
-    value = row.get("timestamp")
+def parse_iso_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=KST)
+    return parsed.astimezone(KST)
+
+
+def parse_log_timestamp(row: dict[str, Any]) -> datetime | None:
+    for field in ("timestamp", "collectedAt", "receivedAt", "detectedAt"):
+        parsed = parse_iso_datetime(row.get(field))
+        if parsed is not None:
+            return parsed
+    payload = row.get("payload")
+    if isinstance(payload, dict):
+        for field in ("timestamp", "collectedAt", "detectedAt"):
+            parsed = parse_iso_datetime(payload.get(field))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def log_payload(row: dict[str, Any]) -> dict[str, Any]:
+    payload = row.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def log_value(row: dict[str, Any], *fields: str) -> Any:
+    payload = log_payload(row)
+    for field in fields:
+        if field in row and row[field] is not None:
+            return row[field]
+        if field in payload and payload[field] is not None:
+            return payload[field]
+    return None
+
+
+def format_log_timestamp(row: dict[str, Any]) -> str:
+    timestamp = parse_log_timestamp(row)
+    if timestamp is None:
+        return "-"
+    return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_log_time(row: dict[str, Any]) -> str:
+    timestamp = parse_log_timestamp(row)
+    if timestamp is None:
+        return "-"
+    return timestamp.strftime("%H:%M:%S")
 
 
 def read_log_hour(path: Path, date_text: str, hour: int, limit: int = 500) -> list[dict[str, Any]]:
@@ -900,6 +1105,150 @@ def format_percent(value: Any) -> str:
     return "-"
 
 
+def format_temperature(value: Any) -> str:
+    if isinstance(value, int | float):
+        return f"{value:.1f}C"
+    return "-"
+
+
+def sanitize_display_text(value: Any, limit: int = 160) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        text = "true" if value else "false"
+    elif isinstance(value, int | float):
+        text = str(value)
+    else:
+        text = str(value)
+    text = re.sub(r"(?i)(authorization|agenttoken|activationtoken|token|password)\s*[:=]\s*\S+", r"\1=[hidden]", text)
+    text = re.sub(r"[A-Za-z]:\\[^\s\t\r\n]+", "[path hidden]", text)
+    text = re.sub(r"(/[^\s\t\r\n]+){2,}", "[path hidden]", text)
+    text = text.replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        return "-"
+    if len(text) > limit:
+        return text[: limit - 1] + "..."
+    return text
+
+
+def display_log_kind(row: dict[str, Any]) -> str:
+    return sanitize_display_text(log_value(row, "kind", "eventType"), 60)
+
+
+def display_log_message(row: dict[str, Any]) -> str:
+    return sanitize_display_text(log_value(row, "message", "osErrorEvent", "status", "summary"), 180)
+
+
+def display_log_table_values(row: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        format_log_time(row),
+        display_log_kind(row),
+        format_percent(log_value(row, "cpuUsage", "cpuUsagePercent")),
+        format_percent(log_value(row, "memoryUsage", "ramUsage", "memoryUsedPercent")),
+        format_percent(log_value(row, "diskUsage", "diskUsedPercent")),
+        format_percent(log_value(row, "gpuUsage", "gpuUsagePercent")),
+        format_percent(log_value(row, "vramUsage", "vramUsagePercent")),
+        format_temperature(log_value(row, "cpuTemp", "cpuTempCelsius", "cpuTemperatureCelsius")),
+        format_temperature(log_value(row, "gpuTemp", "gpuTempCelsius", "gpuTemperatureCelsius")),
+        display_log_message(row),
+    )
+
+
+def signal_search_text(row: dict[str, Any]) -> str:
+    fields = (
+        "kind",
+        "eventType",
+        "message",
+        "osErrorEvent",
+        "symptomType",
+        "supportDecision",
+        "riskLevel",
+        "reasonCode",
+        "reasonCodes",
+        "visitReason",
+        "visitReasons",
+        "blockingFactor",
+        "blockingFactors",
+        "status",
+    )
+    values: list[str] = []
+    payload = log_payload(row)
+    for field in fields:
+        for container in (row, payload):
+            value = container.get(field)
+            if isinstance(value, str):
+                values.append(value)
+            elif isinstance(value, Sequence) and not isinstance(value, str):
+                values.extend(str(item) for item in value if isinstance(item, str))
+    return " ".join(values).lower()
+
+
+def detect_signal(row: dict[str, Any]) -> dict[str, Any] | None:
+    text = signal_search_text(row)
+    if not text:
+        return None
+    for rule in FINAL_SIGNAL_RULES:
+        if any(keyword in text for keyword in rule["keywords"]):
+            timestamp = parse_log_timestamp(row)
+            fallback = datetime.now(KST)
+            return {
+                "code": rule["code"],
+                "title": rule["title"],
+                "level": rule["level"],
+                "timestamp": timestamp,
+                "time": timestamp.strftime("%H:%M:%S") if timestamp else "-",
+                "date": (timestamp or fallback).strftime("%Y-%m-%d"),
+                "hour": (timestamp or fallback).hour,
+            }
+    return None
+
+
+def detect_recent_signals(rows: Sequence[dict[str, Any]], limit: int = STATUS_HOME_SIGNAL_LIMIT) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in reversed(list(rows)):
+        signal = detect_signal(row)
+        if signal is None or signal["code"] in seen:
+            continue
+        seen.add(signal["code"])
+        signals.append(signal)
+        if len(signals) >= limit:
+            break
+    return signals
+
+
+def latest_upload_status(rows: Sequence[dict[str, Any]]) -> str:
+    for row in reversed(list(rows)):
+        text = signal_search_text(row)
+        if "upload failed" in text or "upload_failed" in text:
+            return f"실패 {format_log_time(row)}"
+        if "upload succeeded" in text or "upload success" in text or "upload_succeeded" in text:
+            return f"성공 {format_log_time(row)}"
+    return "기록 없음"
+
+
+def latest_server_status(rows: Sequence[dict[str, Any]]) -> str:
+    for row in reversed(list(rows)):
+        text = signal_search_text(row)
+        if "heartbeat failed" in text or "heartbeat missing" in text:
+            return f"실패 {format_log_time(row)}"
+        if "heartbeat succeeded" in text or "heartbeat success" in text:
+            return f"연결 기록 {format_log_time(row)}"
+    return "확인 전"
+
+
+def status_home_model(config: AgentConfig, path: Path) -> dict[str, Any]:
+    rows = read_log_tail(path, LOG_TABLE_LIMIT)
+    return {
+        "agentStatus": "정상 실행 중" if config.agent_token else "등록 필요",
+        "serverStatus": latest_server_status(rows),
+        "lastUpload": latest_upload_status(rows),
+        "version": config.agent_version,
+        "policyVersion": config.policy_version,
+        "signals": detect_recent_signals(rows),
+    }
+
+
 def powershell_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -907,6 +1256,13 @@ def powershell_string(value: str) -> str:
 def show_log_viewer_powershell(config_path: Path) -> None:
     config = load_config(config_path)
     config.log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_file(config)
+    model = status_home_model(config, path)
+    signal_lines = [
+        f"{signal['time']}  {signal['level']}  {signal['title']} ->"
+        for signal in model["signals"]
+    ] or ["최근 감지 신호 없음"]
+    signals_text = "\r\n".join(signal_lines)
     viewer_path = app_data_dir() / "log-viewer.ps1"
     viewer_path.parent.mkdir(parents=True, exist_ok=True)
     script = f"""
@@ -915,35 +1271,87 @@ Add-Type -AssemblyName System.Drawing
 $logPath = {powershell_string(str(log_file(config).resolve()))}
 $logDir = {powershell_string(str(config.log_dir.resolve()))}
 $supportUrl = {powershell_string(support_new_url(config))}
+$agentStatus = {powershell_string(model["agentStatus"])}
+$serverStatus = {powershell_string(model["serverStatus"])}
+$lastUpload = {powershell_string(model["lastUpload"])}
+$versionText = {powershell_string(str(model["version"]))}
+$policyText = {powershell_string(str(model["policyVersion"]))}
+$signalsText = {powershell_string(signals_text)}
+
+function Get-RowValue {{
+  param($Row, [string[]]$Names)
+  foreach ($name in $Names) {{
+    if ($Row.PSObject.Properties[$name] -and $null -ne $Row.$name) {{
+      return $Row.$name
+    }}
+    if ($Row.PSObject.Properties["payload"] -and $null -ne $Row.payload -and $Row.payload.PSObject.Properties[$name] -and $null -ne $Row.payload.$name) {{
+      return $Row.payload.$name
+    }}
+  }}
+  return $null
+}}
+
+function Hide-SensitiveText {{
+  param($Value)
+  if ($null -eq $Value) {{ return "-" }}
+  $text = [string]$Value
+  $text = [regex]::Replace($text, "(?i)(authorization|agenttoken|activationtoken|token|password)\s*[:=]\s*\S+", '$1=[hidden]')
+  $text = [regex]::Replace($text, "[A-Za-z]:\\\\[^\s\t\r\n]+", "[path hidden]")
+  $text = [regex]::Replace($text, "(/[^\s\t\r\n]+){{2,}}", "[path hidden]")
+  if ($text.Length -gt 120) {{ $text = $text.Substring(0, 117) + "..." }}
+  return $text
+}}
+
+function Format-Percent {{
+  param($Value)
+  if ($null -eq $Value) {{ return "-" }}
+  try {{ return "{{0:N1}}%" -f [double]$Value }} catch {{ return "-" }}
+}}
+
+function Format-Temp {{
+  param($Value)
+  if ($null -eq $Value) {{ return "-" }}
+  try {{ return "{{0:N1}}C" -f [double]$Value }} catch {{ return "-" }}
+}}
+
+function Get-ObservedAt {{
+  param($Row)
+  $value = Get-RowValue $Row @("timestamp", "collectedAt", "receivedAt", "detectedAt")
+  if ($null -eq $value) {{ return $null }}
+  try {{ return [datetime]::Parse([string]$value).ToLocalTime() }} catch {{ return $null }}
+}}
 
 function Get-FilteredLogText {{
   param([string]$DateText, [int]$Hour)
   if (-not (Test-Path -LiteralPath $logPath)) {{
-    return "No log file yet.`r`n$logPath"
+    return "아직 수집된 로그가 없습니다."
   }}
   $output = New-Object System.Collections.Generic.List[string]
   try {{
     $start = [datetime]::ParseExact($DateText, "yyyy-MM-dd", $null).AddHours($Hour)
   }} catch {{
-    return "Invalid date. Use yyyy-MM-dd."
+    return "날짜 형식이 올바르지 않습니다. yyyy-MM-dd 형식으로 입력하세요."
   }}
   $end = $start.AddHours(1)
   Get-Content -LiteralPath $logPath | ForEach-Object {{
     try {{
       $row = $_ | ConvertFrom-Json
-      $observedAt = [datetime]::Parse([string]$row.timestamp)
+      $observedAt = Get-ObservedAt $row
       if ($observedAt -ge $start -and $observedAt -lt $end) {{
-        $timestamp = if ($row.timestamp) {{ $row.timestamp }} else {{ "-" }}
-        $cpu = if ($null -ne $row.cpuUsage) {{ "{{0:N1}}%" -f [double]$row.cpuUsage }} else {{ "-" }}
-        $memory = if ($null -ne $row.memoryUsage) {{ "{{0:N1}}%" -f [double]$row.memoryUsage }} else {{ "-" }}
-        $eventType = if ($row.eventType) {{ $row.eventType }} else {{ "-" }}
-        $message = if ($row.message) {{ $row.message }} else {{ "-" }}
-        $output.Add("$timestamp`tCPU $cpu`tMEM $memory`t$eventType`t$message")
+        $timeText = $observedAt.ToString("HH:mm:ss")
+        $kind = Hide-SensitiveText (Get-RowValue $row @("kind", "eventType"))
+        $cpu = Format-Percent (Get-RowValue $row @("cpuUsage", "cpuUsagePercent"))
+        $memory = Format-Percent (Get-RowValue $row @("memoryUsage", "ramUsage", "memoryUsedPercent"))
+        $disk = Format-Percent (Get-RowValue $row @("diskUsage", "diskUsedPercent"))
+        $gpu = Format-Percent (Get-RowValue $row @("gpuUsage", "gpuUsagePercent"))
+        $cpuTemp = Format-Temp (Get-RowValue $row @("cpuTemp", "cpuTempCelsius", "cpuTemperatureCelsius"))
+        $message = Hide-SensitiveText (Get-RowValue $row @("message", "osErrorEvent", "status", "summary"))
+        $output.Add(("{0,-8} {1,-24} CPU {2,7} MEM {3,7} DISK {4,7} GPU {5,7} CPU-T {6,7}  {7}" -f $timeText, $kind, $cpu, $memory, $disk, $gpu, $cpuTemp, $message))
       }}
     }} catch {{}}
   }}
   if ($output.Count -eq 0) {{
-    return "No logs for $DateText $($Hour.ToString('00')):00 - $($Hour.ToString('00')):59.`r`n$logPath"
+    return "선택한 1시간 구간에 표시할 로그가 없습니다."
   }}
   if ($output.Count -gt 500) {{
     $output = $output.GetRange($output.Count - 500, 500)
@@ -953,36 +1361,124 @@ function Get-FilteredLogText {{
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "BuildGraph PC Agent"
-$form.Size = New-Object System.Drawing.Size(820, 460)
+$form.Size = New-Object System.Drawing.Size(980, 640)
 $form.StartPosition = "CenterScreen"
 
-$label = New-Object System.Windows.Forms.Label
-$label.Text = "Collected logs by 1-hour range"
-$label.AutoSize = $true
-$label.Location = New-Object System.Drawing.Point(12, 12)
-$form.Controls.Add($label)
+$sidebar = New-Object System.Windows.Forms.Panel
+$sidebar.Location = New-Object System.Drawing.Point(0, 0)
+$sidebar.Size = New-Object System.Drawing.Size(118, 640)
+$sidebar.BackColor = [System.Drawing.Color]::FromArgb(239, 250, 248)
+$form.Controls.Add($sidebar)
+
+$brand = New-Object System.Windows.Forms.Label
+$brand.Text = "BuildGraph`r`nAgent"
+$brand.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$brand.Location = New-Object System.Drawing.Point(14, 18)
+$brand.Size = New-Object System.Drawing.Size(92, 48)
+$sidebar.Controls.Add($brand)
+
+$navStatus = New-Object System.Windows.Forms.Button
+$navStatus.Text = "상태"
+$navStatus.Location = New-Object System.Drawing.Point(14, 82)
+$navStatus.Size = New-Object System.Drawing.Size(90, 32)
+$sidebar.Controls.Add($navStatus)
+
+$navLog = New-Object System.Windows.Forms.Button
+$navLog.Text = "로그"
+$navLog.Location = New-Object System.Drawing.Point(14, 124)
+$navLog.Size = New-Object System.Drawing.Size(90, 32)
+$navLog.Add_Click({{ $textbox.Focus() }})
+$sidebar.Controls.Add($navLog)
+
+$navSupport = New-Object System.Windows.Forms.Button
+$navSupport.Text = "AS 접수"
+$navSupport.Location = New-Object System.Drawing.Point(14, 166)
+$navSupport.Size = New-Object System.Drawing.Size(90, 32)
+$navSupport.Add_Click({{ Start-Process -FilePath $supportUrl }})
+$sidebar.Controls.Add($navSupport)
+
+$navSettings = New-Object System.Windows.Forms.Button
+$navSettings.Text = "설정"
+$navSettings.Location = New-Object System.Drawing.Point(14, 208)
+$navSettings.Size = New-Object System.Drawing.Size(90, 32)
+$navSettings.Add_Click({{ Start-Process -FilePath $logDir }})
+$sidebar.Controls.Add($navSettings)
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = "BuildGraph Agent"
+$title.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+$title.AutoSize = $true
+$title.Location = New-Object System.Drawing.Point(138, 18)
+$form.Controls.Add($title)
+
+function Add-Card {{
+  param([int]$X, [string]$Title, [string]$Value, [string]$Detail)
+  $card = New-Object System.Windows.Forms.Panel
+  $card.Location = New-Object System.Drawing.Point($X, 64)
+  $card.Size = New-Object System.Drawing.Size(190, 82)
+  $card.BorderStyle = "FixedSingle"
+  $form.Controls.Add($card)
+  $cardTitle = New-Object System.Windows.Forms.Label
+  $cardTitle.Text = $Title
+  $cardTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+  $cardTitle.Location = New-Object System.Drawing.Point(12, 10)
+  $cardTitle.Size = New-Object System.Drawing.Size(160, 20)
+  $card.Controls.Add($cardTitle)
+  $cardValue = New-Object System.Windows.Forms.Label
+  $cardValue.Text = $Value
+  $cardValue.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+  $cardValue.Location = New-Object System.Drawing.Point(12, 34)
+  $cardValue.Size = New-Object System.Drawing.Size(160, 20)
+  $card.Controls.Add($cardValue)
+  $cardDetail = New-Object System.Windows.Forms.Label
+  $cardDetail.Text = $Detail
+  $cardDetail.Location = New-Object System.Drawing.Point(12, 58)
+  $cardDetail.Size = New-Object System.Drawing.Size(160, 18)
+  $card.Controls.Add($cardDetail)
+}}
+
+Add-Card 138 "Agent 상태" $agentStatus "백그라운드 수집"
+Add-Card 340 "서버 연결" $serverStatus "heartbeat 미호출"
+Add-Card 542 "마지막 업로드" $lastUpload "로컬 기록 기준"
+Add-Card 744 "버전" $versionText "정책 $policyText"
+
+$signalLabel = New-Object System.Windows.Forms.Label
+$signalLabel.Text = "최근 신호"
+$signalLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$signalLabel.Location = New-Object System.Drawing.Point(138, 164)
+$signalLabel.AutoSize = $true
+$form.Controls.Add($signalLabel)
+
+$signalsBox = New-Object System.Windows.Forms.TextBox
+$signalsBox.Multiline = $true
+$signalsBox.ReadOnly = $true
+$signalsBox.BorderStyle = "FixedSingle"
+$signalsBox.Location = New-Object System.Drawing.Point(138, 190)
+$signalsBox.Size = New-Object System.Drawing.Size(796, 70)
+$signalsBox.Text = $signalsText
+$form.Controls.Add($signalsBox)
 
 $dateLabel = New-Object System.Windows.Forms.Label
-$dateLabel.Text = "Date"
+$dateLabel.Text = "날짜"
 $dateLabel.AutoSize = $true
-$dateLabel.Location = New-Object System.Drawing.Point(12, 42)
+$dateLabel.Location = New-Object System.Drawing.Point(138, 282)
 $form.Controls.Add($dateLabel)
 
 $dateInput = New-Object System.Windows.Forms.TextBox
-$dateInput.Location = New-Object System.Drawing.Point(54, 38)
+$dateInput.Location = New-Object System.Drawing.Point(180, 278)
 $dateInput.Size = New-Object System.Drawing.Size(96, 22)
 $dateInput.Text = (Get-Date).ToString("yyyy-MM-dd")
 $form.Controls.Add($dateInput)
 
 $hourLabel = New-Object System.Windows.Forms.Label
-$hourLabel.Text = "Hour"
+$hourLabel.Text = "시간"
 $hourLabel.AutoSize = $true
-$hourLabel.Location = New-Object System.Drawing.Point(166, 42)
+$hourLabel.Location = New-Object System.Drawing.Point(292, 282)
 $form.Controls.Add($hourLabel)
 
 $hourSelect = New-Object System.Windows.Forms.ComboBox
 $hourSelect.DropDownStyle = "DropDownList"
-$hourSelect.Location = New-Object System.Drawing.Point(208, 38)
+$hourSelect.Location = New-Object System.Drawing.Point(334, 278)
 $hourSelect.Size = New-Object System.Drawing.Size(72, 22)
 0..23 | ForEach-Object {{ [void]$hourSelect.Items.Add(($_.ToString("00")) + ":00") }}
 $hourSelect.SelectedIndex = [int](Get-Date).Hour
@@ -993,21 +1489,21 @@ $textbox.Multiline = $true
 $textbox.ScrollBars = "Both"
 $textbox.ReadOnly = $true
 $textbox.Font = New-Object System.Drawing.Font("Consolas", 9)
-$textbox.Location = New-Object System.Drawing.Point(12, 72)
-$textbox.Size = New-Object System.Drawing.Size(780, 288)
+$textbox.Location = New-Object System.Drawing.Point(138, 312)
+$textbox.Size = New-Object System.Drawing.Size(796, 220)
 $textbox.Text = Get-FilteredLogText $dateInput.Text $hourSelect.SelectedIndex
 $form.Controls.Add($textbox)
 
 $refresh = New-Object System.Windows.Forms.Button
-$refresh.Text = "Load hour"
-$refresh.Location = New-Object System.Drawing.Point(292, 37)
+$refresh.Text = "1시간 로그"
+$refresh.Location = New-Object System.Drawing.Point(420, 277)
 $refresh.Size = New-Object System.Drawing.Size(88, 24)
 $refresh.Add_Click({{ $textbox.Text = Get-FilteredLogText $dateInput.Text $hourSelect.SelectedIndex }})
 $form.Controls.Add($refresh)
 
 $today = New-Object System.Windows.Forms.Button
-$today.Text = "Now"
-$today.Location = New-Object System.Drawing.Point(388, 37)
+$today.Text = "현재"
+$today.Location = New-Object System.Drawing.Point(516, 277)
 $today.Size = New-Object System.Drawing.Size(64, 24)
 $today.Add_Click({{
   $dateInput.Text = (Get-Date).ToString("yyyy-MM-dd")
@@ -1017,16 +1513,16 @@ $today.Add_Click({{
 $form.Controls.Add($today)
 
 $folder = New-Object System.Windows.Forms.Button
-$folder.Text = "Open log folder"
-$folder.Location = New-Object System.Drawing.Point(12, 374)
-$folder.Size = New-Object System.Drawing.Size(120, 24)
+$folder.Text = "로그 폴더"
+$folder.Location = New-Object System.Drawing.Point(138, 550)
+$folder.Size = New-Object System.Drawing.Size(100, 28)
 $folder.Add_Click({{ Start-Process -FilePath $logDir }})
 $form.Controls.Add($folder)
 
 $support = New-Object System.Windows.Forms.Button
-$support.Text = "Open AS page"
-$support.Location = New-Object System.Drawing.Point(144, 374)
-$support.Size = New-Object System.Drawing.Size(112, 24)
+$support.Text = "AS 페이지"
+$support.Location = New-Object System.Drawing.Point(250, 550)
+$support.Size = New-Object System.Drawing.Size(100, 28)
 $support.Add_Click({{ Start-Process -FilePath $supportUrl }})
 $form.Controls.Add($support)
 
@@ -1060,23 +1556,58 @@ def show_log_viewer(config_path: Path) -> None:
 
     root = tk.Tk()
     root.title("BuildGraph PC Agent")
-    root.geometry("760x420")
-    root.minsize(640, 340)
+    root.geometry("980x620")
+    root.minsize(880, 560)
 
-    status = tk.StringVar(value="Loading recent logs...")
-    header = ttk.Frame(root, padding=(12, 10, 12, 6))
+    status = tk.StringVar(value="로그를 불러오는 중입니다.")
+    agent_status = tk.StringVar(value="-")
+    server_status = tk.StringVar(value="-")
+    upload_status = tk.StringVar(value="-")
+    version_status = tk.StringVar(value="-")
+
+    shell = ttk.Frame(root)
+    shell.pack(fill="both", expand=True)
+
+    sidebar = ttk.Frame(shell, padding=(12, 14, 10, 14))
+    sidebar.pack(side="left", fill="y")
+    ttk.Label(sidebar, text="BuildGraph\nAgent", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 18))
+    ttk.Button(sidebar, text="상태", command=lambda: status.set("상태 홈을 표시 중입니다.")).pack(fill="x", pady=(0, 8))
+    ttk.Button(sidebar, text="로그", command=lambda: tree.focus_set()).pack(fill="x", pady=(0, 8))
+    ttk.Button(sidebar, text="AS 접수", command=lambda: open_support_page(config_path)).pack(fill="x", pady=(0, 8))
+    ttk.Button(sidebar, text="설정", command=lambda: open_log_folder(config_path)).pack(fill="x", pady=(0, 8))
+
+    content = ttk.Frame(shell, padding=(14, 12, 14, 12))
+    content.pack(side="left", fill="both", expand=True)
+
+    header = ttk.Frame(content)
     header.pack(fill="x")
+    ttk.Label(header, text="BuildGraph Agent", font=("Segoe UI", 15, "bold")).pack(side="left")
+    ttk.Label(header, textvariable=status).pack(side="right")
 
-    ttk.Label(header, text="BuildGraph PC Agent", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-    ttk.Label(header, textvariable=status).pack(anchor="w", pady=(4, 0))
+    cards = ttk.Frame(content)
+    cards.pack(fill="x", pady=(12, 10))
 
-    filters = ttk.Frame(root, padding=(12, 4, 12, 4))
-    filters.pack(fill="x")
-    ttk.Label(filters, text="Date").pack(side="left")
+    def add_card(parent: ttk.Frame, title: str, value: tk.StringVar, detail: str) -> None:
+        card = ttk.LabelFrame(parent, text=title, padding=(12, 8, 12, 8))
+        card.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(card, textvariable=value, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(card, text=detail).pack(anchor="w", pady=(4, 0))
+
+    add_card(cards, "Agent 상태", agent_status, "백그라운드 수집")
+    add_card(cards, "서버 연결", server_status, "heartbeat 미호출")
+    add_card(cards, "마지막 업로드", upload_status, "로컬 기록 기준")
+    add_card(cards, "버전", version_status, "agent / policy")
+
+    signals_section = ttk.LabelFrame(content, text="최근 신호", padding=(10, 8, 10, 8))
+    signals_section.pack(fill="x", pady=(0, 10))
+
+    filters = ttk.Frame(content)
+    filters.pack(fill="x", pady=(0, 8))
+    ttk.Label(filters, text="날짜").pack(side="left")
     date_value = tk.StringVar(value=datetime.now(KST).strftime("%Y-%m-%d"))
     date_entry = ttk.Entry(filters, textvariable=date_value, width=12)
     date_entry.pack(side="left", padx=(6, 14))
-    ttk.Label(filters, text="Hour").pack(side="left")
+    ttk.Label(filters, text="시간").pack(side="left")
     hour_value = tk.StringVar(value=f"{datetime.now(KST).hour:02d}:00")
     hour_select = ttk.Combobox(
         filters,
@@ -1086,51 +1617,77 @@ def show_log_viewer(config_path: Path) -> None:
         state="readonly",
     )
     hour_select.pack(side="left", padx=(6, 14))
+    ttk.Button(filters, text="1시간 로그", command=lambda: refresh()).pack(side="left")
+    ttk.Button(filters, text="현재", command=lambda: set_current_hour()).pack(side="left", padx=(8, 0))
 
-    columns = ("timestamp", "cpu", "memory", "event", "message")
-    table_frame = ttk.Frame(root, padding=(12, 4, 12, 4))
+    columns = ("time", "kind", "cpu", "memory", "disk", "gpu", "vram", "cpu_temp", "gpu_temp", "message")
+    table_frame = ttk.Frame(content)
     table_frame.pack(fill="both", expand=True)
     tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
-    tree.heading("timestamp", text="Timestamp")
+    tree.heading("time", text="시간")
+    tree.heading("kind", text="이벤트")
     tree.heading("cpu", text="CPU")
-    tree.heading("memory", text="Memory")
-    tree.heading("event", text="Event")
-    tree.heading("message", text="Message")
-    tree.column("timestamp", width=190, anchor="w")
-    tree.column("cpu", width=70, anchor="e")
-    tree.column("memory", width=80, anchor="e")
-    tree.column("event", width=160, anchor="w")
-    tree.column("message", width=240, anchor="w")
+    tree.heading("memory", text="메모리")
+    tree.heading("disk", text="디스크")
+    tree.heading("gpu", text="GPU")
+    tree.heading("vram", text="VRAM")
+    tree.heading("cpu_temp", text="CPU 온도")
+    tree.heading("gpu_temp", text="GPU 온도")
+    tree.heading("message", text="메시지")
+    tree.column("time", width=80, anchor="w", stretch=False)
+    tree.column("kind", width=160, anchor="w", stretch=False)
+    tree.column("cpu", width=70, anchor="e", stretch=False)
+    tree.column("memory", width=80, anchor="e", stretch=False)
+    tree.column("disk", width=80, anchor="e", stretch=False)
+    tree.column("gpu", width=70, anchor="e", stretch=False)
+    tree.column("vram", width=70, anchor="e", stretch=False)
+    tree.column("cpu_temp", width=80, anchor="e", stretch=False)
+    tree.column("gpu_temp", width=80, anchor="e", stretch=False)
+    tree.column("message", width=300, anchor="w")
 
-    scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=scrollbar.set)
-    tree.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
+    vertical = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+    horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+    tree.grid(row=0, column=0, sticky="nsew")
+    vertical.grid(row=0, column=1, sticky="ns")
+    horizontal.grid(row=1, column=0, sticky="ew")
+    table_frame.columnconfigure(0, weight=1)
+    table_frame.rowconfigure(0, weight=1)
+
+    def select_signal(signal: dict[str, Any]) -> None:
+        date_value.set(str(signal["date"]))
+        hour_value.set(f"{int(signal['hour']):02d}:00")
+        refresh()
+
+    def refresh_signals(signals: Sequence[dict[str, Any]]) -> None:
+        for child in signals_section.winfo_children():
+            child.destroy()
+        if not signals:
+            ttk.Label(signals_section, text="최근 감지 신호 없음").pack(anchor="w")
+            return
+        for signal in signals:
+            text = f"{signal['time']}  {signal['level']}  {signal['title']}  ➡"
+            ttk.Button(signals_section, text=text, command=lambda current=signal: select_signal(current)).pack(
+                fill="x",
+                pady=(0, 4),
+            )
 
     def refresh() -> None:
         try:
             selected_hour = int(hour_value.get().split(":", 1)[0])
         except ValueError:
             selected_hour = datetime.now(KST).hour
-        rows = read_log_hour(path, date_value.get(), selected_hour, 500)
+        model = status_home_model(config, path)
+        agent_status.set(str(model["agentStatus"]))
+        server_status.set(str(model["serverStatus"]))
+        upload_status.set(str(model["lastUpload"]))
+        version_status.set(f"{model['version']} / {model['policyVersion']}")
+        refresh_signals(model["signals"])
+        rows = read_log_hour(path, date_value.get(), selected_hour, LOG_TABLE_LIMIT)
         tree.delete(*tree.get_children())
         for row in rows:
-            tree.insert(
-                "",
-                "end",
-                values=(
-                    str(row.get("timestamp", "-")),
-                    format_percent(row.get("cpuUsage")),
-                    format_percent(row.get("memoryUsage")),
-                    str(row.get("eventType", "-")),
-                    str(row.get("message", "-")),
-                ),
-            )
-        token_status = "present" if config.agent_token else "missing"
-        status.set(
-            f"Status: running | Agent token: {token_status} | "
-            f"Range: {date_value.get()} {selected_hour:02d}:00 | Rows shown: {len(rows)} | Log file: {path}"
-        )
+            tree.insert("", "end", values=display_log_table_values(row))
+        status.set(f"범위 {date_value.get()} {selected_hour:02d}:00 | 표시 {len(rows)}개")
 
     def set_current_hour() -> None:
         now = datetime.now(KST)
@@ -1138,12 +1695,10 @@ def show_log_viewer(config_path: Path) -> None:
         hour_value.set(f"{now.hour:02d}:00")
         refresh()
 
-    buttons = ttk.Frame(root, padding=(12, 6, 12, 12))
+    buttons = ttk.Frame(content, padding=(0, 8, 0, 0))
     buttons.pack(fill="x")
-    ttk.Button(buttons, text="Load hour", command=refresh).pack(side="left")
-    ttk.Button(buttons, text="Now", command=set_current_hour).pack(side="left", padx=(8, 0))
-    ttk.Button(buttons, text="Open log folder", command=lambda: open_log_folder(config_path)).pack(side="left", padx=(8, 0))
-    ttk.Button(buttons, text="Open AS page", command=lambda: open_support_page(config_path)).pack(side="left", padx=(8, 0))
+    ttk.Button(buttons, text="로그 폴더", command=lambda: open_log_folder(config_path)).pack(side="left")
+    ttk.Button(buttons, text="AS 페이지", command=lambda: open_support_page(config_path)).pack(side="left", padx=(8, 0))
 
     refresh()
     root.mainloop()

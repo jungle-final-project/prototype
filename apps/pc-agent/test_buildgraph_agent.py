@@ -286,6 +286,24 @@ class AgentGoal1112Test(unittest.TestCase):
 
             self.assertEqual([row["message"] for row in selected], ["start", "middle"])
 
+    def test_read_log_hour_accepts_envelope_collected_at(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            rows = [
+                {"collectedAt": "2026-07-02T04:59:59Z", "kind": "SYSTEM_METRIC", "message": "before"},
+                {
+                    "collectedAt": "2026-07-02T05:30:00Z",
+                    "kind": "SYSTEM_METRIC",
+                    "payload": {"cpuUsagePercent": 11.5, "message": "inside"},
+                },
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            selected = agent.read_log_hour(path, "2026-07-02", 14)
+
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(selected[0]["payload"]["message"], "inside")
+
     def test_read_log_hour_rejects_invalid_date_or_hour(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent-metrics.jsonl"
@@ -293,6 +311,71 @@ class AgentGoal1112Test(unittest.TestCase):
 
             self.assertEqual(agent.read_log_hour(path, "bad-date", 14), [])
             self.assertEqual(agent.read_log_hour(path, "2026-07-02", 24), [])
+
+    def test_detect_recent_signals_uses_final_scenarios_without_simple_usage_noise(self) -> None:
+        rows = [
+            {
+                "timestamp": "2026-07-02T14:00:00+09:00",
+                "kind": "SYSTEM_METRIC",
+                "cpuUsage": 99.0,
+                "memoryUsage": 94.0,
+                "message": "High CPU and memory usage only.",
+            },
+            {
+                "timestamp": "2026-07-02T14:05:00+09:00",
+                "kind": "DISPLAY_DRIVER_WARNING",
+                "message": "Display driver warning observed.",
+            },
+            {
+                "timestamp": "2026-07-02T14:10:00+09:00",
+                "kind": "EVENT_LOG",
+                "message": "Kernel-Power unexpected shutdown repeated.",
+            },
+        ]
+
+        signals = agent.detect_recent_signals(rows)
+
+        self.assertEqual([signal["code"] for signal in signals], ["VISIT_POWER_SHUTDOWN", "REMOTE_DRIVER_OS"])
+
+    def test_display_log_table_values_hide_sensitive_values(self) -> None:
+        row = {
+            "timestamp": "2026-07-02T14:00:00+09:00",
+            "kind": "AGENT_HEALTH",
+            "payload": {
+                "cpuUsagePercent": 20.0,
+                "processList": ["secret.exe", "other.exe"],
+                "message": "upload failed token=secret C:\\Users\\me\\raw.log",
+            },
+        }
+
+        values = agent.display_log_table_values(row)
+        joined = " ".join(values).lower()
+
+        self.assertIn("agent_health", joined)
+        self.assertIn("[hidden]", joined)
+        self.assertIn("[path hidden]", joined)
+        self.assertNotIn("secret.exe", joined)
+        self.assertNotIn("c:\\users\\me", joined)
+
+    def test_status_home_model_does_not_expose_agent_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            path.write_text("", encoding="utf-8")
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="raw-agent-token",
+                log_dir=Path(directory),
+                agent_version="test-agent",
+                policy_version="test-policy",
+            )
+
+            model = agent.status_home_model(config, path)
+
+            self.assertEqual(model["agentStatus"], "정상 실행 중")
+            self.assertNotIn("raw-agent-token", json.dumps(model, ensure_ascii=False))
 
     def test_powershell_string_escapes_single_quotes(self) -> None:
         self.assertEqual(agent.powershell_string("C:\\Users\\O'Brien"), "'C:\\Users\\O''Brien'")

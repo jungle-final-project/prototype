@@ -1,5 +1,75 @@
 # 2026-07-03 FINAL_SUPPORT_SCENARIOS 100% 구현 Goal
 
+## 2026-07-03 PC Agent 상태 홈 프론트 1차 구현
+
+### 현재 목표
+
+- `codex/pc-agent-exe-ui-front` 브랜치에서 PC Agent exe 프론트만 상태 홈 1차 UI로 변경한다.
+- 서버/API/DB/웹 화면, heartbeat 신규 호출, 로그 업로드/AS 접수 마법사, 위험 모달, exe 재빌드는 제외한다.
+
+### 완료한 일
+
+- `apps/pc-agent/buildgraph_agent.py`의 Tk 로그 뷰어 첫 화면을 상태 홈 구조로 바꿨다.
+- 좌측 내비게이션, 상단 상태 카드, 최근 신호, 1시간 로그 테이블을 추가했다.
+- PowerShell fallback 로그 뷰어도 상태 홈 형태로 갱신했다.
+- 최근 신호는 최종 11종 기준으로 현재 로그에서 실제 매칭되는 항목만 최대 3개 표시하도록 했다.
+- 단순 CPU/RAM/GPU 고사용률만으로는 최근 신호에 올리지 않도록 했다.
+- 로그 테이블은 flat row와 envelope row를 모두 읽고, token/raw path/process list 전체 payload를 화면에 노출하지 않는 표시 모델을 사용한다.
+- `apps/pc-agent/README.md`에 상태 홈 범위와 실행 기준을 반영했다.
+- `apps/pc-agent/test_buildgraph_agent.py`에 envelope row 시간 처리, 신호 매핑, 고사용률 제외, 민감정보 비노출 테스트를 추가했다.
+
+### 마지막 검증 결과
+
+- `apps/pc-agent`: `python -m py_compile buildgraph_agent.py` 성공.
+- `apps/pc-agent`: `python -m unittest -q` 성공. 총 28개 테스트 통과.
+- 실제 `dist/agent.exe` 재빌드와 웹 다운로드 exe 교체는 이번 범위에서 수행하지 않았다.
+
+### 남은 일
+
+- 사용자가 실제 exe 산출물 갱신을 요청하면 별도 단계에서 PyInstaller 빌드와 다운로드 asset 교체 여부를 다시 결정해야 한다.
+- 서버 연결을 실제 heartbeat 기반으로 갱신하려면 15분 주기, 비차단 실패 처리, 로컬 상태 저장 정책을 별도 런타임 작업으로 설계해야 한다.
+
+## 2026-07-03 PC Agent exe UI 시안 이미지 생성
+
+### 현재 목표
+
+- `docs/agent-as/PC_AGENT_EXE_UI_DESIGN_OPTIONS.md` 기준으로 구현 전에 UI 방향을 이미지로 먼저 확인한다.
+- 새 브랜치에서 프론트/UI 작업만 이어갈 수 있게 준비한다.
+
+### 완료한 일
+
+- `codex/pc-agent-exe-ui-front` 브랜치를 새로 생성했다.
+- 기존 미커밋 변경은 되돌리지 않고 그대로 보존했다.
+- `imagegen` built-in tool로 preview-only UI 시안 3개를 생성했다.
+  - 트레이 중심 최소안
+  - AS 접수 마법사형
+  - 대시보드 + 위험 알림형
+
+### 마지막 검증 결과
+
+- 코드 수정은 하지 않았다.
+- 생성 이미지는 구현 후보 검토용 preview이며, 아직 workspace asset으로 저장하지 않았다.
+- 테스트/빌드는 실행하지 않았다.
+
+## 2026-07-03 PC Agent exe UI 디자인 기획 문서
+
+### 현재 목표
+
+- 지금까지 정리한 Agent AI AS 기획을 바탕으로 PC Agent exe UI 수정 방향을 디자인 시안용 Markdown으로 저장한다.
+
+### 완료한 일
+
+- 현재 exe UI 구현을 확인했다: 트레이 메뉴, 로그 뷰어, 날짜/시간 필터, CPU/MEM/Event/Message 표시, 웹 AS 페이지 열기.
+- 현재 exe 로그 수집 상태를 문서 기준과 대조했다: CPU/RAM/Disk 일부는 실제 수집, GPU/온도/top process/driver warning은 demo 값이다.
+- `docs/agent-as/PC_AGENT_EXE_UI_DESIGN_OPTIONS.md`를 새로 생성했다.
+- 문서에는 트레이 중심 최소안, AS 접수 마법사형, Agent 상태 대시보드형, 위험 알림 우선형, 웹 연결 강조형을 분리해 정리했다.
+- 단순 CPU/RAM/GPU 고사용률만으로 AS 접수를 유도하지 않는 기준을 UI 문서에도 반영했다.
+
+### 마지막 검증 결과
+
+- `Get-Content -Encoding UTF8 docs\agent-as\PC_AGENT_EXE_UI_DESIGN_OPTIONS.md`로 문서가 UTF-8 기준 정상 표시되는 것을 확인했다.
+- 코드 수정은 하지 않았다. 이번 작업은 UI 디자인용 문서 추가다.
+
 ## Current goal
 
 - `docs/agent-as/FINAL_SUPPORT_SCENARIOS.md`의 최종 기획을 기준으로 PC Agent AS 기능을 구현한다.
@@ -244,3 +314,31 @@ Updated: 2026-07-03
 - 남은 주의:
   - 현재 PC Agent는 Windows Service/installer가 아니라 MVP용 CLI/트레이 실행이다.
   - 더블클릭 트레이의 로그 뷰어는 PyInstaller 빌드 중 tkinter broken 경고가 있어 별도 GUI 확인이 필요하다. CLI register/collect/upload는 정상 확인했다.
+
+## AI team AS log/scenario handoff note
+
+Updated: 2026-07-03
+
+- 사용자 요청: 자동 AS 로그가 올라온 뒤 사용자에게 1차 증상을 보여주는 흐름과 AI 팀이 요구한 로그/시나리오 규격이 기획서에 맞는지 확인하고, AI 팀 전달용 md를 작성.
+- 확인 기준:
+  - `docs/agent-as/FINAL_SUPPORT_SCENARIOS.md`
+  - `docs/API_CONTRACT.md`
+  - `docs/DB_SCHEMA.md`
+  - `apps/pc-agent/README.md`
+  - `PcAgentLogAnalyzer`
+- 생성 문서:
+  - `docs/agent-as/AI_TEAM_LOG_SCENARIO_HANDOFF.md`
+- 판단:
+  - 사용자 1차 안내, `LogSummary`/`supportRouting`/`AiDiagnosisRequest`, 관리자 승인 후 개선 데이터 활용은 기획서에 맞다.
+  - raw gzip/전체 JSONL을 직접 학습 입력으로 쓰는 것은 기획서와 맞지 않는다. 학습 입력은 요약/라우팅/AI 결과/관리자 라벨/피드백 중심이어야 한다.
+  - AI 팀원의 XGBoost/홈 하단 부품 추천 연결은 AS 기획서 직접 범위가 아니며 별도 추천 파트 연동 설계로 분리했다.
+  - 사용자가 추가로 제공한 exe 수집 필요 목록은 PC Agent AS 최종 시나리오 기준으로 맞다고 판정했다.
+  - 현재 사용자가 붙인 flat exe 로그는 상태 샘플로는 가능하지만, 최종 서버/AI 계약에는 부족하다. 공식 저장 형식은 JSONL 한 줄마다 `schemaVersion`, `collectedAt`, `agentId`, `sequence`, `kind`, `payload`, `privacyFlags`를 포함하는 envelope 방식으로 정리했다.
+  - 추가 요청에 따라 현재 exe에서 추가해야 할 모니터링 수집 대상만 `docs/agent-as/PC_AGENT_EXE_MONITORING_ADDITIONS_ONLY.md`로 분리했다.
+  - 후속 확인에서 현재 exe가 `psutil` 기반 CPU/RAM 사용률은 이미 수집함을 반영해, 추가 대상 문서의 `SYSTEM_METRIC` 항목을 신규 수집이 아니라 공식 payload 정규화 대상으로 수정했다.
+  - 추가 재검토 요청에 따라 `apps/pc-agent/buildgraph_agent.py`, `requirements.txt`, `test_buildgraph_agent.py`, `README.md`를 다시 읽고, 문서를 “현재 exe에 이미 있는 것 / 현재 있지만 정규화가 필요한 것 / 실제 추가해야 할 수집 대상”으로 재작성했다.
+  - 사용자의 알림 정책 우려를 반영해 RAM/CPU/GPU 단순 임계치만으로는 AS 알림을 보내지 않고, heartbeat 장기 누락, SMART critical, WHEA/BSOD, Kernel-Power, thermal shutdown, 반복 driver/app/network 오류처럼 명확한 문제 신호가 있을 때만 AS 접수 유도 시나리오로 문서화했다.
+  - 최종 기획용으로 `AI_TEAM_LOG_SCENARIO_HANDOFF.md`와 `PC_AGENT_EXE_MONITORING_ADDITIONS_ONLY.md`를 다시 압축했다. 중복된 현재 로그 예시, 기획 대조 판정, 후보성 확장 문구, 부품 추천/XGBoost 관련 언급은 제거하고 RawLog 계약, AI 입출력, AS 접수 유도 기준, 추가 구현 항목, 검증 기준만 남겼다.
+  - 사용자가 실행 중인 `%LOCALAPPDATA%\BuildGraphAgent\logs\agent-metrics.jsonl`을 확인한 결과, 최근 row에 `schemaVersion`, `collectedAt`, `agentId`, `sequence`, `kind`, `payload`, `privacyFlags`가 없어 이전 빌드 또는 이전 collector가 실행 중인 상태로 판단했다. 문서에 실행 중인 exe 최신 여부 확인 기준을 추가했다.
+  - 웹 AS 화면 다운로드 URL `http://localhost:5173/downloads/pc-agent/agent.exe`를 직접 내려받아 repo 파일 `apps/web/public/downloads/pc-agent/agent.exe`와 SHA256을 비교했다. 둘 다 `44791862BD8A33869F7D33891078FDACAFC180AC11EC87F801EE0EE6EE198456`로 일치해, 현재 웹에서 내려받는 파일은 workspace 기준 최신 exe임을 확인했다.
+  - 같은 `agent-metrics.jsonl` 안에 14:31 flat row와 15:41 이후 envelope row가 함께 있음을 확인했다. JSONL은 append 방식이라 이전 exe가 찍은 row가 파일 앞부분에 남아 있고, 최신 여부는 tail row 기준으로 확인해야 한다.
