@@ -153,6 +153,7 @@ test.beforeEach(async ({ page }) => {
 
 test('filters internal assets by sidebar category on self quote page', async ({ page }) => {
   const requestedCategories: string[] = [];
+  const requestedQueries: string[] = [];
   const emptyDraft = {
     id: 'draft-test',
     status: 'ACTIVE',
@@ -240,7 +241,9 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
       return;
     }
     const category = url.searchParams.get('category') ?? '';
+    const query = url.searchParams.get('q') ?? '';
     requestedCategories.push(category);
+    requestedQueries.push(query);
 
     const items = category === 'GPU'
       ? [
@@ -318,6 +321,12 @@ test('filters internal assets by sidebar category on self quote page', async ({ 
 
   await gpuListRow.getByRole('button', { name: 'RTX 4070 SUPER 테스트 견적에서 제거' }).click();
   await expect(page.getByText('왼쪽 목록에서 부품을 담으면 이곳에 내 견적이 쌓입니다.')).toBeVisible();
+
+  await page.goto('/self-quote?category=GPU&q=5090');
+  await expect(page.getByRole('textbox', { name: '부품 검색' })).toHaveValue('5090');
+  await expect(page.getByText('GPU 부품 목록')).toBeVisible();
+  expect(requestedCategories).toContain('GPU');
+  expect(requestedQueries).toContain('5090');
 });
 
 test('shows only latest cart price trend delta when price history changed', async ({ page }) => {

@@ -2,6 +2,8 @@ package com.buildgraph.prototype.agent;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -41,14 +43,27 @@ public class PartRouteResolver {
             ));
         }
         if (category != null && hasConcreteProductHint(message)) {
+            String filterRoute = resolveCategoryFilterRoute(partQuery, category);
             return Optional.of(new ResolvedRoute(
-                    "/self-quote?category=" + category,
-                    categoryLabel(category) + " 부품 보기",
-                    categoryLabel(category) + " 부품 화면으로 이동했습니다.",
-                    "FAST_PART_DETAIL_CATEGORY_FALLBACK"
+                    filterRoute,
+                    categoryLabel(category) + " 후보 보기",
+                    categoryLabel(category) + " 후보 화면으로 이동했습니다.",
+                    "FAST_PART_DETAIL_FILTER_ROUTE"
             ));
         }
         return Optional.empty();
+    }
+
+    public String resolveCategoryFilterRoute(String partQuery, String category) {
+        String safeCategory = categoryFrom(category);
+        if (safeCategory == null) {
+            return null;
+        }
+        String query = firstText(extractPartQuery(partQuery), null);
+        if (query == null) {
+            return "/self-quote?category=" + safeCategory;
+        }
+        return "/self-quote?category=" + safeCategory + "&q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
     }
 
     public String resolvePartDetailRoute(String partQuery, String category) {
@@ -159,7 +174,7 @@ public class PartRouteResolver {
                 || containsAnyNormalized(compact,
                 "asus", "msi", "gigabyte", "기가바이트", "lianli", "리안리", "samsung", "삼성",
                 "corsair", "커세어", "noctua", "녹투아", "arctic", "amd", "intel", "인텔", "라이젠",
-                "ddr5", "nvme");
+                "nvidia", "엔비디아", "ddr5", "ddr4", "nvme", "수랭", "공랭", "aio");
     }
 
     private static String extractPartQuery(String message) {

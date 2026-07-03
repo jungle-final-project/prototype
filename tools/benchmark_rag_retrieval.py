@@ -192,17 +192,17 @@ def write_report(output_dir: Path, results: list[dict[str, Any]]) -> Path:
     variant_count = len({result["variant"] for result in results})
 
     lines = [
-        "# RAG Retrieval Benchmark",
+        "# RAG 검색 벤치마크",
         "",
-        f"- generatedAt: {dt.datetime.now().isoformat(timespec='seconds')}",
-        f"- distinctCases: {distinct_case_count}",
-        f"- variants: {variant_count}",
-        f"- totalRows: {len(results)}",
+        f"- 생성 시각: {dt.datetime.now().isoformat(timespec='seconds')}",
+        f"- 고유 케이스 수: {distinct_case_count}",
+        f"- 실험 variant 수: {variant_count}",
+        f"- 총 결과 row 수: {len(results)}",
         "- endpoint: `GET /api/rag/search`",
         "",
-        "## Summary",
+        "## 요약",
         "",
-        "| variant | purpose | cases | top1HitRate | topKHitRate | avgLatencyMs | p95LatencyMs | avgResults |",
+        "| 실험 라벨 | 목적 | 케이스 | top1 적중률 | topK 적중률 | 평균 지연(ms) | p95 지연(ms) | 평균 결과 수 |",
         "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for (variant, purpose), rows in grouped.items():
@@ -216,9 +216,9 @@ def write_report(output_dir: Path, results: list[dict[str, Any]]) -> Path:
 
     lines.extend([
         "",
-        "## Cases",
+        "## 케이스별 결과",
         "",
-        "| variant | purpose | case | top1 | topK | latencyMs | k | count | modes | topSources | error |",
+        "| 실험 라벨 | 목적 | 케이스 | top1 | topK | 지연(ms) | 요구 k | 결과 수 | 검색 모드 | 상위 source | 오류 |",
         "|---|---|---|---:|---:|---:|---:|---:|---|---|---|",
     ])
     for row in results:
@@ -234,9 +234,9 @@ def write_report(output_dir: Path, results: list[dict[str, Any]]) -> Path:
     if failed_rows:
         lines.extend([
             "",
-            "## Failure Summary",
+            "## 실패 요약",
             "",
-            "| variant | purpose | bucket | failed | cases |",
+            "| 실험 라벨 | 목적 | 실패 분류 | 실패 수 | 케이스 |",
             "|---|---|---|---:|---|",
         ])
         grouped_failures: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
@@ -250,9 +250,9 @@ def write_report(output_dir: Path, results: list[dict[str, Any]]) -> Path:
 
         lines.extend([
             "",
-            "### Failed Cases",
+            "### 실패 케이스",
             "",
-            "| variant | purpose | case | bucket | query | topSources |",
+            "| 실험 라벨 | 목적 | 케이스 | 실패 분류 | 질의 | 상위 source |",
             "|---|---|---|---|---|---|",
         ])
         for row in failed_rows:
@@ -266,9 +266,9 @@ def write_report(output_dir: Path, results: list[dict[str, Any]]) -> Path:
     if top1_miss_rows:
         lines.extend([
             "",
-            "## Top1 Miss Summary",
+            "## Top1 미스 요약",
             "",
-            "| variant | purpose | top1OnlyMiss | cases |",
+            "| 실험 라벨 | 목적 | top1 미스 수 | 케이스 |",
             "|---|---|---:|---|",
         ])
         grouped_top1: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -282,7 +282,7 @@ def write_report(output_dir: Path, results: list[dict[str, Any]]) -> Path:
 
     lines.extend([
         "",
-        "## Policy Reading Guide",
+        "## 정책 해석 기준",
         "",
         "- `topKHitRate`가 vector-off와 2%p 미만 차이면 해당 경로는 latency를 보고 끌 후보가 된다.",
         "- `REQUIREMENT_PARSE`와 `BUILD_RECOMMEND`는 5090, 끝판왕, 예산 표현 같은 의미 검색 실패 감소를 우선한다.",

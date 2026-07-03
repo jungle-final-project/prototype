@@ -1,0 +1,24 @@
+{
+  "recommendedDecision": "NEEDS_MORE_INFO",
+  "supportDecision": "NEEDS_MORE_INFO",
+  "riskLevel": "MEDIUM",
+  "confidence": "MEDIUM",
+  "reasonCodes": [
+    "DATA_RECOVERY_REQUIRED"
+  ],
+  "remoteActions": [],
+  "visitReasons": [],
+  "blockingFactors": [
+    "DATA_RECOVERY_REQUIRED",
+    "DATA_RECOVERY_REQUIRED"
+  ],
+  "safetyAdviceLevel": "MEDIUM",
+  "safetyNotices": [
+    {
+      "code": "BACKUP_REQUIRED",
+      "message": "데이터 손실 가능성이 있으므로 중요한 파일을 먼저 백업하세요."
+    }
+  ],
+  "requiresAdminApproval": true,
+  "allowAutoResponse": false
+}

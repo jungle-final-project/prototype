@@ -550,7 +550,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
             default -> null;
         };
         if (route == null && "PART_DETAIL".equals(routeType) && category != null) {
-            route = "/self-quote?category=" + category;
+            route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), category);
             reason = firstText(reason, "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK");
         }
         if (!isAllowedRoute(route)) {
@@ -581,7 +581,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         ).contains(route)) {
             return true;
         }
-        return route.matches("^/self-quote\\?category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)$")
+        return route.matches("^/self-quote\\?category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)(?:&q=[^#\\s]+)?$")
                 || route.matches("^/parts/[0-9a-fA-F-]{8,}$");
     }
 
@@ -590,7 +590,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
             return "화면 이동";
         }
         if (route.startsWith("/self-quote?category=")) {
-            String category = route.substring(route.indexOf('=') + 1);
+            String category = routeCategory(route);
             return categoryLabel(category) + " 부품 보기";
         }
         if (route.startsWith("/parts/")) {
@@ -605,6 +605,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
             case "/checkout" -> "구매하기 열기";
             default -> "화면 이동";
         };
+    }
+
+    private static String routeCategory(String route) {
+        Matcher matcher = Pattern.compile("[?&]category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)").matcher(route == null ? "" : route);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     private static void preserveServerHardConstraints(Map<String, Object> mergedContext, Map<String, Object> serverContext) {

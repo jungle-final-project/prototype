@@ -1,0 +1,52 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "NEEDS_MORE_INFO",
+  "riskLevel": "MEDIUM",
+  "confidence": "MEDIUM",
+  "reasonCodes": [
+    "DATA_RECOVERY_REQUIRED"
+  ],
+  "causeCandidates": [
+    {
+      "label": "DATA_RECOVERY_REQUIRED",
+      "confidence": "MEDIUM",
+      "reason": "데이터 복구/물리 파손/불법 SW 요청"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "MEDIUM",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [],
+  "visitReasons": [],
+  "blockingFactors": [
+    "DATA_RECOVERY_REQUIRED",
+    "DATA_RECOVERY_REQUIRED"
+  ],
+  "requiredAdditionalLogs": [
+    "더 긴 incident window 로그"
+  ],
+  "evidenceRefs": [
+    "UNKNOWN_050:raw:EVENT_LOG"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "데이터 복구/물리 파손/불법 SW 요청",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": [
+      "문제가 발생한 정확한 시간대를 알려주세요."
+    ]
+  },
+  "proposedTicketPatch": {}
+}

@@ -1,0 +1,48 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "REMOTE_POSSIBLE",
+  "riskLevel": "MEDIUM",
+  "confidence": "MEDIUM",
+  "reasonCodes": [
+    "MEMORY_PRESSURE"
+  ],
+  "causeCandidates": [
+    {
+      "label": "MEMORY_PRESSURE",
+      "confidence": "MEDIUM",
+      "reason": "메모리 압박과 앱 crash 동시 발생"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "MEDIUM",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [
+    "CHECK_EVENT_VIEWER"
+  ],
+  "visitReasons": [],
+  "blockingFactors": [],
+  "requiredAdditionalLogs": [],
+  "evidenceRefs": [
+    "REMOTE_STORAGE_MEMORY_020:raw:SYSTEM_METRIC",
+    "REMOTE_STORAGE_MEMORY_020:raw:EVENT_LOG"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "메모리 압박과 앱 crash 동시 발생",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": []
+  },
+  "proposedTicketPatch": {}
+}

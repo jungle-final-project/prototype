@@ -139,7 +139,7 @@ public class BuildChatCacheService {
         fingerprint.put("appliedPartPreferences", sharedRecommendation ? "ignored" : body.get("appliedPartPreferences"));
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        return "buildgraph:build-chat:v8:" + sha256(json);
+        return "buildgraph:build-chat:v9:" + sha256(json);
     }
 
     private static boolean isShareableRecommendation(Map<String, Object> request) {

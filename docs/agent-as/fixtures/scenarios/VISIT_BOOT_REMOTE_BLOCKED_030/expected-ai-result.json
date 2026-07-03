@@ -1,0 +1,47 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "VISIT_REQUIRED",
+  "riskLevel": "HIGH",
+  "confidence": "HIGH",
+  "reasonCodes": [
+    "REMOTE_HELP_NOT_AVAILABLE"
+  ],
+  "causeCandidates": [
+    {
+      "label": "REMOTE_HELP_NOT_AVAILABLE",
+      "confidence": "HIGH",
+      "reason": "원격 연결 자체 불가"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "HIGH",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [],
+  "visitReasons": [
+    "REMOTE_HELP_NOT_AVAILABLE"
+  ],
+  "blockingFactors": [],
+  "requiredAdditionalLogs": [],
+  "evidenceRefs": [
+    "VISIT_BOOT_REMOTE_BLOCKED_030:raw:AGENT_HEALTH"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "원격 연결 자체 불가",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": []
+  },
+  "proposedTicketPatch": {}
+}

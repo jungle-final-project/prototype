@@ -1,0 +1,47 @@
+{
+  "contractVersion": "1",
+  "supportDecision": "VISIT_REQUIRED",
+  "riskLevel": "HIGH",
+  "confidence": "HIGH",
+  "reasonCodes": [
+    "SUSPECTED_HARDWARE_FAILURE"
+  ],
+  "causeCandidates": [
+    {
+      "label": "SUSPECTED_HARDWARE_FAILURE",
+      "confidence": "HIGH",
+      "reason": "드라이버 오류 후 WHEA도 반복"
+    }
+  ],
+  "nextActions": [
+    {
+      "label": "관리자 검토",
+      "priority": "HIGH",
+      "instruction": "AI 제안은 확정값이 아니므로 관리자 승인 후 사용자 안내에 반영합니다."
+    }
+  ],
+  "remoteActions": [],
+  "visitReasons": [
+    "NEEDS_BENCH_REPRODUCTION"
+  ],
+  "blockingFactors": [],
+  "requiredAdditionalLogs": [],
+  "evidenceRefs": [
+    "VISIT_WHEA_BSOD_011:raw:EVENT_LOG"
+  ],
+  "toolRefs": [],
+  "unsafeActionsExcluded": [
+    "원본 전체 로그 반환",
+    "전체 프로세스 목록 학습"
+  ],
+  "adminReviewRequired": true,
+  "userFirstNotice": {
+    "title": "AS 로그 기반 1차 진단 제안",
+    "summary": "드라이버 오류 후 WHEA도 반복",
+    "safeActions": [
+      "진행 중인 작업을 저장하고 관리자 검토를 기다리세요."
+    ],
+    "additionalQuestions": []
+  },
+  "proposedTicketPatch": {}
+}

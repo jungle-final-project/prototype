@@ -32,7 +32,7 @@ def main() -> int:
     parser.add_argument("--case-group", default=None, help="Run only cases whose benchmarkGroup matches this value")
     parser.add_argument("--case-id", nargs="+", default=None, help="Run only the selected case id(s)")
     parser.add_argument("--repeat", type=int, default=1, help="Repeat each selected case N times")
-    parser.add_argument("--slow-threshold-ms", type=int, default=10_000, help="Latency threshold for slow-case reporting")
+    parser.add_argument("--slow-threshold-ms", type=int, default=5_000, help="Latency threshold for slow-case reporting")
     parser.add_argument("--fail-on-slow", action="store_true", help="Return non-zero when any case reaches slow-threshold-ms")
     parser.add_argument("--include-shadow-summary", action="store_true", help="Append recommendation_shadow_scores rows created during this run")
     parser.add_argument(
