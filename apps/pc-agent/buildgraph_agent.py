@@ -73,6 +73,26 @@ DEFAULT_AGENT_VERSION = "0.1.0"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
+EVENT_PANEL_SIGNAL_LIMIT = 3
+STATUS_LOG_SUMMARY_LIMIT = 6
+EVENT_PANEL_SIGNAL_CODES = {
+    "REMOTE_DRIVER_OS",
+    "REMOTE_APP_LAUNCHER",
+    "REMOTE_LOCAL_NETWORK",
+    "VISIT_DISK_FAILURE",
+    "VISIT_WHEA_BSOD",
+    "VISIT_POWER_SHUTDOWN",
+    "VISIT_FAN_THERMAL",
+}
+EVENT_PANEL_SUMMARIES = {
+    "REMOTE_DRIVER_OS": "드라이버 또는 OS 관련 오류 신호가 감지되었습니다.",
+    "REMOTE_APP_LAUNCHER": "앱 또는 런처 실행 오류가 반복된 기록이 있습니다.",
+    "REMOTE_LOCAL_NETWORK": "로컬 네트워크 연결 문제 신호가 감지되었습니다.",
+    "VISIT_DISK_FAILURE": "디스크 상태 점검이 필요한 신호가 감지되었습니다.",
+    "VISIT_WHEA_BSOD": "블루스크린 또는 하드웨어 오류 로그가 반복 감지되었습니다.",
+    "VISIT_POWER_SHUTDOWN": "예상치 못한 전원 종료 기록이 감지되었습니다.",
+    "VISIT_FAN_THERMAL": "과열 또는 팬 상태 점검이 필요한 신호가 감지되었습니다.",
+}
 FINAL_SIGNAL_RULES: tuple[dict[str, Any], ...] = (
     {
         "code": "REMOTE_AGENT",
@@ -283,6 +303,7 @@ class AgentRuntime:
     def __init__(self) -> None:
         self.running = True
         self.index = 0
+        self.last_event_panel_signature: str | None = None
 
     def stop(self) -> None:
         self.running = False
@@ -1139,6 +1160,20 @@ def display_log_message(row: dict[str, Any]) -> str:
     return sanitize_display_text(log_value(row, "message", "osErrorEvent", "status", "summary"), 180)
 
 
+def display_log_event_summary(row: dict[str, Any]) -> str:
+    kind = display_log_kind(row)
+    labels = {
+        "DEMO_METRIC": "상태 수집",
+        "SYSTEM_METRIC": "상태 수집",
+        "DISPLAY_DRIVER_WARNING": "드라이버 경고",
+        "EVENT_LOG": "시스템 이벤트",
+        "AGENT_HEALTH": "Agent 상태",
+    }
+    if kind != "-":
+        return labels.get(kind.upper(), sanitize_display_text(kind, 80))
+    return sanitize_display_text(display_log_message(row), 80)
+
+
 def display_log_table_values(row: dict[str, Any]) -> tuple[str, ...]:
     return (
         format_log_time(row),
@@ -1152,6 +1187,31 @@ def display_log_table_values(row: dict[str, Any]) -> tuple[str, ...]:
         format_temperature(log_value(row, "gpuTemp", "gpuTempCelsius", "gpuTemperatureCelsius")),
         display_log_message(row),
     )
+
+
+def display_log_summary_values(row: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        format_log_time(row),
+        format_percent(log_value(row, "cpuUsage", "cpuUsagePercent")),
+        format_percent(log_value(row, "memoryUsage", "ramUsage", "memoryUsedPercent")),
+        format_percent(log_value(row, "diskUsage", "diskUsedPercent")),
+        format_percent(log_value(row, "gpuUsage", "gpuUsagePercent")),
+        display_log_event_summary(row),
+    )
+
+
+def read_status_log_summary_rows(path: Path, limit: int = STATUS_LOG_SUMMARY_LIMIT) -> list[dict[str, Any]]:
+    cutoff = datetime.now(KST) - timedelta(hours=1)
+    rows: list[dict[str, Any]] = []
+    for row in read_log_tail(path, LOG_TABLE_LIMIT):
+        timestamp = parse_log_timestamp(row)
+        if timestamp is None:
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=KST)
+        if timestamp >= cutoff:
+            rows.append(row)
+    return rows[-limit:]
 
 
 def signal_search_text(row: dict[str, Any]) -> str:
@@ -1215,6 +1275,93 @@ def detect_recent_signals(rows: Sequence[dict[str, Any]], limit: int = STATUS_HO
         if len(signals) >= limit:
             break
     return signals
+
+
+def event_panel_signals(signals: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for signal in signals:
+        code = str(signal.get("code", ""))
+        if code not in EVENT_PANEL_SIGNAL_CODES or code in seen:
+            continue
+        seen.add(code)
+        selected.append(signal)
+        if len(selected) >= EVENT_PANEL_SIGNAL_LIMIT:
+            break
+    return selected
+
+
+def event_panel_signal_summary(signal: dict[str, Any]) -> str:
+    code = str(signal.get("code", ""))
+    if code in EVENT_PANEL_SUMMARIES:
+        return EVENT_PANEL_SUMMARIES[code]
+    return sanitize_display_text(signal.get("title"), 90)
+
+
+def event_panel_detected_at(signal: dict[str, Any]) -> datetime:
+    timestamp = signal.get("timestamp")
+    if isinstance(timestamp, datetime):
+        return timestamp.astimezone(KST) if timestamp.tzinfo else timestamp.replace(tzinfo=KST)
+    return datetime.now(KST)
+
+
+def event_panel_latest_time(signals: Sequence[dict[str, Any]]) -> str:
+    timestamps = [event_panel_detected_at(signal) for signal in signals]
+    if not timestamps:
+        return "-"
+    return max(timestamps).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def event_panel_signature(signals: Sequence[dict[str, Any]]) -> str | None:
+    selected = event_panel_signals(signals)
+    if not selected:
+        return None
+    parts = [
+        f"{signal.get('code')}:{signal.get('date')}:{signal.get('hour')}"
+        for signal in selected
+    ]
+    return "|".join(parts)
+
+
+def event_panel_model(signals: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    selected = event_panel_signals(signals)
+    if not selected:
+        return None
+    primary = selected[0]
+    detected_at = event_panel_detected_at(primary)
+    symptom_type = str(primary.get("code", "REMOTE_DRIVER_OS"))
+    window = default_incident_window(symptom_type, detected_at=detected_at, trigger_type="SYSTEM_DETECTED")
+    return {
+        "latestTime": event_panel_latest_time(selected),
+        "summaries": [event_panel_signal_summary(signal) for signal in selected],
+        "primarySignal": primary,
+        "detectedTime": detected_at.strftime("%Y-%m-%d %H:%M"),
+        "signalTitle": event_panel_signal_summary(primary),
+        "windowText": (
+            f"{window.started_at.strftime('%H:%M')} ~ {window.ended_at.strftime('%H:%M')} "
+            f"({window.range_minutes()}분)"
+        ),
+    }
+
+
+def event_panel_symptom(signals: Sequence[dict[str, Any]]) -> str:
+    summaries = [event_panel_signal_summary(signal) for signal in event_panel_signals(signals)]
+    if not summaries:
+        return "PC Agent가 확인이 필요한 이벤트를 감지했습니다."
+    return " / ".join(summaries[:EVENT_PANEL_SIGNAL_LIMIT])
+
+
+def event_panel_failure_message(exception: Exception) -> str:
+    text = str(exception).lower()
+    if "agenttoken is missing" in text or "http 401" in text or "http 403" in text:
+        return "Agent 등록 상태를 확인해야 전송할 수 있습니다."
+    if "consent" in text or "consentaccepted" in text:
+        return "서버 업로드 동의가 필요해 전송할 수 없습니다."
+    if "no log rows" in text or "log file does not exist" in text:
+        return "전송할 이벤트 로그가 아직 없습니다. 잠시 후 다시 시도해 주세요."
+    if "timed out" in text or "connection" in text or "refused" in text or "unreachable" in text:
+        return "서버 연결을 확인할 수 없어 전송하지 못했습니다."
+    return "전송하지 못했습니다. 등록, 동의, 서버 연결 상태를 확인해 주세요."
 
 
 def latest_upload_status(rows: Sequence[dict[str, Any]]) -> str:
@@ -1360,7 +1507,7 @@ function Get-FilteredLogText {{
 }}
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "BuildGraph PC Agent"
+$form.Text = "PC Agent"
 $form.Size = New-Object System.Drawing.Size(980, 640)
 $form.StartPosition = "CenterScreen"
 
@@ -1371,41 +1518,41 @@ $sidebar.BackColor = [System.Drawing.Color]::FromArgb(239, 250, 248)
 $form.Controls.Add($sidebar)
 
 $brand = New-Object System.Windows.Forms.Label
-$brand.Text = "BuildGraph`r`nAgent"
+$brand.Text = ""
 $brand.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
 $brand.Location = New-Object System.Drawing.Point(14, 18)
 $brand.Size = New-Object System.Drawing.Size(92, 48)
 $sidebar.Controls.Add($brand)
 
 $navStatus = New-Object System.Windows.Forms.Button
-$navStatus.Text = "상태"
+$navStatus.Text = "● 상태"
 $navStatus.Location = New-Object System.Drawing.Point(14, 82)
 $navStatus.Size = New-Object System.Drawing.Size(90, 32)
 $sidebar.Controls.Add($navStatus)
 
 $navLog = New-Object System.Windows.Forms.Button
-$navLog.Text = "로그"
+$navLog.Text = "≡ 로그"
 $navLog.Location = New-Object System.Drawing.Point(14, 124)
 $navLog.Size = New-Object System.Drawing.Size(90, 32)
 $navLog.Add_Click({{ $textbox.Focus() }})
 $sidebar.Controls.Add($navLog)
 
 $navSupport = New-Object System.Windows.Forms.Button
-$navSupport.Text = "AS 접수"
+$navSupport.Text = "+ AS 접수"
 $navSupport.Location = New-Object System.Drawing.Point(14, 166)
 $navSupport.Size = New-Object System.Drawing.Size(90, 32)
 $navSupport.Add_Click({{ Start-Process -FilePath $supportUrl }})
 $sidebar.Controls.Add($navSupport)
 
 $navSettings = New-Object System.Windows.Forms.Button
-$navSettings.Text = "설정"
+$navSettings.Text = "○ 설정"
 $navSettings.Location = New-Object System.Drawing.Point(14, 208)
 $navSettings.Size = New-Object System.Drawing.Size(90, 32)
 $navSettings.Add_Click({{ Start-Process -FilePath $logDir }})
 $sidebar.Controls.Add($navSettings)
 
 $title = New-Object System.Windows.Forms.Label
-$title.Text = "BuildGraph Agent"
+$title.Text = ""
 $title.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
 $title.AutoSize = $true
 $title.Location = New-Object System.Drawing.Point(138, 18)
@@ -1545,7 +1692,11 @@ $form.Controls.Add($support)
         open_log_folder(config_path)
 
 
-def show_log_viewer(config_path: Path) -> None:
+def show_log_viewer(
+    config_path: Path,
+    focus_signal: dict[str, Any] | None = None,
+    support_signal: dict[str, Any] | None = None,
+) -> None:
     if tk is None or ttk is None:
         show_log_viewer_powershell(config_path)
         return
@@ -1555,59 +1706,404 @@ def show_log_viewer(config_path: Path) -> None:
     path = log_file(config)
 
     root = tk.Tk()
-    root.title("BuildGraph PC Agent")
-    root.geometry("980x620")
-    root.minsize(880, 560)
+    root.title("PC Agent")
+    root.geometry("1000x640")
+    root.minsize(860, 560)
+    colors = {
+        "app_bg": "#f5f7f8",
+        "sidebar_bg": "#e7f2ef",
+        "sidebar_active": "#ffffff",
+        "sidebar_active_bar": "#1f8a70",
+        "text": "#172b3a",
+        "muted": "#5c6b73",
+        "subtle": "#7b8a92",
+        "border": "#d7e0e3",
+        "card_bg": "#ffffff",
+        "section_bg": "#ffffff",
+        "table_header": "#edf3f4",
+        "row_alt": "#f8fbfb",
+        "signal_bg": "#f8fbfb",
+        "signal_hover": "#edf7f4",
+    }
 
-    status = tk.StringVar(value="로그를 불러오는 중입니다.")
+    def create_round_rect(
+        canvas: tk.Canvas,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        radius: int,
+        **kwargs: Any,
+    ) -> None:
+        points = [
+            x1 + radius,
+            y1,
+            x2 - radius,
+            y1,
+            x2,
+            y1,
+            x2,
+            y1 + radius,
+            x2,
+            y2 - radius,
+            x2,
+            y2,
+            x2 - radius,
+            y2,
+            x1 + radius,
+            y2,
+            x1,
+            y2,
+            x1,
+            y2 - radius,
+            x1,
+            y1 + radius,
+            x1,
+            y1,
+        ]
+        canvas.create_polygon(points, smooth=True, **kwargs)
+
+    def rounded_container(
+        parent: tk.Misc,
+        height: int,
+        padding: tuple[int, int] = (14, 12),
+        radius: int = 16,
+    ) -> tuple[tk.Canvas, tk.Frame]:
+        canvas = tk.Canvas(
+            parent,
+            height=height,
+            background=colors["app_bg"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        inner = tk.Frame(canvas, background=colors["card_bg"])
+        window_id = canvas.create_window(padding[0], padding[1], anchor="nw", window=inner)
+
+        def redraw(event: tk.Event) -> None:
+            canvas.delete("rounded-bg")
+            width = max(2, event.width)
+            actual_height = max(2, event.height)
+            create_round_rect(
+                canvas,
+                1,
+                1,
+                width - 1,
+                actual_height - 1,
+                radius,
+                fill=colors["card_bg"],
+                outline=colors["border"],
+                tags="rounded-bg",
+            )
+            canvas.tag_lower("rounded-bg")
+            canvas.coords(window_id, padding[0], padding[1])
+            canvas.itemconfigure(
+                window_id,
+                width=max(1, width - padding[0] * 2),
+                height=max(1, actual_height - padding[1] * 2),
+            )
+
+        canvas.bind("<Configure>", redraw)
+        return canvas, inner
+
+    def rounded_button(
+        parent: tk.Misc,
+        text: str,
+        command: Any,
+        variant: str = "secondary",
+        width: int = 112,
+        height: int = 32,
+    ) -> tk.Canvas:
+        is_primary = variant == "primary"
+        fill = "#197b8f" if is_primary else "#eef7f7"
+        hover = "#156a7a" if is_primary else "#dcefed"
+        foreground = "#ffffff" if is_primary else colors["text"]
+        try:
+            parent_bg = str(parent.cget("background"))  # type: ignore[attr-defined]
+        except Exception:
+            parent_bg = colors["app_bg"]
+        canvas = tk.Canvas(
+            parent,
+            width=width,
+            height=height,
+            background=parent_bg,
+            highlightthickness=0,
+            borderwidth=0,
+            cursor="hand2",
+        )
+
+        def draw(background: str) -> None:
+            canvas.delete("all")
+            create_round_rect(canvas, 1, 1, width - 1, height - 1, 12, fill=background, outline=background)
+            canvas.create_text(
+                width // 2,
+                height // 2,
+                text=text,
+                fill=foreground,
+                font=("Segoe UI", 9, "bold" if is_primary else "normal"),
+            )
+
+        def invoke(event: object = None) -> None:
+            command()
+
+        draw(fill)
+        canvas.bind("<Button-1>", invoke)
+        canvas.bind("<Enter>", lambda event: draw(hover))
+        canvas.bind("<Leave>", lambda event: draw(fill))
+        return canvas
+
+    root.configure(background=colors["app_bg"])
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    style.configure("Agent.TEntry", padding=(6, 3))
+    style.configure("Agent.TCombobox", padding=(6, 3))
+    style.configure("Agent.Toolbar.TButton", padding=(12, 5), font=("Segoe UI", 9))
+    style.configure(
+        "Agent.Treeview",
+        background=colors["section_bg"],
+        fieldbackground=colors["section_bg"],
+        foreground=colors["text"],
+        bordercolor=colors["border"],
+        rowheight=28,
+        font=("Segoe UI", 9),
+    )
+    style.configure(
+        "Agent.Treeview.Heading",
+        background=colors["table_header"],
+        foreground=colors["muted"],
+        relief="flat",
+        font=("Segoe UI", 9, "bold"),
+    )
+    style.map(
+        "Agent.Treeview",
+        background=[("selected", "#dcefed")],
+        foreground=[("selected", colors["text"])],
+    )
+
+    range_status = tk.StringVar(value="")
     agent_status = tk.StringVar(value="-")
     server_status = tk.StringVar(value="-")
     upload_status = tk.StringVar(value="-")
     version_status = tk.StringVar(value="-")
+    selected_nav = tk.StringVar(value="상태")
 
-    shell = ttk.Frame(root)
+    shell = tk.Frame(root, background=colors["app_bg"])
     shell.pack(fill="both", expand=True)
 
-    sidebar = ttk.Frame(shell, padding=(12, 14, 10, 14))
+    sidebar = tk.Frame(shell, width=150, background=colors["sidebar_bg"])
     sidebar.pack(side="left", fill="y")
-    ttk.Label(sidebar, text="BuildGraph\nAgent", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 18))
-    ttk.Button(sidebar, text="상태", command=lambda: status.set("상태 홈을 표시 중입니다.")).pack(fill="x", pady=(0, 8))
-    ttk.Button(sidebar, text="로그", command=lambda: tree.focus_set()).pack(fill="x", pady=(0, 8))
-    ttk.Button(sidebar, text="AS 접수", command=lambda: open_support_page(config_path)).pack(fill="x", pady=(0, 8))
-    ttk.Button(sidebar, text="설정", command=lambda: open_log_folder(config_path)).pack(fill="x", pady=(0, 8))
+    sidebar.pack_propagate(False)
+    tk.Label(
+        sidebar,
+        text="",
+        font=("Segoe UI", 13, "bold"),
+        foreground=colors["text"],
+        background=colors["sidebar_bg"],
+        justify="left",
+        anchor="w",
+    ).pack(fill="x", padx=18, pady=(16, 18))
+    nav_items: list[tuple[str, tk.Frame]] = []
 
-    content = ttk.Frame(shell, padding=(14, 12, 14, 12))
+    def render_nav() -> None:
+        for name, item in nav_items:
+            active = selected_nav.get() == name
+            item.configure(
+                background=colors["sidebar_active"] if active else colors["sidebar_bg"],
+                highlightbackground=colors["border"] if active else colors["sidebar_bg"],
+            )
+            for child in item.winfo_children():
+                role = getattr(child, "_agent_nav_role", "")
+                if role == "bar":
+                    child.configure(background=colors["sidebar_active_bar"] if active else colors["sidebar_bg"])
+                else:
+                    child.configure(
+                        background=colors["sidebar_active"] if active else colors["sidebar_bg"],
+                        foreground=colors["text"] if active else colors["muted"],
+                    )
+
+    def add_nav_item(name: str, icon: str, command: Any) -> None:
+        item = tk.Frame(
+            sidebar,
+            height=42,
+            background=colors["sidebar_bg"],
+            highlightthickness=1,
+            highlightbackground=colors["sidebar_bg"],
+        )
+        item.pack(fill="x", padx=12, pady=4)
+        item.pack_propagate(False)
+        bar = tk.Frame(item, width=4, background=colors["sidebar_bg"])
+        bar._agent_nav_role = "bar"  # type: ignore[attr-defined]
+        bar.pack(side="left", fill="y")
+        label = tk.Label(
+            item,
+            text=f"{icon}  {name}",
+            font=("Segoe UI", 10, "bold" if name == "상태" else "normal"),
+            anchor="w",
+            padx=12,
+            background=colors["sidebar_bg"],
+            foreground=colors["muted"],
+        )
+        label.pack(side="left", fill="both", expand=True)
+
+        def activate(event: object = None) -> None:
+            selected_nav.set(name)
+            render_nav()
+            command()
+
+        for widget in (item, bar, label):
+            widget.configure(cursor="hand2")
+            widget.bind("<Button-1>", activate)
+        nav_items.append((name, item))
+
+    add_nav_item("상태", "●", lambda: show_status_tab())
+    add_nav_item("로그", "≡", lambda: show_log_tab())
+    add_nav_item("AS 접수", "+", lambda: show_support_tab())
+    add_nav_item("설정", "○", lambda: open_log_folder(config_path))
+    render_nav()
+
+    content = tk.Frame(shell, background=colors["app_bg"], padx=14, pady=8)
     content.pack(side="left", fill="both", expand=True)
 
-    header = ttk.Frame(content)
+    header = tk.Frame(content, background=colors["app_bg"])
     header.pack(fill="x")
-    ttk.Label(header, text="BuildGraph Agent", font=("Segoe UI", 15, "bold")).pack(side="left")
-    ttk.Label(header, textvariable=status).pack(side="right")
+    range_badge = tk.Label(
+        header,
+        textvariable=range_status,
+        font=("Segoe UI", 9),
+        foreground=colors["muted"],
+        background="#e9f3f1",
+        padx=12,
+        pady=5,
+    )
 
-    cards = ttk.Frame(content)
-    cards.pack(fill="x", pady=(12, 10))
+    view_stack = tk.Frame(content, background=colors["app_bg"])
+    view_stack.pack(fill="both", expand=True)
+    status_view = tk.Frame(view_stack, background=colors["app_bg"])
+    log_view = tk.Frame(view_stack, background=colors["app_bg"])
+    support_view = tk.Frame(view_stack, background=colors["app_bg"])
 
-    def add_card(parent: ttk.Frame, title: str, value: tk.StringVar, detail: str) -> None:
-        card = ttk.LabelFrame(parent, text=title, padding=(12, 8, 12, 8))
-        card.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(card, textvariable=value, font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        ttk.Label(card, text=detail).pack(anchor="w", pady=(4, 0))
+    cards = tk.Frame(status_view, background=colors["app_bg"])
+    cards.pack(fill="x", pady=(6, 10))
+    for index in range(4):
+        cards.columnconfigure(index, weight=1, uniform="status-card")
 
-    add_card(cards, "Agent 상태", agent_status, "백그라운드 수집")
-    add_card(cards, "서버 연결", server_status, "heartbeat 미호출")
-    add_card(cards, "마지막 업로드", upload_status, "로컬 기록 기준")
-    add_card(cards, "버전", version_status, "agent / policy")
+    def add_card(parent: tk.Frame, index: int, title: str, value: tk.StringVar, detail: str) -> None:
+        card_canvas, card = rounded_container(parent, 90, padding=(14, 10), radius=16)
+        card_canvas.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 8, 0))
+        card.columnconfigure(0, weight=1)
+        tk.Label(
+            card,
+            text=title,
+            font=("Segoe UI", 9, "bold"),
+            foreground=colors["muted"],
+            background=colors["card_bg"],
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        tk.Label(
+            card,
+            textvariable=value,
+            font=("Segoe UI", 12, "bold"),
+            foreground=colors["text"],
+            background=colors["card_bg"],
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew")
+        tk.Label(
+            card,
+            text=detail,
+            font=("Segoe UI", 8),
+            foreground=colors["subtle"],
+            background=colors["card_bg"],
+            anchor="w",
+        ).grid(row=2, column=0, sticky="ew", pady=(5, 0))
 
-    signals_section = ttk.LabelFrame(content, text="최근 신호", padding=(10, 8, 10, 8))
+    add_card(cards, 0, "Agent 상태", agent_status, "백그라운드 수집")
+    add_card(cards, 1, "서버 연결", server_status, "heartbeat 미호출")
+    add_card(cards, 2, "마지막 업로드", upload_status, "로컬 기록 기준")
+    add_card(cards, 3, "버전", version_status, "agent / policy")
+
+    signals_section, signals_inner = rounded_container(status_view, 124, padding=(14, 10), radius=16)
     signals_section.pack(fill="x", pady=(0, 10))
+    tk.Label(
+        signals_inner,
+        text="최근 감지 신호",
+        font=("Segoe UI", 10, "bold"),
+        foreground=colors["text"],
+        background=colors["card_bg"],
+        anchor="w",
+    ).pack(fill="x", pady=(0, 5))
+    signals_body = tk.Frame(signals_inner, background=colors["card_bg"])
+    signals_body.pack(fill="both", expand=True)
 
-    filters = ttk.Frame(content)
+    summary_section, summary_inner = rounded_container(status_view, 260, padding=(14, 10), radius=16)
+    summary_section.pack(fill="both", expand=True)
+    tk.Label(
+        summary_inner,
+        text="1시간 로그 요약",
+        font=("Segoe UI", 10, "bold"),
+        foreground=colors["text"],
+        background=colors["card_bg"],
+        anchor="w",
+    ).pack(fill="x", pady=(0, 6))
+    summary_columns = ("time", "cpu", "memory", "disk", "gpu", "event")
+    summary_table = ttk.Treeview(
+        summary_inner,
+        columns=summary_columns,
+        show="headings",
+        height=6,
+        style="Agent.Treeview",
+    )
+    summary_table.heading("time", text="시간")
+    summary_table.heading("cpu", text="CPU")
+    summary_table.heading("memory", text="메모리")
+    summary_table.heading("disk", text="디스크")
+    summary_table.heading("gpu", text="GPU")
+    summary_table.heading("event", text="이벤트")
+    summary_table.column("time", width=86, minwidth=72, anchor="w", stretch=False)
+    summary_table.column("cpu", width=78, minwidth=64, anchor="e", stretch=False)
+    summary_table.column("memory", width=86, minwidth=72, anchor="e", stretch=False)
+    summary_table.column("disk", width=82, minwidth=68, anchor="e", stretch=False)
+    summary_table.column("gpu", width=78, minwidth=64, anchor="e", stretch=False)
+    summary_table.column("event", width=260, minwidth=180, anchor="w")
+    summary_table.tag_configure("odd", background=colors["row_alt"])
+    summary_table.tag_configure("even", background=colors["section_bg"])
+    summary_table.pack(fill="both", expand=True)
+    summary_empty = tk.Frame(summary_inner, background=colors["card_bg"])
+    tk.Label(
+        summary_empty,
+        text="표시할 로그가 없습니다",
+        font=("Segoe UI", 10, "bold"),
+        foreground=colors["muted"],
+        background=colors["card_bg"],
+    ).pack(pady=(36, 3))
+    tk.Label(
+        summary_empty,
+        text="백그라운드 수집이 시작되면 최근 로그가 표시됩니다",
+        font=("Segoe UI", 9),
+        foreground=colors["subtle"],
+        background=colors["card_bg"],
+    ).pack()
+
+    filters = tk.Frame(log_view, background=colors["app_bg"])
     filters.pack(fill="x", pady=(0, 8))
-    ttk.Label(filters, text="날짜").pack(side="left")
+    tk.Label(
+        filters,
+        text="날짜",
+        font=("Segoe UI", 9, "bold"),
+        foreground=colors["muted"],
+        background=colors["app_bg"],
+    ).pack(side="left")
     date_value = tk.StringVar(value=datetime.now(KST).strftime("%Y-%m-%d"))
-    date_entry = ttk.Entry(filters, textvariable=date_value, width=12)
+    date_entry = ttk.Entry(filters, textvariable=date_value, width=12, style="Agent.TEntry")
     date_entry.pack(side="left", padx=(6, 14))
-    ttk.Label(filters, text="시간").pack(side="left")
+    tk.Label(
+        filters,
+        text="시간",
+        font=("Segoe UI", 9, "bold"),
+        foreground=colors["muted"],
+        background=colors["app_bg"],
+    ).pack(side="left")
     hour_value = tk.StringVar(value=f"{datetime.now(KST).hour:02d}:00")
     hour_select = ttk.Combobox(
         filters,
@@ -1615,15 +2111,32 @@ def show_log_viewer(config_path: Path) -> None:
         values=[f"{hour:02d}:00" for hour in range(24)],
         width=7,
         state="readonly",
+        style="Agent.TCombobox",
     )
     hour_select.pack(side="left", padx=(6, 14))
-    ttk.Button(filters, text="1시간 로그", command=lambda: refresh()).pack(side="left")
-    ttk.Button(filters, text="현재", command=lambda: set_current_hour()).pack(side="left", padx=(8, 0))
+    rounded_button(filters, "1시간 로그", lambda: refresh_log(), "primary", width=104, height=32).pack(side="left")
+    rounded_button(filters, "현재", lambda: set_current_hour(), "secondary", width=76, height=32).pack(
+        side="left",
+        padx=(8, 0),
+    )
 
     columns = ("time", "kind", "cpu", "memory", "disk", "gpu", "vram", "cpu_temp", "gpu_temp", "message")
-    table_frame = ttk.Frame(content)
+    table_frame = tk.Frame(
+        log_view,
+        background=colors["section_bg"],
+        highlightthickness=1,
+        highlightbackground=colors["border"],
+    )
     table_frame.pack(fill="both", expand=True)
-    tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
+    tk.Label(
+        table_frame,
+        text="1시간 로그",
+        font=("Segoe UI", 10, "bold"),
+        foreground=colors["text"],
+        background=colors["section_bg"],
+        anchor="w",
+    ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 6))
+    tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12, style="Agent.Treeview")
     tree.heading("time", text="시간")
     tree.heading("kind", text="이벤트")
     tree.heading("cpu", text="CPU")
@@ -1634,73 +2147,392 @@ def show_log_viewer(config_path: Path) -> None:
     tree.heading("cpu_temp", text="CPU 온도")
     tree.heading("gpu_temp", text="GPU 온도")
     tree.heading("message", text="메시지")
-    tree.column("time", width=80, anchor="w", stretch=False)
-    tree.column("kind", width=160, anchor="w", stretch=False)
-    tree.column("cpu", width=70, anchor="e", stretch=False)
-    tree.column("memory", width=80, anchor="e", stretch=False)
-    tree.column("disk", width=80, anchor="e", stretch=False)
-    tree.column("gpu", width=70, anchor="e", stretch=False)
-    tree.column("vram", width=70, anchor="e", stretch=False)
-    tree.column("cpu_temp", width=80, anchor="e", stretch=False)
-    tree.column("gpu_temp", width=80, anchor="e", stretch=False)
-    tree.column("message", width=300, anchor="w")
+    tree.column("time", width=78, minwidth=70, anchor="w", stretch=False)
+    tree.column("kind", width=138, minwidth=120, anchor="w", stretch=False)
+    tree.column("cpu", width=62, minwidth=58, anchor="e", stretch=False)
+    tree.column("memory", width=74, minwidth=68, anchor="e", stretch=False)
+    tree.column("disk", width=70, minwidth=64, anchor="e", stretch=False)
+    tree.column("gpu", width=62, minwidth=58, anchor="e", stretch=False)
+    tree.column("vram", width=64, minwidth=60, anchor="e", stretch=False)
+    tree.column("cpu_temp", width=76, minwidth=70, anchor="e", stretch=False)
+    tree.column("gpu_temp", width=76, minwidth=70, anchor="e", stretch=False)
+    tree.column("message", width=280, minwidth=220, anchor="w")
+    tree.tag_configure("odd", background=colors["row_alt"])
+    tree.tag_configure("even", background=colors["section_bg"])
 
     vertical = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
     horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
     tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
-    tree.grid(row=0, column=0, sticky="nsew")
-    vertical.grid(row=0, column=1, sticky="ns")
-    horizontal.grid(row=1, column=0, sticky="ew")
+    tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 0))
+    vertical.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 0))
+    horizontal.grid(row=2, column=0, sticky="ew", padx=(12, 0), pady=(0, 12))
     table_frame.columnconfigure(0, weight=1)
-    table_frame.rowconfigure(0, weight=1)
+    table_frame.rowconfigure(1, weight=1)
+    log_empty_label = tk.Label(
+        table_frame,
+        text="표시할 로그가 없습니다",
+        font=("Segoe UI", 10),
+        foreground=colors["subtle"],
+        background=colors["section_bg"],
+    )
+
+    support_card, support_inner = rounded_container(support_view, 520, padding=(18, 16), radius=16)
+    support_card.pack(fill="both", expand=True, pady=(6, 0))
+    tk.Label(
+        support_inner,
+        text="AS 접수",
+        font=("Segoe UI", 16, "bold"),
+        foreground=colors["text"],
+        background=colors["card_bg"],
+        anchor="w",
+    ).pack(fill="x")
+    tk.Label(
+        support_inner,
+        text="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.",
+        font=("Segoe UI", 9),
+        foreground=colors["muted"],
+        background=colors["card_bg"],
+        anchor="w",
+    ).pack(fill="x", pady=(4, 14))
+
+    symptom_title = tk.StringVar(value="")
+    symptom_type = tk.StringVar(value="REMOTE_DRIVER_OS")
+    symptom_time = tk.StringVar(value="")
+    support_mode = tk.StringVar(value="우선 진단만 받기")
+    support_status = tk.StringVar(value="")
+    incident_window_value = tk.StringVar(value="전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
+    support_signal_value: dict[str, Any] | None = None
+
+    def add_form_label(parent: tk.Misc, text: str) -> None:
+        tk.Label(
+            parent,
+            text=text,
+            font=("Segoe UI", 9, "bold"),
+            foreground=colors["muted"],
+            background=colors["card_bg"],
+            anchor="w",
+        ).pack(fill="x", pady=(0, 4))
+
+    def add_form_field(parent: tk.Misc, label: str, widget: tk.Widget) -> None:
+        block = tk.Frame(parent, background=colors["card_bg"])
+        block.pack(fill="x", pady=(0, 10))
+        add_form_label(block, label)
+        widget.pack(fill="x")
+
+    form_grid = tk.Frame(support_inner, background=colors["card_bg"])
+    form_grid.pack(fill="x")
+    left_form = tk.Frame(form_grid, background=colors["card_bg"])
+    right_form = tk.Frame(form_grid, background=colors["card_bg"])
+    left_form.pack(side="left", fill="both", expand=True, padx=(0, 10))
+    right_form.pack(side="left", fill="both", expand=True, padx=(10, 0))
+    add_form_field(left_form, "증상 제목", ttk.Entry(left_form, textvariable=symptom_title, style="Agent.TEntry"))
+    type_select = ttk.Combobox(
+        left_form,
+        textvariable=symptom_type,
+        values=sorted(REMOTE_SYMPTOM_TYPES | VISIT_SYMPTOM_TYPES),
+        state="readonly",
+        style="Agent.TCombobox",
+    )
+    add_form_field(left_form, "증상 유형", type_select)
+    add_form_field(right_form, "증상 발생 시각", ttk.Entry(right_form, textvariable=symptom_time, style="Agent.TEntry"))
+
+    detail_block = tk.Frame(support_inner, background=colors["card_bg"])
+    detail_block.pack(fill="both", expand=True, pady=(0, 10))
+    add_form_label(detail_block, "증상 상세")
+    symptom_detail = tk.Text(
+        detail_block,
+        height=5,
+        wrap="word",
+        relief="flat",
+        borderwidth=1,
+        highlightthickness=1,
+        highlightbackground=colors["border"],
+        font=("Segoe UI", 9),
+    )
+    symptom_detail.pack(fill="both", expand=True)
+
+    mode_block = tk.Frame(support_inner, background=colors["card_bg"])
+    mode_block.pack(fill="x", pady=(0, 8))
+    add_form_label(mode_block, "지원 신청 방식")
+    for label in ("우선 진단만 받기", "원격지원 신청", "방문지원 신청"):
+        tk.Radiobutton(
+            mode_block,
+            text=label,
+            variable=support_mode,
+            value=label,
+            foreground=colors["text"],
+            background=colors["card_bg"],
+            activebackground=colors["card_bg"],
+            selectcolor=colors["card_bg"],
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(0, 16))
+
+    tk.Label(
+        support_inner,
+        textvariable=incident_window_value,
+        font=("Segoe UI", 8),
+        foreground=colors["subtle"],
+        background=colors["card_bg"],
+        anchor="w",
+    ).pack(fill="x", pady=(0, 8))
+    tk.Label(
+        support_inner,
+        textvariable=support_status,
+        font=("Segoe UI", 8),
+        foreground="#16766b",
+        background=colors["card_bg"],
+        anchor="w",
+    ).pack(fill="x", pady=(0, 8))
+
+    support_actions = tk.Frame(support_inner, background=colors["card_bg"])
+    support_actions.pack(fill="x")
 
     def select_signal(signal: dict[str, Any]) -> None:
         date_value.set(str(signal["date"]))
         hour_value.set(f"{int(signal['hour']):02d}:00")
-        refresh()
+        show_log_tab()
 
     def refresh_signals(signals: Sequence[dict[str, Any]]) -> None:
-        for child in signals_section.winfo_children():
+        for child in signals_body.winfo_children():
             child.destroy()
         if not signals:
-            ttk.Label(signals_section, text="최근 감지 신호 없음").pack(anchor="w")
+            empty = tk.Frame(signals_body, background=colors["card_bg"])
+            empty.pack(fill="both", expand=True)
+            tk.Label(
+                empty,
+                text="최근 감지 신호 없음",
+                font=("Segoe UI", 9, "bold"),
+                foreground=colors["muted"],
+                background=colors["card_bg"],
+                anchor="w",
+            ).pack(fill="x", pady=(5, 2))
+            tk.Label(
+                empty,
+                text="단순 CPU/RAM/GPU 고사용률은 AS 알림에서 제외됩니다",
+                font=("Segoe UI", 8),
+                foreground=colors["subtle"],
+                background=colors["card_bg"],
+                anchor="w",
+            ).pack(fill="x")
             return
         for signal in signals:
-            text = f"{signal['time']}  {signal['level']}  {signal['title']}  ➡"
-            ttk.Button(signals_section, text=text, command=lambda current=signal: select_signal(current)).pack(
-                fill="x",
-                pady=(0, 4),
+            row = tk.Frame(signals_body, height=24, background=colors["signal_bg"])
+            row.pack(fill="x", pady=(0, 4))
+            row.grid_propagate(False)
+            row.columnconfigure(2, weight=1)
+            time_label = tk.Label(
+                row,
+                text=str(signal["time"]),
+                font=("Segoe UI", 9),
+                foreground=colors["subtle"],
+                background=colors["signal_bg"],
+                anchor="w",
+                width=8,
+            )
+            time_label.grid(row=0, column=0, sticky="nsw", padx=(8, 8))
+            level_label = tk.Label(
+                row,
+                text=str(signal["level"]),
+                font=("Segoe UI", 8, "bold"),
+                foreground="#1f6f5d",
+                background=colors["signal_bg"],
+                anchor="w",
+                width=7,
+            )
+            level_label.grid(row=0, column=1, sticky="nsw", padx=(0, 8))
+            title_label = tk.Label(
+                row,
+                text=sanitize_display_text(signal["title"], 72),
+                font=("Segoe UI", 9),
+                foreground=colors["text"],
+                background=colors["signal_bg"],
+                anchor="w",
+            )
+            title_label.grid(row=0, column=2, sticky="nsew")
+
+            def paint_signal(target: tk.Frame, background: str) -> None:
+                target.configure(background=background)
+                for widget in target.winfo_children():
+                    widget.configure(background=background)
+
+            def open_signal(event: object = None, current: dict[str, Any] = signal) -> None:
+                selected_nav.set("로그")
+                render_nav()
+                select_signal(current)
+
+            for widget in (row, time_label, level_label, title_label):
+                widget.configure(cursor="hand2")
+                widget.bind("<Button-1>", open_signal)
+                widget.bind("<Enter>", lambda event, target=row: paint_signal(target, colors["signal_hover"]))
+                widget.bind("<Leave>", lambda event, target=row: paint_signal(target, colors["signal_bg"]))
+
+    def support_detail_text() -> str:
+        return symptom_detail.get("1.0", "end").strip()
+
+    def set_support_detail(text: str) -> None:
+        symptom_detail.delete("1.0", "end")
+        symptom_detail.insert("1.0", text)
+
+    def fill_support_from_signal(signal: dict[str, Any] | None) -> None:
+        nonlocal support_signal_value
+        support_signal_value = signal
+        if signal is None:
+            now = datetime.now(KST)
+            symptom_time.set(now.strftime("%Y-%m-%d %H:%M:%S"))
+            incident_window_value.set("전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
+            return
+        code = str(signal.get("code") or "REMOTE_DRIVER_OS")
+        detected_at = event_panel_detected_at(signal)
+        window = default_incident_window(code, detected_at=detected_at, trigger_type="USER_REQUEST")
+        symptom_type.set(code if code in REMOTE_SYMPTOM_TYPES or code in VISIT_SYMPTOM_TYPES else "REMOTE_DRIVER_OS")
+        symptom_time.set(detected_at.strftime("%Y-%m-%d %H:%M:%S"))
+        symptom_title.set(event_panel_signal_summary(signal))
+        if not support_detail_text():
+            set_support_detail(
+                "PC Agent가 확인이 필요한 이벤트를 감지했습니다.\n"
+                f"- {event_panel_signal_summary(signal)}\n"
+                "로그 전송 후 담당자가 내용을 검토합니다."
+            )
+        incident_window_value.set(
+            f"전송 로그 범위: {window.started_at.strftime('%Y-%m-%d %H:%M:%S')} ~ "
+            f"{window.ended_at.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+    def submit_support_request() -> None:
+        try:
+            detected_at = parse_datetime(symptom_time.get(), "symptomTime") if symptom_time.get().strip() else datetime.now(KST)
+            selected_type = symptom_type.get() or "REMOTE_DRIVER_OS"
+            window = default_incident_window(selected_type, detected_at=detected_at, trigger_type="USER_REQUEST")
+            gzip_path = config.log_dir.parent / "uploads" / f"{window.incident_id}.jsonl.gz"
+            gzip_window(path, gzip_path, window)
+            symptom_parts = [
+                symptom_title.get().strip() or "PC Agent AS 접수",
+                support_mode.get(),
+                support_detail_text(),
+            ]
+            result = upload_gzip(
+                config,
+                gzip_path,
+                f"agent-support-{uuid.uuid4()}",
+                " / ".join(part for part in symptom_parts if part),
+                window,
+            )
+            ticket_id = str(result["ticketId"])
+            support_status.set(f"AS 접수 신청이 전송되었습니다. 티켓 {ticket_id}")
+            webbrowser.open(support_url(config.api_base_url, ticket_id, config.web_base_url))
+        except Exception as exception:
+            support_status.set(event_panel_failure_message(exception))
+
+    def refresh_log_summary() -> None:
+        rows = read_status_log_summary_rows(path, STATUS_LOG_SUMMARY_LIMIT)
+        summary_table.delete(*summary_table.get_children())
+        if not rows:
+            summary_table.pack_forget()
+            if not summary_empty.winfo_ismapped():
+                summary_empty.pack(fill="both", expand=True)
+            return
+        summary_empty.pack_forget()
+        if not summary_table.winfo_ismapped():
+            summary_table.pack(fill="both", expand=True)
+        for index, row in enumerate(rows):
+            summary_table.insert(
+                "",
+                "end",
+                values=display_log_summary_values(row),
+                tags=("odd" if index % 2 else "even",),
             )
 
-    def refresh() -> None:
-        try:
-            selected_hour = int(hour_value.get().split(":", 1)[0])
-        except ValueError:
-            selected_hour = datetime.now(KST).hour
+    def refresh_status() -> None:
         model = status_home_model(config, path)
         agent_status.set(str(model["agentStatus"]))
         server_status.set(str(model["serverStatus"]))
         upload_status.set(str(model["lastUpload"]))
         version_status.set(f"{model['version']} / {model['policyVersion']}")
         refresh_signals(model["signals"])
+        refresh_log_summary()
+
+    def refresh_log() -> None:
+        try:
+            selected_hour = int(hour_value.get().split(":", 1)[0])
+        except ValueError:
+            selected_hour = datetime.now(KST).hour
         rows = read_log_hour(path, date_value.get(), selected_hour, LOG_TABLE_LIMIT)
         tree.delete(*tree.get_children())
-        for row in rows:
-            tree.insert("", "end", values=display_log_table_values(row))
-        status.set(f"범위 {date_value.get()} {selected_hour:02d}:00 | 표시 {len(rows)}개")
+        for index, row in enumerate(rows):
+            tree.insert("", "end", values=display_log_table_values(row), tags=("odd" if index % 2 else "even",))
+        if rows:
+            log_empty_label.place_forget()
+        else:
+            log_empty_label.place(relx=0.5, rely=0.52, anchor="center")
+            log_empty_label.lift()
+        range_status.set(f"범위 {date_value.get()} {selected_hour:02d}:00 | 표시 {len(rows)}개")
+
+    def show_status_tab() -> None:
+        selected_nav.set("상태")
+        render_nav()
+        log_view.pack_forget()
+        support_view.pack_forget()
+        status_view.pack(fill="both", expand=True)
+        range_badge.pack_forget()
+        range_status.set("")
+        refresh_status()
+
+    def show_log_tab() -> None:
+        selected_nav.set("로그")
+        render_nav()
+        status_view.pack_forget()
+        support_view.pack_forget()
+        log_view.pack(fill="both", expand=True)
+        if not range_badge.winfo_ismapped():
+            range_badge.pack(side="right")
+        refresh_log()
+        tree.focus_set()
+
+    def show_support_tab(signal: dict[str, Any] | None = None) -> None:
+        selected_nav.set("AS 접수")
+        render_nav()
+        status_view.pack_forget()
+        log_view.pack_forget()
+        support_view.pack(fill="both", expand=True)
+        range_badge.pack_forget()
+        range_status.set("")
+        fill_support_from_signal(signal)
 
     def set_current_hour() -> None:
         now = datetime.now(KST)
         date_value.set(now.strftime("%Y-%m-%d"))
         hour_value.set(f"{now.hour:02d}:00")
-        refresh()
+        refresh_log()
 
-    buttons = ttk.Frame(content, padding=(0, 8, 0, 0))
+    buttons = tk.Frame(log_view, background=colors["app_bg"], pady=8)
     buttons.pack(fill="x")
-    ttk.Button(buttons, text="로그 폴더", command=lambda: open_log_folder(config_path)).pack(side="left")
-    ttk.Button(buttons, text="AS 페이지", command=lambda: open_support_page(config_path)).pack(side="left", padx=(8, 0))
+    rounded_button(buttons, "로그 폴더", lambda: open_log_folder(config_path), "secondary", width=104, height=32).pack(
+        side="left",
+    )
+    rounded_button(
+        buttons,
+        "AS 페이지",
+        lambda: open_support_page(config_path),
+        "secondary",
+        width=104,
+        height=32,
+    ).pack(side="left", padx=(8, 0))
 
-    refresh()
+    rounded_button(
+        support_actions,
+        "AS 접수 신청",
+        submit_support_request,
+        "primary",
+        width=132,
+        height=34,
+    ).pack(side="right")
+
+    if support_signal:
+        show_support_tab(support_signal)
+    elif focus_signal:
+        select_signal(focus_signal)
+    else:
+        show_status_tab()
     root.mainloop()
 
 
@@ -1709,12 +2541,262 @@ def open_support_page(config_path: Path) -> None:
     webbrowser.open(support_new_url(config))
 
 
+def upload_event_panel_request(
+    config: AgentConfig,
+    source: Path,
+    signals: Sequence[dict[str, Any]],
+) -> tuple[str, str]:
+    selected = event_panel_signals(signals)
+    if not selected:
+        raise UploadError("no eligible event signal was selected for upload.")
+    primary = selected[0]
+    symptom_type = str(primary.get("code", ""))
+    detected_at = event_panel_detected_at(primary)
+    window = default_incident_window(
+        symptom_type,
+        detected_at=detected_at,
+        trigger_type="SYSTEM_DETECTED",
+        selected_by_user=True,
+    )
+    work_dir = config.log_dir.parent / "uploads"
+    gzip_path = work_dir / f"{window.incident_id}.jsonl.gz"
+    gzip_window(source, gzip_path, window)
+    result = upload_gzip(
+        config,
+        gzip_path,
+        f"agent-panel-{uuid.uuid4()}",
+        event_panel_symptom(selected),
+        window,
+    )
+    ticket_id = str(result["ticketId"])
+    return ticket_id, support_url(config.api_base_url, ticket_id, config.web_base_url)
+
+
+def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> None:
+    if tk is None or ttk is None:
+        return
+    config = load_config(config_path)
+    source = log_file(config)
+    model = event_panel_model(signals)
+    if model is None:
+        return
+
+    panel = tk.Tk()
+    panel.title("감지 신호")
+    panel.configure(background="#f8fbfc")
+    panel.resizable(False, False)
+    panel.attributes("-topmost", True)
+    width = 360
+    height = 296
+    screen_width = panel.winfo_screenwidth()
+    screen_height = panel.winfo_screenheight()
+    x = max(20, screen_width - width - 28)
+    y = max(20, screen_height - height - 64)
+    panel.geometry(f"{width}x{height}+{x}+{y}")
+
+    status_text = tk.StringVar(value="선택한 구간의 로그를 함께 첨부해 접수합니다.")
+    colors = {
+        "bg": "#f8fbfc",
+        "card": "#ffffff",
+        "line": "#dde7ea",
+        "teal": "#0f7aae",
+        "deep": "#17313b",
+        "muted": "#5f737b",
+        "soft": "#eef8f9",
+        "button": "#0e7490",
+        "button_hover": "#0b6178",
+        "secondary": "#ffffff",
+        "secondary_hover": "#f1f6f7",
+    }
+    container = tk.Frame(panel, background=colors["bg"], padx=12, pady=12)
+    container.pack(fill="both", expand=True)
+    card = tk.Frame(
+        container,
+        background=colors["card"],
+        highlightthickness=1,
+        highlightbackground=colors["line"],
+        padx=14,
+        pady=12,
+    )
+    card.pack(fill="both", expand=True)
+
+    header = tk.Frame(card, background=colors["card"])
+    header.pack(fill="x")
+    icon = tk.Canvas(header, width=28, height=28, background=colors["card"], highlightthickness=0)
+    icon.pack(side="left", padx=(0, 8))
+    icon.create_oval(3, 3, 25, 25, fill=colors["soft"], outline="#b8e2e6")
+    icon.create_text(14, 14, text="!", fill=colors["teal"], font=("Segoe UI", 11, "bold"))
+    title_box = tk.Frame(header, background=colors["card"])
+    title_box.pack(side="left", fill="x", expand=True)
+    tk.Label(
+        title_box,
+        text="확인이 필요한 신호가 감지되었습니다",
+        font=("Segoe UI", 12, "bold"),
+        foreground=colors["deep"],
+        background=colors["card"],
+        anchor="w",
+    ).pack(fill="x")
+    tk.Label(
+        title_box,
+        text="로그에서 자세히 확인할 수 있습니다.",
+        font=("Segoe UI", 8),
+        foreground=colors["muted"],
+        background=colors["card"],
+        anchor="w",
+    ).pack(fill="x", pady=(2, 0))
+    close_label = tk.Label(
+        header,
+        text="×",
+        font=("Segoe UI", 14),
+        foreground=colors["muted"],
+        background=colors["card"],
+        cursor="hand2",
+    )
+    close_label.pack(side="right", padx=(8, 0))
+
+    meta = tk.Frame(card, background=colors["soft"], padx=10, pady=8)
+    meta.pack(fill="x", pady=(12, 10))
+
+    def add_meta_row(label: str, value: str) -> None:
+        row = tk.Frame(meta, background=colors["soft"])
+        row.pack(fill="x", pady=(0, 3))
+        tk.Label(
+            row,
+            text=label,
+            font=("Segoe UI", 8, "bold"),
+            foreground=colors["muted"],
+            background=colors["soft"],
+            anchor="w",
+            width=8,
+        ).pack(side="left")
+        tk.Label(
+            row,
+            text=value,
+            font=("Segoe UI", 8),
+            foreground=colors["deep"],
+            background=colors["soft"],
+            anchor="w",
+            justify="left",
+            wraplength=250,
+        ).pack(side="left", fill="x", expand=True)
+
+    add_meta_row("발생 시간", str(model["detectedTime"]))
+    add_meta_row("감지 신호", str(model["signalTitle"]))
+    add_meta_row("전송 구간", str(model["windowText"]))
+
+    tk.Label(
+        card,
+        text="PC Agent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다.",
+        font=("Segoe UI", 9),
+        foreground=colors["deep"],
+        background=colors["card"],
+        anchor="w",
+        justify="left",
+        wraplength=318,
+    ).pack(fill="x")
+
+    tk.Label(
+        card,
+        textvariable=status_text,
+        font=("Segoe UI", 8),
+        foreground=colors["teal"],
+        background=colors["card"],
+        anchor="w",
+        justify="left",
+        wraplength=318,
+    ).pack(fill="x", pady=(8, 8))
+
+    def request_review() -> None:
+        send_button.configure(state="disabled")
+        status_text.set("AS 접수를 준비하고 있습니다.")
+        panel.update_idletasks()
+        try:
+            ticket_id, url = upload_event_panel_request(config, source, signals)
+        except Exception as exception:
+            send_button.configure(state="normal")
+            status_text.set(event_panel_failure_message(exception))
+            return
+        status_text.set(f"AS 접수가 완료되었습니다. 티켓 {ticket_id}")
+        webbrowser.open(url)
+
+    def open_detail() -> None:
+        primary = model["primarySignal"]
+        panel.destroy()
+        show_log_viewer(config_path, focus_signal=primary)
+
+    def close_panel() -> None:
+        panel.destroy()
+
+    close_label.bind("<Button-1>", lambda event: close_panel())
+
+    button_row = tk.Frame(card, background=colors["card"])
+    button_row.pack(fill="x", pady=(2, 0))
+
+    def make_button(parent: tk.Frame, text: str, command: Any, primary: bool = False) -> tk.Button:
+        button = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            font=("Segoe UI", 9, "bold" if primary else "normal"),
+            foreground="#ffffff" if primary else colors["deep"],
+            background=colors["button"] if primary else colors["secondary"],
+            activebackground=colors["button_hover"] if primary else colors["secondary_hover"],
+            activeforeground="#ffffff" if primary else colors["deep"],
+            relief="flat",
+            highlightthickness=1 if not primary else 0,
+            highlightbackground=colors["line"],
+            padx=10,
+            pady=7,
+            cursor="hand2",
+        )
+        return button
+
+    send_button = make_button(button_row, "AS 접수하기", request_review, True)
+    send_button.pack(side="left", fill="x", expand=True, padx=(0, 8))
+    make_button(button_row, "무시하기", close_panel).pack(side="left", fill="x", expand=True)
+
+    link = tk.Label(
+        card,
+        text="로그 보기 ↗",
+        font=("Segoe UI", 8, "underline"),
+        foreground=colors["teal"],
+        background=colors["card"],
+        cursor="hand2",
+        anchor="e",
+    )
+    link.pack(fill="x", pady=(8, 0))
+    link.bind("<Button-1>", lambda event: open_detail())
+
+    panel.after(900, lambda: panel.attributes("-topmost", False))
+    panel.mainloop()
+
+
+def show_event_panel_async(config_path: Path, signals: Sequence[dict[str, Any]]) -> None:
+    import threading
+
+    selected = list(event_panel_signals(signals))
+    if not selected:
+        return
+    threading.Thread(target=show_event_panel, args=(config_path, selected), daemon=True).start()
+
+
+def maybe_show_event_panel(config_path: Path, config: AgentConfig, runtime: AgentRuntime) -> None:
+    rows = read_log_tail(log_file(config), LOG_TABLE_LIMIT)
+    signals = event_panel_signals(detect_recent_signals(rows))
+    signature = event_panel_signature(signals)
+    if signature is None or signature == runtime.last_event_panel_signature:
+        return
+    runtime.last_event_panel_signature = signature
+    show_event_panel_async(config_path, signals)
+
+
 def collect_background_loop(config_path: Path, runtime: AgentRuntime, interval_seconds: int) -> None:
     while runtime.running:
         try:
             config = load_config(config_path)
             append_metric(config, runtime.index)
             runtime.index += 1
+            maybe_show_event_panel(config_path, config, runtime)
         except Exception as exception:
             error_log = app_data_dir() / "agent-error.log"
             error_log.parent.mkdir(parents=True, exist_ok=True)
@@ -1747,7 +2829,7 @@ def run_background(config_path: Path | None = None, interval_seconds: int = 5, w
         icon = pystray.Icon(
             APP_NAME,
             create_tray_image(),
-            "BuildGraph PC Agent",
+            "PC Agent",
             menu=pystray.Menu(
                 pystray.MenuItem("Open log viewer", lambda icon, item: show_log_viewer(path), default=True),
                 pystray.MenuItem("Open log folder", lambda icon, item: open_log_folder(path)),
@@ -1806,7 +2888,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not argv:
         return run_background()
 
-    parser = argparse.ArgumentParser(description="BuildGraph AI PC Agent prototype CLI")
+    parser = argparse.ArgumentParser(description="PC Agent prototype CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sample = sub.add_parser("sample", help="generate sample JSONL hardware metrics")
@@ -1860,6 +2942,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     background.add_argument("--interval-seconds", type=int, default=5)
     background.add_argument("--no-tray", action="store_true")
 
+    viewer = sub.add_parser("viewer", help="open the Tkinter status home and log viewer")
+    viewer.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
     args = parser.parse_args(argv)
 
     try:
@@ -1909,6 +2994,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             upload_recent(config, args.work_dir, args.symptom, args.idempotency_key, not args.no_open, window)
         elif args.command == "run-background":
             return run_background(args.config, args.interval_seconds, not args.no_tray)
+        elif args.command == "viewer":
+            show_log_viewer(args.config)
     except ConfigError as exception:
         print(f"config error: {exception}", file=sys.stderr)
         return 2

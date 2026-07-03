@@ -1,4 +1,164 @@
+# 2026-07-03 PC Agent exe 이벤트 감지 모달 UI 적용
+
+## 현재 목표
+
+- `codex/pc-agent-exe-ui-front` 브랜치에서 기존 이벤트 감지 패널의 감지/업로드 동작은 유지하고, 모달 UI만 두 번째 참고 이미지처럼 작고 차분한 카드형으로 바꾼다.
+- 서버/API/DB/웹 화면, 로그 탭 구조, AS 접수 페이지 구조, 감지 조건, 업로드 API 흐름은 변경하지 않는다.
+
+## 완료한 일
+
+- `apps/pc-agent/buildgraph_agent.py`의 `event_panel_model()`에 모달 표시용 읽기 전용 값인 발생 시간, 감지 신호, 전송 구간 텍스트를 추가했다.
+- `show_event_panel()`의 레이아웃을 작은 카드형 알림으로 정리했다.
+- 기존 `로그 전송하고 AS 검토 요청` 버튼 문구를 `AS 접수하기`로 바꾸고, `나중에 보기`는 `무시하기`로 정리했다.
+- `로그 보기 ↗` 링크를 추가해 누르면 기존 exe 로그 뷰어가 해당 감지 신호 시간대로 열린다.
+- 이벤트 감지 조건, `IncidentWindow`, `gzip_window()`, `upload_gzip()` 흐름은 유지했다.
+- `apps/pc-agent/test_buildgraph_agent.py`에 모달 표시 모델의 발생 시간/감지 신호/전송 구간 검증을 추가했다.
+
+## 검증
+
+- `apps/pc-agent`: `python -m py_compile buildgraph_agent.py` 성공.
+- `apps/pc-agent`: `python -m unittest -q` 성공. 총 33개 테스트 통과.
+
+## 남은 리스크
+
+- Tkinter 창 위치, topmost 해제, Windows 배율별 버튼 폭은 실제 exe 패키징 환경에서 한 번 더 눈으로 확인해야 한다.
+- exe 재빌드와 웹 다운로드용 `agent.exe` 교체는 수행하지 않았다.
+- 커밋은 생성하지 않았다.
+
+# 2026-07-03 PC Agent exe 이벤트 감지 모달 디자인 기획
+
+## 현재 목표
+
+- `codex/pc-agent-exe-ui-front` 브랜치에서 PC Agent exe의 이벤트 감지 모달/알림 디자인 방향만 정리한다.
+- 코드 구현, 상태 홈 UI 동작 변경, 로그 탭, AS 접수 화면, 서버/API/DB/웹 화면 수정은 하지 않는다.
+- 기존 빨간 경고 느낌을 피하고, 현재 상태 홈과 맞는 teal/blue/muted amber 계열의 차분한 `확인 필요` 톤으로 정리한다.
+
+## 작업 전 확인
+
+- 현재 브랜치: `codex/pc-agent-exe-ui-front`.
+- `git status --short` 확인 결과 기존 미커밋 변경이 있었다:
+  - 수정됨: `apps/pc-agent/README.md`, `apps/pc-agent/buildgraph_agent.py`, `apps/pc-agent/test_buildgraph_agent.py`, `status.md`
+  - 미추적: `docs/agent-as/AI_TEAM_LOG_SCENARIO_HANDOFF.md`, `docs/agent-as/PC_AGENT_EXE_MONITORING_ADDITIONS_ONLY.md`, `docs/agent-as/PC_AGENT_EXE_UI_DESIGN_OPTIONS.md`
+- `status.md`를 읽고, 이전 PC Agent exe UI/이벤트 패널 작업 기록을 확인했다.
+- `docs/agent-as/PC_AGENT_EXE_UI_DESIGN_OPTIONS.md`를 읽고, 기존 전체 exe UI 디자인 옵션을 확인했다.
+- `apps/pc-agent/buildgraph_agent.py`는 상태 홈 톤 확인용으로만 읽었다. 확인한 톤은 `#f5f7f8`, `#e7f2ef`, `#1f8a70`, `#d7e0e3` 중심의 차분한 teal 계열이다.
+
+## 완료한 일
+
+- `imagegen` built-in tool로 preview-only 이벤트 감지 모달/알림 시안 3개를 생성했다.
+  - 상태 홈 중앙 모달
+  - 우측 하단 작은 알림 패널
+  - 상태 홈 내부 카드형 알림
+- `docs/agent-as/PC_AGENT_EXE_UI_DESIGN_OPTIONS.md`에 이벤트 감지 모달/알림 디자인 옵션 섹션을 추가했다.
+- 각 안의 목적, 장점, 단점, 적합한 사용 상황을 정리했다.
+- 1차 추천안은 `상태 홈 내부 카드형 알림`으로 선정했다.
+- 백그라운드 상황의 보조안은 `우측 하단 작은 알림 패널`로 남겼다.
+- `AS 접수하기`는 선택안으로만 두고, 기본 강조 버튼은 `로그 보기`로 둔다는 기준을 명시했다.
+- 나중에 Tkinter로 구현할 때의 `Toplevel`, `topmost`, wraplength, 버튼 우선순위, 민감정보 비노출, 메인 스레드 UI 업데이트 주의점을 정리했다.
+
+## 검증
+
+- 코드 수정은 하지 않았다.
+- `apps/pc-agent/buildgraph_agent.py`는 읽기만 했고 수정하지 않았다.
+- 테스트 코드 수정은 하지 않았다.
+- 테스트/빌드는 실행하지 않았다. 이번 작업은 디자인 문서와 preview 이미지 정리 범위다.
+- 커밋은 생성하지 않았다.
+
+## 남은 리스크
+
+- 생성 이미지는 방향 검토용 preview이며 workspace asset으로 저장하지 않았다.
+- 실제 Tkinter 구현 시 Windows 배율, 폰트 렌더링, topmost 동작은 별도 확인이 필요하다.
+- 현재 작업트리에는 이번 작업 전부터 있던 PC Agent 관련 미커밋 변경이 남아 있다. 이번 작업에서는 되돌리거나 정리하지 않았다.
+
+# 2026-07-03 PC Agent exe 이벤트 감지 우측 패널 UI
+
+## 현재 목표
+
+- 기존 Tkinter 상태 홈은 유지하고, 이벤트 감지 시 중앙 모달이 아닌 오른쪽 아래 Blue/Teal 알림 패널을 띄운다.
+- 패널은 진단 확정이 아니라 AS 검토 시작 여부를 묻는 알림으로 제한한다.
+- 서버/API/DB/웹 관리자 화면, exe 재빌드, 웹 다운로드용 `agent.exe` 교체는 수행하지 않는다.
+
+## 완료한 일
+
+- `detect_recent_signals()` 결과 중 driver/app/network 오류 반복, WHEA/BSOD, Kernel-Power, SMART, thermal 계열 코드만 우측 이벤트 패널 표시 대상으로 필터링했다.
+- Tkinter 우측 하단 이벤트 패널을 추가했다. 제목, 최신 감지 시간, 사용자용 요약 최대 3개, “자동 AS 확정 아님. 정확한 판단은 로그 전송 후 확인합니다.” 문구를 표시한다.
+- `로그 전송하고 AS 검토 요청` 버튼은 기존 `IncidentWindow` + `gzip_window()` + `upload_gzip()` 흐름을 재사용해 `/api/agent/log-uploads` 업로드와 ticket 생성까지 이어지게 했다.
+- 등록, 동의, 서버 연결, 로그 없음 문제는 raw 오류 대신 사용자용 실패 메시지로 표시한다.
+- `상세 확인하기` 버튼은 상태 홈을 열고 해당 감지 신호의 날짜/시간 로그로 이동하게 했다.
+- `나중에 보기` 버튼은 패널만 닫고 백그라운드 수집을 유지한다.
+- token, Authorization header, activation token, raw path, 전체 process list, raw payload는 패널에 노출하지 않는다.
+- 상태 홈/이벤트 패널/PowerShell fallback/tray tooltip의 `BuildGraph Agent` 계열 화면 표기를 제거하고, 제거한 브랜드 영역은 빈 spacer로 유지해 기존 레이아웃 높이와 간격을 유지했다.
+- 좌측 메뉴 `상태`, `로그`, `AS 접수`, `설정`에 새 의존성 없이 Tkinter 텍스트 아이콘을 추가했다.
+- Tkinter 상태 홈과 로그 화면을 실제 `status_view`/`log_view` content frame 전환 구조로 분리했다.
+- 처음 실행 시 상태 탭에는 상단 카드와 최근 감지 신호만 표시하고, 날짜/시간 필터, `1시간 로그`, `현재`, 로그 테이블, 범위 표시는 숨긴다.
+- 로그 탭에서만 날짜 입력, 시간 선택, `1시간 로그`, `현재`, 로그 테이블, 선택 범위 표시를 보여준다.
+- 상태 탭의 최근 감지 신호와 이벤트 패널 `상세 확인하기`는 로그 탭으로 이동하면서 해당 날짜/시간대를 자동 선택하고 refresh한다.
+- 로그 탭에 표시할 row가 없으면 `표시할 로그가 없습니다` empty state를 표시한다.
+- README에 우측 이벤트 패널 동작을 짧게 문서화했다.
+
+## 검증
+
+- `python -m py_compile apps/pc-agent/buildgraph_agent.py` 성공.
+- `apps/pc-agent`: `python -m unittest -q` 성공. 총 31개 테스트 통과.
+
+## 남은 리스크
+
+- Tkinter 창 표시와 topmost 동작은 실제 Windows exe 패키징 환경에서 한 번 더 확인해야 한다.
+- 현재는 명확한 이벤트가 로그에 남은 뒤 다음 수집 루프에서 패널을 띄우는 방식이다.
+- exe 재빌드와 웹 다운로드용 `agent.exe` 교체는 수행하지 않았다.
+- 커밋은 생성하지 않았다.
+
+# 2026-07-03 PC Agent exe 상태 홈 UI visual pass
+
+## 현재 목표
+
+- `codex/pc-agent-exe-ui-front` 브랜치에서 PC Agent exe의 Tkinter 상태 홈 기능 틀은 유지하고, 기본 Tk 회색 화면 느낌을 줄이는 1차 visual pass를 진행한다.
+- 서버/API/DB/웹 화면, heartbeat 신규 호출, 업로드/AS 마법사, 위험 모달은 추가하지 않는다.
+
+## 완료한 일
+
+- `apps/pc-agent/buildgraph_agent.py`의 `show_log_viewer()` 중심으로 Tkinter 배경, 좌측 메뉴, 상태 카드, 최근 신호, 1시간 로그 테이블의 여백과 정렬을 정리했다.
+- 좌측 메뉴는 선택된 `상태` 항목이 흰 배경과 좌측 포인트 바를 갖도록 바꿨다.
+- 상단 4개 카드는 균일한 높이, 간격, 테두리, 배경색을 갖는 그리드로 정리했다.
+- 최근 감지 신호는 버튼 대신 클릭 가능한 한 줄 항목 형태로 바꾸고, 기존 신호 선택 시 해당 시간대 로그로 이동하는 동작은 유지했다.
+- 로그 테이블은 Treeview 스타일, 헤더, row height, 컬럼 폭, 세로/가로 스크롤, alternate row 배경을 정리했다.
+- UI 실행 실패 원인을 확인했다. bare `python`은 시스템 Python 3.10을 가리키며 `Tk()` 생성 시 Tcl/Tk 오류가 발생했고, `%LOCALAPPDATA%\BuildGraphAgent\agent-config.json`은 다른 Windows 사용자 ACL로 제한되어 현재 Codex 실행 계정에서 읽을 수 없었다.
+- 같은 상태 홈을 개발 검증에서 재현 가능하게 열 수 있도록 `viewer --config ...` CLI를 추가했다.
+- README에 `.venv` Python과 명시 config를 사용하는 상태 홈 실행법을 추가했다.
+- 기존 UI 모델 함수, 로그 파싱, 최근 신호 탐지, tray 실행, 로그 폴더 열기, AS 페이지 열기, CLI 경로는 변경하지 않았다.
+
+## 검증
+
+- `apps/pc-agent`: `python -m py_compile buildgraph_agent.py` 성공.
+- `apps/pc-agent`: `python -m unittest -q` 성공. 총 28개 테스트 통과.
+
+## 남은 리스크
+
+- Tkinter/ttk 테마는 Windows 런타임과 Python 배포 환경별로 세부 색상과 테두리 표현이 다를 수 있어 실제 exe 화면 확인이 필요하다.
+- 이번 작업은 visual pass이며 PyInstaller exe 재빌드와 웹 다운로드 파일 교체는 수행하지 않았다.
+- 커밋은 생성하지 않았다.
+
 # 2026-07-03 FINAL_SUPPORT_SCENARIOS 100% 구현 Goal
+
+## 2026-07-03 PC Agent 이벤트 감지 모달 시안 이미지 생성
+
+### 현재 목표
+
+- 1번째 상태 홈 UI를 메인 방향으로 유지하고, 이벤트 감지 시 표시할 모달 디자인을 별도로 비교한다.
+- 기존 빨간색 위험 모달보다 덜 강렬한 UI 톤을 찾는다.
+
+### 완료한 일
+
+- `imagegen` built-in tool로 preview-only 이벤트 감지 모달 시안 3개를 생성했다.
+  - muted amber 좌측 강조 모달
+  - blue/teal 중앙 검토 모달
+  - lower-right compact 검토 패널형 모달
+
+### 마지막 검증 결과
+
+- 코드 수정은 하지 않았다.
+- 생성 이미지는 구현 후보 검토용 preview이며, 아직 workspace asset으로 저장하지 않았다.
+- 테스트/빌드는 실행하지 않았다.
 
 ## 2026-07-03 PC Agent 상태 홈 프론트 1차 구현
 
@@ -22,6 +182,7 @@
 
 - `apps/pc-agent`: `python -m py_compile buildgraph_agent.py` 성공.
 - `apps/pc-agent`: `python -m unittest -q` 성공. 총 28개 테스트 통과.
+- 커밋 `ed925c0 feat(pc-agent): add status home UI`를 `pcagent/codex/pc-agent-exe-ui-front`에 push 완료.
 - 실제 `dist/agent.exe` 재빌드와 웹 다운로드 exe 교체는 이번 범위에서 수행하지 않았다.
 
 ### 남은 일

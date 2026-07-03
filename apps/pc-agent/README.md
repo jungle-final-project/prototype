@@ -63,6 +63,15 @@ build-agent-exe.cmd
 
 현재 로그 뷰어의 첫 화면은 상태 홈입니다. 상태 홈은 Agent 상태, 서버 연결 표시값, 마지막 업로드 표시값, 버전, 최근 감지 신호, 1시간 로그 테이블을 보여줍니다. 이번 1차 UI는 프론트 표시만 바꾸며 heartbeat 호출, 로그 업로드 마법사, 위험 모달, AS 접수 마법사는 추가하지 않습니다. `tkinter`가 없는 패키징 환경에서는 PowerShell fallback 창이 같은 개인정보 기준으로 표시됩니다.
 
+백그라운드 수집 중 `detect_recent_signals()`가 드라이버/앱/네트워크 오류 반복, WHEA/BSOD, Kernel-Power, SMART, thermal 계열의 명확한 신호를 찾으면 오른쪽 아래 Blue/Teal 알림 패널을 띄웁니다. 이 패널은 진단 확정 UI가 아니라 AS 검토 시작 여부를 묻는 알림이며, raw log 원문, token, raw path, 전체 process list는 표시하지 않습니다. 사용자가 `로그 전송하고 AS 검토 요청`을 누르면 기존 IncidentWindow gzip 업로드 흐름으로 `/api/agent/log-uploads`에 전송하고 ticket 생성 결과를 엽니다. 등록, 동의, 서버 연결 문제로 전송할 수 없으면 사용자용 실패 문구만 표시합니다.
+
+개발 중 상태 홈만 바로 확인할 때는 bare `python` 대신 저장소 루트의 `.venv` Python 또는 빌드된 `agent.exe`를 사용합니다. Windows 사용자별 `%LOCALAPPDATA%\BuildGraphAgent\agent-config.json`은 token 보호를 위해 ACL이 제한될 수 있으므로, Codex/개발 검증에서는 명시적인 workspace config를 넘깁니다.
+
+```powershell
+cd C:\나만무\prototype
+.\.venv\Scripts\python.exe apps\pc-agent\buildgraph_agent.py viewer --config apps\pc-agent\agent-config.example.json
+```
+
 로컬 웹 데모에서 내려받는 파일은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다.
 
 ## 출력 예시
@@ -96,6 +105,8 @@ agentToken: present
 - 업로드 응답 `ticketId`로 `/support/{ticketId}` URL 생성
 - 더블클릭 시 시작프로그램 등록과 트레이 기반 백그라운드 demo metric 수집
 - 트레이 아이콘에서 상태 홈과 날짜/시간별 1시간 로그 뷰어 열기
+- 명확한 이벤트 감지 시 오른쪽 아래 알림 패널로 AS 검토 요청 연결
+- `viewer --config ...`로 같은 상태 홈을 개발 검증용으로 직접 열기
 
 ## 구현 시 지켜야 할 점
 

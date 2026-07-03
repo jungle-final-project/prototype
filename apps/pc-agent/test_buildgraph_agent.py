@@ -312,6 +312,43 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(agent.read_log_hour(path, "bad-date", 14), [])
             self.assertEqual(agent.read_log_hour(path, "2026-07-02", 24), [])
 
+    def test_status_log_summary_uses_recent_rows_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            now = datetime.now(agent.KST)
+            rows = [
+                {"timestamp": (now - timedelta(hours=2)).isoformat(), "message": "old"},
+                {"timestamp": (now - timedelta(minutes=20)).isoformat(), "message": "recent-1"},
+                {"timestamp": (now - timedelta(minutes=10)).isoformat(), "message": "recent-2"},
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            summary = agent.read_status_log_summary_rows(path, 6)
+
+            self.assertEqual([row["message"] for row in summary], ["recent-1", "recent-2"])
+
+    def test_display_log_summary_values_hide_sensitive_values(self) -> None:
+        row = {
+            "collectedAt": "2026-07-02T05:30:00Z",
+            "kind": "AGENT_HEALTH",
+            "payload": {
+                "cpuUsagePercent": 20.0,
+                "memoryUsedPercent": 40.0,
+                "diskUsedPercent": 50.0,
+                "processList": ["secret.exe"],
+                "message": "upload failed token=secret C:\\Users\\me\\raw.log",
+            },
+        }
+
+        values = agent.display_log_summary_values(row)
+        joined = " ".join(values).lower()
+
+        self.assertEqual(values[4], "-")
+        self.assertIn("agent 상태", joined)
+        self.assertNotIn("token", joined)
+        self.assertNotIn("c:\\users", joined)
+        self.assertNotIn("secret.exe", joined)
+
     def test_detect_recent_signals_uses_final_scenarios_without_simple_usage_noise(self) -> None:
         rows = [
             {
@@ -336,6 +373,108 @@ class AgentGoal1112Test(unittest.TestCase):
         signals = agent.detect_recent_signals(rows)
 
         self.assertEqual([signal["code"] for signal in signals], ["VISIT_POWER_SHUTDOWN", "REMOTE_DRIVER_OS"])
+
+    def test_event_panel_model_uses_only_clear_user_safe_signals(self) -> None:
+        detected = datetime(2026, 7, 2, 14, 0, tzinfo=agent.KST)
+        signals = [
+            {
+                "code": "REMOTE_STORAGE_MEMORY",
+                "title": "memory pressure token=secret C:\\Users\\me\\raw.log",
+                "timestamp": detected,
+                "date": "2026-07-02",
+                "hour": 14,
+            },
+            {
+                "code": "REMOTE_DRIVER_OS",
+                "title": "driver token=secret C:\\Users\\me\\raw.log",
+                "timestamp": detected,
+                "date": "2026-07-02",
+                "hour": 14,
+            },
+            {
+                "code": "VISIT_WHEA_BSOD",
+                "title": "WHEA",
+                "timestamp": detected + timedelta(minutes=1),
+                "date": "2026-07-02",
+                "hour": 14,
+            },
+        ]
+
+        model = agent.event_panel_model(signals)
+
+        self.assertIsNotNone(model)
+        assert model is not None
+        joined = " ".join(model["summaries"]).lower()
+        self.assertIn("드라이버", joined)
+        self.assertIn("블루스크린", joined)
+        self.assertEqual(model["detectedTime"], "2026-07-02 14:00")
+        self.assertIn("드라이버", model["signalTitle"])
+        self.assertEqual(model["windowText"], "13:45 ~ 14:05 (20분)")
+        self.assertNotIn("memory pressure", joined)
+        self.assertNotIn("token", joined)
+        self.assertNotIn("c:\\users", joined)
+
+    def test_event_panel_failure_message_hides_raw_error_detail(self) -> None:
+        message = agent.event_panel_failure_message(
+            agent.UploadError("upload failed: HTTP 400 token=secret C:\\Users\\me\\raw.log consentAccepted=false")
+        )
+
+        self.assertIn("동의", message)
+        self.assertNotIn("token", message.lower())
+        self.assertNotIn("c:\\users", message.lower())
+
+    def test_upload_event_panel_request_uses_existing_incident_upload_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log_dir = root / "logs"
+            log_dir.mkdir()
+            source = log_dir / "agent-metrics.jsonl"
+            detected = datetime(2026, 7, 2, 14, 0, tzinfo=agent.KST)
+            source.write_text(
+                json.dumps(
+                    {
+                        "timestamp": detected.isoformat(),
+                        "kind": "DISPLAY_DRIVER_WARNING",
+                        "message": "Display driver warning observed.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="agent-token",
+                log_dir=log_dir,
+                agent_version="test-agent",
+                policy_version="test-policy",
+                web_base_url="http://localhost:5173",
+            )
+            signals = [
+                {
+                    "code": "REMOTE_DRIVER_OS",
+                    "title": "드라이버/OS 오류",
+                    "timestamp": detected,
+                    "date": "2026-07-02",
+                    "hour": 14,
+                }
+            ]
+
+            with patch("buildgraph_agent.upload_gzip", return_value={"ticketId": "ticket-public-id"}) as upload:
+                ticket_id, url = agent.upload_event_panel_request(config, source, signals)
+
+            self.assertEqual(ticket_id, "ticket-public-id")
+            self.assertEqual(url, "http://localhost:5173/support/ticket-public-id")
+            upload_args = upload.call_args.args
+            self.assertEqual(upload_args[0], config)
+            self.assertTrue(upload_args[1].name.endswith(".jsonl.gz"))
+            self.assertTrue(upload_args[2].startswith("agent-panel-"))
+            self.assertIn("드라이버", upload_args[3])
+            self.assertEqual(upload_args[4].trigger_type, "SYSTEM_DETECTED")
+            self.assertEqual(upload_args[4].symptom_type, "REMOTE_DRIVER_OS")
+            self.assertTrue(upload_args[4].selected_by_user)
 
     def test_display_log_table_values_hide_sensitive_values(self) -> None:
         row = {
