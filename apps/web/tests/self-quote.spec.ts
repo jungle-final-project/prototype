@@ -1031,6 +1031,60 @@ test('opens checkout from self quote purchase CTA without using the build result
   await expect(page).not.toHaveURL(/\/builds\/00000000-0000-4000-8000-000000002001/);
 });
 
+test('saves current self quote cart into my quotes', async ({ page }) => {
+  const saveRequests: unknown[] = [];
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(checkoutDraft)
+    });
+  });
+
+  await page.route('**/api/builds/from-chat', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    saveRequests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'saved-self-quote-build' })
+    });
+  });
+
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote');
+  const cartPanel = page.getByRole('heading', { name: '견적 장바구니', exact: true }).locator('xpath=ancestor::section[1]');
+  await cartPanel.getByRole('button', { name: '내 견적함에 추가' }).click();
+
+  await expect.poll(() => saveRequests.length).toBe(1);
+  expect(saveRequests[0]).toMatchObject({
+    sourceBuildId: 'self-quote-draft-checkout-test',
+    lastUserMessage: '셀프 견적에서 저장',
+    build: {
+      id: 'self-quote-draft-checkout-test',
+      title: '셀프 견적 저장 조합',
+      totalPrice: 1_400_000,
+      items: [
+        { partId: 'part-checkout-gpu', category: 'GPU', quantity: 1, price: 980_000 },
+        { partId: 'part-checkout-cpu', category: 'CPU', quantity: 1, price: 420_000 }
+      ]
+    }
+  });
+  await expect(cartPanel.getByText('내 견적함에 추가했습니다.')).toBeVisible();
+  await expect(cartPanel.getByRole('link', { name: '내 견적함 보기' })).toHaveAttribute('href', '/my/quotes');
+});
+
 test('renders checkout from current quote draft and completes demo payment snapshot', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
