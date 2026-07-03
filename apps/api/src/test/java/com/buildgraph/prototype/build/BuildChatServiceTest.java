@@ -270,7 +270,6 @@ class BuildChatServiceTest {
         when(jdbcTemplate.queryForList(
                 anyString(),
                 eq("GPU"),
-                eq("GPU"),
                 eq("5090"),
                 eq("5090"),
                 eq("5090")
@@ -304,7 +303,6 @@ class BuildChatServiceTest {
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
         when(jdbcTemplate.queryForList(
                 anyString(),
-                eq("CPU"),
                 eq("CPU"),
                 eq("9950X3D"),
                 eq("9950X3D"),
@@ -344,7 +342,6 @@ class BuildChatServiceTest {
         when(jdbcTemplate.queryForList(
                 anyString(),
                 eq("CPU"),
-                eq("CPU"),
                 eq("9950X3D"),
                 eq("9950X3D"),
                 eq("9950X3D")
@@ -374,7 +371,6 @@ class BuildChatServiceTest {
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
         when(jdbcTemplate.queryForList(
                 anyString(),
-                eq("GPU"),
                 eq("GPU"),
                 eq("5090"),
                 eq("5090"),
@@ -448,7 +444,7 @@ class BuildChatServiceTest {
         BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
         PartReplacementRanker ranker = new PartReplacementRanker(mock(PartAliasReviewService.class));
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService, ranker);
-        when(jdbcTemplate.queryForList(anyString(), eq("GPU"), eq(50))).thenReturn(List.of(
+        when(jdbcTemplate.queryForList(anyString(), eq("GPU"), eq(200))).thenReturn(List.of(
                 partRow("gpu-5070", "GPU", "RTX 5070", 900_000, Map.of("gpuClass", "RTX_5070", "vramGb", 12), 72),
                 partRow("gpu-5080", "GPU", "RTX 5080", 1_700_000, Map.of("gpuClass", "RTX_5080", "vramGb", 16), 88),
                 partRow("gpu-5090", "GPU", "RTX 5090", 3_000_000, Map.of("gpuClass", "RTX_5090", "vramGb", 32), 100)

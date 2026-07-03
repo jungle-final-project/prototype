@@ -41,6 +41,7 @@ public class BuildChatService {
     private static final Pattern EXPLICIT_CPU_MODEL = Pattern.compile("(?i)\\b\\d{4,5}x3d\\b|\\b\\d{4,5}x\\b|\\bi[3579]-?\\d{4,5}\\b");
     private static final Pattern QUANTITY_PATTERN = Pattern.compile("(\\d+)\\s*(?:개|장|ea|pcs|개로)");
     private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern WATT_PATTERN = Pattern.compile("(\\d{3,4})\\s*w", Pattern.CASE_INSENSITIVE);
     private static final List<Tier> TIERS = List.of(
             new Tier("budget", "가성비", "가성비형"),
             new Tier("balanced", "균형", "균형형"),
@@ -56,8 +57,6 @@ public class BuildChatService {
             "CASE", "케이스",
             "COOLER", "쿨러"
     );
-    private static final List<String> BLOCKING_FAIL_TOOLS = List.of("compatibility", "power", "size");
-
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
     private final AiChatEngine aiChatEngine;
@@ -165,16 +164,17 @@ public class BuildChatService {
             logBuildChatPath("FAST_DRAFT_ACTION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
-        Optional<Map<String, Object>> deterministicResponse = deterministicFastResponse(body, message, rawBudgetIntent);
-        if (deterministicResponse.isPresent()) {
-            Map<String, Object> response = deterministicResponse.get();
-            logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback());
-            return response;
-        }
         var cachedResponse = buildChatCacheService.lookup(body, requestedAiProfile, userId);
         if (cachedResponse.isPresent()) {
             Map<String, Object> response = cachedResponse.get();
             logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty());
+            return response;
+        }
+        Optional<Map<String, Object>> deterministicResponse = deterministicFastResponse(body, message, rawBudgetIntent);
+        if (deterministicResponse.isPresent()) {
+            Map<String, Object> response = deterministicResponse.get();
+            buildChatCacheService.store(body, requestedAiProfile, userId, response);
+            logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback());
             return response;
         }
         AiChatEngineResponse engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
@@ -445,16 +445,23 @@ public class BuildChatService {
         if (effectiveCategory == null) {
             return Optional.empty();
         }
+        Optional<Map<String, Object>> directReplacement = directReplacementResponse(request, message, effectiveCategory, draftItems);
+        if (directReplacement.isPresent()) {
+            return directReplacement;
+        }
 
         Integer targetMaxPrice = category == null ? null : parseBudgetWon(message);
-        List<AiChatEngineResponse.PartRecommendation> candidates = partRecommendations(effectiveCategory, 50);
+        List<AiChatEngineResponse.PartRecommendation> messageMatchedCandidates = messageMatchedBrandRecommendations(effectiveCategory, message, 80);
+        List<AiChatEngineResponse.PartRecommendation> candidates = messageMatchedCandidates.isEmpty()
+                ? preferMessageMatchedRecommendations(partRecommendations(effectiveCategory, 200), message)
+                : messageMatchedCandidates;
         PartReplacementRanker.SelectionResult selection = partReplacementRanker.select(
                 effectiveCategory,
                 currentItem,
                 priceDirection,
                 targetMaxPrice,
                 candidates,
-                3
+                24
         );
         List<String> warnings = new ArrayList<>(selection.warnings());
         List<AiChatEngineResponse.PartRecommendation> safeRecommendations = failSafePartRecommendations(selection.parts(), request, warnings);
@@ -469,6 +476,146 @@ public class BuildChatService {
                 actions,
                 warnings
         ));
+    }
+
+    private Optional<Map<String, Object>> directReplacementResponse(
+            Map<String, Object> request,
+            String message,
+            String category,
+            List<Map<String, Object>> draftItems
+    ) {
+        List<AiChatEngineResponse.PartRecommendation> directCandidates = directReplacementCandidates(category, message);
+        if (directCandidates.isEmpty()) {
+            return Optional.empty();
+        }
+        List<String> warnings = new ArrayList<>();
+        List<AiChatEngineResponse.PartRecommendation> safeRecommendations = failSafePartRecommendations(directCandidates, request, warnings)
+                .stream()
+                .limit(3)
+                .toList();
+        List<Map<String, Object>> actions = replacementActions(safeRecommendations, draftItems, false);
+        if (actions.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(fastResponse(
+                "PART",
+                categoryLabel(category) + " 조건에 맞는 교체 후보를 바로 찾았습니다.",
+                partRecommendation(safeRecommendations, Map.of()),
+                actions,
+                warnings
+        ));
+    }
+
+    private List<AiChatEngineResponse.PartRecommendation> directReplacementCandidates(String category, String message) {
+        List<AiChatEngineResponse.PartRecommendation> brandCandidates = messageMatchedBrandRecommendations(category, message, 80);
+        if (!brandCandidates.isEmpty()) {
+            return brandCandidates;
+        }
+        Integer wattage = parseWattage(message);
+        if ("PSU".equals(category) && wattage != null && wattage > 0) {
+            return partRecommendations(category, 200).stream()
+                    .filter(part -> Math.max(
+                            firstNumber(part.attributes().get("capacityW"), 0),
+                            firstNumber(part.attributes().get("wattage"), 0)
+                    ) >= wattage)
+                    .toList();
+        }
+        return List.of();
+    }
+
+    private List<AiChatEngineResponse.PartRecommendation> preferMessageMatchedRecommendations(
+            List<AiChatEngineResponse.PartRecommendation> candidates,
+            String message
+    ) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        String normalized = normalizeCommand(message);
+        List<AiChatEngineResponse.PartRecommendation> matched = candidates.stream()
+                .filter(candidate -> messageMatchesPartCandidate(normalized, candidate))
+                .toList();
+        return matched.isEmpty() ? candidates : matched;
+    }
+
+    private boolean messageMatchesPartCandidate(String normalizedMessage, AiChatEngineResponse.PartRecommendation candidate) {
+        if (normalizedMessage == null || normalizedMessage.isBlank() || candidate == null) {
+            return false;
+        }
+        String manufacturer = normalizeCommand(candidate.manufacturer());
+        if (!manufacturer.isBlank() && normalizedMessage.contains(manufacturer)) {
+            return true;
+        }
+        String name = normalizeCommand(candidate.name());
+        for (String token : normalizedMessage.split("[^0-9a-zA-Z가-힣]+")) {
+            if (token.length() >= 3 && name.contains(token)) {
+                return true;
+            }
+        }
+        for (String token : List.of("msi", "asus", "gigabyte", "기가바이트", "리안리", "lianli", "corsair", "커세어", "samsung", "삼성")) {
+            String normalizedToken = normalizeCommand(token);
+            if (normalizedMessage.contains(normalizedToken) && name.contains(normalizedToken)) {
+                return true;
+            }
+        }
+        Matcher numericToken = Pattern.compile("\\d{3,5}[a-zA-Z]*").matcher(normalizedMessage);
+        while (numericToken.find()) {
+            if (name.contains(normalizeCommand(numericToken.group()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<AiChatEngineResponse.PartRecommendation> messageMatchedBrandRecommendations(String category, String message, int limit) {
+        String brandToken = brandToken(message);
+        if (category == null || brandToken == null) {
+            return List.of();
+        }
+        return jdbcTemplate.queryForList("""
+                        SELECT p.public_id::text AS id,
+                               p.category,
+                               p.name,
+                               p.manufacturer,
+                               p.price,
+                               p.attributes,
+                               b.score AS benchmark_score,
+                               b.summary AS benchmark_summary
+                        FROM parts p
+                        LEFT JOIN LATERAL (
+                          SELECT score, summary
+                          FROM benchmark_summaries bs
+                          WHERE bs.part_id = p.id
+                            AND bs.deleted_at IS NULL
+                          ORDER BY bs.score DESC NULLS LAST, bs.created_at DESC
+                          LIMIT 1
+                        ) b ON true
+                        WHERE p.category = ?
+                          AND p.status = 'ACTIVE'
+                          AND p.deleted_at IS NULL
+                          AND p.price IS NOT NULL
+                          AND (
+                            lower(coalesce(p.manufacturer, '')) LIKE '%' || lower(?) || '%'
+                            OR lower(p.name) LIKE '%' || lower(?) || '%'
+                          )
+                        ORDER BY b.score DESC NULLS LAST, p.price ASC, p.name ASC
+                        LIMIT ?
+                        """, category, brandToken, brandToken, Math.max(1, limit))
+                .stream()
+                .map(this::partRecommendation)
+                .toList();
+    }
+
+    private static String brandToken(String message) {
+        String normalized = normalizeCommand(message);
+        for (String token : List.of(
+                "msi", "asus", "gigabyte", "기가바이트", "리안리", "lianli", "corsair", "커세어",
+                "samsung", "삼성", "superflower", "슈퍼플라워", "fsp", "arctic", "녹투아", "noctua"
+        )) {
+            if (normalized.contains(normalizeCommand(token))) {
+                return token;
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> fastResponse(
@@ -770,7 +917,8 @@ public class BuildChatService {
                 return;
             }
             List<String> localWarnings = new ArrayList<>();
-            List<Map<String, Object>> toolResults = toolResults(selected, rawBudgetIntent.budget(), localWarnings);
+            int toolBudget = "MAX".equals(rawBudgetIntent.mode()) ? rawBudgetIntent.budget() : totalPrice;
+            List<Map<String, Object>> toolResults = toolResults(selected, toolBudget, localWarnings);
             if (hasBlockingToolFailure(toolResults)) {
                 return;
             }
@@ -837,10 +985,13 @@ public class BuildChatService {
         Map<String, Object> parsedContext = engineResponse.parsedContext() == null ? Map.of() : engineResponse.parsedContext();
         int totalPrice = totalPrice(parts, parsedContext);
         Integer userBudget = effectiveBudget(parsedContext, rawBudgetIntent);
-        int toolBudget = userBudget == null || userBudget <= 0 ? totalPrice : userBudget;
+        boolean hardConstraintOverBudget = userBudget != null
+                && totalPrice > userBudget
+                && hasEffectiveHardConstraint(parsedContext, rawBudgetIntent);
+        int toolBudget = toolBudgetForBuild(totalPrice, userBudget, rawBudgetIntent, hardConstraintOverBudget);
         List<Map<String, Object>> toolResults = toolResults(parts, toolBudget, warnings);
         List<String> buildWarnings = new ArrayList<>(toolWarnings(toolResults));
-        if (userBudget != null && totalPrice > userBudget && hasEffectiveHardConstraint(parsedContext, rawBudgetIntent)) {
+        if (hardConstraintOverBudget) {
             buildWarnings.add("HARD_CONSTRAINT_OVER_BUDGET");
             buildWarnings.add("명시한 부품 조건을 지키기 위해 예산을 초과했습니다.");
         }
@@ -1104,8 +1255,7 @@ public class BuildChatService {
 
     private boolean hasBlockingToolFailure(List<Map<String, Object>> toolResults) {
         return toolResults.stream()
-                .anyMatch(result -> "FAIL".equals(text(result.get("status")))
-                        && BLOCKING_FAIL_TOOLS.contains(text(result.get("tool"))));
+                .anyMatch(result -> "FAIL".equals(text(result.get("status"))));
     }
 
     private Map<String, Object> removeAction(Map<String, Object> item) {
@@ -1240,8 +1390,11 @@ public class BuildChatService {
         if (containsAnyNormalized(normalized, "더싼", "싼걸", "저렴", "비싸", "낮춰", "예산낮", "가격낮", "가성비")) {
             return "CHEAPER";
         }
-        if (containsAnyNormalized(normalized, "더좋", "상위", "업그레이드", "더빠른", "빠른걸", "여유", "넉넉", "잘식히", "조용", "고성능", "큰그래픽카드")) {
+        if (containsAnyNormalized(normalized, "더좋", "상위", "업그레이드", "더빠른", "빠른걸", "여유", "넉넉", "잘식히", "조용", "고성능", "큰그래픽카드", "이상")) {
             return "MORE_EXPENSIVE";
+        }
+        if (containsAnyNormalized(normalized, "맞춰", "걸로", "브랜드", "모델")) {
+            return "SIMILAR_PRICE";
         }
         return null;
     }
@@ -1252,6 +1405,7 @@ public class BuildChatService {
                 "바꿔",
                 "교체",
                 "걸로",
+                "맞춰",
                 "추천",
                 "더싼",
                 "더좋",
@@ -1262,7 +1416,8 @@ public class BuildChatService {
                 "빠른",
                 "조용",
                 "잘식히",
-                "낮춰"
+                "낮춰",
+                "이상"
         );
     }
 
@@ -1414,6 +1569,12 @@ public class BuildChatService {
     private static Integer parseCapacityGb(String message) {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
         Matcher matcher = CAPACITY_GB_PATTERN.matcher(normalized);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
+    private static Integer parseWattage(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        Matcher matcher = WATT_PATTERN.matcher(normalized);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
     }
 
@@ -1575,27 +1736,29 @@ public class BuildChatService {
                         LIMIT ?
                         """, category, Math.max(1, limit))
                 .stream()
-                .map(row -> {
-                    Map<String, Object> attributes = new LinkedHashMap<>(objectMap(DbValueMapper.json(row, "attributes", Map.of())));
-                    Integer benchmarkScore = DbValueMapper.integer(row, "benchmark_score");
-                    String benchmarkSummary = DbValueMapper.string(row, "benchmark_summary");
-                    if (benchmarkScore != null) {
-                        attributes.put("_benchmarkScore", benchmarkScore);
-                        attributes.put("benchmarkScore", benchmarkScore);
-                    }
-                    if (benchmarkSummary != null) {
-                        attributes.put("_benchmarkSummary", benchmarkSummary);
-                    }
-                    return new AiChatEngineResponse.PartRecommendation(
-                            DbValueMapper.string(row, "id"),
-                            DbValueMapper.string(row, "category"),
-                            DbValueMapper.string(row, "name"),
-                            DbValueMapper.string(row, "manufacturer"),
-                            DbValueMapper.integer(row, "price"),
-                            attributes
-                    );
-                })
+                .map(this::partRecommendation)
                 .toList();
+    }
+
+    private AiChatEngineResponse.PartRecommendation partRecommendation(Map<String, Object> row) {
+        Map<String, Object> attributes = new LinkedHashMap<>(objectMap(DbValueMapper.json(row, "attributes", Map.of())));
+        Integer benchmarkScore = DbValueMapper.integer(row, "benchmark_score");
+        String benchmarkSummary = DbValueMapper.string(row, "benchmark_summary");
+        if (benchmarkScore != null) {
+            attributes.put("_benchmarkScore", benchmarkScore);
+            attributes.put("benchmarkScore", benchmarkScore);
+        }
+        if (benchmarkSummary != null) {
+            attributes.put("_benchmarkSummary", benchmarkSummary);
+        }
+        return new AiChatEngineResponse.PartRecommendation(
+                DbValueMapper.string(row, "id"),
+                DbValueMapper.string(row, "category"),
+                DbValueMapper.string(row, "name"),
+                DbValueMapper.string(row, "manufacturer"),
+                DbValueMapper.integer(row, "price"),
+                attributes
+        );
     }
 
     private List<PartCandidate> pricePartCandidates(String category, int limit) {
@@ -1733,6 +1896,21 @@ public class BuildChatService {
             return rawBudgetIntent.budget();
         }
         return numberValue(parsedContext.get("budget"));
+    }
+
+    private static int toolBudgetForBuild(
+            int totalPrice,
+            Integer userBudget,
+            BudgetIntent rawBudgetIntent,
+            boolean hardConstraintOverBudget
+    ) {
+        if (userBudget == null || userBudget <= 0 || hardConstraintOverBudget) {
+            return totalPrice;
+        }
+        if (rawBudgetIntent != null && rawBudgetIntent.hasBudget() && "MAX".equals(rawBudgetIntent.mode())) {
+            return userBudget;
+        }
+        return totalPrice;
     }
 
     private static boolean withinBudgetGuard(Map<String, Object> build, Map<String, Object> parsedContext, BudgetIntent rawBudgetIntent) {
