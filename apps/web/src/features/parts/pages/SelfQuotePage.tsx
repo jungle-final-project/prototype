@@ -1,8 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, CheckCircle2, PackageCheck, Search, ShoppingCart, SlidersHorizontal, X } from 'lucide-react';
+import { Bell, CheckCircle2, FolderPlus, PackageCheck, Search, ShoppingCart, SlidersHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { CategorySidebar, DataTable, Panel, Screen } from '../../../components/ui';
+import { CategorySidebar, DataTable, Panel, Screen, StateMessage } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
 import { BuildDependencyGraph } from '../../quote/components/BuildDependencyGraph';
 import {
@@ -11,14 +11,15 @@ import {
   clearSelectedAiBuild,
   readSelectedAiBuild,
   type AiBuildItem,
+  type AiRecommendedBuild,
   type BuildGraphFocus,
   type PartCategory,
   type AiSelectedBuild
 } from '../../quote/aiSelection';
-import { resolveBuildGraph } from '../../quote/quoteApi';
+import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { partImageUrl, partShortSpec } from '../partDisplay';
 import { deleteQuoteDraftItem, getCurrentQuoteDraft, getPartPriceHistory, listParts, patchQuoteDraftItem, putQuoteDraftItem } from '../partsApi';
-import type { PartRow, PartSearchParams, QuoteDraftItem } from '../types';
+import type { PartRow, PartSearchParams, QuoteDraft, QuoteDraftItem } from '../types';
 
 const selfQuoteCategories = [
   { label: '셀프 견적', value: '' },
@@ -72,6 +73,14 @@ export function SelfQuotePage() {
   const quantityMutation = useMutation({
     mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => patchQuoteDraftItem(partId, quantity),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] })
+  });
+  const saveQuoteMutation = useMutation({
+    mutationFn: (draft: QuoteDraft) => saveBuildFromChat({
+      sourceBuildId: selfQuoteBuildId(draft),
+      lastUserMessage: '셀프 견적에서 저장',
+      build: quoteDraftToRecommendedBuild(draft)
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['build-history'] })
   });
   const parts = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -344,7 +353,21 @@ export function SelfQuotePage() {
           </section>
 
           <aside className="min-w-0 xl:sticky xl:top-5 xl:self-start">
-            <Panel title="견적 장바구니" subtitle="선택한 부품 총액과 검증 진입점을 확인합니다.">
+            <Panel
+              title="견적 장바구니"
+              subtitle="선택한 부품 총액과 검증 진입점을 확인합니다."
+              action={quoteDraft && draftItems.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => saveQuoteMutation.mutate(quoteDraft)}
+                  disabled={saveQuoteMutation.isPending}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-brand-blue px-3 text-xs font-black text-white hover:bg-blue-700 disabled:cursor-wait disabled:bg-slate-400"
+                >
+                  <FolderPlus size={14} />
+                  {saveQuoteMutation.isPending ? '추가 중' : '내 견적함에 추가'}
+                </button>
+              ) : null}
+            >
               <QuoteTotalCard totalPrice={selectedTotal} />
               <div className="mt-4 space-y-2">
                 {!hasToken ? (
@@ -382,6 +405,17 @@ export function SelfQuotePage() {
                     </div>
                   </div>
                 ))}
+                {saveQuoteMutation.isSuccess ? (
+                  <div className="space-y-2">
+                    <StateMessage type="success" title="내 견적함에 추가했습니다." body="저장된 견적은 내 견적함 / 목표가 알림 화면에서 다시 확인할 수 있습니다." />
+                    <Link to="/my/quotes" className="flex min-h-10 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-black text-emerald-700 hover:border-emerald-300">
+                      내 견적함 보기
+                    </Link>
+                  </div>
+                ) : null}
+                {saveQuoteMutation.isError ? (
+                  <StateMessage type="warn" title="내 견적함 추가 실패" body="현재 견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+                ) : null}
               </div>
               <div className="mt-4 space-y-3">
                 <button className="flex w-full min-h-11 items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 py-3 text-sm font-black text-white hover:bg-slate-700">
@@ -764,6 +798,43 @@ function quoteGraphSignature(items: QuoteDraftItem[]) {
     .map((item) => `${item.partId}:${item.quantity}:${item.lineTotal}`)
     .sort()
     .join('|');
+}
+
+function selfQuoteBuildId(draft: QuoteDraft) {
+  return `self-quote-${draft.id ?? 'current'}`;
+}
+
+function quoteDraftToRecommendedBuild(draft: QuoteDraft): AiRecommendedBuild {
+  const items = draft.items
+    .filter((item): item is QuoteDraftItem & { category: PartCategory } => isPartCategory(item.category))
+    .map((item) => ({
+      partId: item.partId,
+      category: item.category,
+      name: item.name,
+      manufacturer: item.manufacturer ?? 'BuildGraph',
+      quantity: item.quantity,
+      price: item.currentPrice,
+      note: '셀프 견적 장바구니에서 저장'
+    }));
+  const categories = Array.from(new Set(items.map((item) => item.category)));
+
+  return {
+    id: selfQuoteBuildId(draft),
+    tier: 'balanced',
+    label: '셀프',
+    title: '셀프 견적 저장 조합',
+    summary: '셀프 견적 페이지에서 선택한 부품을 내 견적함에 저장했습니다.',
+    totalPrice: draft.totalPrice,
+    badges: ['셀프 견적', `${items.length}개 부품`],
+    budgetWon: draft.totalPrice,
+    budgetLabel: '셀프 견적',
+    tierLabel: '셀프 견적',
+    appliedPartCategories: categories,
+    items,
+    toolResults: [],
+    warnings: [],
+    confidence: 'HIGH'
+  };
 }
 
 function isPartCategory(category: string): category is PartCategory {

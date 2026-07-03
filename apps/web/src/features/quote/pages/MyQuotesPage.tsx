@@ -1,12 +1,13 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellRing, CheckCircle2, FileText, PencilLine, Save, Target } from 'lucide-react';
+import { BellRing, CheckCircle2, FileText, GitBranch, PencilLine, Save, ShoppingBag, Target, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
-import { createQuotePriceAlert, getBuildHistory, getPriceAlerts, type PriceAlert } from '../quoteApi';
+import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
+import type { PartCategory } from '../aiSelection';
+import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
+import { createQuotePriceAlert, getBuildHistory, getPriceAlerts, resolveBuildGraph, type PriceAlert } from '../quoteApi';
 import type { BuildItem, BuildSummary } from '../types';
-
-type AlertInputMode = 'saved-part' | 'manual';
 
 type SavedPartOption = {
   partId: string;
@@ -15,13 +16,19 @@ type SavedPartOption = {
   buildName: string;
   price: number;
 };
+type SavedBuildApplyDestination = 'checkout' | 'self-quote';
+type SavedBuildApplyVariables = {
+  build: BuildSummary;
+  destination: SavedBuildApplyDestination;
+};
 
 export function MyQuotesPage() {
   const queryClient = useQueryClient();
-  const [partId, setPartId] = useState('');
+  const navigate = useNavigate();
+  const [selectedAlertBuildId, setSelectedAlertBuildId] = useState('');
   const [selectedSavedPartId, setSelectedSavedPartId] = useState('');
+  const [graphBuild, setGraphBuild] = useState<BuildSummary | null>(null);
   const [targetPrice, setTargetPrice] = useState('850000');
-  const [alertInputMode, setAlertInputMode] = useState<AlertInputMode>('saved-part');
   const alertFormRef = useRef<HTMLDivElement | null>(null);
 
   const buildsQuery = useQuery({ queryKey: ['build-history'], queryFn: getBuildHistory });
@@ -29,16 +36,42 @@ export function MyQuotesPage() {
 
   const builds = buildsQuery.data?.items ?? [];
   const alerts = alertsQuery.data?.items ?? [];
-  const savedPartOptions = useMemo(() => collectSavedPartOptions(builds), [builds]);
-  const effectiveAlertInputMode: AlertInputMode = savedPartOptions.length === 0 ? 'manual' : alertInputMode;
+  const selectedAlertBuild = useMemo(
+    () => builds.find((build) => build.id === selectedAlertBuildId) ?? builds[0],
+    [builds, selectedAlertBuildId]
+  );
+  const savedPartOptions = useMemo(
+    () => selectedAlertBuild ? collectSavedPartOptions(selectedAlertBuild) : [],
+    [selectedAlertBuild]
+  );
   const selectedSavedPart = savedPartOptions.find((option) => option.partId === selectedSavedPartId);
-  const selectedPartIdForSubmit = effectiveAlertInputMode === 'saved-part' ? selectedSavedPartId : partId.trim();
+  const selectedPartIdForSubmit = selectedSavedPartId;
   const targetPriceNumber = Number(targetPrice.replace(/,/g, ''));
   const achievedAlertCount = alerts.filter((alert) => isPriceTargetAchieved(alert)).length;
   const nearestAlert = useMemo(() => findNearestAlert(alerts), [alerts]);
+  const graphBuildItems = useMemo(() => graphBuild ? quoteDraftItemsForBuild(graphBuild) : [], [graphBuild]);
+  const graphQuery = useQuery({
+    queryKey: ['build-graph', 'saved-build', graphBuild?.id, graphBuildSignature(graphBuildItems), graphBuild?.totalPrice],
+    queryFn: () => resolveBuildGraph({
+      source: 'AI_BUILD',
+      items: graphBuildItems,
+      budgetWon: graphBuild?.totalPrice
+    }),
+    enabled: Boolean(graphBuild && graphBuildItems.length > 0)
+  });
 
   useEffect(() => {
-    if (!selectedSavedPartId && savedPartOptions[0]) {
+    if (!selectedAlertBuildId && builds[0]) {
+      setSelectedAlertBuildId(builds[0].id);
+    }
+  }, [builds, selectedAlertBuildId]);
+
+  useEffect(() => {
+    if (savedPartOptions.length === 0) {
+      setSelectedSavedPartId('');
+      return;
+    }
+    if (!savedPartOptions.some((option) => option.partId === selectedSavedPartId)) {
       setSelectedSavedPartId(savedPartOptions[0].partId);
     }
   }, [savedPartOptions, selectedSavedPartId]);
@@ -46,6 +79,18 @@ export function MyQuotesPage() {
   const createAlertMutation = useMutation({
     mutationFn: () => createQuotePriceAlert(selectedPartIdForSubmit, targetPriceNumber),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['price-alerts'] })
+  });
+  const applyBuildMutation = useMutation({
+    mutationFn: ({ build }: SavedBuildApplyVariables) => applyAiBuildToQuoteDraft({
+      buildId: build.id,
+      conflictPolicy: 'REPLACE',
+      items: quoteDraftItemsForBuild(build)
+    }),
+    onSuccess: (draft, variables) => {
+      queryClient.setQueryData(['quote-draft', 'current'], draft);
+      void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+      navigate(variables.destination === 'checkout' ? '/checkout' : '/self-quote');
+    }
   });
 
   function submitAlert(event: FormEvent) {
@@ -59,9 +104,19 @@ export function MyQuotesPage() {
   function selectBuildPartForAlert(build: BuildSummary) {
     const firstPartId = resolvePartId(build.items?.[0]);
     if (!firstPartId) return;
-    setAlertInputMode('saved-part');
+    setSelectedAlertBuildId(build.id);
     setSelectedSavedPartId(firstPartId);
     alertFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function openCheckoutForBuild(build: BuildSummary) {
+    if (quoteDraftItemsForBuild(build).length === 0 || applyBuildMutation.isPending) return;
+    applyBuildMutation.mutate({ build, destination: 'checkout' });
+  }
+
+  function openSelfQuoteForBuild(build: BuildSummary) {
+    if (quoteDraftItemsForBuild(build).length === 0 || applyBuildMutation.isPending) return;
+    applyBuildMutation.mutate({ build, destination: 'self-quote' });
   }
 
   return (
@@ -97,8 +152,20 @@ export function MyQuotesPage() {
             ) : builds.length ? (
               <div className="space-y-3">
                 {builds.map((build) => (
-                  <SavedBuildCard key={build.id} build={build} onAlertSelect={selectBuildPartForAlert} />
+                  <SavedBuildCard
+                    key={build.id}
+                    build={build}
+                    isPreparingCheckout={isApplyingBuild(applyBuildMutation.variables, build, 'checkout', applyBuildMutation.isPending)}
+                    isPreparingSelfQuote={isApplyingBuild(applyBuildMutation.variables, build, 'self-quote', applyBuildMutation.isPending)}
+                    onAlertSelect={selectBuildPartForAlert}
+                    onCheckout={openCheckoutForBuild}
+                    onEditParts={openSelfQuoteForBuild}
+                    onOpenGraph={setGraphBuild}
+                  />
                 ))}
+                {applyBuildMutation.isError ? (
+                  <StateMessage type="warn" title="견적 적용 실패" body="저장 견적을 현재 장바구니에 적용하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -112,67 +179,39 @@ export function MyQuotesPage() {
           </Panel>
 
           <div ref={alertFormRef} className="xl:sticky xl:top-5 xl:self-start">
-            <Panel title="목표가 알림 등록" subtitle="저장 견적의 부품을 선택하거나 부품 ID를 직접 입력할 수 있습니다.">
+            <Panel title="목표가 알림 등록" subtitle="선택한 저장 견적에 포함된 부품만 목표가 알림으로 등록할 수 있습니다.">
               <form onSubmit={submitAlert} className="space-y-4">
-                <div className="grid grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setAlertInputMode('saved-part')}
+                <div>
+                  {selectedAlertBuild ? (
+                    <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
+                      <div className="text-[11px] font-black text-brand-blue">선택한 저장 견적</div>
+                      <div className="mt-1 truncate text-sm font-black text-commerce-ink" title={selectedAlertBuild.name}>{selectedAlertBuild.name}</div>
+                    </div>
+                  ) : null}
+                  <label htmlFor="quote-alert-saved-part" className="mb-1 block text-xs font-black text-slate-600">저장 견적 부품</label>
+                  <select
+                    id="quote-alert-saved-part"
+                    className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-commerce-ink focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    value={selectedSavedPartId}
+                    onChange={(event) => setSelectedSavedPartId(event.target.value)}
                     disabled={savedPartOptions.length === 0}
-                    className={`min-h-9 rounded px-3 text-xs font-black transition disabled:cursor-not-allowed disabled:text-slate-400 ${
-                      effectiveAlertInputMode === 'saved-part'
-                        ? 'bg-white text-brand-blue shadow-sm'
-                        : 'text-slate-600 hover:text-commerce-ink'
-                    }`}
                   >
-                    저장 부품 선택
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAlertInputMode('manual')}
-                    className={`min-h-9 rounded px-3 text-xs font-black transition ${
-                      effectiveAlertInputMode === 'manual'
-                        ? 'bg-white text-brand-blue shadow-sm'
-                        : 'text-slate-600 hover:text-commerce-ink'
-                    }`}
-                  >
-                    직접 입력
-                  </button>
+                    {savedPartOptions.map((option) => (
+                      <option key={option.partId} value={option.partId}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedSavedPart ? (
+                    <p className="mt-2 break-keep text-xs leading-5 text-slate-500">
+                      {selectedSavedPart.buildName} · 현재 저장가 {selectedSavedPart.price.toLocaleString()}원
+                    </p>
+                  ) : (
+                    <p className="mt-2 break-keep text-xs leading-5 text-slate-500">
+                      목표가를 등록하려면 저장 견적 카드의 목표가 등록 버튼을 먼저 선택하세요.
+                    </p>
+                  )}
                 </div>
-
-                {effectiveAlertInputMode === 'saved-part' ? (
-                  <div>
-                    <label htmlFor="quote-alert-saved-part" className="mb-1 block text-xs font-black text-slate-600">저장 견적 부품</label>
-                    <select
-                      id="quote-alert-saved-part"
-                      className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-commerce-ink focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
-                      value={selectedSavedPartId}
-                      onChange={(event) => setSelectedSavedPartId(event.target.value)}
-                    >
-                      {savedPartOptions.map((option) => (
-                        <option key={option.partId} value={option.partId}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedSavedPart ? (
-                      <p className="mt-2 break-keep text-xs leading-5 text-slate-500">
-                        {selectedSavedPart.buildName} · 현재 저장가 {selectedSavedPart.price.toLocaleString()}원
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div>
-                    <label htmlFor="quote-alert-part-id" className="mb-1 block text-xs font-black text-slate-600">부품 ID 직접 입력</label>
-                    <input
-                      id="quote-alert-part-id"
-                      className="h-11 w-full rounded-md border border-slate-300 px-3 text-sm font-bold text-commerce-ink focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
-                      value={partId}
-                      onChange={(event) => setPartId(event.target.value)}
-                      placeholder="part-public-id"
-                    />
-                  </div>
-                )}
 
                 <div>
                   <label htmlFor="quote-alert-target-price" className="mb-1 block text-xs font-black text-slate-600">목표가</label>
@@ -223,6 +262,15 @@ export function MyQuotesPage() {
           </Panel>
         </div>
       </div>
+      {graphBuild ? (
+        <SavedBuildGraphDialog
+          build={graphBuild}
+          graph={graphQuery.data}
+          isLoading={graphQuery.isLoading}
+          isError={graphQuery.isError}
+          onClose={() => setGraphBuild(null)}
+        />
+      ) : null}
     </Screen>
   );
 }
@@ -256,18 +304,6 @@ function SummaryMetric({
   );
 }
 
-function ConfidencePill({ confidence }: { confidence: string }) {
-  const value = confidence.toUpperCase();
-  const label = value === 'HIGH' ? '근거 높음' : value === 'MEDIUM' ? '근거 보통' : value === 'LOW' ? '근거 낮음' : confidence;
-  const className = value === 'HIGH'
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    : value === 'MEDIUM'
-      ? 'border-orange-200 bg-orange-50 text-orange-700'
-      : 'border-slate-200 bg-slate-100 text-slate-600';
-
-  return <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-black ${className}`}>{label}</span>;
-}
-
 function AlertStatusPill({ alert }: { alert: PriceAlert }) {
   const achieved = isPriceTargetAchieved(alert);
   return (
@@ -282,18 +318,42 @@ function AlertStatusPill({ alert }: { alert: PriceAlert }) {
   );
 }
 
-function SavedBuildCard({ build, onAlertSelect }: { build: BuildSummary; onAlertSelect: (build: BuildSummary) => void }) {
+function SavedBuildCard({
+  build,
+  isPreparingCheckout,
+  isPreparingSelfQuote,
+  onAlertSelect,
+  onCheckout,
+  onEditParts,
+  onOpenGraph
+}: {
+  build: BuildSummary;
+  isPreparingCheckout: boolean;
+  isPreparingSelfQuote: boolean;
+  onAlertSelect: (build: BuildSummary) => void;
+  onCheckout: (build: BuildSummary) => void;
+  onEditParts: (build: BuildSummary) => void;
+  onOpenGraph: (build: BuildSummary) => void;
+}) {
   const mainItems = (build.items ?? []).slice(0, 4);
   const hasAlertablePart = Boolean(resolvePartId(build.items?.[0]));
+  const hasCheckoutItems = quoteDraftItemsForBuild(build).length > 0;
 
   return (
     <article data-testid={`saved-build-card-${build.id}`} className="rounded-md border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:shadow-product">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">{build.recommendedFor ?? '저장 견적'}</span>
-            <ConfidencePill confidence={build.confidence} />
-            {build.warnings?.length ? <span className="rounded bg-orange-50 px-2 py-1 text-[11px] font-black text-orange-700">주의 {build.warnings.length}건</span> : null}
+            <button
+              type="button"
+              disabled={!hasCheckoutItems}
+              onClick={() => onOpenGraph(build)}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2.5 text-[11px] font-black text-brand-blue hover:border-blue-200 hover:bg-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+            >
+              <GitBranch size={13} />
+              견적 관계 그래프 보기
+            </button>
           </div>
           <h2 className="mt-2 text-lg font-black leading-6 text-commerce-ink">{build.name}</h2>
           <p className="mt-1 line-clamp-2 break-keep text-sm leading-6 text-slate-600">
@@ -314,12 +374,25 @@ function SavedBuildCard({ build, onAlertSelect }: { build: BuildSummary; onAlert
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-        <Link to={`/builds/${build.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-brand-blue px-3 text-xs font-black text-white hover:bg-blue-700">
+        <button
+          type="button"
+          disabled={!hasCheckoutItems || isPreparingCheckout}
+          onClick={() => onCheckout(build)}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-brand-blue px-3 text-xs font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+        >
+          <ShoppingBag size={14} /> {isPreparingCheckout ? '구매 준비 중' : '구매하기'}
+        </button>
+        <Link to={`/builds/${build.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink">
           <FileText size={14} /> 견적 상세
         </Link>
-        <Link to={`/builds/${build.id}/change-part`} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink">
-          <PencilLine size={14} /> 부품 변경
-        </Link>
+        <button
+          type="button"
+          disabled={!hasCheckoutItems || isPreparingSelfQuote}
+          onClick={() => onEditParts(build)}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+        >
+          <PencilLine size={14} /> {isPreparingSelfQuote ? '이동 준비 중' : '부품 변경'}
+        </button>
         <button
           type="button"
           disabled={!hasAlertablePart}
@@ -382,6 +455,61 @@ function PriceAlertRow({ alert }: { alert: PriceAlert }) {
   );
 }
 
+function SavedBuildGraphDialog({
+  build,
+  graph,
+  isLoading,
+  isError,
+  onClose
+}: {
+  build: BuildSummary;
+  graph: Awaited<ReturnType<typeof resolveBuildGraph>> | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] bg-slate-950/40 p-3 sm:p-6" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        onClose();
+      }
+    }}>
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="저장 견적 관계 그래프"
+        className="mx-auto flex h-full max-h-[920px] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-commerce-line px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <div className="text-xs font-black text-brand-blue">읽기 전용</div>
+            <h2 className="mt-1 truncate text-lg font-black text-commerce-ink" title={build.name}>{build.name}</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">저장 견적의 부품 관계를 확인합니다. 이 팝업에서는 부품 교체나 담기 동작을 하지 않습니다.</p>
+          </div>
+          <button
+            type="button"
+            aria-label="관계 그래프 닫기"
+            onClick={onClose}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-commerce-line bg-white text-slate-500 hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
+          <BuildDependencyGraph
+            graph={graph}
+            isLoading={isLoading}
+            isError={isError}
+            totalPrice={build.totalPrice}
+            title="견적 관계 그래프"
+            subtitle="저장 견적에 포함된 부품만 기준으로 계산한 읽기 전용 관계도입니다."
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SavedBuildSkeleton() {
   return (
     <div className="space-y-3">
@@ -402,30 +530,67 @@ function AlertSkeleton() {
   );
 }
 
-function collectSavedPartOptions(builds: BuildSummary[]): SavedPartOption[] {
+function collectSavedPartOptions(build: BuildSummary): SavedPartOption[] {
   const seen = new Set<string>();
   const options: SavedPartOption[] = [];
 
-  for (const build of builds) {
-    for (const item of build.items ?? []) {
-      const partId = resolvePartId(item);
-      if (!partId || seen.has(partId)) continue;
-      seen.add(partId);
-      options.push({
-        partId,
-        label: `${labelForCategory(item.category)} · ${item.name}`,
-        category: item.category,
-        buildName: build.name,
-        price: item.price
-      });
-    }
+  for (const item of build.items ?? []) {
+    const partId = resolvePartId(item);
+    if (!partId || seen.has(partId)) continue;
+    seen.add(partId);
+    options.push({
+      partId,
+      label: `${labelForCategory(item.category)} · ${item.name}`,
+      category: item.category,
+      buildName: build.name,
+      price: item.price
+    });
   }
 
   return options;
 }
 
+function quoteDraftItemsForBuild(build: BuildSummary) {
+  return (build.items ?? [])
+    .map((item) => {
+      const partId = resolvePartId(item);
+      if (!partId || !isPartCategory(item.category)) return null;
+      return {
+        partId,
+        category: item.category,
+        quantity: quantityForBuildItem(item)
+      };
+    })
+    .filter((item): item is { partId: string; category: PartCategory; quantity: number } => Boolean(item));
+}
+
+function graphBuildSignature(items: Array<{ partId: string; category: PartCategory; quantity: number }>) {
+  return items
+    .map((item) => `${item.category}:${item.partId}:${item.quantity}`)
+    .sort()
+    .join('|');
+}
+
+function isApplyingBuild(
+  variables: SavedBuildApplyVariables | undefined,
+  build: BuildSummary,
+  destination: SavedBuildApplyDestination,
+  isPending: boolean
+) {
+  return Boolean(isPending && variables?.build.id === build.id && variables.destination === destination);
+}
+
 function resolvePartId(item?: BuildItem) {
   return item?.partId ?? item?.id ?? '';
+}
+
+function quantityForBuildItem(item: BuildItem) {
+  const quantity = (item as BuildItem & { quantity?: number }).quantity;
+  return typeof quantity === 'number' && quantity > 0 ? quantity : 1;
+}
+
+function isPartCategory(category: string): category is PartCategory {
+  return ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER'].includes(category);
 }
 
 function isPriceTargetAchieved(alert: PriceAlert) {

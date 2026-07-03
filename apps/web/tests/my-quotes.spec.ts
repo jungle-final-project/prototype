@@ -73,6 +73,8 @@ function item(category: string, partId: string, name: string, manufacturer: stri
 
 async function openMyQuotesAsUser(page: Page) {
   const priceAlertRequests: unknown[] = [];
+  const applyBuildRequests: unknown[] = [];
+  const graphRequests: unknown[] = [];
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
     localStorage.setItem('buildgraph.authUser', JSON.stringify({
@@ -101,6 +103,46 @@ async function openMyQuotesAsUser(page: Page) {
       body: JSON.stringify({ items: savedBuilds, page: 0, size: 20, total: savedBuilds.length })
     });
   });
+  await page.route('**/api/quote-drafts/current/apply-ai-build', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    applyBuildRequests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'draft-from-saved-build',
+        status: 'ACTIVE',
+        name: '저장 견적 구매 준비',
+        items: (body.items ?? []).map((next: { partId: string; category: string; quantity: number }, index: number) => {
+          const source = savedBuilds.flatMap((build) => build.items).find((item) => item.partId === next.partId);
+          return {
+            id: `draft-item-${index}`,
+            partId: next.partId,
+            category: next.category,
+            name: source?.name ?? next.partId,
+            manufacturer: source?.manufacturer ?? 'BuildGraph',
+            quantity: next.quantity,
+            unitPriceAtAdd: source?.price ?? 100_000,
+            currentPrice: source?.price ?? 100_000,
+            lineTotal: (source?.price ?? 100_000) * next.quantity,
+            attributes: {},
+            externalOffer: {
+              supplierName: '테스트 구매처',
+              offerUrl: `https://example.test/${next.partId}`,
+              lowPrice: source?.price ?? 100_000,
+              source: 'TEST',
+              refreshedAt: '2026-07-04T00:00:00Z'
+            }
+          };
+        }),
+        totalPrice: (body.items ?? []).reduce((sum: number, next: { partId: string; quantity: number }) => {
+          const source = savedBuilds.flatMap((build) => build.items).find((item) => item.partId === next.partId);
+          return sum + (source?.price ?? 100_000) * next.quantity;
+        }, 0),
+        itemCount: (body.items ?? []).length
+      })
+    });
+  });
   await page.route('**/api/price-alerts', async (route) => {
     if (route.request().method() === 'POST') {
       const body = JSON.parse(route.request().postData() ?? '{}');
@@ -126,9 +168,42 @@ async function openMyQuotesAsUser(page: Page) {
       body: JSON.stringify({ items: priceAlerts, page: 0, size: 20, total: priceAlerts.length })
     });
   });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    graphRequests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'BUILD_OVERVIEW',
+        summary: '저장 견적 부품 관계를 읽기 전용으로 표시합니다.',
+        nodes: [
+          { id: 'part-CPU', type: 'PART', category: 'CPU', label: 'AMD Ryzen 7 9700X', status: 'PASS', detail: '저장 견적 CPU' },
+          { id: 'part-GPU', type: 'PART', category: 'GPU', label: 'GeForce RTX 5070', status: 'PASS', detail: '저장 견적 GPU' },
+          { id: 'constraint-total-price', type: 'CONSTRAINT', category: 'PRICE', label: '총액', status: 'PASS', detail: '2,180,000원' }
+        ],
+        edges: [
+          {
+            id: 'edge-cpu-gpu-performance',
+            source: 'part-CPU',
+            target: 'part-GPU',
+            type: 'AFFECTS',
+            status: 'PASS',
+            label: '성능 균형',
+            summary: 'CPU와 GPU 조합의 성능 균형을 확인합니다.'
+          }
+        ],
+        focusNodeIds: ['part-CPU', 'part-GPU'],
+        insights: [],
+        toolResults: [
+          { tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '저장 견적 성능 균형을 확인했습니다.' }
+        ]
+      })
+    });
+  });
 
   await page.goto('/my/quotes');
-  return { priceAlertRequests };
+  return { priceAlertRequests, applyBuildRequests, graphRequests };
 }
 
 test('shows saved quotes, actionable price alert setup, and alert progress', async ({ page }) => {
@@ -142,10 +217,14 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
   await expect(firstBuild).toContainText('QHD 균형 저장 견적');
   await expect(firstBuild.getByRole('link', { name: '견적 상세' })).toHaveAttribute('href', '/builds/build-qhd-balanced');
-  await expect(firstBuild.getByRole('link', { name: '부품 변경' })).toHaveAttribute('href', '/builds/build-qhd-balanced/change-part');
+  await expect(firstBuild.getByRole('button', { name: '부품 변경' })).toBeVisible();
   await firstBuild.getByRole('button', { name: '목표가 등록' }).click();
 
   await expect(page.getByLabel('저장 견적 부품')).toHaveValue('part-cpu-9700x');
+  await expect(page.getByLabel('저장 견적 부품').locator('option')).toHaveCount(savedBuilds[0].items.length);
+  await expect(page.getByLabel('저장 견적 부품')).toContainText('AMD Ryzen 7 9700X');
+  await expect(page.getByLabel('저장 견적 부품')).toContainText('GeForce RTX 5070');
+  await expect(page.getByLabel('저장 견적 부품')).not.toContainText('GeForce RTX 5080');
   await page.getByLabel('목표가').fill('880000');
   await page.getByRole('button', { name: '알림 등록' }).click();
 
@@ -162,14 +241,86 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(triggeredAlert).toContainText('목표 달성');
 });
 
-test('allows manual part id entry when the saved quote part is not listed', async ({ page }) => {
-  const { priceAlertRequests } = await openMyQuotesAsUser(page);
+test('limits target price dropdown to the selected quote and opens checkout for that quote', async ({ page }) => {
+  const { applyBuildRequests } = await openMyQuotesAsUser(page);
 
-  await page.getByRole('button', { name: '직접 입력' }).click();
-  await page.getByLabel('부품 ID 직접 입력').fill('manual-part-001');
-  await page.getByLabel('목표가').fill('777000');
-  await page.getByRole('button', { name: '알림 등록' }).click();
+  const secondBuild = page.getByTestId('saved-build-card-build-workstation');
+  await secondBuild.getByRole('button', { name: '목표가 등록' }).click();
 
-  await expect.poll(() => priceAlertRequests.length).toBe(1);
-  expect(priceAlertRequests[0]).toEqual({ partId: 'manual-part-001', targetPrice: 777_000 });
+  const savedPartSelect = page.getByLabel('저장 견적 부품');
+  await expect(savedPartSelect).toHaveValue('part-gpu-5080');
+  await expect(savedPartSelect.locator('option')).toHaveCount(savedBuilds[1].items.length);
+  await expect(savedPartSelect).toContainText('GeForce RTX 5080');
+  await expect(savedPartSelect).toContainText('DDR5 64GB Kit');
+  await expect(savedPartSelect).not.toContainText('AMD Ryzen 7 9700X');
+
+  await secondBuild.getByRole('button', { name: '구매하기' }).click();
+
+  await expect.poll(() => applyBuildRequests.length).toBe(1);
+  expect(applyBuildRequests[0]).toEqual({
+    buildId: 'build-workstation',
+    conflictPolicy: 'REPLACE',
+    items: [
+      { partId: 'part-gpu-5080', category: 'GPU', quantity: 1 },
+      { partId: 'part-ram-64', category: 'RAM', quantity: 1 }
+    ]
+  });
+  await expect(page).toHaveURL('/checkout');
+});
+
+test('applies the selected saved quote before opening self quote for part changes', async ({ page }) => {
+  const { applyBuildRequests } = await openMyQuotesAsUser(page);
+
+  const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
+  await firstBuild.getByRole('button', { name: '부품 변경' }).click();
+
+  await expect.poll(() => applyBuildRequests.length).toBe(1);
+  expect(applyBuildRequests[0]).toEqual({
+    buildId: 'build-qhd-balanced',
+    conflictPolicy: 'REPLACE',
+    items: [
+      { partId: 'part-cpu-9700x', category: 'CPU', quantity: 1 },
+      { partId: 'part-gpu-5070', category: 'GPU', quantity: 1 },
+      { partId: 'part-board-b650', category: 'MOTHERBOARD', quantity: 1 }
+    ]
+  });
+  await expect(page).toHaveURL('/self-quote');
+});
+
+test('does not expose manual part id entry for target price alerts', async ({ page }) => {
+  await openMyQuotesAsUser(page);
+
+  await expect(page.getByRole('button', { name: '직접 입력' })).toHaveCount(0);
+  await expect(page.getByLabel('부품 ID 직접 입력')).toHaveCount(0);
+  await expect(page.getByLabel('저장 견적 부품')).toBeVisible();
+});
+
+test('opens a read-only dependency graph popup for each saved quote', async ({ page }) => {
+  const { graphRequests } = await openMyQuotesAsUser(page);
+
+  const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
+  const secondBuild = page.getByTestId('saved-build-card-build-workstation');
+  await expect(firstBuild).not.toContainText('근거 높음');
+  await expect(secondBuild).not.toContainText('주의 1건');
+
+  await firstBuild.getByRole('button', { name: '견적 관계 그래프 보기' }).click();
+
+  await expect.poll(() => graphRequests.length).toBe(1);
+  expect(graphRequests[0]).toMatchObject({
+    source: 'AI_BUILD',
+    budgetWon: 2_180_000,
+    items: [
+      { partId: 'part-cpu-9700x', category: 'CPU', quantity: 1 },
+      { partId: 'part-gpu-5070', category: 'GPU', quantity: 1 },
+      { partId: 'part-board-b650', category: 'MOTHERBOARD', quantity: 1 }
+    ]
+  });
+
+  const dialog = page.getByRole('dialog', { name: '저장 견적 관계 그래프' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('QHD 균형 저장 견적');
+  await expect(dialog).toContainText('읽기 전용');
+  await expect(dialog.getByTestId('graph-flow-canvas')).toBeVisible();
+  await dialog.getByRole('button', { name: '관계 그래프 닫기' }).click();
+  await expect(dialog).toHaveCount(0);
 });

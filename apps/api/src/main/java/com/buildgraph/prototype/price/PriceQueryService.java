@@ -5,6 +5,7 @@ import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,7 +27,8 @@ public class PriceQueryService {
     }
 
     public Map<String, Object> createAlert(Map<String, Object> request, CurrentUserService.CurrentUser user) {
-        String partId = request == null ? defaultGpuPartId() : String.valueOf(request.getOrDefault("partId", defaultGpuPartId()));
+        Object rawPartId = request == null ? null : request.get("partId");
+        String partId = requirePublicId(rawPartId == null ? defaultGpuPartId() : String.valueOf(rawPartId), "partId");
         Integer targetPrice = numberValue(request == null ? null : request.get("targetPrice"), 850_000);
         requireActivePart(partId);
         List<Map<String, Object>> existing = alertRows(user.internalId(), partId, targetPrice);
@@ -239,5 +241,16 @@ public class PriceQueryService {
             return fallback;
         }
         return Integer.valueOf(value.toString());
+    }
+
+    private static String requirePublicId(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + "가 필요합니다.");
+        }
+        try {
+            return UUID.fromString(value).toString();
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + "는 public_id UUID 형식이어야 합니다.");
+        }
     }
 }
