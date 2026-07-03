@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Background,
   Controls,
+  Handle,
   MarkerType,
   Position,
   ReactFlow,
@@ -44,14 +45,16 @@ type BuildDependencyGraphProps = {
 type CandidateContext = NonNullable<BuildDependencyGraphProps['candidateContext']>;
 
 const categoryOrder = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'PSU', 'CASE', 'COOLER', 'STORAGE', 'PRICE'];
-const DEFAULT_NODE_DIAMETER = 140;
+const DEFAULT_NODE_SIZE = { width: 220, height: 108 };
+const WIDE_NODE_SIZE = { width: 250, height: 112 };
+const PRICE_NODE_SIZE = { width: 220, height: 88 };
 const FLOATING_GRAPH_DEFAULT_SIZE = { width: 500, graphHeight: 480 };
 const FLOATING_GRAPH_MIN_SIZE = { width: 300, graphHeight: 200 };
 const FLOATING_GRAPH_MAX_SIZE = { width: 760, graphHeight: 640 };
 const FLOATING_GRAPH_MAIN_VISIBLE_RATIO = 0.5;
 const FLOATING_GRAPH_VIEWPORT_MARGIN = 40;
 const FLOATING_GRAPH_HEADER_HEIGHT = 42;
-const graphNodeTypes = { priceTotal: PriceTotalNode };
+const graphNodeTypes = { graphCard: GraphCardNode, priceTotal: PriceTotalNode };
 const categoryPositions: Record<string, { x: number; y: number }> = {
   CPU: { x: 20, y: 170 },
   MOTHERBOARD: { x: 300, y: 36 },
@@ -534,6 +537,16 @@ function clampFloatingGraphSize(size: typeof FLOATING_GRAPH_DEFAULT_SIZE) {
   };
 }
 
+function GraphCardNode({ data }: NodeProps<Node<{ label: ReactNode }>>) {
+  return (
+    <>
+      <Handle type="target" position={Position.Left} />
+      {data.label}
+      <Handle type="source" position={Position.Right} />
+    </>
+  );
+}
+
 function PriceTotalNode({ data }: NodeProps<Node<{ label: ReactNode }>>) {
   return <>{data.label}</>;
 }
@@ -559,7 +572,7 @@ function toFlowElements(graph?: BuildGraphResolveResponse | null): { nodes: Node
     };
     return {
       id: flowNodeId,
-      type: isPriceNode ? 'priceTotal' : undefined,
+      type: isPriceNode ? 'priceTotal' : 'graphCard',
       position: basePosition,
       ...(isPriceNode ? {} : {
         sourcePosition: Position.Right,
@@ -629,11 +642,13 @@ function withDisplayTotalPrice(
 function nodeLabel(node: BuildGraphResolveResponse['nodes'][number]) {
   const priceLabel = nodePriceLabel(node);
   return (
-    <div className="buildgraph-node-card buildgraph-node-circle">
-      <div className="buildgraph-node-category-label">{nodeCategoryLabel(node)}</div>
+    <div className="buildgraph-node-card buildgraph-node-card-main" title={node.label}>
+      <div className="buildgraph-node-card-main-header">
+        <div className="buildgraph-node-category-label">{nodeCategoryLabel(node)}</div>
+        <div className={`buildgraph-node-status-label ${statusBadgeTone(node.status)}`}>{statusLabel(node.status)}</div>
+      </div>
       <div className="buildgraph-node-main-label">{node.label}</div>
       {priceLabel ? <div className="buildgraph-node-price-label">{priceLabel}</div> : null}
-      <div className={`buildgraph-node-status-label ${statusBadgeTone(node.status)}`}>{statusLabel(node.status)}</div>
     </div>
   );
 }
@@ -657,17 +672,16 @@ function nodeCategoryLabel(node: BuildGraphResolveResponse['nodes'][number]) {
 
 function nodeStyle(node: BuildGraphResolveResponse['nodes'][number]) {
   const status = node.status;
-  const diameter = nodeDiameter(node);
+  const size = nodeSize(node);
   const base = {
-    borderRadius: '50%',
-    borderWidth: status === 'WARN' ? 4 : 3,
+    borderRadius: 10,
+    borderWidth: status === 'PASS' ? 1 : 2,
     borderStyle: 'solid',
     padding: 0,
-    width: diameter,
-    height: diameter,
-    minWidth: diameter,
-    minHeight: diameter,
-    aspectRatio: '1 / 1',
+    width: size.width,
+    height: size.height,
+    minWidth: size.width,
+    minHeight: size.height,
     boxShadow: status === 'WARN'
       ? '0 14px 30px rgba(245, 158, 11, 0.14)'
       : '0 14px 30px rgba(15, 23, 42, 0.08)'
@@ -690,13 +704,12 @@ function nodeStyle(node: BuildGraphResolveResponse['nodes'][number]) {
   };
 }
 
-function nodeDiameter(node: BuildGraphResolveResponse['nodes'][number]) {
+function nodeSize(node: BuildGraphResolveResponse['nodes'][number]) {
   const category = String(node.category ?? node.id).toUpperCase();
-  if (category === 'MOTHERBOARD') return 136;
-  if (category === 'PRICE') return 126;
-  if (category === 'CASE') return 124;
-  if (String(node.label).length >= 8) return 118;
-  return DEFAULT_NODE_DIAMETER;
+  if (category === 'PRICE') return PRICE_NODE_SIZE;
+  if (category === 'MOTHERBOARD' || category === 'CASE') return WIDE_NODE_SIZE;
+  if (String(node.label).length >= 16) return WIDE_NODE_SIZE;
+  return DEFAULT_NODE_SIZE;
 }
 
 function SelectedNodePanel({ node }: { node: BuildGraphNode }) {

@@ -2114,7 +2114,7 @@ test('keeps self quote shopping workspace usable on mobile width', async ({ page
   expect(hasBodyOverflow).toBe(false);
 });
 
-test('renders quote dependency graph with circular nodes in the reference layout', async ({ page }) => {
+test('renders quote dependency graph with card nodes in the reference layout', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
   });
@@ -2145,18 +2145,20 @@ test('renders quote dependency graph with circular nodes in the reference layout
   await page.goto('/self-quote');
 
   const graphCanvas = page.getByTestId('graph-flow-canvas');
-  await expect(graphCanvas.getByText('소켓 일치')).toBeVisible();
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: 'CPU' }).first()).toBeVisible();
 
   const nodeBox = async (label: string, categoryLabel: string) => {
     const node = graphCanvas.locator('.react-flow__node').filter({ hasText: label }).first();
     await expect(node).toHaveClass(/buildgraph-flow-node/);
-    await expect(node).toHaveCSS('border-radius', '50%');
+    await expect(node).not.toHaveClass(/react-flow__node-default/);
+    await expect(node).toHaveCSS('border-radius', '10px');
+    await expect(node.locator('.buildgraph-node-card-main')).toBeVisible();
     await expect(node.locator('.buildgraph-node-category-label')).toHaveText(categoryLabel);
     await expect(node.locator('.buildgraph-node-main-label')).toContainText(label);
     await expect(node.locator('.buildgraph-node-status-label')).toHaveText(/호환됨|간섭 주의|장착 불가/);
     const box = await node.boundingBox();
     expect(box).not.toBeNull();
-    expect(Math.abs((box?.width ?? 0) - (box?.height ?? 0))).toBeLessThanOrEqual(2);
+    expect(box?.width).toBeGreaterThan((box?.height ?? 0) + 40);
     return box!;
   };
   const center = (box: { x: number; y: number; width: number; height: number }) => ({

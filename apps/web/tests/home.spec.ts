@@ -689,13 +689,15 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   expect(graphPaneBox?.height).toBeGreaterThanOrEqual(520);
   const gpuGraphNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first();
   await expect(gpuGraphNode).toHaveClass(/buildgraph-flow-node/);
-  await expect(gpuGraphNode).toHaveCSS('border-radius', '50%');
+  await expect(gpuGraphNode).not.toHaveClass(/react-flow__node-default/);
+  await expect(gpuGraphNode).toHaveCSS('border-radius', '10px');
+  await expect(gpuGraphNode.locator('.buildgraph-node-card-main')).toBeVisible();
   await expect(gpuGraphNode.locator('.buildgraph-node-category-label')).toHaveText('GPU');
   await expect(gpuGraphNode.locator('.buildgraph-node-main-label')).toContainText('RTX 5070');
   await expect(gpuGraphNode.locator('.buildgraph-node-status-label')).toHaveText('호환됨');
   const gpuGraphNodeBox = await gpuGraphNode.boundingBox();
   expect(gpuGraphNodeBox).not.toBeNull();
-  expect(Math.abs((gpuGraphNodeBox?.width ?? 0) - (gpuGraphNodeBox?.height ?? 0))).toBeLessThanOrEqual(2);
+  expect(gpuGraphNodeBox?.width).toBeGreaterThan((gpuGraphNodeBox?.height ?? 0) + 40);
   await expect(gpuGraphNode.locator('.buildgraph-node-status-orb')).toHaveCount(0);
   const graphEdgePath = graphCanvas.locator('.react-flow__edge.buildgraph-flow-edge .react-flow__edge-path').first();
   await expect(graphEdgePath).toHaveCSS('stroke-linecap', 'round');
