@@ -349,7 +349,7 @@ export function SupportNewPage() {
     }
     if (!selectedFile) {
       setSubmitState('validation_error');
-      setError('선택한 IncidentWindow 구간의 PC Agent 로그 파일을 선택해 주세요. .jsonl 또는 .ndjson 파일을 사용할 수 있습니다.');
+      setError('선택한 문제 발생 전후 로그 구간의 PC Agent 로그 파일을 선택해 주세요. .jsonl 또는 .ndjson 파일을 사용할 수 있습니다.');
       return;
     }
     if (!consentAccepted) {
@@ -391,7 +391,7 @@ export function SupportNewPage() {
       detail,
       '',
       `[증상 유형] ${symptomLabel(symptomType)}`,
-      `[IncidentWindow] ${windowStartedAt} ~ ${windowEndedAt}`,
+      `[문제 발생 전후 로그] ${windowStartedAt} ~ ${windowEndedAt}`,
       `[지원 신청] ${supportRequestLabel(supportRequestKind)}`
     ].join('\n');
     try {
@@ -407,7 +407,7 @@ export function SupportNewPage() {
 
   return (
     <Screen>
-      <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <form onSubmit={submit} className="grid gap-5">
         <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
             <div>
@@ -460,7 +460,7 @@ export function SupportNewPage() {
             </div>
             <div className="rounded border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-bold text-slate-800">IncidentWindow 확인</p>
+                <p className="text-sm font-bold text-slate-800">문제 발생 전후 로그</p>
                 <button
                   type="button"
                   className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-bold"
@@ -558,15 +558,6 @@ export function SupportNewPage() {
               {isUploading ? '로그 업로드 및 티켓 생성 중...' : 'AS 접수하기'}
             </button>
           </div>
-        </Panel>
-        <Panel title="접수 상태">
-          {submitState === 'default' ? <StateMessage type="info" title="접수 준비" body="증상 유형, 발생 시각, 선택 구간 로그를 함께 제출하면 AS 접수가 시작됩니다." /> : null}
-          {submitState === 'validation_error' ? <StateMessage type="warn" title="입력 확인 필요" body={error || '증상과 로그 파일 입력값을 확인해 주세요.'} /> : null}
-          {submitState === 'consent_required' ? <StateMessage type="warn" title="동의 필요" body="PC Agent 로그에는 사용 환경 정보가 포함될 수 있어 업로드 동의가 필요합니다." /> : null}
-          {submitState === 'uploading' ? <StateMessage type="info" title="접수 중" body="로그를 업로드한 뒤 AS 티켓을 생성하고 있습니다." /> : null}
-          {submitState === 'upload_error' ? <StateMessage type="warn" title="로그 업로드 실패" body={error || '로그 파일과 백엔드 실행 상태를 확인해 주세요.'} /> : null}
-          {submitState === 'ticket_error' ? <StateMessage type="warn" title="티켓 생성 실패" body={error || 'AS 티켓을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.'} /> : null}
-          {submitState === 'ticket_created' ? <StateMessage type="success" title="접수 완료" body="사용자 티켓 상세 화면에서 상태를 확인할 수 있습니다." /> : null}
         </Panel>
       </form>
     </Screen>
