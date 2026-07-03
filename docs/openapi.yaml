@@ -350,6 +350,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationModelVersionsResponse"
+  /api/admin/build-graph-layouts/default:
+    get:
+      summary: 기본 견적 관계도 배치 조회
+      description: 관리자 화면에서 고정한 category 기준 견적 관계도 좌표를 조회한다. 저장값이 없으면 기본 좌표를 반환한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
+    put:
+      summary: 기본 견적 관계도 배치 저장
+      description: 관리자 화면에서 드래그로 조정한 category 기준 견적 관계도 좌표를 저장한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildGraphLayoutSaveRequest"
+      responses:
+        "200":
+          description: 저장된 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
+        "400":
+          description: 좌표 request validation 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: 기본 견적 관계도 배치 초기화
+      description: 저장된 견적 관계도 배치를 삭제하고 기본 좌표로 되돌린다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 초기화된 기본 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
   /api/build-graphs/resolve:
     post:
       summary: Build 관계 그래프 계산
@@ -2870,6 +2919,54 @@ components:
         price:
           type: integer
           nullable: true
+        position:
+          $ref: "#/components/schemas/BuildGraphLayoutPositionDto"
+          nullable: true
+    BuildGraphLayoutSaveRequest:
+      type: object
+      required: [positions]
+      properties:
+        positions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/BuildGraphLayoutPositionDto"
+          example:
+            CPU:
+              x: 20
+              y: 170
+            GPU:
+              x: 300
+              y: 270
+    BuildGraphLayoutDto:
+      type: object
+      required: [layoutKey, source, positions]
+      properties:
+        layoutKey:
+          type: string
+          example: DEFAULT
+        source:
+          type: string
+          enum: [DEFAULT, SAVED]
+        positions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/BuildGraphLayoutPositionDto"
+        updatedAt:
+          type: string
+          nullable: true
+          example: "2026-07-03T00:00:00Z"
+    BuildGraphLayoutPositionDto:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: integer
+          minimum: 0
+          maximum: 2400
+        y:
+          type: integer
+          minimum: 0
+          maximum: 2400
     BuildGraphEdgeDto:
       type: object
       required: [id, source, target, type, status, label, summary]

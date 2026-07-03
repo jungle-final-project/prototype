@@ -19,6 +19,7 @@ import com.buildgraph.prototype.admin.AdminQueryService;
 import com.buildgraph.prototype.agent.AgentQueryService;
 import com.buildgraph.prototype.agent.PcAgentAsService;
 import com.buildgraph.prototype.agent.PcAgentController;
+import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
 import com.buildgraph.prototype.ticket.TicketController;
@@ -91,6 +92,9 @@ class PcAgentControllerSecurityTest {
 
     @MockitoBean
     private PriceQueryService priceQueryService;
+
+    @MockitoBean
+    private BuildGraphLayoutService buildGraphLayoutService;
 
     @Test
     void registerAllowsBootstrapWithoutAgentBearerToken() throws Exception {

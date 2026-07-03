@@ -24,11 +24,18 @@ public class BuildGraphService {
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
     private final CurrentUserService currentUserService;
+    private final BuildGraphLayoutService buildGraphLayoutService;
 
-    public BuildGraphService(JdbcTemplate jdbcTemplate, ToolCheckService toolCheckService, CurrentUserService currentUserService) {
+    public BuildGraphService(
+            JdbcTemplate jdbcTemplate,
+            ToolCheckService toolCheckService,
+            CurrentUserService currentUserService,
+            BuildGraphLayoutService buildGraphLayoutService
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.toolCheckService = toolCheckService;
         this.currentUserService = currentUserService;
+        this.buildGraphLayoutService = buildGraphLayoutService;
     }
 
     public Map<String, Object> resolve(String authorization, Map<String, Object> request) {
@@ -46,15 +53,40 @@ public class BuildGraphService {
         int budget = firstNumber(body.get("budgetWon"), total);
         List<Map<String, Object>> toolResults = parts.isEmpty() ? List.of() : toolCheckService.checkBuild(parts, budget);
         GraphDraft draft = buildGraph(parts, toolResults, mode, view, focus, budget, total);
+        List<Map<String, Object>> nodes = withLayoutPositions(draft.nodes(), buildGraphLayoutService.resolvePositions());
         return MockData.map(
                 "mode", mode,
                 "summary", draft.summary(),
-                "nodes", draft.nodes(),
+                "nodes", nodes,
                 "edges", draft.edges(),
                 "focusNodeIds", draft.focusNodeIds(),
                 "insights", draft.insights(),
                 "toolResults", toolResults
         );
+    }
+
+    private static List<Map<String, Object>> withLayoutPositions(
+            List<Map<String, Object>> nodes,
+            Map<String, BuildGraphLayoutService.GraphPosition> positions
+    ) {
+        if (positions == null || positions.isEmpty()) {
+            return nodes;
+        }
+        return nodes.stream()
+                .map(node -> {
+                    String category = normalizeCategory(text(node.get("category")));
+                    if (category == null) {
+                        return node;
+                    }
+                    BuildGraphLayoutService.GraphPosition position = positions.get(category);
+                    if (position == null) {
+                        return node;
+                    }
+                    Map<String, Object> withPosition = new LinkedHashMap<>(node);
+                    withPosition.put("position", position.toMap());
+                    return withPosition;
+                })
+                .toList();
     }
 
     private List<ToolBuildPart> aiBuildParts(Map<String, Object> body) {

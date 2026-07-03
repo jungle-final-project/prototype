@@ -1,14 +1,19 @@
 package com.buildgraph.prototype.admin;
 
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.buildgraph.prototype.agent.AgentQueryService;
+import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
@@ -59,6 +64,9 @@ class AdminControllerTest {
 
     @MockitoBean
     private PriceQueryService priceQueryService;
+
+    @MockitoBean
+    private BuildGraphLayoutService buildGraphLayoutService;
 
     @MockitoBean
     private CurrentUserService currentUserService;
@@ -113,6 +121,79 @@ class AdminControllerTest {
                 .andExpect(jsonPath("$.generatedAt").value("2026-06-29T10:50:00Z"));
 
         verify(adminQueryService).dashboard();
+    }
+
+    @Test
+    void buildGraphLayoutReturnsSavedDefaultLayoutForAdminToken() throws Exception {
+        when(buildGraphLayoutService.getDefaultLayout()).thenReturn(Map.of(
+                "layoutKey", "DEFAULT",
+                "source", "SAVED",
+                "positions", Map.of(
+                        "CPU", Map.of("x", 120, "y", 180),
+                        "GPU", Map.of("x", 460, "y", 320)
+                ),
+                "updatedAt", "2026-07-03T00:00:00Z"
+        ));
+
+        mockMvc.perform(get("/api/admin/build-graph-layouts/default")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.layoutKey").value("DEFAULT"))
+                .andExpect(jsonPath("$.source").value("SAVED"))
+                .andExpect(jsonPath("$.positions.CPU.x").value(120))
+                .andExpect(jsonPath("$.positions.GPU.y").value(320));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(buildGraphLayoutService).getDefaultLayout();
+    }
+
+    @Test
+    void buildGraphLayoutSavesDefaultLayoutForAdminToken() throws Exception {
+        when(buildGraphLayoutService.saveDefaultLayout(anyMap(), eq(ADMIN))).thenReturn(Map.of(
+                "layoutKey", "DEFAULT",
+                "source", "SAVED",
+                "positions", Map.of(
+                        "CPU", Map.of("x", 140, "y", 190),
+                        "GPU", Map.of("x", 520, "y", 340)
+                )
+        ));
+
+        mockMvc.perform(put("/api/admin/build-graph-layouts/default")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "positions": {
+                                    "CPU": { "x": 140, "y": 190 },
+                                    "GPU": { "x": 520, "y": 340 }
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("SAVED"))
+                .andExpect(jsonPath("$.positions.CPU.x").value(140))
+                .andExpect(jsonPath("$.positions.GPU.y").value(340));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(buildGraphLayoutService).saveDefaultLayout(anyMap(), eq(ADMIN));
+    }
+
+    @Test
+    void buildGraphLayoutResetDeletesSavedLayoutForAdminToken() throws Exception {
+        when(buildGraphLayoutService.resetDefaultLayout(ADMIN)).thenReturn(Map.of(
+                "layoutKey", "DEFAULT",
+                "source", "DEFAULT",
+                "positions", Map.of("CPU", Map.of("x", 20, "y", 170))
+        ));
+
+        mockMvc.perform(delete("/api/admin/build-graph-layouts/default")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("DEFAULT"))
+                .andExpect(jsonPath("$.positions.CPU.x").value(20));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(buildGraphLayoutService).resetDefaultLayout(ADMIN);
     }
 
     @Test

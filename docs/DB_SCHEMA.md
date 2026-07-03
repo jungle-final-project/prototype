@@ -35,6 +35,7 @@
 - `requirements`
 - `builds`
 - `parts`
+- `build_graph_layouts`
 - `price_jobs`
 - `agent_sessions`
 - `tool_invocations`
@@ -345,6 +346,36 @@ MVP 기준 결정값:
 - `POST /api/builds/{id}/change-part`는 같은 transaction 안에서 기존 category row를 물리 삭제한 뒤 새 `build_items` row를 insert한다. 내부 `build_items.id`는 public API에 노출하지 않으므로 교체 후 바뀌어도 된다.
 - 교체 이력 테이블은 V1에서 만들지 않는다. 교체 전후 diff는 API 응답으로만 반환한다.
 - category 값은 `parts.category`와 동일한 대문자 식별자를 사용한다. 예: `CPU`, `GPU`, `RAM`, `MOTHERBOARD`, `STORAGE`, `PSU`, `CASE`, `COOLER`.
+
+### build_graph_layouts
+
+목적: 관리자 화면에서 고정한 견적 관계도 category 기준 노드 배치를 저장한다.
+
+Owner: 1번, 관리자 shell 협업 5번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `layout_key` | `VARCHAR(50)` | no | - | 배치 키. v1은 `DEFAULT` 1개 |
+| `positions_json` | `JSONB` | no | - | `{ "CPU": { "x": 20, "y": 170 } }` 형태 category 좌표 |
+| `created_by` | `BIGINT` | yes | `users.id` | 최초 저장 관리자 |
+| `updated_by` | `BIGINT` | yes | `users.id` | 마지막 수정 관리자 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | no | - | 수정 시각 |
+
+Index:
+
+- unique: `build_graph_layouts.public_id`
+- unique: `build_graph_layouts.layout_key`
+- index: `build_graph_layouts.layout_key`
+
+MVP 기준 결정값:
+
+- 저장 기준은 node id가 아니라 `category` 키다. 예: `CPU`, `MOTHERBOARD`, `RAM`, `GPU`, `STORAGE`, `PSU`, `CASE`, `COOLER`, `PRICE`.
+- 사용자/홈 관계도 API는 `build_graph_layouts.layout_key = 'DEFAULT'` 좌표를 `nodes[].position`으로 내려준다.
+- 저장된 좌표가 없는 category는 서버 기본 좌표로 보정한다.
+- 프론트는 같은 category 노드가 여러 개면 저장 좌표를 기준점으로 삼고 겹침 방지 오프셋을 적용할 수 있다.
 
 ### quote_drafts
 
