@@ -67,7 +67,7 @@ function build(tier: AiTier, budgetWon: number, appliedPartCategories: PartCateg
     toolResults: [
       { tool: 'price', status: 'PASS', confidence: 'HIGH', summary: '저장된 현재가 기준 예산 안에 들어옵니다.' }
     ],
-    warnings: [],
+    warnings: [] as string[],
     confidence: 'HIGH'
   };
 }
@@ -1675,7 +1675,15 @@ test('keeps recommendation cards full width while the detail drawer overlays on 
 
 test('shows a read-only build graph preview on recommendation card hover and reuses cached graph data', async ({ page }) => {
   const buildGraphRequests = await mockBuildGraphApi(page);
-  const latestBuilds = budgetBuilds(2_000_000);
+  const latestBuilds = budgetBuilds(2_000_000).map((candidate, index) => index === 0
+    ? {
+      ...candidate,
+      warnings: [
+        '성능 또는 작업 적합도 여유가 낮아 상위 부품을 검토해야 합니다.',
+        '저장된 현재가 기준 예산을 초과합니다.'
+      ]
+    }
+    : candidate);
   await openHomeAsUser(page);
   await page.evaluate(({ session }) => {
     sessionStorage.setItem('buildgraph.ai.assistantSession:user-1004', JSON.stringify(session));
@@ -1687,16 +1695,26 @@ test('shows a read-only build graph preview on recommendation card hover and reu
   const preview = page.getByTestId('latest-build-graph-preview');
   await expect(preview).toBeVisible();
   await expect(preview.getByRole('heading', { name: '견적 관계도' })).toBeVisible();
-  await expect(preview.getByText('총액')).toHaveCount(0);
+  await expect(preview).toContainText(latestBuilds[0].title);
+  await expect(preview).toContainText(`${latestBuilds[0].totalPrice.toLocaleString()}원`);
+  await expect(preview).toContainText('부품 8개');
+  await expect(preview).toContainText('경고 2건');
+  await expect(preview).toContainText('주의 필요 2건');
   await expect(preview.getByText('Tool 검증 요약')).toHaveCount(0);
+  await expect(preview.getByText('추천 저장 전 상세 drawer에서 Tool 검증 결과를 확인하세요.')).toHaveCount(0);
+  await expect(preview.locator('.react-flow__node').filter({ hasText: 'GPU' }).filter({ hasText: '호환됨' })).toBeVisible();
+  await expect(preview.locator('.react-flow__node').filter({ hasText: '파워' }).filter({ hasText: '주의' })).toBeVisible();
   await expect(preview.locator('.react-flow__node').filter({ hasText: 'RTX 5070' })).toBeVisible();
+  await expect(preview.locator('.react-flow__node').filter({ hasText: '총액' })).toHaveCount(0);
   const cardBox = await firstCard.boundingBox();
   const previewBox = await preview.boundingBox();
   expect(cardBox).not.toBeNull();
   expect(previewBox).not.toBeNull();
   expect(previewBox?.x).toBeGreaterThan((cardBox?.x ?? 0) + (cardBox?.width ?? 0));
-  expect(previewBox?.width).toBeLessThan(460);
-  expect(previewBox?.height).toBeLessThan(380);
+  expect(previewBox?.width).toBeGreaterThan(700);
+  expect(previewBox?.width).toBeLessThan(800);
+  expect(previewBox?.height).toBeGreaterThan(520);
+  expect(previewBox?.height).toBeLessThan(600);
   await expect.poll(() => buildGraphRequests.length).toBe(1);
   expect(buildGraphRequests[0]).toMatchObject({
     source: 'AI_BUILD',

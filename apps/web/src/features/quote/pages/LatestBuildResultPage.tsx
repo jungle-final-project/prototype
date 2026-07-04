@@ -49,20 +49,20 @@ type GraphPreviewAnchor = {
 
 const compactGraphNodeTypes = { compactGraphNode: CompactGraphNode };
 const COMPACT_GRAPH_STALE_TIME_MS = 5 * 60 * 1000;
-const GRAPH_PREVIEW_PANEL_WIDTH = 420;
-const GRAPH_PREVIEW_PANEL_HEIGHT = 330;
+const GRAPH_PREVIEW_PANEL_WIDTH = 760;
+const GRAPH_PREVIEW_PANEL_HEIGHT = 540;
 const GRAPH_PREVIEW_GAP = 12;
 const GRAPH_PREVIEW_MARGIN = 16;
 const compactCategoryPositions: Record<string, { x: number; y: number }> = {
-  CPU: { x: 0, y: 122 },
-  MOTHERBOARD: { x: 210, y: 24 },
-  RAM: { x: 430, y: 32 },
-  GPU: { x: 210, y: 158 },
-  PSU: { x: 430, y: 150 },
-  CASE: { x: 430, y: 264 },
-  COOLER: { x: 210, y: 288 },
-  STORAGE: { x: 0, y: 292 },
-  PRICE: { x: 0, y: 392 }
+  CPU: { x: 0, y: 120 },
+  MOTHERBOARD: { x: 230, y: 18 },
+  RAM: { x: 480, y: 20 },
+  GPU: { x: 230, y: 154 },
+  PSU: { x: 480, y: 150 },
+  CASE: { x: 480, y: 278 },
+  COOLER: { x: 230, y: 296 },
+  STORAGE: { x: 0, y: 296 },
+  PRICE: { x: 0, y: 420 }
 };
 
 export function LatestBuildResultPage() {
@@ -624,6 +624,9 @@ function BuildGraphPreviewPanel({
   onMouseLeave: () => void;
 }) {
   const graphQuery = useRecommendationBuildGraph(build);
+  const issueCount = graphPreviewIssueCount(build);
+  const statusTone: BuildGraphStatus = issueCount > 0 ? 'WARN' : 'PASS';
+  const statusText = issueCount > 0 ? `주의 필요 ${issueCount}건` : '주요 관계 확인됨';
 
   return (
     <aside
@@ -631,7 +634,7 @@ function BuildGraphPreviewPanel({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       style={{ left: anchor.left, top: anchor.top, width: anchor.width }}
-      className="pointer-events-none fixed z-[70] hidden rounded-lg border border-commerce-line bg-white p-2 shadow-2xl md:block"
+      className="pointer-events-none fixed z-[70] hidden h-[540px] overflow-hidden rounded-lg border border-commerce-line bg-white shadow-2xl md:block"
     >
       <div
         aria-hidden="true"
@@ -641,21 +644,50 @@ function BuildGraphPreviewPanel({
             : '-right-1.5 border-r border-t'
         }`}
       />
-      <div className="flex items-center justify-between gap-3 px-2 pb-2">
-        <h2 className="text-sm font-black text-commerce-ink">견적 관계도</h2>
-        <span className="rounded-full bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">{build.tierLabel}</span>
+      <div className="border-b border-commerce-line bg-white px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-black text-brand-blue">{build.tierLabel}</div>
+            <h2 className="mt-1 truncate text-sm font-black text-commerce-ink" title={build.title}>견적 관계도 · {build.title}</h2>
+          </div>
+          <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-black ${graphPreviewStatusClasses(statusTone)}`}>
+            {statusText}
+          </span>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-black">
+          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-brand-blue">총액 {build.totalPrice.toLocaleString()}원</span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">부품 {build.items.length}개</span>
+          <span className={`rounded-full px-2.5 py-1 ${issueCount > 0 ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
+            경고 {issueCount}건
+          </span>
+        </div>
       </div>
-      <div className="overflow-hidden rounded-md border border-slate-100">
+      <div className="mx-4 mt-3 overflow-hidden rounded-md border border-slate-100">
         <CompactBuildGraph
           graph={graphQuery.data}
           isLoading={graphQuery.isLoading}
           isError={graphQuery.isError}
-          heightClassName="h-[260px]"
+          heightClassName="h-[448px]"
           includePriceNode={false}
         />
       </div>
     </aside>
   );
+}
+
+function graphPreviewIssueCount(build: AiRecommendedBuild) {
+  return build.warnings?.length ?? 0;
+}
+
+function graphPreviewStatusClasses(status: BuildGraphStatus) {
+  switch (status) {
+    case 'FAIL':
+      return 'border-red-200 bg-red-50 text-red-700';
+    case 'WARN':
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    default:
+      return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+  }
 }
 
 function BuildGraphInlineSection({ build }: { build: AiRecommendedBuild }) {
@@ -724,7 +756,7 @@ function CompactBuildGraph({
         edges={flowElements.edges}
         nodeTypes={compactGraphNodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.18 }}
+        fitViewOptions={{ padding: 0.12 }}
         minZoom={0.18}
         maxZoom={1.1}
         zoomOnScroll={false}
@@ -745,11 +777,16 @@ function CompactGraphNode({ data }: NodeProps) {
   const nodeData = data as CompactGraphNodeData;
 
   return (
-    <div className={`relative flex h-16 w-36 flex-col justify-center rounded-lg border bg-white px-3 text-left shadow-sm ${compactNodeClasses(nodeData.status)}`}>
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-white !bg-blue-500" />
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-white !bg-blue-500" />
-      <div className="truncate text-[10px] font-black text-brand-blue">{nodeData.category ?? '부품'}</div>
-      <div className="mt-1 line-clamp-2 text-[11px] font-black leading-4 text-commerce-ink" title={nodeData.label}>
+    <div className={`relative flex h-[78px] w-44 flex-col justify-between rounded-lg border bg-white px-3 py-2 text-left shadow-sm ${compactNodeClasses(nodeData.status)}`}>
+      <Handle type="target" position={Position.Left} className="!h-1.5 !w-1.5 !border-white !bg-slate-300 !opacity-60" />
+      <Handle type="source" position={Position.Right} className="!h-1.5 !w-1.5 !border-white !bg-slate-300 !opacity-60" />
+      <div className="flex items-start justify-between gap-2">
+        <div className="truncate text-[10px] font-black text-brand-blue">{nodeData.category ?? '부품'}</div>
+        <div className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-black ${compactNodeStatusClasses(nodeData.status)}`}>
+          {compactStatusLabel(nodeData.status)}
+        </div>
+      </div>
+      <div className="line-clamp-2 text-[12px] font-black leading-4 text-commerce-ink" title={nodeData.label}>
         {nodeData.label}
       </div>
     </div>
@@ -852,12 +889,13 @@ function getGraphPreviewAnchor(rect: DOMRect): GraphPreviewAnchor {
   const preferredLeft = placement === 'right'
     ? rect.right + GRAPH_PREVIEW_GAP
     : rect.left - width - GRAPH_PREVIEW_GAP;
+  const preferredTop = rect.top - 48;
   const maxLeft = viewportWidth - width - GRAPH_PREVIEW_MARGIN;
   const maxTop = viewportHeight - GRAPH_PREVIEW_PANEL_HEIGHT - GRAPH_PREVIEW_MARGIN;
 
   return {
     left: clamp(preferredLeft, GRAPH_PREVIEW_MARGIN, Math.max(GRAPH_PREVIEW_MARGIN, maxLeft)),
-    top: clamp(rect.top, GRAPH_PREVIEW_MARGIN, Math.max(GRAPH_PREVIEW_MARGIN, maxTop)),
+    top: clamp(preferredTop, GRAPH_PREVIEW_MARGIN, Math.max(GRAPH_PREVIEW_MARGIN, maxTop)),
     width,
     placement
   };
@@ -894,12 +932,12 @@ function toCompactFlowElements(graph: BuildGraphResolveResponse, includePriceNod
           target: edge.target,
           type: 'smoothstep',
           label: edge.label,
-          style: { stroke: color, strokeWidth: 1.8 },
+          style: { stroke: color, strokeWidth: 2.4 },
           markerEnd: { type: MarkerType.ArrowClosed, color },
-          labelStyle: { fill: color, fontWeight: 800, fontSize: 10 },
-          labelBgPadding: [4, 2],
-          labelBgBorderRadius: 4,
-          labelBgStyle: { fill: '#ffffff', fillOpacity: 0.9 }
+          labelStyle: { fill: color, fontWeight: 900, fontSize: 11 },
+          labelBgPadding: [6, 3],
+          labelBgBorderRadius: 6,
+          labelBgStyle: { fill: '#ffffff', fillOpacity: 0.96 }
         } satisfies Edge;
       })
   };
@@ -918,11 +956,33 @@ function compactNodePosition(category: string | undefined, index: number) {
 function compactNodeClasses(status: BuildGraphStatus) {
   switch (status) {
     case 'FAIL':
-      return 'border-red-300 bg-red-50';
+      return 'border-red-300 bg-red-50 shadow-red-100';
     case 'WARN':
-      return 'border-amber-300 bg-amber-50';
+      return 'border-amber-300 bg-amber-50 shadow-amber-100';
     default:
-      return 'border-blue-100';
+      return 'border-blue-100 shadow-blue-50';
+  }
+}
+
+function compactNodeStatusClasses(status: BuildGraphStatus) {
+  switch (status) {
+    case 'FAIL':
+      return 'bg-red-100 text-red-700';
+    case 'WARN':
+      return 'bg-amber-100 text-amber-700';
+    default:
+      return 'bg-emerald-50 text-emerald-700';
+  }
+}
+
+function compactStatusLabel(status: BuildGraphStatus) {
+  switch (status) {
+    case 'FAIL':
+      return '불가';
+    case 'WARN':
+      return '주의';
+    default:
+      return '호환됨';
   }
 }
 
