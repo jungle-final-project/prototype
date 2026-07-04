@@ -164,11 +164,10 @@ public class BuildChatCacheService {
         fingerprint.put("currentQuoteDraft", quoteDraftFingerprint(body.get("currentQuoteDraft")));
         if (scope != CacheScope.RECOMMENDATION) {
             fingerprint.put("currentBuilds", currentBuildsFingerprint(body.get("currentBuilds")));
-            fingerprint.put("appliedPartPreferences", appliedPartPreferencesFingerprint(body.get("appliedPartPreferences")));
         }
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        return "buildgraph:build-chat:v19:" + sha256(json);
+        return "buildgraph:build-chat:v20:" + sha256(json);
     }
 
     private static CacheScope scopeFor(Map<String, Object> request) {
@@ -206,7 +205,7 @@ public class BuildChatCacheService {
         if (!objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()) {
             return false;
         }
-        if (!objectMaps(body.get("currentBuilds")).isEmpty() || !objectMaps(body.get("appliedPartPreferences")).isEmpty()) {
+        if (!objectMaps(body.get("currentBuilds")).isEmpty()) {
             return false;
         }
         if (containsAnyNormalized(
@@ -275,29 +274,6 @@ public class BuildChatCacheService {
                         .comparing((Map<String, Object> item) -> String.valueOf(item.get("category")))
                         .thenComparing(item -> String.valueOf(item.get("partId")))
                         .thenComparing(item -> String.valueOf(item.get("quantity"))))
-                .toList();
-    }
-
-    private Map<String, Object> appliedPartPreferencesFingerprint(Object value) {
-        List<Map<String, Object>> preferences = objectMaps(value).stream()
-                .map(preference -> {
-                    Map<String, Object> normalized = new LinkedHashMap<>();
-                    normalized.put("category", normalizeText(preference.get("category")));
-                    normalized.put("optionPartIds", optionPartIdsFingerprint(preference.get("options")));
-                    return normalized;
-                })
-                .sorted(Comparator
-                        .comparing((Map<String, Object> preference) -> String.valueOf(preference.get("category")))
-                        .thenComparing(preference -> String.valueOf(preference.get("optionPartIds"))))
-                .toList();
-        return Map.of("preferences", preferences);
-    }
-
-    private List<String> optionPartIdsFingerprint(Object value) {
-        return objectMaps(value).stream()
-                .map(option -> normalizeText(option.get("partId")))
-                .filter(partId -> partId != null)
-                .sorted()
                 .toList();
     }
 

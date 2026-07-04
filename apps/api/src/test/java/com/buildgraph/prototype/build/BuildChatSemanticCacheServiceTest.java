@@ -57,14 +57,14 @@ class BuildChatSemanticCacheServiceTest {
     }
 
     @Test
-    void semanticCacheSkipsMutationAndUnconfiguredEmbedding() {
+    void semanticCacheSkipsIneligibleDecisionAndUnconfiguredEmbedding() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         OpenAiEmbeddingClient embeddingClient = mock(OpenAiEmbeddingClient.class);
         when(embeddingClient.isConfigured()).thenReturn(false);
         BuildChatSemanticCacheService service = new BuildChatSemanticCacheService(jdbcTemplate, embeddingClient, null, true, 0.94, 600);
 
         assertThat(service.lookup(Map.of("message", "GPU 빼줘"), null,
-                new BuildChatIntentDecision(BuildChatIntent.MUTATE_DRAFT_REMOVE, "HIGH", "LOW", "GPU", null, "FAST_DRAFT_ACTION", "NONE", null, List.of()))).isEmpty();
+                new BuildChatIntentDecision(BuildChatIntent.UNSUPPORTED, "HIGH", "LOW", "GPU", null, "FAST_GUIDANCE", "NONE", null, List.of()))).isEmpty();
         assertThat(service.lookup(Map.of("message", "300만원 견적 추천해줘"), null,
                 decision(BuildChatIntent.BUILD_RECOMMEND, "BUILD_RECOMMEND|budget=TARGET:3000000"))).isEmpty();
         verifyNoInteractions(jdbcTemplate);

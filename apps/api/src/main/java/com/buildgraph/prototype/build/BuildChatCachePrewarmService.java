@@ -21,8 +21,7 @@ public class BuildChatCachePrewarmService {
             "300만원으로 게임용 PC 추천해줘",
             "200만원 QHD 게임용 PC 추천해줘",
             "AI 학습용 800만원 이하인데 소음 낮은 PC 추천해줘",
-            "맥스엘리트 파워 이슈 걱정되니 안정적인 파워 위주 PC 추천해줘",
-            "고성능 GPU 추천해줘"
+            "맥스엘리트 파워 이슈 걱정되니 안정적인 파워 위주 PC 추천해줘"
     );
 
     private final BuildChatService buildChatService;
