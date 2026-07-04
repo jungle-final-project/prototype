@@ -63,6 +63,7 @@ docker compose up --build
 | `BUILD_CHAT_SEMANTIC_CACHE_TTL_SECONDS` | 선택 | Build Chat semantic cache TTL | 기본값은 `600`초입니다. OpenAI embedding 또는 DB 오류 시 기존 LLM/RAG 흐름으로 우회합니다. |
 | `RECOMMENDATION_RERANKER_ENDPOINT` | 선택 | 홈 추천부품 XGBoost scorer | Docker 기본값은 `http://xgb-reranker:8091/score`입니다. 로컬 jar 단독 실행 시에는 `http://localhost:8091/score`로 바꿉니다. |
 | `RECOMMENDATION_RERANKER_MODEL_PATH` | 선택 | XGBoost scorer 모델 파일 | Docker에서는 `/models/<model-file>.json` 형식입니다. 비어 있으면 baseline scorer로 동작합니다. |
+| `RECOMMENDATION_RERANKER_MODEL_VOLUME` | 선택 | XGBoost scorer 모델 저장소 | Docker Compose 기본값은 named volume `recommendation-models`입니다. 로컬 파일을 직접 연결할 때만 공유 가능한 host 경로로 바꿉니다. |
 | `OPENAI_EMBEDDING_MODEL` | 선택 | RAG vector 검색 | 기본값은 `text-embedding-3-small`입니다. |
 | `OPENAI_EMBEDDING_DIMENSIONS` | 선택 | RAG vector 검색 | 기본값은 `1536`입니다. |
 | `RAG_VECTOR_ENABLED` | 선택 | RAG 검색 방식 | 기본값은 `true`입니다. 키/embedding이 없으면 keyword fallback을 사용합니다. |
@@ -325,10 +326,16 @@ python tools/export_recommendation_training_data.py --home-parts --output artifa
 python tools/train_xgb_reranker.py --input artifacts/recommendation/training-home-parts.csv --output-dir artifacts/recommendation/model --allow-small-dataset
 ```
 
-Docker scorer의 기본 active 모델 경로는 `/models/home-parts-active.json`입니다. 이 파일은 관리자 activate API가 scorer reload에 성공했을 때 갱신됩니다. 특정 모델 파일을 고정 테스트하려면 `.env`에 모델 경로를 넣고 scorer/API를 재기동합니다.
+Docker scorer의 기본 active 모델 경로는 `/models/home-parts-active.json`입니다. `/models`는 기본적으로 Docker named volume `recommendation-models`에 저장되므로 macOS Docker Desktop의 File Sharing 설정 없이 `docker compose up --build`가 동작합니다. 이 파일은 관리자 activate API가 scorer reload에 성공했을 때 갱신됩니다. 특정 모델 파일을 고정 테스트하려면 `.env`에 모델 경로를 넣고 scorer/API를 재기동합니다.
 
 ```env
 RECOMMENDATION_RERANKER_MODEL_PATH=/models/home-parts-active.json
+```
+
+CLI로 만든 `artifacts/recommendation/model` 파일을 Docker scorer에 직접 연결해야 할 때만 아래처럼 bind mount로 바꿉니다. macOS Docker Desktop에서는 이 host 경로가 File Sharing에 포함되어 있어야 합니다.
+
+```env
+RECOMMENDATION_RERANKER_MODEL_VOLUME=./artifacts/recommendation/model
 ```
 
 ```powershell

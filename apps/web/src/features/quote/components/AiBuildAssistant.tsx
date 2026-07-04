@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Cpu, PackageCheck, Send, ShoppingCart, Sparkles, X, Zap } from 'lucide-react';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib/api';
+import { AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT } from '../../../lib/events';
 import { applyAiBuildToQuoteDraft, deleteQuoteDraftItem, getCurrentQuoteDraft, patchQuoteDraftItem, putQuoteDraftItem } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -24,6 +25,7 @@ import {
   type AiDraftActionStatus,
   type AiPerformanceSimulation,
   type AiRecommendedBuild,
+  type AiToolResult,
   type BuildGraphFocus,
   type PartCategory
 } from '../aiSelection';
@@ -42,11 +44,16 @@ const COMMON_QUICK_PROMPTS = [
   { label: 'GPU 추천상담', prompt: '고성능 GPU 추천해줘' }
 ];
 
+const ASSISTANT_DESKTOP_QUERY = '(min-width: 768px)';
+
 export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  const [isDesktopAssistant, setIsDesktopAssistant] = useState(() => (
+    typeof window === 'undefined' ? true : window.matchMedia(ASSISTANT_DESKTOP_QUERY).matches
+  ));
   const [prompt, setPrompt] = useState('');
   const [session, setSession] = useState(() => readAssistantSession());
   const [isSending, setIsSending] = useState(false);
@@ -61,6 +68,36 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     queryFn: getCurrentQuoteDraft,
     enabled: surface === 'self-quote' && hasToken
   });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia(ASSISTANT_DESKTOP_QUERY);
+    const handleChange = () => setIsDesktopAssistant(mediaQuery.matches);
+    handleChange();
+    mediaQuery.addEventListener('change', handleChange);
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const openAssistant = () => setOpen(true);
+    const toggleAssistant = () => setOpen((current) => !current);
+    window.addEventListener(AI_BUILD_ASSISTANT_OPEN_EVENT, openAssistant);
+    window.addEventListener(AI_BUILD_ASSISTANT_TOGGLE_EVENT, toggleAssistant);
+    return () => {
+      window.removeEventListener(AI_BUILD_ASSISTANT_OPEN_EVENT, openAssistant);
+      window.removeEventListener(AI_BUILD_ASSISTANT_TOGGLE_EVENT, toggleAssistant);
+    };
+  }, []);
+
+  useEffect(() => {
+    const shouldReserveSpace = open && isDesktopAssistant;
+    document.documentElement.classList.toggle('ai-assistant-open', shouldReserveSpace);
+    return () => {
+      document.documentElement.classList.remove('ai-assistant-open');
+    };
+  }, [open, isDesktopAssistant]);
 
   useEffect(() => {
     const syncSession = () => {
@@ -379,6 +416,10 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     });
   }
 
+  if (!open && isDesktopAssistant) {
+    return null;
+  }
+
   if (!open) {
     return (
       <button
@@ -386,7 +427,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
         aria-label="AI 견적 챗봇 열기"
         data-testid="ai-chatbot-launcher"
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 right-5 z-50 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-900 bg-slate-950 text-white shadow-2xl transition hover:-translate-y-0.5 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-blue-200"
+        className="fixed bottom-5 right-5 z-50 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-900 bg-slate-950 text-white shadow-2xl transition hover:-translate-y-0.5 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-blue-200 md:hidden"
       >
         <span className="relative grid h-11 w-11 place-items-center rounded-xl bg-white text-slate-950">
           <Bot size={26} />
@@ -396,42 +437,47 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     );
   }
 
+  const panelClassName = isDesktopAssistant
+    ? 'fixed inset-y-0 right-0 z-50 flex h-dvh w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#f8fbff] shadow-2xl'
+    : 'fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-2xl border border-slate-200 bg-[#f8fbff] shadow-2xl';
+
   return (
     <section
       data-testid="ai-chatbot-panel"
-      className="fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-xl border border-slate-900 bg-white shadow-2xl sm:bottom-5 sm:right-4"
+      className={panelClassName}
     >
-      <div className="bg-slate-950 px-4 py-3 text-white">
+      <div className="border-b border-slate-200 bg-white px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white text-slate-950">
-              <Bot size={22} />
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-blue text-white shadow-sm">
+              <Sparkles size={20} />
             </div>
             <div className="min-w-0">
-              <h2 className="truncate text-sm font-black">BuildGraph AI 챗봇</h2>
-              <p className="truncate text-xs text-white/70">{surface === 'home' ? '예산/부품 DB 추천' : '셀프견적 보조 추천'}</p>
+              <h2 className="truncate text-sm font-black text-commerce-ink">AI 견적 어시스턴트</h2>
+              <p className="truncate text-xs font-bold text-slate-500">{surface === 'home' ? '내부 견적 자산 기준 · 호환성 자동 체크' : '현재 견적 기준 · 부품 교체 자동 적용'}</p>
             </div>
           </div>
           <button
             type="button"
             aria-label="AI 견적 챗봇 닫기"
             onClick={() => setOpen(false)}
-            className="grid h-9 w-9 place-items-center rounded-md border border-white/15 text-white/80 hover:bg-white/10 hover:text-white"
+            className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
           >
             <X size={17} />
           </button>
         </div>
       </div>
 
-      <div className="flex max-h-[78vh] flex-col">
-        <div className="border-b border-commerce-line bg-slate-50 px-4 py-3">
+      <div className={`${isDesktopAssistant ? 'min-h-0 flex-1' : 'max-h-[78vh]'} flex flex-col`}>
+        <div className="border-b border-slate-100 bg-[#f8fbff] px-4 py-3">
+          <div className="mb-2 text-[11px] font-black text-slate-400">이렇게 물어보세요</div>
           <div className="flex flex-wrap gap-2">
             {COMMON_QUICK_PROMPTS.map((example) => (
               <button
                 key={example.label}
                 type="button"
                 onClick={() => setPrompt(example.prompt)}
-                className="rounded-full border border-commerce-line bg-white px-3 py-1 text-[11px] font-black text-slate-600 hover:border-commerce-ink hover:text-commerce-ink"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
               >
                 {example.label}
               </button>
@@ -439,7 +485,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
           </div>
         </div>
 
-        <div data-testid="ai-chat-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        <div data-testid="ai-chat-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
           {session.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -450,14 +496,14 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
             />
           ))}
           {isSending ? (
-            <div className="rounded-xl border border-commerce-line bg-white px-3 py-2 text-sm font-bold text-slate-500">
+            <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-500 shadow-sm">
               서버 DB에서 추천 조합을 계산하는 중입니다.
             </div>
           ) : null}
           <div ref={messagesEndRef} />
         </div>
 
-        <form onSubmit={submitPrompt} className="border-t border-commerce-line bg-white p-3">
+        <form onSubmit={submitPrompt} className="border-t border-slate-200 bg-white p-3">
           {submitError ? (
             <div role="alert" className="mb-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
               {submitError}
@@ -477,21 +523,21 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
             </div>
           ) : null}
           <label className="sr-only" htmlFor="ai-build-chat-input">AI 챗봇에게 PC 사양 질문</label>
-          <div className="flex gap-2 rounded-lg border border-commerce-line bg-slate-50 p-2 focus-within:border-commerce-ink focus-within:ring-4 focus-within:ring-blue-100">
+          <div className="flex gap-2 rounded-full border border-slate-200 bg-slate-50 p-1.5 shadow-inner focus-within:border-brand-blue focus-within:ring-4 focus-within:ring-blue-100">
             <input
               id="ai-build-chat-input"
               aria-label="AI 챗봇에게 PC 사양 질문"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               disabled={isSending}
-              placeholder="예: 800만원 PC 추천, 9950X3D 상세페이지로 이동해"
-              className="min-w-0 flex-1 bg-transparent px-2 text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
+              placeholder="PC 견적을 물어보세요..."
+              className="min-w-0 flex-1 bg-transparent px-3 text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
             />
             <button
               type="submit"
               aria-label="질문 보내기"
               disabled={!prompt.trim() || isSending}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-commerce-ink text-white transition hover:bg-slate-700 disabled:bg-slate-300"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-blue text-white transition hover:bg-blue-700 disabled:bg-slate-300"
             >
               <Send size={17} />
             </button>
@@ -708,11 +754,13 @@ function ChatMessage({
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-full ${isUser ? 'w-fit max-w-[86%]' : 'w-full'}`}>
-        <div className={`rounded-xl px-3 py-2 text-sm leading-6 ${isUser ? 'bg-commerce-ink text-white' : 'border border-commerce-line bg-white text-slate-700'}`}>
+        <div className={`rounded-2xl px-3 py-2 text-sm leading-6 shadow-sm ${isUser ? 'bg-brand-blue text-white' : 'border border-slate-200 bg-white text-slate-700'}`}>
           {!isUser ? (
             <div className="mb-1 flex items-center gap-2 text-[11px] font-black text-brand-blue">
-              <Sparkles size={13} />
-              {message.simulation ? '성능 시뮬레이션' : 'BuildGraph Assistant'}
+              <span className="grid h-5 w-5 place-items-center rounded-full bg-blue-50 text-brand-blue">
+                <Sparkles size={12} />
+              </span>
+              {message.simulation ? '성능 시뮬레이션' : 'AI 견적 어시스턴트'}
             </div>
           ) : null}
           <p className="break-keep">{message.text}</p>
@@ -872,44 +920,82 @@ function CompactBuildCard({
   build: AiRecommendedBuild;
   onSelectBuild: (build: AiRecommendedBuild) => void;
 }) {
+  const primaryItems = build.items.slice(0, 5);
+
   return (
-    <article className="rounded-lg border border-commerce-line bg-slate-50 p-3">
+    <article className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-commerce-ink px-2 py-1 text-[11px] font-black text-white">{build.label}</span>
+        <span className="rounded-full bg-brand-blue px-2.5 py-1 text-[11px] font-black text-white">{build.label}</span>
         {build.appliedPartCategories.map((category) => (
-          <span key={category} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">
+          <span key={category} className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-emerald-700">
             {PART_CATEGORY_LABELS[category]} 반영됨
           </span>
         ))}
       </div>
-      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h3 className="text-sm font-black text-commerce-ink">{build.title}</h3>
+          <h3 className="text-sm font-black leading-5 text-commerce-ink">{build.title}</h3>
           <p className="mt-1 line-clamp-2 break-keep text-xs leading-5 text-slate-500">{build.summary}</p>
         </div>
         <div className="shrink-0 text-left sm:text-right">
-          <div className="text-base font-black text-commerce-sale">{build.totalPrice.toLocaleString()}원</div>
-          <div className="text-[11px] font-bold text-commerce-green">8개 부품</div>
+          <div className="text-base font-black text-brand-blue">{build.totalPrice.toLocaleString()}원</div>
+          <div className="text-[11px] font-bold text-slate-500">{build.items.length}개 부품</div>
         </div>
       </div>
-      <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-        {build.items.slice(0, 4).map((item) => (
-          <div key={item.partId} className="min-w-0 rounded-md bg-white px-2 py-1.5">
-            <span className="font-black text-slate-800">{PART_CATEGORY_LABELS[item.category]}</span>
-            <span className="ml-1 text-slate-500">{item.name}</span>
+      {build.toolResults?.length ? (
+        <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Tool 검증 결과">
+          {build.toolResults.map((result) => (
+            <span
+              key={`${result.tool}-${result.status}`}
+              title={result.summary}
+              className={`rounded-full border px-2 py-1 text-[11px] font-black ${toolStatusChipClass(result.status)}`}
+            >
+              {toolDisplayLabel(result.tool)} {toolStatusLabel(result.status)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-3 grid gap-1.5 text-xs">
+        {primaryItems.map((item) => (
+          <div key={item.partId} className="grid grid-cols-[56px_minmax(0,1fr)] gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
+            <span className="font-black text-brand-blue">{PART_CATEGORY_LABELS[item.category]}</span>
+            <span className="truncate font-semibold text-slate-700">{item.name}</span>
           </div>
         ))}
       </div>
       <button
         type="button"
         onClick={() => onSelectBuild(build)}
-        className="mt-3 flex w-full min-h-10 items-center justify-center gap-2 rounded-md bg-commerce-ink px-3 text-xs font-black text-white transition hover:bg-slate-700 focus:outline-none focus:ring-4 focus:ring-blue-100"
+        className="mt-3 flex w-full min-h-10 items-center justify-center gap-2 rounded-full border border-blue-200 bg-white px-3 text-xs font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-100"
       >
         <ShoppingCart size={15} />
         이 조합으로 셀프 견적 보기
       </button>
     </article>
   );
+}
+
+function toolDisplayLabel(tool: AiToolResult['tool']) {
+  const labels: Record<string, string> = {
+    compatibility: '호환성',
+    power: '전력',
+    size: '규격',
+    performance: '성능',
+    price: '가격'
+  };
+  return labels[tool] ?? tool;
+}
+
+function toolStatusLabel(status: AiToolResult['status']) {
+  if (status === 'PASS') return '호환';
+  if (status === 'WARN') return '간섭 주의';
+  return '안 맞음';
+}
+
+function toolStatusChipClass(status: AiToolResult['status']) {
+  if (status === 'PASS') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'WARN') return 'border-amber-200 bg-amber-50 text-amber-700';
+  return 'border-red-200 bg-red-50 text-red-700';
 }
 
 function formatPlainNumber(value?: number | null) {

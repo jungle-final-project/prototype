@@ -34,6 +34,22 @@ background:
   );
 }
 
+@media (min-width: 768px) {
+  .screen-shell {
+    transition: margin-right 180ms ease;
+  }
+
+  .ai-assistant-open .screen-shell {
+    margin-right: 420px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-shell {
+    transition: none;
+  }
+}
+
 .panel {
   border: 1px solid #e4e7ec;
   border-radius: 10px;
@@ -175,5 +191,13 @@ background:
   border: 0;
   background: transparent;
   opacity: 0;
+  pointer-events: none;
+}
+
+.compact-build-graph--card-link .react-flow,
+.compact-build-graph--card-link .react-flow__pane,
+.compact-build-graph--card-link .react-flow__renderer,
+.compact-build-graph--card-link .react-flow__viewport,
+.compact-build-graph--card-link .react-flow__node {
   pointer-events: none;
 }

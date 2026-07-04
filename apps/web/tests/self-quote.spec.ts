@@ -1289,7 +1289,7 @@ test('self quote chatbot sends current draft and automatically applies a remove 
 
   await page.goto('/self-quote');
   await expect(page.getByText('RTX 5070 챗봇 테스트')).toBeVisible();
-  await page.getByRole('button', { name: 'AI 견적 챗봇 열기' }).click();
+  await page.getByRole('button', { name: 'AI에게 물어보기' }).click();
   const chatbotPanel = page.getByTestId('ai-chatbot-panel');
   await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toBeVisible();
   await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toBeVisible();
