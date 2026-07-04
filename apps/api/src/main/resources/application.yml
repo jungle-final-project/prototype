@@ -127,6 +127,13 @@ ai:
       enabled: ${BUILD_CHAT_SEMANTIC_CACHE_ENABLED:true}
       threshold: ${BUILD_CHAT_SEMANTIC_CACHE_THRESHOLD:0.94}
       ttl-seconds: ${BUILD_CHAT_SEMANTIC_CACHE_TTL_SECONDS:600}
+    tier-snapshot:
+      enabled: ${BUILD_CHAT_TIER_SNAPSHOT_ENABLED:true}
+      min-budget-won: ${BUILD_CHAT_TIER_SNAPSHOT_MIN_BUDGET_WON:2000000}
+      max-budget-won: ${BUILD_CHAT_TIER_SNAPSHOT_MAX_BUDGET_WON:13000000}
+      step-won: ${BUILD_CHAT_TIER_SNAPSHOT_STEP_WON:1000000}
+      refresh-delay-ms: ${BUILD_CHAT_TIER_SNAPSHOT_REFRESH_DELAY_MS:3600000}
+      tolerance-pct: ${BUILD_CHAT_TIER_SNAPSHOT_TOLERANCE_PCT:15}
     fast:
       model: ${BUILD_CHAT_FAST_MODEL:gpt-5.5}
       reasoning-effort: ${BUILD_CHAT_FAST_REASONING_EFFORT:low}

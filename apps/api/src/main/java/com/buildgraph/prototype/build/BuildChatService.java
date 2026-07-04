@@ -25,6 +25,7 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
@@ -42,6 +43,11 @@ public class BuildChatService {
     private static final Pattern EXPLICIT_CPU_MODEL = Pattern.compile("(?i)\\b\\d{4,5}x3d\\b|\\b\\d{4,5}x\\b|\\bi[3579]-?\\d{4,5}\\b");
     private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
     private static final Pattern WATT_PATTERN = Pattern.compile("(\\d{3,4})\\s*w", Pattern.CASE_INSENSITIVE);
+    // 팀 정책: 벤치마크 수치는 보장이 아니라 참고용이며, 제공 범위(내부 DB 등록 조합)를 함께 고지한다
+    static final String SIMULATION_DISCLAIMER =
+            "본 수치는 내부 벤치마크 DB 기준 참고용 추정치이며, 내부 DB에 등록된 부품·게임·해상도 조합에 한해 제공됩니다. "
+                    + "실제 성능은 게임 버전, 그래픽 옵션, 드라이버, 해상도, 냉각·전원 환경에 따라 달라질 수 있습니다.";
+
     private static final List<Tier> TIERS = List.of(
             new Tier("budget", "가성비", "가성비형"),
             new Tier("balanced", "균형", "균형형"),
@@ -125,6 +131,16 @@ public class BuildChatService {
         this(jdbcTemplate, toolCheckService, aiChatEngine, buildChatCacheService, partReplacementRanker, candidateReranker, new PartRouteResolver(jdbcTemplate), new BuildChatIntentRouter(), BuildChatSemanticCacheService.disabled());
     }
 
+    private BuildChatTierSnapshotStore tierSnapshotStore;
+
+    @Value("${ai.build-chat.tier-snapshot.tolerance-pct:15}")
+    private double tierSnapshotTolerancePct = 15;
+
+    @Autowired(required = false)
+    public void setTierSnapshotStore(BuildChatTierSnapshotStore tierSnapshotStore) {
+        this.tierSnapshotStore = tierSnapshotStore;
+    }
+
     public Map<String, Object> chat(Map<String, Object> request) {
         return chat(request, (String) null);
     }
@@ -185,26 +201,58 @@ public class BuildChatService {
             logBuildChatPath("FAST_UNSUPPORTED", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
+        long stageStartNanos = System.nanoTime();
         var cachedResponse = buildChatCacheService.lookup(body, requestedAiProfile, userId);
+        long redisMs = elapsedMs(stageStartNanos);
         if (cachedResponse.isPresent()) {
             Map<String, Object> response = cachedResponse.get();
-            logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty());
+            logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
+                    "redisMs=" + redisMs);
             return response;
         }
+        if (tierSnapshotStore != null
+                && rawBudgetIntent.hasBudget()
+                && !rawBudgetIntent.explicitHardConstraint()
+                && objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()) {
+            stageStartNanos = System.nanoTime();
+            Optional<BuildChatTierSnapshotStore.TierSnapshot> tierSnapshot =
+                    tierSnapshotStore.bestFor(rawBudgetIntent.budget(), rawBudgetIntent.mode(), tierSnapshotTolerancePct);
+            long tierMs = elapsedMs(stageStartNanos);
+            if (tierSnapshot.isPresent()) {
+                BuildChatTierSnapshotStore.TierSnapshot snapshot = tierSnapshot.get();
+                Map<String, Object> response = fastResponse(
+                        "BUDGET",
+                        "내부 자산과 Tool 검증 기준으로 미리 계산한 추천 조합을 바로 가져왔습니다.",
+                        snapshot.builds(),
+                        snapshot.warnings()
+                );
+                buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+                logBuildChatPath("FAST_TIER_SNAPSHOT", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty(),
+                        "redisMs=" + redisMs + " tierMs=" + tierMs + " tierBudgetWon=" + snapshot.tierBudgetWon());
+                return response;
+            }
+        }
+        stageStartNanos = System.nanoTime();
         Optional<Map<String, Object>> deterministicResponse = deterministicFastResponse(body, message, rawBudgetIntent);
+        long deterministicMs = elapsedMs(stageStartNanos);
         if (deterministicResponse.isPresent()) {
             Map<String, Object> response = deterministicResponse.get();
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
             semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
-            logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback());
+            logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
+                    "redisMs=" + redisMs + " deterministicMs=" + deterministicMs);
             return response;
         }
+        stageStartNanos = System.nanoTime();
         var semanticCachedResponse = semanticCacheService.lookup(body, requestedAiProfile, intentDecision);
+        long semanticMs = elapsedMs(stageStartNanos);
         if (semanticCachedResponse.isPresent()) {
             Map<String, Object> response = semanticCachedResponse.get();
-            logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty());
+            logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
+                    "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return response;
         }
+        stageStartNanos = System.nanoTime();
         AiChatEngineResponse engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
                 message,
                 "HOME",
@@ -214,14 +262,46 @@ public class BuildChatService {
                 body,
                 userId
         ), requestedAiProfile);
+        long engineMs = elapsedMs(stageStartNanos);
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
         Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
         log.debug("Build Chat response generated: userId={}, requestedAiProfile={}, cacheStore=true", userId, requestedAiProfile);
         buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
         semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
-        logBuildChatPath("LLM_FULL", startedNanos, userId, requestedAiProfile, false, guardStats);
+        logBuildChatPath("LLM_FULL", startedNanos, userId, requestedAiProfile, false, guardStats,
+                "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs + " engineMs=" + engineMs);
         return response;
+    }
+
+    private static long elapsedMs(long startNanos) {
+        return Math.max(0, (System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    public record TierBuilds(List<Map<String, Object>> builds, List<String> warnings) {
+    }
+
+    // 예산 티어 스냅샷용 계산: 요청 경로의 budget fallback 탐색을 그대로 재사용한다 (MAX 모드 → 총액 ≤ 티어 보장)
+    public TierBuilds computeBudgetTierBuilds(int budgetWon) {
+        AiChatEngineResponse engineResponse = new AiChatEngineResponse(
+                "내부 자산과 Tool 검증 기준으로 바로 추천 조합을 구성했습니다.",
+                AiChatIntent.FULL_BUILD_RECOMMEND,
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(),
+                null
+        );
+        List<String> warnings = new ArrayList<>();
+        List<Map<String, Object>> builds = budgetFallbackBuilds(
+                engineResponse,
+                new BudgetIntent(budgetWon, "MAX", false),
+                warnings,
+                new BuildChatGuardStats()
+        );
+        return new TierBuilds(builds, warnings);
     }
 
     static Integer parseBudgetWon(String message) {
@@ -668,7 +748,7 @@ public class BuildChatService {
         result.put("fpsComparisons", fpsComparisons);
         result.put("specComparisons", specComparisons);
         result.put("warnings", distinct(simulationWarnings));
-        result.put("disclaimer", "실제 FPS는 게임 버전, 옵션, 드라이버, 냉각 상태에 따라 달라질 수 있습니다.");
+        result.put("disclaimer", SIMULATION_DISCLAIMER);
         return result;
     }
 
@@ -689,7 +769,7 @@ public class BuildChatService {
             return null;
         }
         return MockData.map(
-                "label", "벤치마크 기반 점수",
+                "label", "내부 벤치마크 정규화 점수 (참고용)",
                 "currentScore", current,
                 "targetScore", target,
                 "delta", current == null || target == null ? null : target - current
@@ -1412,10 +1492,22 @@ public class BuildChatService {
             boolean cacheHit,
             BuildChatGuardStats guardStats
     ) {
+        logBuildChatPath(pathType, startedNanos, userId, requestedAiProfile, cacheHit, guardStats, null);
+    }
+
+    private void logBuildChatPath(
+            String pathType,
+            long startedNanos,
+            Long userId,
+            String requestedAiProfile,
+            boolean cacheHit,
+            BuildChatGuardStats guardStats,
+            String stageSummary
+    ) {
         long latencyMs = Math.max(0, (System.nanoTime() - startedNanos) / 1_000_000);
         BuildChatGuardStats stats = guardStats == null ? BuildChatGuardStats.empty() : guardStats;
         log.info(
-                "Build Chat pathType={} latencyMs={} userId={} requestedAiProfile={} cacheHit={} budgetGuardDropped={} blockingFailDropped={} routeFallbackUsed={}",
+                "Build Chat pathType={} latencyMs={} userId={} requestedAiProfile={} cacheHit={} budgetGuardDropped={} blockingFailDropped={} routeFallbackUsed={} stages=[{}]",
                 pathType,
                 latencyMs,
                 userId,
@@ -1423,7 +1515,8 @@ public class BuildChatService {
                 cacheHit,
                 stats.budgetGuardDropped,
                 stats.blockingFailDropped,
-                stats.routeFallbackUsed
+                stats.routeFallbackUsed,
+                stageSummary == null ? "" : stageSummary
         );
     }
 

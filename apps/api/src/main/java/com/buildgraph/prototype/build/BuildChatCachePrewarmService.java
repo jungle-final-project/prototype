@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 public class BuildChatCachePrewarmService {
     private static final Logger log = LoggerFactory.getLogger(BuildChatCachePrewarmService.class);
     private static final List<String> PREWARM_PROMPTS = List.of(
+            "200만원으로 게이밍 PC 추천해줘",
             "800만원으로 최고급 PC 추천해줘",
             "800만원짜리 컴퓨터 추천해줘",
             "300만원대 게임용 PC 추천해줘",

@@ -383,7 +383,7 @@ async function mockAiBuildChatApi(page: Page) {
             },
             summary: 'RTX 5080에서 RTX 5090으로 바꿨을 때 확인 가능한 벤치마크입니다.',
             scoreComparison: {
-              label: '벤치마크 기반 점수',
+              label: '내부 벤치마크 정규화 점수 (참고용)',
               currentScore: 95,
               targetScore: 100,
               delta: 5
@@ -403,7 +403,7 @@ async function mockAiBuildChatApi(page: Page) {
               { label: 'VRAM', currentValue: '16GB', targetValue: '32GB', deltaText: '+16GB' }
             ],
             warnings: [],
-            disclaimer: '실제 FPS는 게임 버전, 옵션, 드라이버, 냉각 상태에 따라 달라질 수 있습니다.'
+            disclaimer: '본 수치는 내부 벤치마크 DB 기준 참고용 추정치이며, 내부 DB에 등록된 부품·게임·해상도 조합에 한해 제공됩니다. 실제 성능은 게임 버전, 그래픽 옵션, 드라이버, 해상도, 냉각·전원 환경에 따라 달라질 수 있습니다.'
           }
         })
       });
@@ -985,7 +985,8 @@ test('chatbot renders performance simulation as a benchmark card', async ({ page
   const messages = page.getByTestId('ai-chat-messages');
   await expect(messages).toContainText('성능 시뮬레이션');
   await expect(messages).toContainText('RTX 5080 → RTX 5090');
-  await expect(messages).toContainText('벤치마크 기반 점수');
+  await expect(messages).toContainText('내부 벤치마크 정규화 점수 (참고용)');
+  await expect(messages).toContainText('참고용 추정치');
   await expect(messages).toContainText("PlayerUnknown's Battlegrounds");
   await expect(messages).toContainText('223fps → 243fps');
   await expect(messages).toContainText('+20fps');

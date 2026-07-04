@@ -549,7 +549,8 @@ function SimulationResultCard({ simulation }: { simulation: AiPerformanceSimulat
         </div>
       ) : null}
       <p className="mt-3 break-keep text-[11px] font-bold leading-5 text-slate-500">
-        {simulation.disclaimer ?? '실제 FPS는 게임 버전, 옵션, 드라이버, 냉각 상태에 따라 달라질 수 있습니다.'}
+        {simulation.disclaimer
+          ?? '본 수치는 내부 벤치마크 DB 기준 참고용 추정치입니다. 실제 성능은 게임 버전, 그래픽 옵션, 드라이버, 해상도, 냉각·전원 환경에 따라 달라질 수 있습니다.'}
       </p>
     </section>
   );
