@@ -52,6 +52,62 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void buildChatServesTierSnapshotWithoutEngineWhenBudgetIsNearTier() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        BuildChatTierSnapshotStore store = new BuildChatTierSnapshotStore();
+        store.put(new BuildChatTierSnapshotStore.TierSnapshot(
+                4_000_000,
+                List.of(Map.of("id", "tier-build-400", "tier", "balanced")),
+                List.of("미리 계산된 조합"),
+                java.time.Instant.now()
+        ));
+        service.setTierSnapshotStore(store);
+
+        Map<String, Object> response = service.chat(Map.of("message", "437만원 PC 추천해줘"));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> builds = (List<Map<String, Object>>) response.get("builds");
+        assertThat(builds).extracting(build -> build.get("id")).containsExactly("tier-build-400");
+        assertThat(response.get("warnings")).asList().contains("미리 계산된 조합");
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatSkipsTierSnapshotForExplicitPartConstraintOrDraftContext() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        BuildChatTierSnapshotStore store = new BuildChatTierSnapshotStore();
+        store.put(new BuildChatTierSnapshotStore.TierSnapshot(
+                4_000_000,
+                List.of(Map.of("id", "tier-build-400", "tier", "balanced")),
+                List.of(),
+                java.time.Instant.now()
+        ));
+        service.setTierSnapshotStore(store);
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(buildResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+
+        // 명시적 부품 제약(5090)이 있으면 티어 즉시 응답을 쓰지 않는다
+        Map<String, Object> constrained = service.chat(Map.of("message", "437만원 RTX 5090 넣어서 PC 추천해줘"));
+        assertThat(constrained.get("builds")).asList()
+                .noneMatch(build -> "tier-build-400".equals(((Map<?, ?>) build).get("id")));
+
+        // 드래프트 문맥이 있으면 티어 즉시 응답을 쓰지 않는다
+        Map<String, Object> withDraft = service.chat(Map.of(
+                "message", "437만원 PC 추천해줘",
+                "currentQuoteDraft", Map.of("items", List.of(Map.of("partId", "gpu-1", "category", "GPU", "quantity", 1)))
+        ));
+        assertThat(withDraft.get("builds")).asList()
+                .noneMatch(build -> "tier-build-400".equals(((Map<?, ?>) build).get("id")));
+    }
+
+    @Test
     void buildChatUsesLlmRequiredEngineAndKeepsLegacyBuildShape() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
