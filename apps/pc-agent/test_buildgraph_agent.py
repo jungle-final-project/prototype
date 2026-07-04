@@ -1226,6 +1226,86 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(run_background.call_args.args[1], 1)
         self.assertFalse(run_background.call_args.args[2])
+        self.assertNotIn("open_viewer_when_running", run_background.call_args.kwargs)
+
+    def test_no_arg_launch_opens_viewer_when_background_is_already_running(self) -> None:
+        with patch("buildgraph_agent.run_background", return_value=0) as run_background:
+            exit_code = agent.main([])
+
+        self.assertEqual(exit_code, 0)
+        run_background.assert_called_once_with(open_viewer_when_running=True)
+
+    def test_run_background_exits_when_instance_lock_exists(self) -> None:
+        with patch("buildgraph_agent.acquire_named_instance_lock", return_value=None) as acquire_lock, \
+            patch("buildgraph_agent.ensure_default_config") as ensure_default_config, \
+            patch("buildgraph_agent.show_log_viewer") as show_log_viewer:
+            exit_code = agent.run_background(Path("agent-config.json"), with_tray=False)
+
+        self.assertEqual(exit_code, 0)
+        acquire_lock.assert_called_once_with(agent.BACKGROUND_INSTANCE_MUTEX_NAME)
+        ensure_default_config.assert_not_called()
+        show_log_viewer.assert_not_called()
+
+    def test_run_background_opens_viewer_for_user_launch_when_instance_lock_exists(self) -> None:
+        config_path = Path("agent-config.json")
+        with patch("buildgraph_agent.acquire_named_instance_lock", return_value=None) as acquire_lock, \
+            patch("buildgraph_agent.ensure_default_config", return_value=config_path) as ensure_default_config, \
+            patch("buildgraph_agent.show_log_viewer") as show_log_viewer:
+            exit_code = agent.run_background(config_path, with_tray=False, open_viewer_when_running=True)
+
+        self.assertEqual(exit_code, 0)
+        acquire_lock.assert_called_once_with(agent.BACKGROUND_INSTANCE_MUTEX_NAME)
+        ensure_default_config.assert_called_once_with(config_path)
+        show_log_viewer.assert_called_once_with(config_path)
+
+    def test_run_background_releases_instance_lock_after_shutdown(self) -> None:
+        fake_lock = MagicMock()
+        runtime = SimpleNamespace(running=False, stop=MagicMock())
+
+        class FakeThread:
+            def __init__(self, target: object, args: tuple, daemon: bool) -> None:
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self) -> None:
+                self.target(*self.args)
+
+        with patch("buildgraph_agent.acquire_named_instance_lock", return_value=fake_lock), \
+            patch("buildgraph_agent.ensure_default_config", return_value=Path("agent-config.json")), \
+            patch("buildgraph_agent.import_activation_config"), \
+            patch("buildgraph_agent.auto_register_agent"), \
+            patch("buildgraph_agent.register_startup"), \
+            patch("buildgraph_agent.hide_console_window"), \
+            patch("buildgraph_agent.write_pid"), \
+            patch("buildgraph_agent.remove_pid"), \
+            patch("buildgraph_agent.AgentRuntime", return_value=runtime), \
+            patch("buildgraph_agent.collect_background_loop"), \
+            patch("threading.Thread", FakeThread):
+            exit_code = agent.run_background(Path("agent-config.json"), interval_seconds=0, with_tray=False)
+
+        self.assertEqual(exit_code, 0)
+        runtime.stop.assert_called_once()
+        fake_lock.release.assert_called_once()
+
+    def test_cli_status_does_not_acquire_background_instance_lock(self) -> None:
+        with patch("buildgraph_agent.print_status") as print_status, \
+            patch("buildgraph_agent.acquire_named_instance_lock") as acquire_lock:
+            exit_code = agent.main(["status", "--config", "agent-config.json"])
+
+        self.assertEqual(exit_code, 0)
+        print_status.assert_called_once()
+        acquire_lock.assert_not_called()
+
+    def test_show_log_viewer_exits_when_viewer_lock_exists(self) -> None:
+        with patch("buildgraph_agent.tk", object()), \
+            patch("buildgraph_agent.ttk", object()), \
+            patch("buildgraph_agent.acquire_named_instance_lock", return_value=None) as acquire_lock, \
+            patch("buildgraph_agent.load_config") as load_config:
+            agent.show_log_viewer(Path("agent-config.json"))
+
+        acquire_lock.assert_called_once_with(agent.VIEWER_INSTANCE_MUTEX_NAME)
+        load_config.assert_not_called()
 
     def test_specup_agent_icon_assets_are_available(self) -> None:
         self.assertTrue(agent.app_asset_path(agent.AGENT_ICON_PNG).exists())
