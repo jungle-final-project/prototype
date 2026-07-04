@@ -276,6 +276,13 @@ public class BuildChatService {
         long engineMs = elapsedMs(stageStartNanos);
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
         Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
+        // 라우터가 전체 견적(BUILD_RECOMMEND)으로 판정했는데 LLM 엔진이 내부적으로 부품 추천으로
+        // 분류해 answerType=PART가 되는 경우를 교정한다 (조합 카드가 있으면 BUDGET으로 표기).
+        if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
+                && !objectMaps(response.get("builds")).isEmpty()
+                && "PART".equals(text(response.get("answerType")))) {
+            response.put("answerType", "BUDGET");
+        }
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
         log.debug("Build Chat response generated: userId={}, requestedAiProfile={}, cacheStore=true", userId, requestedAiProfile);
         buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
@@ -1227,12 +1234,25 @@ public class BuildChatService {
         if (budget != null && objectMap(request.get("currentQuoteDraft")).isEmpty()) {
             int minimumTotal = minimumBuildTotal();
             if (minimumTotal > 0 && budget < minimumTotal) {
-                return Optional.of(fastResponse(
-                        "GENERAL",
-                        "내부 부품 자산 기준 최소 구성 가격은 약 " + formatBudgetLabel(minimumTotal)
-                                + "부터 가능합니다. 예산을 조금 높여서 다시 요청해 주세요.",
-                        List.of("BUDGET_BELOW_MINIMUM")
-                ));
+                // 요청 예산으로는 구성이 어려우므로 "가능한 최소 구성" 카드를 실제로 만들어 함께 제공한다
+                List<String> warnings = new ArrayList<>();
+                warnings.add("BUDGET_BELOW_MINIMUM");
+                Optional<GreedyBuild> minimumBuild = greedyTargetBuild(
+                        (int) Math.round(minimumTotal * 1.25), (int) Math.round(minimumTotal * 1.25), false);
+                String guidance = "요청 예산(" + formatBudgetLabel(budget) + ")으로는 내부 자산 기준 완전한 구성이 어렵습니다. "
+                        + "가능한 최소 구성은 약 " + formatBudgetLabel(minimumTotal) + "부터이며, 약 "
+                        + formatBudgetLabel(Math.max(0, minimumTotal - budget)) + "을(를) 더 준비하시면 됩니다.";
+                if (minimumBuild.isPresent()) {
+                    GreedyBuild greedy = minimumBuild.get();
+                    warnings.addAll(greedy.warnings());
+                    Map<String, Object> build = budgetFallbackBuildMap(
+                            TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false), 1,
+                            greedy.toolResults(), greedy.warnings(), List.of());
+                    build.put("title", "가능한 최소 구성");
+                    build.put("summary", "내부 ACTIVE 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
+                    return Optional.of(fastResponse("BUDGET", guidance, List.of(build), warnings));
+                }
+                return Optional.of(fastResponse("GENERAL", guidance, warnings));
             }
         }
         if (isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
