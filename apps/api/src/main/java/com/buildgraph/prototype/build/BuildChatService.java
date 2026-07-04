@@ -234,6 +234,16 @@ public class BuildChatService {
             }
         }
         stageStartNanos = System.nanoTime();
+        Optional<Map<String, Object>> completionResponse = draftCompletionFastResponse(body, message, rawBudgetIntent);
+        long completionMs = elapsedMs(stageStartNanos);
+        if (completionResponse.isPresent()) {
+            Map<String, Object> response = completionResponse.get();
+            buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+            logBuildChatPath("FAST_DRAFT_COMPLETION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
+                    "redisMs=" + redisMs + " completionMs=" + completionMs);
+            return response;
+        }
+        stageStartNanos = System.nanoTime();
         Optional<Map<String, Object>> deterministicResponse = deterministicFastResponse(body, message, rawBudgetIntent);
         long deterministicMs = elapsedMs(stageStartNanos);
         if (deterministicResponse.isPresent()) {
@@ -1023,7 +1033,208 @@ public class BuildChatService {
         );
     }
 
+    // 그래프(드래프트) 기반 견적 완성: 담긴 부품은 고정하고 빈 카테고리만 채운다. LLM 미경유.
+    private Optional<Map<String, Object>> draftCompletionFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(request.get("currentQuoteDraft")).get("items"));
+        String normalized = normalizeCommand(message);
+        if (draftItems.isEmpty() || !containsAnyNormalized(normalized, "채워", "완성", "나머지", "마저")) {
+            return Optional.empty();
+        }
+        if (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint()) {
+            return Optional.empty();
+        }
+
+        List<PartCandidate> fixedParts = new ArrayList<>();
+        Map<String, Integer> fixedQuantities = new LinkedHashMap<>();
+        java.util.Set<String> fixedCategories = new java.util.LinkedHashSet<>();
+        int fixedTotal = 0;
+        for (Map<String, Object> item : draftItems) {
+            PartCandidate candidate = draftPartCandidate(item);
+            Integer quantityValue = numberValue(item.get("quantity"));
+            int quantity = quantityValue == null || quantityValue < 1 ? 1 : quantityValue;
+            fixedParts.add(candidate);
+            fixedQuantities.put(candidate.publicId() == null ? candidate.name() : candidate.publicId(), quantity);
+            if (candidate.category() != null) {
+                fixedCategories.add(candidate.category());
+            }
+            fixedTotal += Math.max(0, candidate.price() == null ? 0 : candidate.price()) * quantity;
+        }
+
+        List<String> missingCategories = fallbackCategories(true, true).stream()
+                .filter(category -> !fixedCategories.contains(category))
+                .toList();
+        List<String> warnings = new ArrayList<>();
+        Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
+
+        if (missingCategories.isEmpty()) {
+            List<Map<String, Object>> toolResults = toolResults(fixedParts, budget == null ? fixedTotal : budget, warnings);
+            warnings.addAll(toolWarnings(toolResults));
+            Map<String, Object> build = completionBuildMap(TIERS.get(1), fixedParts, fixedQuantities, List.of(), budget, toolResults, warnings);
+            return Optional.of(fastResponse("BUDGET", "이미 모든 카테고리가 채워져 있어 현재 구성 그대로 검증했습니다.", List.of(build), warnings));
+        }
+
+        int pickBudget = budget == null ? Integer.MAX_VALUE : budget - fixedTotal;
+        if (budget != null && pickBudget <= 0) {
+            return Optional.of(fastResponse(
+                    "GENERAL",
+                    "현재 담긴 부품 합계(" + formatBudgetLabel(fixedTotal) + ")가 이미 요청 예산을 넘어 나머지를 채울 수 없습니다. 예산을 높이거나 그래프에서 부품을 조정해 주세요.",
+                    List.of("DRAFT_COMPLETION_BUDGET_TOO_LOW")
+            ));
+        }
+
+        Map<String, List<PartCandidate>> pools = new LinkedHashMap<>();
+        for (String category : missingCategories) {
+            List<PartCandidate> pool = nearBudgetPartCandidates(category, fallbackCandidateLimit(category, true), pickBudget);
+            if (pool.isEmpty()) {
+                return Optional.empty();
+            }
+            pools.put(category, pool);
+        }
+
+        LinkedHashMap<String, Map<String, Object>> byComposition = new LinkedHashMap<>();
+        for (int strategy = 0; strategy < 3 && byComposition.size() < 3; strategy += 1) {
+            List<PartCandidate> picked = pickCompletionParts(pools, strategy, pickBudget);
+            if (picked == null) {
+                continue;
+            }
+            List<PartCandidate> previewParts = new ArrayList<>(fixedParts);
+            previewParts.addAll(picked);
+            List<String> localWarnings = new ArrayList<>();
+            int totalPrice = fixedTotal + picked.stream().mapToInt(BuildChatService::completionCandidatePrice).sum();
+            List<Map<String, Object>> toolResults = toolResults(previewParts, budget == null ? totalPrice : budget, localWarnings);
+            if (hasBlockingToolFailure(toolResults)) {
+                continue;
+            }
+            localWarnings.addAll(toolWarnings(toolResults));
+            Map<String, Object> build = completionBuildMap(TIERS.get(strategy), fixedParts, fixedQuantities, picked, budget, toolResults, localWarnings);
+            byComposition.putIfAbsent(buildItemsKey(build), build);
+        }
+        if (byComposition.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Map<String, Object>> builds = new ArrayList<>(byComposition.values());
+        relabelCompletionBuilds(builds);
+        return Optional.of(fastResponse(
+                "BUDGET",
+                "현재 견적에 담긴 부품은 유지하고 나머지 카테고리를 내부 자산과 Tool 검증 기준으로 채웠습니다.",
+                builds,
+                warnings
+        ));
+    }
+
+    // 전략 0=가성비(저가), 1=균형(중간), 2=고성능(예산 안 최대) — 남은 예산을 넘지 않게 선택한다
+    private List<PartCandidate> pickCompletionParts(Map<String, List<PartCandidate>> pools, int strategy, int pickBudget) {
+        List<PartCandidate> picked = new ArrayList<>();
+        long runningTotal = 0;
+        List<String> categories = new ArrayList<>(pools.keySet());
+        for (int index = 0; index < categories.size(); index += 1) {
+            List<PartCandidate> pool = pools.get(categories.get(index));
+            long minRemaining = 0;
+            for (int rest = index + 1; rest < categories.size(); rest += 1) {
+                List<PartCandidate> restPool = pools.get(categories.get(rest));
+                minRemaining += completionCandidatePrice(restPool.get(0));
+            }
+            int preferredIndex = switch (strategy) {
+                case 0 -> 0;
+                case 1 -> pool.size() / 2;
+                default -> pool.size() - 1;
+            };
+            PartCandidate chosen = null;
+            for (int candidateIndex = preferredIndex; candidateIndex >= 0; candidateIndex -= 1) {
+                PartCandidate candidate = pool.get(candidateIndex);
+                long candidatePrice = completionCandidatePrice(candidate);
+                if (runningTotal + candidatePrice + minRemaining <= pickBudget) {
+                    chosen = candidate;
+                    break;
+                }
+            }
+            if (chosen == null) {
+                return null;
+            }
+            picked.add(chosen);
+            runningTotal += completionCandidatePrice(chosen);
+        }
+        return picked;
+    }
+
+    private static int completionCandidatePrice(PartCandidate candidate) {
+        return Math.max(0, candidate.price() == null ? 0 : candidate.price()) * defaultQuantity(candidate.category());
+    }
+
+    private Map<String, Object> completionBuildMap(
+            Tier tier,
+            List<PartCandidate> fixedParts,
+            Map<String, Integer> fixedQuantities,
+            List<PartCandidate> pickedParts,
+            Integer budget,
+            List<Map<String, Object>> toolResults,
+            List<String> warnings
+    ) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        int totalPrice = 0;
+        List<String> appliedCategories = new ArrayList<>();
+        for (PartCandidate part : fixedParts) {
+            int quantity = fixedQuantities.getOrDefault(part.publicId() == null ? part.name() : part.publicId(), 1);
+            items.add(partItem(part, "현재 견적에서 유지", quantity));
+            totalPrice += Math.max(0, part.price() == null ? 0 : part.price()) * quantity;
+            if (part.category() != null && !appliedCategories.contains(part.category())) {
+                appliedCategories.add(part.category());
+            }
+        }
+        for (PartCandidate part : pickedParts) {
+            int quantity = defaultQuantity(part.category());
+            items.add(partItem(part, "빈 카테고리 자동 채움", quantity));
+            totalPrice += Math.max(0, part.price() == null ? 0 : part.price()) * quantity;
+        }
+        return MockData.map(
+                "id", "ai-draft-completion-" + tier.id() + "-" + Math.abs(items.hashCode()),
+                "tier", tier.id(),
+                "label", tier.label(),
+                "title", tier.title() + " 견적 완성 조합",
+                "summary", "현재 견적의 부품은 그대로 두고 빈 카테고리만 내부 자산으로 채웠습니다.",
+                "recommendedFor", List.of("견적 완성", "내부 자산", "Tool 검증"),
+                "totalPrice", totalPrice,
+                "badges", List.of(tier.title(), "DRAFT_COMPLETION"),
+                "budgetWon", budget == null ? totalPrice : budget,
+                "budgetLabel", budget == null ? "예산 미지정" : formatBudgetLabel(budget),
+                "tierLabel", tier.title(),
+                "appliedPartCategories", appliedCategories,
+                "items", items,
+                "toolResults", toolResults,
+                "warnings", distinct(warnings),
+                "confidence", confidence(toolResults, warnings),
+                "evidenceIds", List.of()
+        );
+    }
+
+    private static void relabelCompletionBuilds(List<Map<String, Object>> builds) {
+        builds.sort(java.util.Comparator.comparingInt(build -> {
+            Integer total = numberValue(build.get("totalPrice"));
+            return total == null ? 0 : total;
+        }));
+        for (int index = 0; index < builds.size(); index += 1) {
+            Tier tier = TIERS.get(Math.min(index, TIERS.size() - 1));
+            Map<String, Object> build = builds.get(index);
+            build.put("tier", tier.id());
+            build.put("label", tier.label());
+            build.put("title", tier.title() + " 견적 완성 조합");
+            build.put("tierLabel", tier.title());
+        }
+    }
+
     private Optional<Map<String, Object>> deterministicFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
+        Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
+        if (budget != null && objectMap(request.get("currentQuoteDraft")).isEmpty()) {
+            int minimumTotal = minimumBuildTotal();
+            if (minimumTotal > 0 && budget < minimumTotal) {
+                return Optional.of(fastResponse(
+                        "GENERAL",
+                        "내부 부품 자산 기준 최소 구성 가격은 약 " + formatBudgetLabel(minimumTotal)
+                                + "부터 가능합니다. 예산을 조금 높여서 다시 요청해 주세요.",
+                        List.of("BUDGET_BELOW_MINIMUM")
+                ));
+            }
+        }
         if (isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
             AiChatEngineResponse engineResponse = new AiChatEngineResponse(
                     "내부 자산과 Tool 검증 기준으로 바로 추천 조합을 구성했습니다.",
@@ -1167,16 +1378,21 @@ public class BuildChatService {
         int budgetWon = rawBudgetIntent.budget();
         if ("MIN".equals(rawBudgetIntent.mode())) {
             // "이상" 요청: 예산 하한을 지키는 조합을 우선 찾고, 없으면 이하 최대 구성으로 완화한다
-            int ramQuantity = budgetWon <= 1_200_000 ? 1 : 2;
-            List<Map<String, Object>> result = new ArrayList<>();
-            collectNearBudgetBuilds(true, true, ramQuantity, rawBudgetIntent, engineResponse.evidenceIds(), result, budgetWon, Integer.MAX_VALUE);
-            collectNearBudgetBuilds(false, false, ramQuantity, rawBudgetIntent, engineResponse.evidenceIds(), result, budgetWon, Integer.MAX_VALUE);
-            if (!result.isEmpty()) {
+            Optional<GreedyBuild> aboveBudget = greedyTargetBuild(
+                    (int) Math.min(Integer.MAX_VALUE, Math.round(budgetWon * 1.15)),
+                    (int) Math.min(Integer.MAX_VALUE, Math.round(budgetWon * 1.5)),
+                    true
+            );
+            if (aboveBudget.isPresent()
+                    && aboveBudget.get().parts().stream().mapToLong(BuildChatService::completionCandidatePrice).sum() >= budgetWon) {
+                GreedyBuild greedy = aboveBudget.get();
+                Map<String, Object> build = budgetFallbackBuildMap(
+                        TIERS.get(2), greedy.parts(), rawBudgetIntent, 2, greedy.toolResults(), greedy.warnings(), engineResponse.evidenceIds());
                 warnings.add("명시 예산 범위에 맞춰 내부 자산 기준 보조 견적을 재구성했습니다.");
                 if (guardStats != null) {
                     guardStats.routeFallbackUsed = true;
                 }
-                return result.stream().limit(3).toList();
+                return List.of(build);
             }
             List<Map<String, Object>> relaxed = nearBudgetLadderBuilds(budgetWon, engineResponse.evidenceIds(), warnings, guardStats);
             if (!relaxed.isEmpty()) {
@@ -1193,9 +1409,10 @@ public class BuildChatService {
         return ladder;
     }
 
-    // 하한을 0.875→0.7→0.5→0.25→0 순으로 완화하며 "예산 이하 & 최대 근접" 조합을 찾는다.
-    // 후보 풀이 저가 우선이라 하한이 없으면 최저가 조합만 나오는 문제(전 예산 동일 조합)를 막는다.
-    private static final double[] NEAR_BUDGET_LOWER_FRACTIONS = {0.875, 0.7, 0.5, 0.25, 0.0};
+    // 3개 추천의 다양성을 위한 타깃 예산 비율: 가성비 / 균형 / 예산 근접.
+    // 느슨한 가격 밴드 탐색은 가지치기가 무력해져 수십 초가 걸리므로,
+    // 타깃 예산을 낮춰 "타깃의 87.5%~100%" 타이트한 탐색을 3번 수행한다.
+    private static final double[] NEAR_BUDGET_TIER_TARGETS = {0.55, 0.75, 1.0};
 
     private List<Map<String, Object>> nearBudgetLadderBuilds(
             int budgetWon,
@@ -1203,177 +1420,330 @@ public class BuildChatService {
             List<String> warnings,
             BuildChatGuardStats guardStats
     ) {
-        BudgetIntent guardIntent = new BudgetIntent(budgetWon, "MAX", false);
-        int ramQuantity = budgetWon <= 1_200_000 ? 1 : 2;
-        boolean preferLiteBuild = budgetWon <= 1_500_000;
-        for (double fraction : NEAR_BUDGET_LOWER_FRACTIONS) {
-            int lowerBound = (int) Math.floor(budgetWon * fraction);
-            List<Map<String, Object>> result = new ArrayList<>();
-            if (preferLiteBuild) {
-                collectNearBudgetBuilds(false, false, ramQuantity, guardIntent, evidenceIds, result, lowerBound, budgetWon);
-                collectNearBudgetBuilds(true, true, ramQuantity, guardIntent, evidenceIds, result, lowerBound, budgetWon);
-            } else {
-                collectNearBudgetBuilds(true, true, ramQuantity, guardIntent, evidenceIds, result, lowerBound, budgetWon);
-                collectNearBudgetBuilds(false, false, ramQuantity, guardIntent, evidenceIds, result, lowerBound, budgetWon);
-            }
-            if (!result.isEmpty()) {
-                if (fraction < 0.875) {
-                    warnings.add("예산에 근접한 조합을 내부 자산으로 구성하지 못해, 구성 가능한 범위에서 예산 이하 최대 조합을 추천합니다.");
-                }
-                if (guardStats != null) {
-                    guardStats.routeFallbackUsed = true;
-                }
-                return result.stream().limit(3).toList();
+        // 타깃 예산별로 1개씩 뽑아 가성비/균형/근접 다양성을 확보한다
+        LinkedHashMap<String, Map<String, Object>> byComposition = new LinkedHashMap<>();
+        for (double targetRatio : NEAR_BUDGET_TIER_TARGETS) {
+            int targetBudget = (int) Math.floor(budgetWon * targetRatio);
+            List<Map<String, Object>> targetResult = singleTargetLadderBuilds(targetBudget, evidenceIds);
+            if (!targetResult.isEmpty()) {
+                Map<String, Object> build = targetResult.get(0);
+                byComposition.putIfAbsent(buildItemsKey(build), build);
             }
         }
-        return List.of();
+
+        // 부족분은 예산 근접 탐색 결과로 보충한다
+        if (byComposition.size() < 3) {
+            for (Map<String, Object> build : singleTargetLadderBuilds(budgetWon, evidenceIds)) {
+                if (byComposition.size() >= 3) {
+                    break;
+                }
+                byComposition.putIfAbsent(buildItemsKey(build), build);
+            }
+        }
+
+        if (byComposition.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> builds = new ArrayList<>(byComposition.values());
+        // 총액 오름차순으로 정렬해 가성비→균형→고성능 순서와 티어 라벨을 일치시킨다
+        builds.sort(java.util.Comparator.comparingInt(build -> {
+            Integer total = numberValue(build.get("totalPrice"));
+            return total == null ? 0 : total;
+        }));
+        relabelTierBuilds(builds);
+        int bestTotal = builds.stream()
+                .map(build -> numberValue(build.get("totalPrice")))
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+        if (bestTotal < Math.floor(budgetWon * 0.875)) {
+            warnings.add("예산에 근접한 조합을 내부 자산으로 구성하지 못해, 구성 가능한 범위에서 예산 이하 최대 조합을 추천합니다.");
+        }
+        if (guardStats != null) {
+            guardStats.routeFallbackUsed = true;
+        }
+        return builds.stream().limit(3).toList();
     }
 
-    private void collectNearBudgetBuilds(
-            boolean includeGpu,
-            boolean includeCooler,
-            int ramQuantity,
-            BudgetIntent guardIntent,
-            List<String> evidenceIds,
-            List<Map<String, Object>> result,
-            int lowerBound,
-            int upperBound
-    ) {
-        if (result.size() >= 3) {
-            return;
+    // 카테고리별 예산 비중 — 그리디 초기 배분 기준
+    private static final Map<String, Double> BUDGET_SHARE_WITH_GPU = Map.of(
+            "CPU", 0.20, "MOTHERBOARD", 0.11, "RAM", 0.08, "GPU", 0.33,
+            "STORAGE", 0.08, "PSU", 0.07, "CASE", 0.06, "COOLER", 0.07);
+    private static final Map<String, Double> BUDGET_SHARE_NO_GPU = Map.of(
+            "CPU", 0.32, "MOTHERBOARD", 0.18, "RAM", 0.14, "STORAGE", 0.14, "PSU", 0.11, "CASE", 0.11);
+    private static final List<String> GREEDY_PICK_ORDER =
+            List.of("CPU", "MOTHERBOARD", "RAM", "COOLER", "GPU", "PSU", "CASE", "STORAGE");
+    private static final List<String> GREEDY_UPGRADE_ORDER = List.of("GPU", "CPU", "STORAGE", "RAM");
+
+    /**
+     * 타깃 예산에 근접한 조합 1개를 그리디로 구성한다.
+     * 조합 DFS는 소켓 비호환 조합마다 Tool 검증(SQL)을 반복해 수십 초가 걸렸다 —
+     * 여기서는 비중 배분 + 호환 프리필터로 후보를 만들고 Tool 검증은 1~4회만 수행한다.
+     */
+    private List<Map<String, Object>> singleTargetLadderBuilds(int targetBudget, List<String> evidenceIds) {
+        if (targetBudget <= 0) {
+            return List.of();
         }
-        List<List<PartCandidate>> groups = new ArrayList<>();
-        for (String category : fallbackCategories(includeGpu, includeCooler)) {
-            List<PartCandidate> candidates = nearBudgetPartCandidates(category, fallbackCandidateLimit(category, includeGpu), upperBound);
-            if (candidates.isEmpty()) {
-                return;
-            }
-            groups.add(candidates);
+        boolean includeGpu = targetBudget >= 1_000_000;
+        Optional<GreedyBuild> build = greedyTargetBuild(targetBudget, targetBudget, includeGpu);
+        if (build.isEmpty() && includeGpu) {
+            build = greedyTargetBuild(targetBudget, targetBudget, false);
         }
-        int[] minRemaining = minRemainingPrices(groups, ramQuantity);
-        int[] maxRemaining = maxRemainingPrices(groups, ramQuantity);
-        collectBudgetFallbackCombination(
-                groups,
-                0,
-                new ArrayList<>(),
-                new LinkedHashSet<>(),
-                0,
-                lowerBound,
-                upperBound,
-                minRemaining,
-                maxRemaining,
-                ramQuantity,
-                guardIntent,
-                evidenceIds,
-                result
+        if (build.isEmpty()) {
+            return List.of();
+        }
+        GreedyBuild greedy = build.get();
+        Map<String, Object> map = budgetFallbackBuildMap(
+                TIERS.get(1),
+                greedy.parts(),
+                new BudgetIntent(targetBudget, "MAX", false),
+                2,
+                greedy.toolResults(),
+                greedy.warnings(),
+                evidenceIds
         );
+        return List.of(map);
     }
 
-    private void collectBudgetFallbackCombination(
-            List<List<PartCandidate>> groups,
-            int groupIndex,
-            List<PartCandidate> selected,
-            LinkedHashSet<String> seenKeys,
-            int partialPrice,
-            int lowerBound,
-            int upperBound,
-            int[] minRemaining,
-            int[] maxRemaining,
-            int ramQuantity,
-            BudgetIntent rawBudgetIntent,
-            List<String> evidenceIds,
-            List<Map<String, Object>> result
-    ) {
-        if (result.size() >= 3) {
-            return;
-        }
-        if (partialPrice + minRemaining[groupIndex] > upperBound) {
-            return;
-        }
-        if (partialPrice + maxRemaining[groupIndex] < lowerBound) {
-            return;
-        }
-        if (groupIndex >= groups.size()) {
-            String key = selected.stream().map(PartCandidate::publicId).toList().toString();
-            if (!seenKeys.add(key)) {
-                return;
+    private record GreedyBuild(List<PartCandidate> parts, List<Map<String, Object>> toolResults, List<String> warnings) {
+    }
+
+    private Optional<GreedyBuild> greedyTargetBuild(int targetBudget, int poolUpperBound, boolean includeGpu) {
+        Map<String, Double> shares = includeGpu ? BUDGET_SHARE_WITH_GPU : BUDGET_SHARE_NO_GPU;
+        LinkedHashMap<String, List<PartCandidate>> pools = new LinkedHashMap<>();
+        for (String category : fallbackCategories(includeGpu, includeGpu)) {
+            List<PartCandidate> pool = nearBudgetPartCandidates(category, 8, poolUpperBound);
+            if (pool.isEmpty()) {
+                return Optional.empty();
             }
-            int totalPrice = partialPrice;
-            if (!withinBudgetGuard(MockData.map("totalPrice", totalPrice), Map.of(), rawBudgetIntent)) {
-                return;
-            }
-            List<String> localWarnings = new ArrayList<>();
-            int toolBudget = "MAX".equals(rawBudgetIntent.mode()) ? rawBudgetIntent.budget() : totalPrice;
-            List<Map<String, Object>> toolResults = toolResults(selected, toolBudget, localWarnings);
-            if (hasBlockingToolFailure(toolResults)) {
-                return;
-            }
-            localWarnings.addAll(toolWarnings(toolResults));
-            Tier tier = TIERS.get(Math.min(result.size(), TIERS.size() - 1));
-            result.add(budgetFallbackBuildMap(tier, selected, rawBudgetIntent, ramQuantity, toolResults, localWarnings, evidenceIds));
-            return;
+            pools.put(category, pool);
         }
-        for (PartCandidate candidate : groups.get(groupIndex)) {
-            int candidatePrice = effectiveCandidatePrice(candidate, ramQuantity);
-            int nextPartialPrice = partialPrice + candidatePrice;
-            if (nextPartialPrice + minRemaining[groupIndex + 1] > upperBound) {
-                break;
-            }
-            if (nextPartialPrice + maxRemaining[groupIndex + 1] < lowerBound) {
+
+        LinkedHashMap<String, PartCandidate> chosen = new LinkedHashMap<>();
+        for (String category : GREEDY_PICK_ORDER) {
+            List<PartCandidate> pool = pools.get(category);
+            if (pool == null) {
                 continue;
             }
-            selected.add(candidate);
-            collectBudgetFallbackCombination(
-                    groups,
-                    groupIndex + 1,
-                    selected,
-                    seenKeys,
-                    nextPartialPrice,
-                    lowerBound,
-                    upperBound,
-                    minRemaining,
-                    maxRemaining,
-                    ramQuantity,
-                    rawBudgetIntent,
-                    evidenceIds,
-                    result
-            );
-            selected.remove(selected.size() - 1);
-            if (result.size() >= 3) {
-                return;
+            List<PartCandidate> filtered = compatibleCandidates(pool, category, chosen);
+            if (filtered.isEmpty()) {
+                filtered = pool;
+            }
+            int shareBudget = (int) Math.floor(targetBudget * shares.getOrDefault(category, 0.05));
+            chosen.put(category, pickNearestPrice(filtered, shareBudget));
+        }
+
+        // 예산 초과 시 가장 큰 절감이 가능한 카테고리부터 한 단계씩 하향
+        for (int guard = 0; guard < 32 && greedyTotal(chosen) > targetBudget; guard += 1) {
+            if (!shiftOneStep(pools, chosen, targetBudget, false)) {
+                return Optional.empty();
             }
         }
-    }
-
-    private static int[] minRemainingPrices(List<List<PartCandidate>> groups, int ramQuantity) {
-        int[] remaining = new int[groups.size() + 1];
-        remaining[groups.size()] = 0;
-        for (int index = groups.size() - 1; index >= 0; index -= 1) {
-            int min = groups.get(index).stream()
-                    .mapToInt(candidate -> effectiveCandidatePrice(candidate, ramQuantity))
-                    .min()
-                    .orElse(0);
-            remaining[index] = remaining[index + 1] + min;
+        if (greedyTotal(chosen) > targetBudget) {
+            return Optional.empty();
         }
-        return remaining;
-    }
-
-    private static int[] maxRemainingPrices(List<List<PartCandidate>> groups, int ramQuantity) {
-        int[] remaining = new int[groups.size() + 1];
-        remaining[groups.size()] = 0;
-        for (int index = groups.size() - 1; index >= 0; index -= 1) {
-            int max = groups.get(index).stream()
-                    .mapToInt(candidate -> effectiveCandidatePrice(candidate, ramQuantity))
-                    .max()
-                    .orElse(0);
-            remaining[index] = remaining[index + 1] + max;
+        // 남은 예산은 GPU→CPU→저장장치→램 순으로 상향해 타깃에 근접시킨다
+        for (int guard = 0; guard < 32; guard += 1) {
+            if (!shiftOneStep(pools, chosen, targetBudget, true)) {
+                break;
+            }
         }
-        return remaining;
+
+        List<String> warnings = new ArrayList<>();
+        List<Map<String, Object>> toolResults = toolResults(new ArrayList<>(chosen.values()), targetBudget, warnings);
+        for (int attempt = 0; attempt < 3 && hasBlockingToolFailure(toolResults); attempt += 1) {
+            if (!repairBlockingFailure(pools, chosen, toolResults, targetBudget)) {
+                return Optional.empty();
+            }
+            warnings = new ArrayList<>();
+            toolResults = toolResults(new ArrayList<>(chosen.values()), targetBudget, warnings);
+        }
+        if (hasBlockingToolFailure(toolResults)) {
+            return Optional.empty();
+        }
+        warnings.addAll(toolWarnings(toolResults));
+        return Optional.of(new GreedyBuild(new ArrayList<>(chosen.values()), toolResults, warnings));
     }
 
-    private static int effectiveCandidatePrice(PartCandidate candidate, int ramQuantity) {
-        int quantity = "RAM".equals(candidate.category()) ? Math.max(1, Math.min(4, ramQuantity)) : defaultQuantity(candidate.category());
-        return Math.max(0, candidate.price() == null ? 0 : candidate.price()) * quantity;
+    // upgrade=false: 예산 초과 해소(최대 절감 스왑), upgrade=true: 예산 내 최대 상향(우선순위 카테고리)
+    private boolean shiftOneStep(
+            Map<String, List<PartCandidate>> pools,
+            LinkedHashMap<String, PartCandidate> chosen,
+            int targetBudget,
+            boolean upgrade
+    ) {
+        List<String> categories = upgrade ? GREEDY_UPGRADE_ORDER : new ArrayList<>(chosen.keySet());
+        String bestCategory = null;
+        PartCandidate bestCandidate = null;
+        long bestDelta = 0;
+        for (String category : categories) {
+            PartCandidate current = chosen.get(category);
+            List<PartCandidate> pool = pools.get(category);
+            if (current == null || pool == null) {
+                continue;
+            }
+            int currentIndex = pool.indexOf(current);
+            int nextIndex = upgrade ? currentIndex + 1 : currentIndex - 1;
+            while (nextIndex >= 0 && nextIndex < pool.size()) {
+                PartCandidate candidate = pool.get(nextIndex);
+                long delta = completionCandidatePrice(candidate) - completionCandidatePrice(current);
+                LinkedHashMap<String, PartCandidate> trial = new LinkedHashMap<>(chosen);
+                trial.put(category, candidate);
+                boolean fitsBudget = !upgrade || greedyTotal(trial) <= targetBudget;
+                if (fitsBudget && pairwiseCompatible(trial)) {
+                    if (upgrade) {
+                        // 상향은 우선순위 첫 후보를 즉시 적용
+                        chosen.put(category, candidate);
+                        return true;
+                    }
+                    if (delta < bestDelta) {
+                        bestDelta = delta;
+                        bestCategory = category;
+                        bestCandidate = candidate;
+                    }
+                    break;
+                }
+                nextIndex = upgrade ? nextIndex + 1 : nextIndex - 1;
+            }
+        }
+        if (!upgrade && bestCategory != null) {
+            chosen.put(bestCategory, bestCandidate);
+            return true;
+        }
+        return false;
+    }
+
+    // Tool FAIL 종류별 표적 교체: 전력→PSU 상향, 규격→케이스 상향, 호환→보드/쿨러/램 재선택
+    private boolean repairBlockingFailure(
+            Map<String, List<PartCandidate>> pools,
+            LinkedHashMap<String, PartCandidate> chosen,
+            List<Map<String, Object>> toolResults,
+            int targetBudget
+    ) {
+        for (Map<String, Object> result : toolResults) {
+            if (!"FAIL".equals(text(result.get("status")))) {
+                continue;
+            }
+            String tool = text(result.get("tool"));
+            List<String> targets = switch (firstText(tool, "")) {
+                case "power" -> List.of("PSU", "GPU");
+                case "size" -> List.of("CASE", "GPU", "COOLER");
+                default -> List.of("MOTHERBOARD", "COOLER", "RAM");
+            };
+            for (String category : targets) {
+                PartCandidate current = chosen.get(category);
+                List<PartCandidate> pool = pools.get(category);
+                if (current == null || pool == null) {
+                    continue;
+                }
+                LinkedHashMap<String, PartCandidate> without = new LinkedHashMap<>(chosen);
+                without.remove(category);
+                for (PartCandidate candidate : compatibleCandidates(pool, category, without)) {
+                    if (candidate == current) {
+                        continue;
+                    }
+                    LinkedHashMap<String, PartCandidate> trial = new LinkedHashMap<>(chosen);
+                    trial.put(category, candidate);
+                    if (greedyTotal(trial) <= targetBudget && pairwiseCompatible(trial)) {
+                        chosen.put(category, candidate);
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static long greedyTotal(Map<String, PartCandidate> chosen) {
+        return chosen.values().stream().mapToLong(BuildChatService::completionCandidatePrice).sum();
+    }
+
+    private static PartCandidate pickNearestPrice(List<PartCandidate> pool, int shareBudget) {
+        PartCandidate best = pool.get(0);
+        long bestDistance = Long.MAX_VALUE;
+        for (PartCandidate candidate : pool) {
+            long distance = Math.abs(completionCandidatePrice(candidate) - (long) shareBudget);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    // ToolCheckService의 blocking 규칙(소켓/메모리/쿨러/전력/규격)을 값싼 속성 비교로 선반영한다
+    private static List<PartCandidate> compatibleCandidates(
+            List<PartCandidate> pool,
+            String category,
+            Map<String, PartCandidate> chosen
+    ) {
+        return pool.stream().filter(candidate -> {
+            LinkedHashMap<String, PartCandidate> trial = new LinkedHashMap<>(chosen);
+            trial.put(category, candidate);
+            return pairwiseCompatible(trial);
+        }).toList();
+    }
+
+    private static boolean pairwiseCompatible(Map<String, PartCandidate> chosen) {
+        PartCandidate cpu = chosen.get("CPU");
+        PartCandidate motherboard = chosen.get("MOTHERBOARD");
+        PartCandidate ram = chosen.get("RAM");
+        PartCandidate cooler = chosen.get("COOLER");
+        PartCandidate gpu = chosen.get("GPU");
+        PartCandidate psu = chosen.get("PSU");
+        PartCandidate pcCase = chosen.get("CASE");
+
+        String cpuSocket = cpu == null ? null : firstAttributeText(cpu, "socket");
+        String boardSocket = motherboard == null ? null : firstAttributeText(motherboard, "socket");
+        if (cpuSocket != null && boardSocket != null && !cpuSocket.equalsIgnoreCase(boardSocket)) {
+            return false;
+        }
+        String ramType = ram == null ? null : firstAttributeText(ram, "memoryType");
+        String boardMemory = motherboard == null ? null : firstAttributeText(motherboard, "memoryType");
+        if (ramType != null && boardMemory != null && !ramType.equalsIgnoreCase(boardMemory)) {
+            return false;
+        }
+        if (cooler != null && cpuSocket != null && cooler.attributes().get("socketSupport") instanceof List<?> supports
+                && !supports.isEmpty()
+                && supports.stream().noneMatch(item -> cpuSocket.equalsIgnoreCase(String.valueOf(item)))) {
+            return false;
+        }
+        Integer psuCapacity = psu == null ? null : firstAttributeNumber(psu, "capacityW");
+        Integer gpuRequired = gpu == null ? null : firstAttributeNumber(gpu, "requiredSystemPowerW");
+        if (psuCapacity != null && gpuRequired != null && psuCapacity < gpuRequired) {
+            return false;
+        }
+        Integer gpuLength = gpu == null ? null : firstAttributeNumber(gpu, "lengthMm");
+        Integer maxGpuLength = pcCase == null ? null : firstAttributeNumber(pcCase, "maxGpuLengthMm");
+        if (gpuLength != null && maxGpuLength != null && maxGpuLength > 0 && gpuLength > maxGpuLength) {
+            return false;
+        }
+        Integer coolerHeight = cooler == null ? null : firstAttributeNumber(cooler, "heightMm", "coolerHeightMm");
+        Integer maxCoolerHeight = pcCase == null ? null : firstAttributeNumber(pcCase, "maxCpuCoolerHeightMm");
+        if (coolerHeight != null && maxCoolerHeight != null && maxCoolerHeight > 0 && coolerHeight > maxCoolerHeight) {
+            return false;
+        }
+        return true;
+    }
+
+    private static String buildItemsKey(Map<String, Object> build) {
+        return objectMaps(build.get("items")).stream()
+                .map(item -> item.get("partId") + ":" + item.get("quantity"))
+                .sorted()
+                .toList()
+                .toString();
+    }
+
+    private static void relabelTierBuilds(List<Map<String, Object>> builds) {
+        for (int index = 0; index < builds.size(); index += 1) {
+            Tier tier = TIERS.get(Math.min(index, TIERS.size() - 1));
+            Map<String, Object> build = builds.get(index);
+            build.put("tier", tier.id());
+            build.put("label", tier.label());
+            build.put("title", tier.title() + " 예산 맞춤 조합");
+            build.put("tierLabel", tier.title());
+        }
     }
 
     private Map<String, Object> budgetFallbackBuildMap(
@@ -1686,6 +2056,19 @@ public class BuildChatService {
         return merged.values().stream()
                 .sorted(java.util.Comparator.comparingInt(PartCandidate::price))
                 .toList();
+    }
+
+    // GPU/쿨러 제외 기본 구성의 최저 조합 가격 — 예산 미달 고지용
+    private int minimumBuildTotal() {
+        int total = 0;
+        for (String category : fallbackCategories(false, false)) {
+            List<PartCandidate> cheapest = pricePartCandidates(category, 1);
+            if (cheapest.isEmpty()) {
+                return 0;
+            }
+            total += Math.max(0, cheapest.get(0).price() == null ? 0 : cheapest.get(0).price());
+        }
+        return total;
     }
 
     private List<PartCandidate> topPricePartCandidates(String category, int limit, int upperBound) {
