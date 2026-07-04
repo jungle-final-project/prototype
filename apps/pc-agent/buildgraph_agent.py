@@ -80,6 +80,8 @@ APP_NAME = "BuildGraphAgent"
 APP_ASSET_DIR = "assets"
 AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
+BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
+VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
 DEFAULT_AGENT_VERSION = "0.1.0"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
@@ -281,6 +283,60 @@ class AgentError(RuntimeError):
 
 class UploadError(AgentError):
     pass
+
+
+class NamedInstanceLock:
+    ERROR_ALREADY_EXISTS = 183
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.handle: int | None = None
+        self.acquired = False
+        self._kernel32: Any = None
+
+    def acquire(self) -> bool:
+        if os.name != "nt":
+            self.acquired = True
+            return True
+        try:
+            import ctypes
+
+            self._kernel32 = ctypes.windll.kernel32
+            handle = self._kernel32.CreateMutexW(None, True, self.name)
+            if not handle:
+                self.acquired = True
+                return True
+            if self._kernel32.GetLastError() == self.ERROR_ALREADY_EXISTS:
+                self._kernel32.CloseHandle(handle)
+                return False
+            self.handle = handle
+            self.acquired = True
+            return True
+        except Exception:
+            self.acquired = True
+            return True
+
+    def release(self) -> None:
+        if not self.acquired:
+            return
+        if os.name == "nt" and self.handle and self._kernel32 is not None:
+            try:
+                self._kernel32.ReleaseMutex(self.handle)
+            except Exception:
+                pass
+            try:
+                self._kernel32.CloseHandle(self.handle)
+            except Exception:
+                pass
+        self.handle = None
+        self.acquired = False
+
+
+def acquire_named_instance_lock(name: str) -> NamedInstanceLock | None:
+    instance_lock = NamedInstanceLock(name)
+    if not instance_lock.acquire():
+        return None
+    return instance_lock
 
 
 @dataclass(frozen=True)
@@ -2871,6 +2927,10 @@ def show_log_viewer(
         show_log_viewer_powershell(config_path)
         return
 
+    viewer_lock = acquire_named_instance_lock(VIEWER_INSTANCE_MUTEX_NAME)
+    if viewer_lock is None:
+        return
+
     config = load_config(config_path)
     config.log_dir.mkdir(parents=True, exist_ok=True)
     path = log_file(config)
@@ -4045,7 +4105,10 @@ def show_log_viewer(
     root.protocol("WM_DELETE_WINDOW", stop_live_refresh)
 
     schedule_live_refresh()
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        viewer_lock.release()
 
 
 def open_support_page(config_path: Path) -> None:
@@ -4725,54 +4788,67 @@ def collect_background_loop(
             time.sleep(1)
 
 
-def run_background(config_path: Path | None = None, interval_seconds: int = 5, with_tray: bool = True) -> int:
-    path = ensure_default_config(config_path or default_background_config_path())
+def run_background(
+    config_path: Path | None = None,
+    interval_seconds: int = 5,
+    with_tray: bool = True,
+    open_viewer_when_running: bool = False,
+) -> int:
+    instance_lock = acquire_named_instance_lock(BACKGROUND_INSTANCE_MUTEX_NAME)
+    if instance_lock is None:
+        if open_viewer_when_running:
+            show_log_viewer(ensure_default_config(config_path or default_background_config_path()))
+        return 0
     try:
-        import_activation_config(path)
-        auto_register_agent(path)
-    except Exception as exception:
-        error_log = app_data_dir() / "agent-error.log"
-        error_log.parent.mkdir(parents=True, exist_ok=True)
-        with error_log.open("a", encoding="utf-8") as file:
-            file.write(f"{datetime.now(KST).isoformat()} auto-register failed: {exception}\n")
-    register_startup()
-    hide_console_window()
-    write_pid()
-    runtime = AgentRuntime()
-
-    import threading
-
-    worker = threading.Thread(target=collect_background_loop, args=(path, runtime, interval_seconds), daemon=True)
-    worker.start()
-
-    if with_tray and pystray is not None:
-        def stop(icon: object, item: object = None) -> None:
-            runtime.stop()
-            remove_pid()
-            icon.stop()
-
-        icon = pystray.Icon(
-            APP_NAME,
-            create_tray_image(),
-            "PC Agent",
-            menu=pystray.Menu(
-                pystray.MenuItem("Open log viewer", lambda icon, item: show_log_viewer(path), default=True),
-                pystray.MenuItem("Open log folder", lambda icon, item: open_log_folder(path)),
-                pystray.MenuItem("Open AS page", lambda icon, item: open_support_page(path)),
-                pystray.MenuItem("Stop", stop),
-            ),
-        )
-        icon.run()
-    else:
+        path = ensure_default_config(config_path or default_background_config_path())
         try:
-            while runtime.running:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            runtime.stop()
+            import_activation_config(path)
+            auto_register_agent(path)
+        except Exception as exception:
+            error_log = app_data_dir() / "agent-error.log"
+            error_log.parent.mkdir(parents=True, exist_ok=True)
+            with error_log.open("a", encoding="utf-8") as file:
+                file.write(f"{datetime.now(KST).isoformat()} auto-register failed: {exception}\n")
+        register_startup()
+        hide_console_window()
+        write_pid()
+        runtime = AgentRuntime()
 
-    runtime.stop()
-    remove_pid()
-    return 0
+        import threading
+
+        worker = threading.Thread(target=collect_background_loop, args=(path, runtime, interval_seconds), daemon=True)
+        worker.start()
+
+        if with_tray and pystray is not None:
+            def stop(icon: object, item: object = None) -> None:
+                runtime.stop()
+                remove_pid()
+                icon.stop()
+
+            icon = pystray.Icon(
+                APP_NAME,
+                create_tray_image(),
+                "PC Agent",
+                menu=pystray.Menu(
+                    pystray.MenuItem("Open log viewer", lambda icon, item: show_log_viewer(path), default=True),
+                    pystray.MenuItem("Open log folder", lambda icon, item: open_log_folder(path)),
+                    pystray.MenuItem("Open AS page", lambda icon, item: open_support_page(path)),
+                    pystray.MenuItem("Stop", stop),
+                ),
+            )
+            icon.run()
+        else:
+            try:
+                while runtime.running:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                runtime.stop()
+
+        runtime.stop()
+        remove_pid()
+        return 0
+    finally:
+        instance_lock.release()
 
 
 def upload_recent(
@@ -4911,7 +4987,7 @@ def submit_issue_ticket(
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        return run_background()
+        return run_background(open_viewer_when_running=True)
 
     parser = argparse.ArgumentParser(description="PC Agent prototype CLI")
     sub = parser.add_subparsers(dest="command", required=True)
