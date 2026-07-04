@@ -17,16 +17,6 @@ export type BuildGraphMode = 'BUILD_OVERVIEW' | 'PART_IMPACT' | 'ISSUE_PATH' | '
 export type BuildGraphNodeType = 'PART' | 'CONSTRAINT' | 'ISSUE' | 'ACTION';
 export type BuildGraphEdgeType = 'REQUIRES' | 'AFFECTS' | 'BLOCKS' | 'SUGGESTS';
 export type BuildGraphStatus = 'PASS' | 'WARN' | 'FAIL';
-export type AiDraftActionType =
-  | 'OPEN_ROUTE'
-  | 'ADD_BUILD_TO_DRAFT'
-  | 'ADD_PART_TO_DRAFT'
-  | 'REPLACE_DRAFT_PART'
-  | 'REMOVE_DRAFT_PART'
-  | 'UPDATE_DRAFT_QUANTITY'
-  | 'ASK_FOLLOW_UP';
-export type AiDraftActionStatus = 'PENDING' | 'APPLYING' | 'APPLIED' | 'FAILED';
-
 export type AiToolResult = {
   tool: string;
   status: 'PASS' | 'WARN' | 'FAIL';
@@ -65,13 +55,6 @@ export type AiRecommendedBuild = {
 
 export type AiSelectedBuild = Omit<AiRecommendedBuild, 'label' | 'badges'> & {
   selectedAt: string;
-};
-
-export type AiPartRecommendation = {
-  category: PartCategory;
-  label: string;
-  intro: string;
-  options: AiBuildItem[];
 };
 
 export type AiSimulationPart = {
@@ -117,31 +100,6 @@ export type AiPerformanceSimulation = {
   specComparisons?: AiSimulationSpecComparison[];
   warnings?: string[];
   disclaimer?: string;
-};
-
-export type AiDraftAction = {
-  id: string;
-  type: AiDraftActionType;
-  label: string;
-  description?: string;
-  payload: {
-    partId?: string;
-    buildId?: string;
-    category?: PartCategory;
-    quantity?: number;
-    route?: string;
-    source?: string;
-    [key: string]: unknown;
-  };
-  requiresConfirmation?: boolean;
-  status?: AiDraftActionStatus;
-};
-
-export type AiAppliedPartPreference = {
-  category: PartCategory;
-  label: string;
-  appliedAt: string;
-  options: AiBuildItem[];
 };
 
 export type BuildGraphFocus = {
@@ -207,8 +165,6 @@ export type AiChatMessage = {
   kind: 'intro' | 'budget' | 'part' | 'general';
   budgetWon?: number;
   builds?: AiRecommendedBuild[];
-  partRecommendation?: AiPartRecommendation | null;
-  actions?: AiDraftAction[];
   simulation?: AiPerformanceSimulation | null;
   warnings?: string[];
 };
@@ -217,7 +173,6 @@ export type AiAssistantSession = {
   messages: AiChatMessage[];
   latestBuilds: AiRecommendedBuild[];
   savedBuildIds: Record<string, string>;
-  appliedPartPreferences: AiAppliedPartPreference[];
   latestGraphFocus?: BuildGraphFocus;
   latestActiveBuildId?: string;
   updatedAt: string;
@@ -226,7 +181,6 @@ export type AiAssistantSession = {
 export type AiBuildChatRequest = {
   message: string;
   currentBuilds?: AiRecommendedBuild[];
-  appliedPartPreferences?: AiAppliedPartPreference[];
   currentQuoteDraft?: QuoteDraft;
 };
 
@@ -234,8 +188,6 @@ export type AiBuildChatResponse = {
   answerType: AiChatAnswerType;
   message: string;
   builds: AiRecommendedBuild[];
-  partRecommendation?: AiPartRecommendation | null;
-  actions?: AiDraftAction[];
   simulation?: AiPerformanceSimulation | null;
   warnings?: string[];
 };
@@ -254,7 +206,7 @@ export const PART_CATEGORY_LABELS: Record<PartCategory, string> = {
 const initialAssistantMessage: AiChatMessage = {
   id: 'ai-intro',
   role: 'assistant',
-  text: '예산은 “800만원 PC 추천”처럼, 상세 이동은 “9950X3D 상세페이지로 이동해”처럼 물어보세요. 추천은 서버의 실제 부품 DB와 룰 기반 검증 결과로 계산됩니다.',
+  text: '예산 견적은 “200만원 게이밍 PC 추천”, 견적 완성은 “지금 견적 나머지 채워줘”, 성능 비교는 “CPU를 9700X로 바꾸면?”처럼 물어보세요. 추천은 서버의 실제 부품 DB와 룰 기반 검증 결과로 계산됩니다.',
   createdAt: '2026-06-30T00:00:00.000Z',
   kind: 'intro'
 };
@@ -264,7 +216,6 @@ export function emptyAssistantSession(): AiAssistantSession {
     messages: [initialAssistantMessage],
     latestBuilds: [],
     savedBuildIds: {},
-    appliedPartPreferences: [],
     latestGraphFocus: undefined,
     latestActiveBuildId: undefined,
     updatedAt: initialAssistantMessage.createdAt
@@ -360,7 +311,6 @@ export function readAssistantSession(ownerKey: string | null = getAiStorageOwner
       messages: normalizeAssistantMessages(parsed.messages.length > 0 ? parsed.messages : [initialAssistantMessage]),
       latestBuilds: mergeAiBuildHistory(parsed.latestBuilds ?? [], []),
       savedBuildIds: normalizeSavedBuildIds(parsed.savedBuildIds),
-      appliedPartPreferences: parsed.appliedPartPreferences ?? [],
       latestGraphFocus: parsed.latestGraphFocus,
       latestActiveBuildId: parsed.latestActiveBuildId,
       updatedAt: parsed.updatedAt ?? initialAssistantMessage.createdAt
@@ -473,10 +423,14 @@ function normalizeSavedBuildIds(value: unknown): Record<string, string> {
 }
 
 function normalizeAssistantMessages(messages: AiChatMessage[]) {
-  return messages.map((message) => ({
-    ...message,
-    builds: message.builds ? normalizeAiBuilds(message.builds) : undefined
-  }));
+  return messages.map((message) => {
+    const { actions: _legacyActions, partRecommendation: _legacyPartRecommendation, ...rest } =
+      message as AiChatMessage & { actions?: unknown; partRecommendation?: unknown };
+    return {
+      ...rest,
+      builds: message.builds ? normalizeAiBuilds(message.builds) : undefined
+    };
+  });
 }
 
 function buildCompositionFingerprint(build: AiRecommendedBuild) {

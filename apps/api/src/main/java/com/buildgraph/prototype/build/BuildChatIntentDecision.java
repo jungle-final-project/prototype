@@ -13,13 +13,6 @@ public record BuildChatIntentDecision(
         String semanticConstraintSignature,
         List<String> ambiguityReasons
 ) {
-    public boolean isMutation() {
-        return intent == BuildChatIntent.MUTATE_DRAFT_REMOVE
-                || intent == BuildChatIntent.MUTATE_DRAFT_QUANTITY
-                || intent == BuildChatIntent.MUTATE_DRAFT_REPLACE_EXACT
-                || intent == BuildChatIntent.MUTATE_DRAFT_RECOMMEND;
-    }
-
     public boolean isSemanticCacheEligible() {
         return "SEMANTIC_READ_ONLY".equals(cachePolicy)
                 && "NONE".equals(sideEffectRisk)
