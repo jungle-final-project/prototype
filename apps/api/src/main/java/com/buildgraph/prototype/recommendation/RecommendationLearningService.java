@@ -17,6 +17,12 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class RecommendationLearningService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    // 사용자 이벤트 API가 허용하는 sourceSurface. 자유 문자열을 허용하면 사용자가
+    // ADMIN_AS_FEEDBACK 같은 관리자 전용 surface를 위조해 학습 데이터를 오염시킬 수 있다.
+    private static final java.util.Set<String> USER_SOURCE_SURFACES = java.util.Set.of(
+            "BUILD_CHAT",
+            "HOME_RECOMMENDED_PARTS"
+    );
     private static final Map<String, Double> LABEL_SCORES = Map.ofEntries(
             Map.entry("IMPRESSION", 0.0),
             Map.entry("CLICK", 1.0),
@@ -54,6 +60,10 @@ public class RecommendationLearningService {
                 return existing;
             }
         }
+        String sourceSurface = firstText(text(request.get("sourceSurface")), "BUILD_CHAT").toUpperCase(Locale.ROOT);
+        if (!USER_SOURCE_SURFACES.contains(sourceSurface)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 sourceSurface입니다.");
+        }
         Long partId = resolvePartId(text(request.get("partId")));
         Long buildId = resolveOwnedBuildId(text(request.get("buildId")), user.internalId());
         Long asTicketId = resolveOwnedAsTicketId(text(request.get("asTicketId")), user.internalId());
@@ -62,7 +72,7 @@ public class RecommendationLearningService {
                 null,
                 eventType,
                 label(eventType),
-                firstText(text(request.get("sourceSurface")), "BUILD_CHAT"),
+                sourceSurface,
                 text(request.get("recommendationId")),
                 buildId,
                 partId,

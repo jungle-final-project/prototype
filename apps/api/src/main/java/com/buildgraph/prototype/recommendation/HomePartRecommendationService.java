@@ -188,19 +188,22 @@ public class HomePartRecommendationService {
                 return new ScoringOutcome("FALLBACK", null, true);
             }
             Long modelVersionId = modelRegistry.upsertShadowModelVersion(scorerResponse);
-            boolean matchedAnyScore = false;
             Map<String, HomePartCandidate> byPartId = new LinkedHashMap<>();
             for (HomePartCandidate candidate : candidates) {
                 byPartId.put(candidate.publicId(), candidate);
             }
+            // 스코어러 점수를 후보에 바로 덮어쓰지 않는다. 예전에는 여기서 candidate.score()를 덮어쓴 뒤
+            // baseline-shadow 판정으로 FALLBACK을 리턴해도 점수가 복원되지 않아, scoreSource=FALLBACK인데
+            // 실제 순위는 Python baseline 점수가 결정하는 거짓 표시가 됐다. 섀도우 기록은 그대로 남기고,
+            // 실모델(XGBOOST) 판정이 확정된 뒤에만 순위 점수에 반영한다.
+            Map<HomePartCandidate, Double> pendingScores = new LinkedHashMap<>();
             for (Map<String, Object> scoreRow : scores) {
                 HomePartCandidate candidate = byPartId.get(firstText(text(scoreRow.get("partId")), text(scoreRow.get("candidateId"))));
                 Double score = decimal(scoreRow.get("score"));
                 if (candidate == null || score == null) {
                     continue;
                 }
-                matchedAnyScore = true;
-                candidate.score(score);
+                pendingScores.put(candidate, score);
                 jdbcTemplate.update("""
                         INSERT INTO recommendation_shadow_scores (
                           user_id,
@@ -228,13 +231,15 @@ public class HomePartRecommendationService {
                         OBJECT_MAPPER.writeValueAsString(scoreRow)
                 );
             }
-            if (!matchedAnyScore) {
+            if (pendingScores.isEmpty()) {
                 return new ScoringOutcome("FALLBACK", null, true);
             }
             String modelVersion = text(scorerResponse.get("modelVersion"));
             if ("baseline-shadow".equals(modelVersion)) {
+                // 후보 점수를 건드리지 않았으므로 FALLBACK 표시와 실제 순위(Java deterministicScore)가 일치한다.
                 return new ScoringOutcome("FALLBACK", null, true);
             }
+            pendingScores.forEach(HomePartCandidate::score);
             return new ScoringOutcome("XGBOOST", modelVersion, false);
         } catch (Exception error) {
             log.warn("Home part XGBoost scoring skipped: {}", error.getMessage());
@@ -492,6 +497,10 @@ public class HomePartRecommendationService {
 
         private Map<String, Object> features(int rankPosition) {
             Integer price = DbValueMapper.integer(row, "price");
+            // 결측 기본값은 훈련 스냅샷(RecommendationTrainingService.featureSnapshot)과 반드시 일치해야 한다.
+            // 예전에는 여기서 null을 그대로 보내 Python이 0.0으로 치환 — 훈련(999=오래됨)과 정반대 의미가 됐다.
+            Double priceAgeDays = decimal(row.get("price_age_days"));
+            double priceAgeFeature = priceAgeDays == null ? 999.0 : priceAgeDays;
             Map<String, Object> features = new LinkedHashMap<>(MockData.map(
                     "rank_position", rankPosition,
                     "part_price", price,
@@ -503,8 +512,8 @@ public class HomePartRecommendationService {
                     "has_image", text(row.get("external_offer_image_url")) != null,
                     "part_has_offer", text(row.get("external_offer_url")) != null,
                     "has_offer", text(row.get("external_offer_url")) != null,
-                    "part_price_age_days", row.get("price_age_days"),
-                    "price_age_days", row.get("price_age_days"),
+                    "part_price_age_days", priceAgeFeature,
+                    "price_age_days", priceAgeFeature,
                     "part_tool_ready", toolReady(row),
                     "tool_ready", toolReady(row),
                     "part_has_fps_coverage", booleanValue(row.get("has_fps_coverage")),

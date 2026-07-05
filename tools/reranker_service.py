@@ -26,8 +26,11 @@ from pathlib import Path
 from typing import Any
 
 
+# 모델 피처 계약. Java의 훈련 스냅샷(RecommendationTrainingService.featureSnapshot)과
+# 서빙 요청(HomePartRecommendationService.features) 모두 이 이름·의미와 일치해야 한다.
+# rank_position은 제외한다: 훈련(카드 노출 위치 0~3)과 서빙(전체 후보 인덱스 0~N)의 의미가
+# 달라 학습-서빙 스큐를 만들고, 이전 랭킹이 정한 위치를 입력으로 쓰는 포지션 누수이기도 하다.
 FEATURES = [
-    "rank_position",
     "part_price",
     "build_total_price",
     "part_benchmark_score",
@@ -321,20 +324,80 @@ def run_training_job(job_id: int, dataset_id: int, worker_id: str, min_rows: int
 
 
 def load_training_rows(dataset_id: int) -> list[dict[str, Any]]:
+    # 이벤트 발생 시각 오름차순으로 정렬해 시간 기반 holdout 분리(과거로 학습, 최근으로 평가)가 가능하게 한다.
     with db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT features_snapshot,
-                       label_score_snapshot
-                FROM recommendation_training_dataset_items
-                WHERE dataset_id = %s
-                  AND included = true
-                ORDER BY id ASC
+                SELECT item.features_snapshot,
+                       item.label_score_snapshot,
+                       event.created_at AS event_created_at
+                FROM recommendation_training_dataset_items item
+                JOIN recommendation_events event ON event.id = item.event_id
+                WHERE item.dataset_id = %s
+                  AND item.included = true
+                ORDER BY event.created_at ASC, item.id ASC
                 """,
                 (dataset_id,),
             )
             return list(cur.fetchall())
+
+
+def mean_absolute_error(predictions: list[float], actuals: list[float]) -> float:
+    return sum(abs(pred - actual) for pred, actual in zip(predictions, actuals)) / len(actuals)
+
+
+def root_mean_squared_error(predictions: list[float], actuals: list[float]) -> float:
+    return math.sqrt(sum((pred - actual) ** 2 for pred, actual in zip(predictions, actuals)) / len(actuals))
+
+
+def midranks(values: list[float]) -> list[float]:
+    # 동순위는 평균 순위(midrank)로 처리한 순위 배열.
+    order = sorted(range(len(values)), key=lambda index: values[index])
+    ranks = [0.0] * len(values)
+    position = 0
+    while position < len(order):
+        tail = position
+        while tail + 1 < len(order) and values[order[tail + 1]] == values[order[position]]:
+            tail += 1
+        average_rank = (position + tail) / 2.0 + 1.0
+        for index in range(position, tail + 1):
+            ranks[order[index]] = average_rank
+        position = tail + 1
+    return ranks
+
+
+def spearman_correlation(predictions: list[float], actuals: list[float]) -> float | None:
+    # 예측과 실제 라벨의 순위 일치도(-1~1). 랭킹 문제에서 MAE보다 직접적인 신호다.
+    if len(predictions) < 2:
+        return None
+    pred_ranks = midranks(predictions)
+    actual_ranks = midranks(actuals)
+    mean_pred = sum(pred_ranks) / len(pred_ranks)
+    mean_actual = sum(actual_ranks) / len(actual_ranks)
+    covariance = sum((p - mean_pred) * (a - mean_actual) for p, a in zip(pred_ranks, actual_ranks))
+    pred_variance = math.sqrt(sum((p - mean_pred) ** 2 for p in pred_ranks))
+    actual_variance = math.sqrt(sum((a - mean_actual) ** 2 for a in actual_ranks))
+    if pred_variance == 0 or actual_variance == 0:
+        return None
+    return covariance / (pred_variance * actual_variance)
+
+
+def ndcg_at_k(predictions: list[float], actuals: list[float], k: int = 4) -> float | None:
+    # holdout 전체를 하나의 랭킹 그룹으로 본 NDCG@k. 음수 라벨은 gain 0으로 클램프한다.
+    # (요청 단위 그룹 정보가 학습 행에 없어 그룹별 NDCG는 불가 — 전역 근사치임을 이름으로 명시)
+    if not predictions:
+        return None
+    gains = [max(actual, 0.0) for actual in actuals]
+    if all(gain == 0.0 for gain in gains):
+        return None
+    predicted_order = sorted(range(len(predictions)), key=lambda index: predictions[index], reverse=True)
+    ideal_order = sorted(range(len(gains)), key=lambda index: gains[index], reverse=True)
+    dcg = sum(gains[index] / math.log2(position + 2) for position, index in enumerate(predicted_order[:k]))
+    ideal_dcg = sum(gains[index] / math.log2(position + 2) for position, index in enumerate(ideal_order[:k]))
+    if ideal_dcg == 0:
+        return None
+    return dcg / ideal_dcg
 
 
 def train_model(job_id: int, dataset_id: int, rows: list[dict[str, Any]], worker_id: str):
@@ -347,17 +410,35 @@ def train_model(job_id: int, dataset_id: int, rows: list[dict[str, Any]], worker
         features = row["features_snapshot"] or {}
         x.append([feature_value(features, name) for name in FEATURES])
         y.append(float(row["label_score_snapshot"]))
+
+    # 시간 기반 holdout: 과거 80%로 학습하고 최근 20%로 평가한다(rows는 event 시각 오름차순).
+    # 기존 train-on-train MAE/RMSE는 일반화 성능을 전혀 반영하지 못해 SHADOW 품질을 오판하게 했다.
+    holdout_size = max(len(rows) // 5, 5)
+    train_size = len(rows) - holdout_size
+    x_train, y_train = x[:train_size], y[:train_size]
+    x_holdout, y_holdout = x[train_size:], y[train_size:]
+
     model = XGBRegressor(
-        n_estimators=80,
+        n_estimators=200,
         max_depth=3,
         learning_rate=0.08,
         objective="reg:squarederror",
         random_state=42,
+        early_stopping_rounds=15,
     )
-    model.fit(x, y)
-    predictions = [float(value) for value in model.predict(x)]
-    mae = sum(abs(pred - actual) for pred, actual in zip(predictions, y)) / len(y)
-    rmse = math.sqrt(sum((pred - actual) ** 2 for pred, actual in zip(predictions, y)) / len(y))
+    model.fit(x_train, y_train, eval_set=[(x_holdout, y_holdout)], verbose=False)
+
+    train_predictions = [float(value) for value in model.predict(x_train)]
+    holdout_predictions = [float(value) for value in model.predict(x_holdout)]
+    holdout_metrics = {
+        "rows": len(y_holdout),
+        "mae": mean_absolute_error(holdout_predictions, y_holdout),
+        "rmse": root_mean_squared_error(holdout_predictions, y_holdout),
+        "spearman": spearman_correlation(holdout_predictions, y_holdout),
+        "ndcgAt4Global": ndcg_at_k(holdout_predictions, y_holdout, 4),
+        "split": "TIME_LAST_20PCT",
+    }
+
     model_version = f"home-parts-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-job{job_id}"
     artifact_path = f"/models/{model_version}.json"
     Path("/models").mkdir(parents=True, exist_ok=True)
@@ -366,8 +447,12 @@ def train_model(job_id: int, dataset_id: int, rows: list[dict[str, Any]], worker
         "modelVersion": model_version,
         "status": "SUCCEEDED",
         "rowCount": len(rows),
-        "mae": mae,
-        "rmse": rmse,
+        "trainRows": len(y_train),
+        # 참고용 in-sample 지표(과적합 정도 파악용). 품질 판단은 holdout을 봐야 한다.
+        "trainMae": mean_absolute_error(train_predictions, y_train),
+        "trainRmse": root_mean_squared_error(train_predictions, y_train),
+        "holdout": holdout_metrics,
+        "bestIteration": int(getattr(model, "best_iteration", 0) or 0),
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "workerId": worker_id,
     }

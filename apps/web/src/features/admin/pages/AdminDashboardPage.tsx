@@ -300,7 +300,10 @@ export function AdminDashboardPage() {
       </div>
     ),
     status: <StatusBadge status={item.status} />,
-    metric: item.metrics?.mae !== undefined ? `MAE ${Number(item.metrics.mae).toFixed(3)}` : '-',
+    // 새 학습 워커는 holdout 지표(일반화 성능)를 기록한다. 구 모델의 in-sample mae는 폴백 표시.
+    metric: item.metrics?.holdout?.mae !== undefined
+      ? `MAE(holdout) ${Number(item.metrics.holdout.mae).toFixed(3)}`
+      : item.metrics?.mae !== undefined ? `MAE ${Number(item.metrics.mae).toFixed(3)}` : '-',
     createdAt: item.createdAt ?? '-',
     action: (
       <div className="flex flex-wrap gap-2">
