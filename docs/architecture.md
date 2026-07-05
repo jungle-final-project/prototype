@@ -36,6 +36,7 @@ seed/
 | redis | 캐시/작업 상태 확장용 | `6379` |
 | rabbitmq | 비동기 작업 확장용 | `5672`, `15672` |
 | mailpit | 메일 발송 테스트 | `1025`, `8025` |
+| xgb-reranker | XGBoost 추천 스코어러 + 학습 워커 | `8091` |
 
 ## 백엔드 도메인
 
@@ -49,6 +50,7 @@ seed/
 | rag | `.../rag` | 근거 검색, 근거 상세 |
 | log | `.../log` | Agent 로그 업로드 |
 | ticket | `.../ticket` | AS 티켓 |
+| recommendation | `.../recommendation` | 홈 추천부품 스코어링, 추천 학습 이벤트/모델 운영 |
 | admin | `.../admin` | 관리자 dashboard와 운영 조회 |
 
 ## 프론트엔드 구조

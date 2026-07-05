@@ -67,6 +67,16 @@ docker compose up --build
 | `RECOMMENDATION_RERANKER_ENDPOINT` | 선택 | 홈 추천부품 XGBoost scorer | Docker 기본값은 `http://xgb-reranker:8091/score`입니다. 로컬 jar 단독 실행 시에는 `http://localhost:8091/score`로 바꿉니다. |
 | `RECOMMENDATION_RERANKER_MODEL_PATH` | 선택 | XGBoost scorer 모델 파일 | Docker에서는 `/models/<model-file>.json` 형식입니다. 비어 있으면 baseline scorer로 동작합니다. |
 | `RECOMMENDATION_RERANKER_MODEL_VOLUME` | 선택 | XGBoost scorer 모델 저장소 | Docker Compose 기본값은 named volume `recommendation-models`입니다. 로컬 파일을 직접 연결할 때만 공유 가능한 host 경로로 바꿉니다. |
+| `RECOMMENDATION_RERANKER_ENABLED` | 선택 | XGBoost rerank 순위 반영 | 기본값은 `false`입니다. `true`면 rerank 점수를 실제 후보 순위에 반영하고, `false`면 shadow 기록만 남깁니다. |
+| `RECOMMENDATION_RERANKER_SHADOW_ENABLED` | 선택 | XGBoost shadow 수집 | 기본값은 `true`입니다. 홈 추천 shadow 점수 수집과 scorer 사용 전체 스위치입니다. 운영 규칙 상세는 [docs/RECOMMENDATION_OPERATIONS.md](docs/RECOMMENDATION_OPERATIONS.md)를 참고합니다. |
+| `RECOMMENDATION_RERANKER_TIMEOUT_MS` | 선택 | XGBoost scorer 호출 타임아웃 | 기본값은 `1200`ms입니다. |
+| `RECOMMENDATION_TRAINING_WORKER_ENABLED` | 선택 | xgb-reranker 학습 워커 | 기본값은 `true`입니다. 컨테이너 안에서 `QUEUED` 학습 Job을 polling해 처리합니다. |
+| `RECOMMENDATION_TRAINING_MIN_ROWS` | 선택 | 학습 최소 행 수 | 기본값은 `50`입니다. 미만이면 학습 Job이 `SKIPPED_LOW_DATASET`으로 끝납니다. |
+| `RECOMMENDATION_TRAINING_POLL_SECONDS` | 선택 | 학습 Job polling 주기 | 기본값은 `5`초입니다. |
+| `SCHEDULING_POOL_SIZE` | 선택 | API `@Scheduled` 잡 스레드풀 크기 | 기본값은 `4`입니다. 파이프라인 잡(가격/다나와/릴리스 스캔/프리웜/티어 스냅샷)이 한 스레드를 공유하며 서로 막지 않게 격리합니다. compose.yaml에는 env 매핑이 없어 Docker에서 바꾸려면 compose에 매핑을 추가해야 합니다. |
+| `DEMO_FREEZE_MUTATIONS` | 선택 | 데모 동결 단일 스위치 | 기본값은 `false`입니다. `true`면 가격/다나와/추이/제조사 스캔 스케줄러 4종이 `SKIPPED_FROZEN`으로 건너뛰고, 관리자 가격 Job 실행(`POST /api/admin/price-jobs/run`)은 `409`로 거절됩니다. 읽기 API에는 영향이 없습니다. |
+| `AGENT_DEMO_ACTIVATION_TOKEN` | 선택 | PC Agent 데모 등록 토큰 | 기본값(빈값)이면 데모 등록 경로가 비활성화되어 `401`을 반환합니다. Docker Compose 로컬 스택은 `demo-agent-activation-token`으로 켜 둡니다. 프로덕션 배포에서는 반드시 비우거나 DB 발급 토큰 방식으로 대체합니다. |
+| `PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED` | 선택 | 인증 없는 데모 RSS 피드 노출 | 기본값은 `false`이며 이때 `/api/demo/manufacturer-release-feed.xml` 라우트 자체가 비활성화됩니다. Docker Compose 로컬 스택만 `true`입니다. |
 | `OPENAI_EMBEDDING_MODEL` | 선택 | RAG vector 검색 | 기본값은 `text-embedding-3-small`입니다. |
 | `OPENAI_EMBEDDING_DIMENSIONS` | 선택 | RAG vector 검색 | 기본값은 `1536`입니다. |
 | `RAG_VECTOR_ENABLED` | 선택 | RAG 검색 방식 | 기본값은 `true`입니다. 키/embedding이 없으면 keyword fallback을 사용합니다. |
@@ -307,7 +317,7 @@ python tools/benchmark_build_chat_profiles.py --variant-label vector-on
 
 ## 홈 추천부품 XGBoost scorer
 
-홈 인기 부품 랭킹은 `GET /api/recommendations/home-parts`가 반환합니다. 현재 홈 화면은 `limit=8`로 2줄 랭킹을 표시하며, API의 기본값은 파라미터를 생략했을 때 4개입니다. Docker Compose는 `xgb-reranker` 서비스를 함께 실행하며, trained model scorer가 정상 응답하면 XGBoost score를 홈 추천부품 순서에 반영합니다. 모델 파일이 없거나 scorer가 baseline-shadow/오류를 반환하면 API는 deterministic fallback으로 사용자 화면을 유지합니다.
+홈 인기 부품 랭킹은 `GET /api/recommendations/home-parts`가 반환합니다. 현재 홈 화면은 `limit=8`로 2줄 랭킹을 표시하며, API의 기본값은 파라미터를 생략했을 때 4개입니다. Docker Compose는 `xgb-reranker` 서비스를 함께 실행합니다. `ACTIVE` 모델이 있으면 API가 scorer를 동기 호출해 XGBoost score를 홈 추천부품 순서에 반영하고(`scoreSource=XGBOOST`), scorer가 baseline임이 확인되면 홈 응답을 scorer 호출로 블로킹하지 않고 deterministic 순위로 즉시 응답하면서(`scoreSource=FALLBACK`) 백그라운드로 shadow 점수만 기록합니다. 같은 후보 집합의 shadow 기록은 기본 5분 스로틀이 적용되고(`recommendation.reranker.shadow-throttle-ms`), 쌓인 shadow 점수는 매일 03:40 KST에 30일 초과분이 삭제됩니다(`recommendation.shadow.retention-days`/`retention-cron`, Docker에서 바꾸려면 compose.yaml에 env 매핑 추가 필요). 모델을 활성화/은퇴하면 서빙 모드가 즉시 전환됩니다. 승급 게이트, 서빙 모드, 학습 데이터 정책 등 추천 운영 상세는 [docs/RECOMMENDATION_OPERATIONS.md](docs/RECOMMENDATION_OPERATIONS.md)를 참고합니다.
 
 권장 운영 순서:
 
@@ -320,9 +330,9 @@ docker compose up --build -d api web xgb-reranker
 3. dataset이 `DRAFT`인 동안 노출만 있는 약한 이벤트 등을 include/exclude로 정리합니다.
 4. dataset을 `LOCKED`로 잠급니다.
 5. 학습 Job을 생성합니다. API는 DB에 `QUEUED` Job만 만들고, `xgb-reranker` worker가 학습을 처리합니다.
-6. 성공한 모델은 `SHADOW`로만 저장됩니다. metric을 확인한 뒤 `활성화`를 누르면 scorer reload 성공 후 `ACTIVE`로 전환됩니다.
+6. 성공한 모델은 `SHADOW`로만 저장되며, 최근 20% 시간 기반 holdout 지표(NDCG@4, Spearman, MAE/RMSE)가 `metrics.holdout`으로 함께 기록됩니다. holdout 지표를 확인한 뒤 `활성화`를 누르면 scorer reload 성공 후 `ACTIVE`로 전환됩니다. holdout 지표가 없는 구버전 모델은 활성화가 `409`로 거절되므로 최신 워커로 재훈련합니다. 활성화 성공 시 기존 `ACTIVE` 모델은 자동으로 `RETIRED` 처리됩니다.
 
-기본 학습은 50행 미만이면 `SKIPPED_LOW_DATASET`으로 끝나며 모델 버전을 만들지 않습니다. CLI export/train은 로컬 분석 또는 데모 보조용으로 남겨두며, 운영 기본 흐름은 관리자 dataset/job UI입니다.
+기본 학습은 50행 미만이면 `SKIPPED_LOW_DATASET`으로 끝나며 모델 버전을 만들지 않습니다. CLI export/train은 로컬 분석 또는 데모 보조용으로 남겨두며, 운영 기본 흐름은 관리자 dataset/job UI입니다. 주의: CLI 학습 도구(`tools/train_xgb_reranker.py`)는 현재 서빙 피처 계약과 다릅니다(서빙 `FEATURES`는 `rank_position` 제외, CLI 학습/추출은 `rank_position` 포함). CLI로 만든 모델을 Docker scorer에 직접 연결하면 scoring이 실패해 홈이 항상 FALLBACK으로 떨어지므로, 운영 모델은 반드시 관리자 dataset/job UI(워커 학습)로 만듭니다.
 
 ```powershell
 python tools/export_recommendation_training_data.py --home-parts --output artifacts/recommendation/training-home-parts.csv
@@ -335,7 +345,7 @@ Docker scorer의 기본 active 모델 경로는 `/models/home-parts-active.json`
 RECOMMENDATION_RERANKER_MODEL_PATH=/models/home-parts-active.json
 ```
 
-CLI로 만든 `artifacts/recommendation/model` 파일을 Docker scorer에 직접 연결해야 할 때만 아래처럼 bind mount로 바꿉니다. macOS Docker Desktop에서는 이 host 경로가 File Sharing에 포함되어 있어야 합니다.
+CLI로 만든 `artifacts/recommendation/model` 파일을 Docker scorer에 직접 연결해야 할 때만 아래처럼 bind mount로 바꿉니다(위 피처 계약 주의 — 로컬 실험 용도로만 사용). macOS Docker Desktop에서는 이 host 경로가 File Sharing에 포함되어 있어야 합니다.
 
 ```env
 RECOMMENDATION_RERANKER_MODEL_VOLUME=./artifacts/recommendation/model
@@ -354,6 +364,8 @@ docker compose up --build -d xgb-reranker api
 상품 사진과 공급업체 표시는 `part_external_offers` 캐시를 읽습니다. 저장소 루트 `.env`에 아래 값을 넣고 API를 재빌드한 뒤, 관리자 갱신 API를 호출해 내부 자산과 외부 상품 캐시를 채웁니다. 갱신 작업이 `part_external_offers.low_price`를 저장하면 같은 값을 `parts.price`와 `price_snapshots`에도 반영하므로, 사용자 화면의 가격/정렬/필터는 마지막으로 저장된 네이버 검색 가격 기준으로 동작합니다. 상품별 가격변동 추이는 `GET /api/parts/{id}/price-history`가 `price_snapshots`를 읽어서 반환합니다.
 
 API 서버가 실행 중이고 네이버 키가 설정되어 있으면 `part.price-refresh.cron`에 따라 한국시간 매일 04:00에 `part_external_offers`를 자동 갱신합니다. 기본 수동 갱신도 `force=true`가 없으면 최근 1일 안에 갱신된 상품을 건너뜁니다.
+
+네이버 API 호출에는 connect 5초/read 10초 타임아웃과 요청 간 150ms 지연이 적용됩니다(`naver.search.connect-timeout-ms`/`read-timeout-ms`/`request-delay-ms` 프로퍼티, 연속 오류 시 비례 백오프 후 조기 중단. Docker에서 바꾸려면 compose.yaml에 env 매핑 추가 필요). API 오류(429/5xx/타임아웃)는 상품 미매칭(`skipped`)과 구분된 `errors`로 집계됩니다. 자동 갱신을 포함한 스케줄 잡 실행 결과는 `pipeline_job_runs`에 기록되어 관리자 가격 작업 화면의 `스케줄 실행 이력`과 `GET /api/admin/pipeline-job-runs`로 확인할 수 있으며, `DEMO_FREEZE_MUTATIONS=true`면 자동/수동 갱신이 모두 동결됩니다.
 
 ```env
 NAVER_SEARCH_CLIENT_ID=...
@@ -396,6 +408,30 @@ Invoke-RestMethod -Method Post `
 `catalog/refresh`는 category별 query pack을 사용합니다. GPU는 RTX 5090/5080/5070 Ti/5070/5060 Ti/5060을 ASUS, MSI, GIGABYTE, ZOTAC, PNY 등 제조사 검색어로 나누어 수십 개 후보를 모읍니다. MOTHERBOARD, PSU도 주요 제조사와 최신 규격 검색어 묶음을 사용합니다.
 
 키가 없거나 캐시가 없으면 `/api/parts`는 정상 동작하지만 `externalOffer`는 `null`이고, 웹은 기본 썸네일과 공급업체 `-`로 표시합니다. 네이버 키는 절대 커밋하지 않습니다.
+
+## 제조사 릴리스 인테이크
+
+신제품 자산 후보 수집 파이프라인입니다. 공식 제조사 피드를 읽어 `manufacturer_posts`로 저장하고, 제품 후보로 판정된 게시글을 `part_catalog_candidates`로 만듭니다. AI 초안(`ai-asset-draft`)은 게시글 구조화와 후보 생성/동기화까지만 수행하며, `INACTIVE` 자산 초안은 관리자가 후보를 검수한 뒤 approve로만 만듭니다.
+
+- 기본 OFF입니다. `PART_MANUFACTURER_RELEASE_INTAKE_ENABLED=true`면 한국시간 매일 06:00(`PART_MANUFACTURER_RELEASE_INTAKE_CRON`)에 전체 scan이 실행됩니다.
+- 전체 scan은 source별 `poll_interval_minutes` 주기가 도래한 활성 source만 대상으로 하며, 저장된 ETag/Last-Modified로 조건부 GET을 보내 304면 본문을 다시 받지 않습니다. 외부 호출에는 connect 10초/read 20초 타임아웃이 적용됩니다(`part.manufacturer-release-intake.connect-timeout-ms`/`read-timeout-ms`).
+- 차단성 응답(403/429)이 연속 3회 누적되면 해당 source는 `ERROR`가 아니라 `PAUSED`로 자동 전환되어 scan 대상에서 빠집니다. 관리자 화면에서 원인을 확인한 뒤 수동으로 재개합니다. UA 위장으로 차단을 우회하지 않습니다.
+- scan 결과는 `pipeline_job_runs`에 기록되며 `DEMO_FREEZE_MUTATIONS=true`면 동결 대상입니다.
+- 데모 RSS 피드 `/api/demo/manufacturer-release-feed.xml`은 `PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED=true`인 로컬/데모 환경에서만 노출됩니다(기본 false, Docker Compose 로컬 스택은 true).
+
+## 데모 동결과 스케줄 잡 실행 이력
+
+데모 시연 직전에는 `.env`에 `DEMO_FREEZE_MUTATIONS=true`를 넣고 API를 재기동합니다. 가격/다나와/추이/제조사 스캔 스케줄러 4종이 일괄 동결되어 실행 이력에 `SKIPPED_FROZEN`으로 남고, 관리자 가격 Job 실행(`POST /api/admin/price-jobs/run`)은 `409`로 거절됩니다. 읽기 API에는 영향이 없습니다. 데모가 끝나면 `false`로 되돌리고 다시 재기동합니다.
+
+스케줄 파이프라인 잡(네이버 가격, 다나와 스냅샷/추이, 제조사 릴리스 스캔, 추천 shadow 보존 정리)의 실행 이력은 `pipeline_job_runs`에 기록됩니다. 관리자 가격 작업 화면의 `스케줄 실행 이력` 패널 또는 `GET /api/admin/pipeline-job-runs`로 확인합니다.
+
+| status | 의미 |
+| --- | --- |
+| `SUCCEEDED` / `FAILED` | 정상 완료 / 실패(`errorSummary` 기록) |
+| `SKIPPED_FROZEN` | `DEMO_FREEZE_MUTATIONS=true` 동결로 건너뜀 |
+| `SKIPPED_LOCKED` | 다른 인스턴스가 같은 잡을 실행 중이어서 건너뜀 |
+
+API 인스턴스를 여러 개 띄워도 스케줄 잡은 잡 이름 단위 Postgres advisory lock으로 상호배제되며, 락을 못 잡은 인스턴스는 실행하지 않고 `SKIPPED_LOCKED` 이력만 남깁니다(잡 실행 중 DB 커넥션 1개 점유). 홈 추천 파이프라인의 승급/롤백/서빙 모드 등 운영 규칙은 [docs/RECOMMENDATION_OPERATIONS.md](docs/RECOMMENDATION_OPERATIONS.md)에 있습니다.
 
 ## Java 21 로컬 설치
 

@@ -17,7 +17,7 @@
    - 자연어 예산 견적 추천 ("200만원 게이밍 PC")
    - 그래프 노드(현재 견적 드래프트) 기반 견적 생성/완성
    - 내부 DB 자산(`part_benchmark_normalized_scores` 등) 기반 성능 차이 비교
-4. 그래프 노드 클릭 시 단순 호환 부품 리스트 제공은 **그래프 UI가 담당**한다 (챗봇 아님). 이미 `/api/parts/compatible-candidates`로 구현되어 있다.
+4. 그래프 노드 클릭 시 단순 호환 부품 리스트 제공은 **그래프 UI가 담당**한다 (챗봇 아님). 이미 `/api/parts/compatible-candidates`로 구현되어 있다. *(이후 슬롯보드 개편(PR #61)으로 `/self-quote` 후보 패널은 `GET /api/parts` + `compatibilitySource=QUOTE_DRAFT_CURRENT`로 대체됐고, `compatible-candidates`는 홈/빌드 상세의 `BuildDependencyGraph` 전용으로 남았다.)*
 5. 챗봇에서 제거되는 기능의 백엔드 코드는 삭제하되, 삭제 전 상태를 `backup/build-chat-full-feature` 브랜치에 보존한다. (완료: origin에 push됨)
 
 ## 2. 챗봇 기능 명세 (축소 후)
@@ -33,7 +33,7 @@
 
 - 견적 결과의 "이 조합으로 셀프 견적 보기"(= `apply-ai-build`)는 **견적 생성의 출력 경로이므로 유지**한다.
 - 시뮬레이션은 항상 `actions=[]`, 드래프트를 변경하지 않는다 (기존 원칙 유지).
-- 챗봇은 현재 드래프트(그래프 상태)를 항상 컨텍스트로 전송한다 — 지금은 `surface === 'self-quote'`일 때만 보내는데, **모든 surface에서 전송**하도록 변경.
+- 챗봇은 현재 드래프트(그래프 상태)를 항상 컨텍스트로 전송한다 — 지금은 `surface === 'self-quote'`일 때만 보내는데, **모든 surface에서 전송**하도록 변경. *(구현은 조건부로 확정: surface와 무관하게, 프롬프트가 드래프트를 필요로 할 때(`needsDraftContext`)만 포함하며, PR #60에서 eager draft fetch도 제거됐다.)*
 
 ### 제거하는 기능
 
@@ -71,7 +71,7 @@
 
 | 파일 | 변경 |
 | --- | --- |
-| `build/BuildChatIntent.java` | enum 축소: `SIMULATE_REPLACEMENT`, `BUILD_RECOMMEND`, `ASK_CLARIFICATION`, `LLM_FULL`만 유지 |
+| `build/BuildChatIntent.java` | enum 축소: `SIMULATE_REPLACEMENT`, `BUILD_RECOMMEND`, `ASK_CLARIFICATION`, `UNSUPPORTED` (LLM_FULL은 intent enum이 아니라 처리 경로 `pathType`/fallback 명칭으로만 존재) |
 | `build/BuildChatIntentRouter.java` | 네비게이션/필터/뮤테이션/부품추천 분기 제거 |
 | `build/BuildChatService.java` | 제거된 intent 처리 경로 삭제, draft 컨텍스트 기반 견적 완성 유지/보강 |
 | cache 서비스 | 제거된 intent 서명 정리 |
