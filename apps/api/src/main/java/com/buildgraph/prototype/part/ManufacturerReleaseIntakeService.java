@@ -345,13 +345,49 @@ public class ManufacturerReleaseIntakeService {
                 failed += 1;
             }
         }
+        // 후보 생성이 일시 실패(네이버 키 미설정/장애)했던 게시물을 스캔과 독립적으로 재시도한다.
+        // 예전에는 게시물이 피드에서 밀려나면 후보가 영원히 생성되지 않았다(감사 A5).
+        Map<String, Object> backfill = !Boolean.FALSE.equals(createCandidates)
+                ? backfillMissingCandidates(safeLimit)
+                : MockData.map("attempted", 0, "created", 0);
         return MockData.map(
                 "scannedSources", scanned,
                 "newPosts", newPosts,
                 "createdCandidates", candidates,
                 "failedSources", failed,
+                "candidateBackfill", backfill,
                 "results", results
         );
+    }
+
+    // PRODUCT_CANDIDATE인데 후보 연결이 없는 게시물(감지 카테고리·제품명이 있어 검색 가능한 것만)에
+    // 후보 생성을 재시도한다. 관리자/AI 확정 게시물도 후보가 없으면 대상이다(IGNORED는 상태로 제외됨).
+    private Map<String, Object> backfillMissingCandidates(int limit) {
+        List<Map<String, Object>> posts = jdbcTemplate.queryForList("""
+                SELECT public_id::text AS public_id
+                FROM manufacturer_posts
+                WHERE classification_status = 'PRODUCT_CANDIDATE'
+                  AND created_catalog_candidate_id IS NULL
+                  AND detected_category IS NOT NULL
+                  AND detected_product_name IS NOT NULL
+                  AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT ?
+                """, Math.min(Math.max(limit, 1), 50));
+        int attempted = 0;
+        int created = 0;
+        for (Map<String, Object> post : posts) {
+            attempted += 1;
+            try {
+                Map<String, Object> result = createCandidateForPost(stringValue(post.get("public_id")), null);
+                if (Boolean.TRUE.equals(result.get("created"))) {
+                    created += 1;
+                }
+            } catch (RuntimeException ignored) {
+                // 개별 게시물 실패가 backfill 전체를 멈추지 않는다. 다음 스캔 주기에 다시 시도된다.
+            }
+        }
+        return MockData.map("attempted", attempted, "created", created);
     }
 
     public Map<String, Object> scanSource(String sourceId, Integer limit, Boolean createCandidates) {

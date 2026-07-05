@@ -69,6 +69,9 @@ class AdminControllerTest {
     private BuildGraphLayoutService buildGraphLayoutService;
 
     @MockitoBean
+    private com.buildgraph.prototype.common.PipelineJobRunRecorder pipelineJobRunRecorder;
+
+    @MockitoBean
     private CurrentUserService currentUserService;
 
     @BeforeEach

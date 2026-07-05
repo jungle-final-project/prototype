@@ -951,6 +951,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/pipeline-job-runs:
+    get:
+      summary: 스케줄 파이프라인 잡 실행 이력 조회
+      description: 매일 도는 수집 잡(네이버 가격/다나와 스냅샷·추이/제조사 릴리스 스캔/추천 섀도우 보존 정리)의 자동 실행 결과를 최신순으로 반환한다. status는 SUCCEEDED/FAILED/SKIPPED_FROZEN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 30
+            maximum: 100
+      responses:
+        "200":
+          description: 실행 이력 목록
+          content:
+            application/json:
+              schema:
+                type: object
   /api/admin/price-jobs:
     get:
       summary: 관리자 가격 수집 작업 목록

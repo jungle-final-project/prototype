@@ -817,6 +817,32 @@ Index:
 - index: `price_jobs.created_at`
 - partial unique: `QUEUED`, `RUNNING` 상태의 active job은 동시에 1개만 허용한다.
 
+### pipeline_job_runs
+
+목적: 스케줄 수집 파이프라인 잡(네이버 일일 가격, 다나와 스냅샷/추이, 제조사 릴리스 스캔, 추천 섀도우 보존 정리)의 자동 실행 이력을 저장한다. 실행 결과가 서버 로그로만 남아 실패가 관리자에게 보이지 않던 문제를 해소한다 (V91).
+
+주 owner: 2번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGSERIAL` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `job_name` | `TEXT` | no | - | `PART_PRICE_REFRESH`, `DANAWA_SNAPSHOT_REFRESH`, `DANAWA_TREND_REFRESH`, `MANUFACTURER_RELEASE_SCAN`, `SHADOW_SCORE_RETENTION` |
+| `trigger_type` | `TEXT` | no | - | `SCHEDULED` |
+| `status` | `TEXT` | no | - | `SUCCEEDED`, `FAILED`, `SKIPPED_FROZEN` |
+| `result_summary` | `JSONB` | yes | - | 서비스 결과 맵(attempted/updated/errors 등) |
+| `error_summary` | `TEXT` | yes | - | 실패/스킵 사유 |
+| `started_at` | `TIMESTAMPTZ` | no | - | 시작 시각 |
+| `finished_at` | `TIMESTAMPTZ` | yes | - | 종료 시각 |
+| `duration_ms` | `BIGINT` | yes | - | 소요 시간 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+
+Index:
+
+- unique: `pipeline_job_runs.public_id`
+- index: `(job_name, created_at DESC)`
+- index: `pipeline_job_runs.created_at DESC`
+
 ### compatibility_rules
 
 목적: 부품 호환성 검증에 쓰는 read-only seed 기준 데이터를 저장한다.

@@ -96,6 +96,9 @@ class PcAgentControllerSecurityTest {
     @MockitoBean
     private BuildGraphLayoutService buildGraphLayoutService;
 
+    @MockitoBean
+    private com.buildgraph.prototype.common.PipelineJobRunRecorder pipelineJobRunRecorder;
+
     @Test
     void registerAllowsBootstrapWithoutAgentBearerToken() throws Exception {
         when(pcAgentAsService.register(anyMap())).thenReturn(Map.of(
