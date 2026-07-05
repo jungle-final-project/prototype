@@ -185,13 +185,10 @@ export function BuildDependencyGraph({
   }, [canShowFloatingGraph, isDesktopViewport]);
 
   const handleNodeClick = (node: Node) => {
+    // 노드 클릭은 후보 패널만 연다. 카테고리 전환(목록 페이지 리셋)은 패널의 명시적 버튼으로 분리한다.
     const originalNodeId = typeof node.data.originalId === 'string' ? node.data.originalId : String(node.id);
     setActiveNodeId(originalNodeId);
     setActiveEdge(null);
-    const category = node.data.category;
-    if (typeof category === 'string' && isPartCategory(category)) {
-      onCategorySelect?.(category);
-    }
   };
 
   const handleEdgeClick = (edge: Edge) => {
@@ -308,6 +305,12 @@ export function BuildDependencyGraph({
                   }}
                   onNodeClick={(_, node: Node) => handleNodeClick(node)}
                   onEdgeClick={(_, edge: Edge) => handleEdgeClick(edge)}
+                  onPaneClick={() => {
+                    // 빈 캔버스를 클릭하면 노드/엣지 선택과 후보 패널을 해제해 선택을 취소할 수 있게 한다.
+                    setActiveNodeId(null);
+                    setActiveEdge(null);
+                    setIsEdgeGuideVisible(false);
+                  }}
                 >
                   <Background color="#dbe4f0" gap={18} />
                   {isDesktopViewport ? <Controls showInteractive={false} /> : null}
@@ -336,6 +339,7 @@ export function BuildDependencyGraph({
                 isLoading={candidateQuery.isLoading}
                 isError={candidateQuery.isError}
                 rejectedCount={candidateQuery.data?.rejectedCount ?? 0}
+                onViewCategoryList={activeNodeCategory && onCategorySelect ? () => onCategorySelect(activeNodeCategory) : undefined}
               />
             ) : null}
           </div>
@@ -1078,7 +1082,8 @@ function GraphNodeCandidatePanel({
   isLoading,
   isError,
   rejectedCount,
-  onClose
+  onClose,
+  onViewCategoryList
 }: {
   variant?: 'inline' | 'floating';
   activeNode: BuildGraphNode;
@@ -1089,6 +1094,7 @@ function GraphNodeCandidatePanel({
   isError: boolean;
   rejectedCount: number;
   onClose?: () => void;
+  onViewCategoryList?: () => void;
 }) {
   const panelClassName = variant === 'floating'
     ? 'rounded-xl border border-commerce-line bg-white p-4 shadow-2xl'
@@ -1112,6 +1118,15 @@ function GraphNodeCandidatePanel({
         </div>
       ) : null}
       <SelectedNodePanel node={activeNode} />
+      {activeNodeCategory && onViewCategoryList ? (
+        <button
+          type="button"
+          onClick={onViewCategoryList}
+          className="mb-4 w-full rounded-md border border-commerce-line bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-commerce-ink hover:text-commerce-ink focus:outline-none focus:ring-2 focus:ring-brand-blue"
+        >
+          이 카테고리 목록 보기
+        </button>
+      ) : null}
       {activeNodeCategory && candidateContext ? (
         <>
           <div className="mb-4 border-t border-dashed border-commerce-line" />

@@ -936,7 +936,9 @@ public class BuildQueryService {
 
     private static PartCandidate chooseByTarget(List<PartCandidate> parts, int targetPrice) {
         if (parts.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "추천에 필요한 내부 자산이 부족합니다.");
+            // 카탈로그 카테고리 후보가 없는 것은 서버 장애가 아니라 자산 부족이므로 503으로 안내한다
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "추천에 필요한 부품 자산이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.");
         }
         return parts.stream()
                 .filter(part -> part.price() <= targetPrice)
@@ -1087,13 +1089,21 @@ public class BuildQueryService {
     }
 
     private static Integer inferBudget(String message) {
-        Matcher manwon = BUDGET_MANWON.matcher(message);
-        if (manwon.find()) {
-            return Integer.parseInt(manwon.group(1)) * 10_000;
-        }
-        Matcher number = BUDGET_NUMBER.matcher(message);
-        if (number.find()) {
-            return Integer.parseInt(number.group(1).replace(",", ""));
+        // 거대한 숫자 입력이 int 범위를 넘어 parseInt/곱셈에서 오버플로해 500이 나던 문제를 방지한다.
+        // 파싱 불가하거나 범위를 벗어나면 예외 대신 null(예산 없음)로 처리해 조용히 무시한다.
+        try {
+            Matcher manwon = BUDGET_MANWON.matcher(message);
+            if (manwon.find()) {
+                long won = Long.parseLong(manwon.group(1)) * 10_000L;
+                return (int) Math.min(won, Integer.MAX_VALUE);
+            }
+            Matcher number = BUDGET_NUMBER.matcher(message);
+            if (number.find()) {
+                long won = Long.parseLong(number.group(1).replace(",", ""));
+                return (int) Math.min(won, Integer.MAX_VALUE);
+            }
+        } catch (NumberFormatException ignored) {
+            return null;
         }
         return null;
     }

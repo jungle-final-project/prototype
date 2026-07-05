@@ -3,7 +3,7 @@ import { Bell, CheckCircle2, FolderPlus, PackageCheck, Search, ShoppingCart, Sli
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { CategorySidebar, DataTable, Panel, Screen, StateMessage } from '../../../components/ui';
-import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
+import { ApiError, AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
 import { BuildDependencyGraph } from '../../quote/components/BuildDependencyGraph';
 import {
   AI_SELECTED_BUILD_CHANGED_EVENT,
@@ -82,6 +82,8 @@ export function SelfQuotePage() {
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['build-history'] })
   });
+  // 담기/빼기/수량 변경 mutation 실패가 조용히 삼켜지지 않도록 장바구니 영역에 에러를 노출한다.
+  const cartMutationError = cartMutationErrorMessage(addMutation.error ?? deleteMutation.error ?? quantityMutation.error);
   const parts = data?.items ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -276,6 +278,8 @@ export function SelfQuotePage() {
           onCategorySelect={selectCategory}
           candidateContext={{
             source: 'QUOTE_DRAFT_CURRENT',
+            // 담기/빼기로 draft가 바뀌면 items-signature가 갱신되어 호환 후보가 stale되지 않고 재조회된다.
+            items: draftItems.map((item) => ({ partId: item.partId, category: item.category, quantity: item.quantity })),
             readOnly: false,
             selectedPartIds,
             onSelectPart: addPart
@@ -415,6 +419,16 @@ export function SelfQuotePage() {
                 ) : null}
                 {saveQuoteMutation.isError ? (
                   <StateMessage type="warn" title="내 견적함 추가 실패" body="현재 견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+                ) : null}
+                {cartMutationError ? (
+                  <div className="space-y-2">
+                    <StateMessage type="warn" title="장바구니 반영 실패" body={cartMutationError.body} />
+                    {cartMutationError.isAuth ? (
+                      <Link to={`/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`} className="flex min-h-10 items-center justify-center rounded-md border border-orange-200 bg-orange-50 px-3 text-xs font-black text-orange-700 hover:border-orange-300">
+                        다시 로그인하기
+                      </Link>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
               <div className="mt-4 space-y-3">
@@ -775,6 +789,21 @@ function DraftQuantityStepper({ item, onChange, disabled }: { item: QuoteDraftIt
 
 function allowsQuantity(category: string) {
   return category === 'RAM' || category === 'STORAGE';
+}
+
+// 담기/빼기/수량 mutation 오류를 사용자 안내 문구로 변환한다. 401은 로그인 유도, 그 외에는 서버 메시지(예: 비활성/삭제 부품 404)를 그대로 노출한다.
+function cartMutationErrorMessage(error: unknown): { body: string; isAuth: boolean } | null {
+  if (!error) {
+    return null;
+  }
+  if (error instanceof ApiError) {
+    const isAuth = error.status === 401;
+    if (isAuth) {
+      return { body: '로그인이 만료되어 변경 사항을 저장하지 못했습니다. 다시 로그인해 주세요.', isAuth: true };
+    }
+    return { body: error.message || '견적 장바구니 변경 사항을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.', isAuth: false };
+  }
+  return { body: '견적 장바구니 변경 사항을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.', isAuth: false };
 }
 
 function quoteGraphFocus(category: string): BuildGraphFocus {

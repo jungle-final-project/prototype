@@ -394,7 +394,8 @@ public class BuildChatService {
     }
 
     private static boolean isStandaloneBuildRecommend(String message, Map<String, Object> request, BudgetIntent rawBudgetIntent) {
-        if (!objectMap(request.get("currentQuoteDraft")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
+        // 견적 초안 존재 여부는 map이 비었는지가 아니라 items가 있는지로 판정해야 함(빈 items 배열을 "초안 있음"으로 오인 방지)
+        if (!objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
             return false;
         }
         String normalized = normalizeCommand(message);
@@ -1264,7 +1265,8 @@ public class BuildChatService {
 
     private Optional<Map<String, Object>> deterministicFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
         Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
-        if (budget != null && objectMap(request.get("currentQuoteDraft")).isEmpty()) {
+        // 견적 초안 유무는 map 비었는지가 아니라 items 존재로 판정(빈 items 배열을 "초안 있음"으로 오인하지 않도록 표준화)
+        if (budget != null && objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty()) {
             int minimumTotal = minimumBuildTotal();
             if (minimumTotal > 0 && budget < minimumTotal) {
                 // 요청 예산으로는 구성이 어려우므로 "가능한 최소 구성" 카드를 실제로 만들어 함께 제공한다

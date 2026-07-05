@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import ReactFullpage from '@fullpage/react-fullpage';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -34,6 +34,20 @@ import {
   type PartCategory
 } from '../aiSelection';
 import { resolveBuildGraph } from '../quoteApi';
+
+// 부품 이미지 로드 실패 시 보여줄 대체 이미지(partImageUrl placeholder와 동일 톤).
+const PART_IMAGE_PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112"><rect width="112" height="112" rx="14" fill="#f8fafc"/><rect x="12" y="20" width="88" height="56" rx="10" fill="#334155" opacity="0.92"/><rect x="20" y="28" width="72" height="40" rx="6" fill="#ffffff" opacity="0.16"/><text x="56" y="54" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#ffffff">NO IMAGE</text><rect x="24" y="84" width="64" height="6" rx="3" fill="#cbd5e1"/></svg>'
+)}`;
+
+// onError 재귀 방지 가드: dataset으로 1회만 대체 이미지로 교체해 무한 루프를 막는다.
+function handlePartImageError(event: SyntheticEvent<HTMLImageElement>) {
+  const target = event.currentTarget;
+  if (!target.dataset.fallback) {
+    target.dataset.fallback = '1';
+    target.src = PART_IMAGE_PLACEHOLDER;
+  }
+}
 
 type HeroAction = {
   label: string;
@@ -620,6 +634,7 @@ function AiRecommendationCard({
           <img
             src={partImageUrl(casePart)}
             alt={`${casePart.name} 제품 사진`}
+            onError={handlePartImageError}
             className="aspect-[4/3] w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02]"
           />
         ) : (
@@ -852,6 +867,7 @@ function FeaturedBuildCard({
           <img
             src={partImageUrl(casePart)}
             alt={`${casePart.name} 제품 사진`}
+            onError={handlePartImageError}
             className="h-48 w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02] sm:h-56"
           />
         ) : (
@@ -982,6 +998,7 @@ function PopularPartsSection() {
                   <img
                     src={partImageUrl(matchedPart)}
                     alt={`${matchedPart.name} 제품 사진`}
+                    onError={handlePartImageError}
                     className="h-40 w-full object-contain p-3 sm:h-44 xl:h-40"
                   />
                 ) : (

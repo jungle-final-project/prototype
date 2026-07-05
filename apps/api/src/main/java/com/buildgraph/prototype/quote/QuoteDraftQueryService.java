@@ -174,7 +174,9 @@ public class QuoteDraftQueryService {
                         """, publicId)
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "부품을 찾을 수 없습니다."));
+                // 비활성/삭제된 부품이면 어떤 부품이 실패했는지 프론트가 알 수 있도록 partId를 메시지에 포함한다
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "부품을 찾을 수 없습니다. (비활성 또는 삭제된 부품일 수 있습니다. partId=" + publicId + ")"));
     }
 
     private List<ResolvedAiItem> resolveAiItems(Object value) {
