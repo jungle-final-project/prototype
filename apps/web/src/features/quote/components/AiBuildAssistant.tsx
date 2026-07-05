@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -226,7 +226,8 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     }
   }
 
-  async function selectBuild(build: AiRecommendedBuild) {
+  // 새 메시지 추가로 리스트가 리렌더될 때 ChatMessage memo가 유지되도록 참조를 안정화한다.
+  const selectBuild = useCallback(async (build: AiRecommendedBuild) => {
     if (applyingBuildId) return;
     const normalizedBuild = normalizeAiRecommendedBuild(build);
     saveSelectedAiBuild(normalizedBuild);
@@ -253,7 +254,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     } finally {
       setApplyingBuildId(null);
     }
-  }
+  }, [applyingBuildId, queryClient, navigate]);
 
   if (!open && isDesktopAssistant) {
     return null;
@@ -432,7 +433,7 @@ function toolFromPrompt(prompt: string): BuildGraphFocus['tool'] {
   return undefined;
 }
 
-function ChatMessage({
+const ChatMessage = memo(function ChatMessage({
   message,
   onSelectBuild
 }: {
@@ -470,7 +471,11 @@ function ChatMessage({
       </div>
     </div>
   );
-}
+}, (prev, next) => (
+  // 세션 저장→syncSession이 메시지 객체를 매번 새로 만들기 때문에 참조 비교로는 memo가 무효다.
+  // 메시지는 id당 내용이 불변이므로 id + 콜백 참조로 비교해 기존 메시지 리렌더를 막는다.
+  prev.message.id === next.message.id && prev.onSelectBuild === next.onSelectBuild
+));
 
 function SimulationResultCard({ simulation }: { simulation: AiPerformanceSimulation }) {
   const fpsRows = simulation.fpsComparisons ?? [];
