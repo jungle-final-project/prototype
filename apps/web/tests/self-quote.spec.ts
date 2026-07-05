@@ -1137,9 +1137,9 @@ test('shows checkout empty state and keeps mobile layout within viewport', async
   expect(hasBodyOverflow).toBe(false);
 });
 
-test('self quote chatbot sends current draft and automatically applies a remove action', async ({ page }) => {
+test('self quote chatbot sends current draft and never mutates the draft automatically', async ({ page }) => {
   const buildChatBodies: unknown[] = [];
-  let deleteRequests = 0;
+  const draftMutationMethods: string[] = [];
   const gpuDraft = {
     id: 'draft-chat-test',
     status: 'ACTIVE',
@@ -1148,16 +1148,6 @@ test('self quote chatbot sends current draft and automatically applies a remove 
     totalPrice: 890000,
     itemCount: 1
   };
-  const emptyChatDraft = {
-    id: 'draft-chat-test',
-    status: 'ACTIVE',
-    name: '셀프 견적',
-    items: [],
-    totalPrice: 0,
-    itemCount: 0
-  };
-  let draft: unknown = gpuDraft;
-
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
     localStorage.setItem('buildgraph.authUser', JSON.stringify({
@@ -1183,15 +1173,14 @@ test('self quote chatbot sends current draft and automatically applies a remove 
   });
 
   await page.route('**/api/quote-drafts/current**', async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname.endsWith('/items/part-gpu-chat') && route.request().method() === 'DELETE') {
-      deleteRequests += 1;
-      draft = emptyChatDraft;
+    const method = route.request().method();
+    if (method !== 'GET') {
+      draftMutationMethods.push(method);
     }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(draft)
+      body: JSON.stringify(gpuDraft)
     });
   });
 
@@ -1215,26 +1204,9 @@ test('self quote chatbot sends current draft and automatically applies a remove 
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        answerType: 'GENERAL',
-        message: '현재 견적에서 GPU 제거 변경안을 만들었습니다.',
+        answerType: 'BUDGET',
+        message: '현재 견적에 담긴 부품은 유지하고 나머지 카테고리를 내부 자산 기준으로 채웠습니다.',
         builds: [],
-        partRecommendation: null,
-        actions: [
-          {
-            id: 'action-remove-gpu',
-            type: 'REMOVE_DRAFT_PART',
-            label: 'GPU 빼기',
-            description: 'RTX 5070 챗봇 테스트를 견적에서 제거합니다.',
-            payload: {
-              partId: 'part-gpu-chat',
-              category: 'GPU',
-              source: 'AI_BUILD_CHAT',
-              intentConfidence: 'HIGH',
-              sideEffectRisk: 'LOW'
-            },
-            requiresConfirmation: false
-          }
-        ],
         warnings: []
       })
     });
@@ -1244,20 +1216,22 @@ test('self quote chatbot sends current draft and automatically applies a remove 
   await expect(page.getByTestId('slot-GPU')).toContainText('RTX 5070 챗봇 테스트');
   await page.getByRole('button', { name: 'AI에게 물어보기' }).click();
   const chatbotPanel = page.getByTestId('ai-chatbot-panel');
-  await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toBeVisible();
-  await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toBeVisible();
-  await expect(chatbotPanel.getByRole('button', { name: '내 견적함' })).toBeVisible();
-  await expect(chatbotPanel.getByRole('button', { name: 'GPU 추천상담' })).toBeVisible();
-  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('GPU 빼줘');
+  await expect(chatbotPanel.getByRole('button', { name: '200만원 게이밍 PC' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '견적 마저 채우기' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '성능 비교' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toHaveCount(0);
+  await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toHaveCount(0);
+  await expect(chatbotPanel.getByRole('button', { name: '내 견적함' })).toHaveCount(0);
+  // 견적 완성 요청은 현재 견적(드래프트) 문맥이 필요하므로 서버로 draft가 전송돼야 한다
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('지금 견적 기준으로 나머지 부품 채워줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
 
   await expect.poll(() => buildChatBodies.length).toBe(1);
   expect((buildChatBodies[0] as { currentQuoteDraft?: { items?: Array<{ partId: string }> } }).currentQuoteDraft?.items?.[0]?.partId).toBe('part-gpu-chat');
-  await expect(page.getByText('견적 장바구니 자동 실행')).toBeVisible();
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('나머지 카테고리를 내부 자산 기준으로 채웠습니다.');
 
-  await expect.poll(() => deleteRequests).toBe(1);
-  await expect(page.getByText('견적 장바구니에 적용됨')).toBeVisible();
-  await expect(page.getByTestId('slot-GPU')).toContainText('+ 부품 선택');
+  expect(draftMutationMethods).toHaveLength(0);
+  await expect(page.getByText('RTX 5070 챗봇 테스트')).toBeVisible();
 });
 
 test('opens cooler candidate panel from home category link', async ({ page }) => {
@@ -1303,7 +1277,9 @@ test('opens cooler candidate panel from home category link', async ({ page }) =>
   });
 
   await page.goto('/');
-  await page.getByRole('link', { name: '쿨러' }).click();
+  await page.getByRole('link', { name: /전체 부품/ }).first().click();
+  await expect(page).toHaveURL('/self-quote');
+  await page.getByRole('button', { name: '쿨러' }).click();
 
   await expect(page).toHaveURL('/self-quote?category=COOLER');
   const panel = page.getByTestId('slot-candidate-panel');
@@ -1354,7 +1330,9 @@ test('opens GPU candidate panel from home category link', async ({ page }) => {
   });
 
   await page.goto('/');
-  await page.getByRole('link', { name: 'GPU', exact: true }).click();
+  await page.getByRole('link', { name: /전체 부품/ }).first().click();
+  await expect(page).toHaveURL('/self-quote');
+  await page.getByRole('button', { name: 'GPU', exact: true }).click();
 
   await expect(page).toHaveURL('/self-quote?category=GPU');
   const panel = page.getByTestId('slot-candidate-panel');

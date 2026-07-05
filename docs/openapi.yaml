@@ -253,7 +253,7 @@ paths:
   /api/ai/build-chat:
     post:
       summary: AI 챗봇 LLM/RAG 기반 Build 추천
-      description: LLM/RAG로 message의 intent와 구조화 조건을 분석하고, 실제 ACTIVE parts DB와 Tool 검증 결과로 AI 추천 조합을 반환한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 428을 반환한다.
+      description: 축소된 Build Chat. 지원 범위는 예산/현재 견적 기반 추천 조합 생성, 부품 교체 성능 시뮬레이션, 명확화 질문뿐이다. 화면 이동, 견적초안 조작, 단일 부품 추천, 일반 상담 요청은 고정 안내 메시지(GENERAL)로 응답한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 428을 반환한다.
       security:
         - bearerAuth: []
       parameters:
@@ -311,7 +311,7 @@ paths:
   /api/recommendations/home-parts:
     get:
       summary: 홈 추천 부품 랭킹
-      description: 홈 하단 인기 부품 랭킹 카드에 표시할 ACTIVE 내부 자산 4개를 반환한다. XGBoost scorer가 실패하면 deterministic fallback 랭킹을 반환한다.
+      description: 홈 하단 인기 부품 랭킹 카드에 표시할 ACTIVE 내부 자산을 limit 기준으로 반환한다. 현재 홈 화면은 limit=8로 2줄 랭킹을 표시하고, limit을 생략하면 기본 4개를 반환한다. XGBoost scorer가 실패하면 deterministic fallback 랭킹을 반환한다.
       security:
         - bearerAuth: []
       parameters:
@@ -2919,9 +2919,6 @@ components:
     BuildGraphEdgeType:
       type: string
       enum: [REQUIRES, AFFECTS, BLOCKS, SUGGESTS]
-    AiDraftActionType:
-      type: string
-      enum: [OPEN_ROUTE, ADD_BUILD_TO_DRAFT, ADD_PART_TO_DRAFT, REPLACE_DRAFT_PART, REMOVE_DRAFT_PART, UPDATE_DRAFT_QUANTITY, ASK_FOLLOW_UP]
     AiBuildChatRequest:
       type: object
       required: [message]
@@ -2932,12 +2929,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AiBuildRecommendationDto"
-        appliedPartPreferences:
-          type: array
-          items:
-            $ref: "#/components/schemas/AiAppliedPartPreferenceDto"
         currentQuoteDraft:
-          description: /self-quote 챗봇에서만 전달하는 현재 견적초안 문맥. 서버는 이 값으로 action만 제안하고 직접 저장하지 않는다.
+          description: 현재 견적초안(그래프 상태) 문맥. 모든 화면에서 전달하며, 서버는 견적 완성 제약과 시뮬레이션 기준으로만 사용하고 직접 저장하지 않는다.
           allOf:
             - $ref: "#/components/schemas/QuoteDraftDto"
     AiBuildChatResponse:
@@ -2950,18 +2943,9 @@ components:
           type: string
         builds:
           type: array
-          description: 예산 질문은 추천 build 3개를 반환한다. 부품 질문에서 currentBuilds가 없으면 빈 배열이다.
+          description: 견적 추천 질문은 추천 build 2~3개를 반환한다. 시뮬레이션/명확화/미지원 응답에서는 빈 배열이다.
           items:
             $ref: "#/components/schemas/AiBuildRecommendationDto"
-        partRecommendation:
-          nullable: true
-          allOf:
-            - $ref: "#/components/schemas/AiPartRecommendationDto"
-        actions:
-          type: array
-          description: 사용자 화면 이동 또는 견적초안 변경 action. OPEN_ROUTE는 fast route 또는 LLM routeIntent가 고확신일 때만 내려오며, 프론트는 route allowlist를 재검증해야 한다. 애매한 상품 상세 요청은 /self-quote?category=...&q=... 후보 필터 화면으로 이동할 수 있다. 견적초안 저장은 quote-drafts API가 수행한다.
-          items:
-            $ref: "#/components/schemas/AiDraftActionDto"
         simulation:
           nullable: true
           description: 부품을 실제로 바꾸지 않고 성능/FPS/스펙 변화를 보여주는 읽기 전용 시뮬레이션 결과.
@@ -3887,54 +3871,6 @@ components:
           type: integer
         note:
           type: string
-    AiPartRecommendationDto:
-      type: object
-      required: [category, label, intro, options]
-      properties:
-        category:
-          $ref: "#/components/schemas/PartCategory"
-        label:
-          type: string
-        intro:
-          type: string
-        options:
-          type: array
-          items:
-            $ref: "#/components/schemas/AiBuildItemDto"
-    AiAppliedPartPreferenceDto:
-      type: object
-      required: [category, label, appliedAt, options]
-      properties:
-        category:
-          $ref: "#/components/schemas/PartCategory"
-        label:
-          type: string
-        appliedAt:
-          type: string
-          format: date-time
-        options:
-          type: array
-          items:
-            $ref: "#/components/schemas/AiBuildItemDto"
-    AiDraftActionDto:
-      type: object
-      required: [id, type, label, payload, requiresConfirmation]
-      properties:
-        id:
-          type: string
-        type:
-          $ref: "#/components/schemas/AiDraftActionType"
-        label:
-          type: string
-        description:
-          type: string
-        payload:
-          type: object
-          additionalProperties: true
-          description: route 또는 partId, category, quantity 등 사용자 화면 이동/quote draft API 실행에 필요한 값. OPEN_ROUTE route는 /self-quote, /self-quote?category=..., /self-quote?category=...&q=..., /my/quotes, /requirements/new, /support/new, /support/ai-chat, /checkout, 단일 고확신 ACTIVE 부품의 /parts/{partId}만 허용한다. 견적초안 변경 action은 자동 실행 안전 판단용 intentConfidence와 sideEffectRisk를 포함할 수 있으며, 프론트는 HIGH/LOW 조합만 자동 실행한다.
-        requiresConfirmation:
-          type: boolean
-          default: false
     AiBuildApplyRequest:
       type: object
       required: [items, conflictPolicy]

@@ -25,6 +25,7 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
@@ -36,13 +37,18 @@ import org.springframework.web.server.ResponseStatusException;
 public class BuildChatService {
     private static final Logger log = LoggerFactory.getLogger(BuildChatService.class);
     private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(?:만원|만)");
-    private static final Pattern BUDGET_BAEKMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*백\\s*만원");
+    private static final Pattern BUDGET_BAEKMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*백\\s*만\\s*원?");
+    private static final Pattern BUDGET_CHEONMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)?\\s*천\\s*(?:(\\d+(?:\\.\\d+)?)\\s*백)?\\s*만\\s*(원)?");
     private static final Pattern BUDGET_WON = Pattern.compile("(\\d{6,})\\s*원?");
     private static final Pattern EXPLICIT_GPU_MODEL = Pattern.compile("(?i)(?:rtx|geforce|지포스)?\\s*(40[6-9]0|50[6-9]0)(?:\\s*(ti|super))?");
     private static final Pattern EXPLICIT_CPU_MODEL = Pattern.compile("(?i)\\b\\d{4,5}x3d\\b|\\b\\d{4,5}x\\b|\\bi[3579]-?\\d{4,5}\\b");
-    private static final Pattern QUANTITY_PATTERN = Pattern.compile("(\\d+)\\s*(?:개|장|ea|pcs|개로)");
     private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
     private static final Pattern WATT_PATTERN = Pattern.compile("(\\d{3,4})\\s*w", Pattern.CASE_INSENSITIVE);
+    // 팀 정책: 벤치마크 수치는 보장이 아니라 참고용이며, 제공 범위(내부 DB 등록 조합)를 함께 고지한다
+    static final String SIMULATION_DISCLAIMER =
+            "본 수치는 내부 벤치마크 DB 기준 참고용 추정치이며, 내부 DB에 등록된 부품·게임·해상도 조합에 한해 제공됩니다. "
+                    + "실제 성능은 게임 버전, 그래픽 옵션, 드라이버, 해상도, 냉각·전원 환경에 따라 달라질 수 있습니다.";
+
     private static final List<Tier> TIERS = List.of(
             new Tier("budget", "가성비", "가성비형"),
             new Tier("balanced", "균형", "균형형"),
@@ -126,6 +132,16 @@ public class BuildChatService {
         this(jdbcTemplate, toolCheckService, aiChatEngine, buildChatCacheService, partReplacementRanker, candidateReranker, new PartRouteResolver(jdbcTemplate), new BuildChatIntentRouter(), BuildChatSemanticCacheService.disabled());
     }
 
+    private BuildChatTierSnapshotStore tierSnapshotStore;
+
+    @Value("${ai.build-chat.tier-snapshot.tolerance-pct:15}")
+    private double tierSnapshotTolerancePct = 15;
+
+    @Autowired(required = false)
+    public void setTierSnapshotStore(BuildChatTierSnapshotStore tierSnapshotStore) {
+        this.tierSnapshotStore = tierSnapshotStore;
+    }
+
     public Map<String, Object> chat(Map<String, Object> request) {
         return chat(request, (String) null);
     }
@@ -160,48 +176,9 @@ public class BuildChatService {
                 requestedAiProfile,
                 buildChatCacheService.getClass().getName()
         );
-        RouteIntent routeIntent = intentDecision.intent() == BuildChatIntent.NAVIGATE_CATEGORY && intentDecision.targetCategory() != null
-                ? new RouteIntent(
-                "/self-quote?category=" + intentDecision.targetCategory(),
-                categoryLabel(intentDecision.targetCategory()) + " 부품 보기",
-                categoryLabel(intentDecision.targetCategory()) + " 부품 화면으로 이동했습니다."
-        )
-                : intentDecision.intent() == BuildChatIntent.NAVIGATE_STATIC
-                ? routeIntent(message)
-                : null;
-        if (routeIntent != null) {
-            Map<String, Object> response = routeResponse(routeIntent);
-            logBuildChatPath("FAST_ROUTE", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
-            return response;
-        }
-        if (intentDecision.intent() == BuildChatIntent.FILTER_PART_SEARCH) {
-            String route = partRouteResolver.resolveCategoryFilterRoute(intentDecision.partQuery(), intentDecision.targetCategory());
-            if (route != null) {
-                Map<String, Object> response = routeResponse(new RouteIntent(
-                        route,
-                        categoryLabel(intentDecision.targetCategory()) + " 후보 보기",
-                        categoryLabel(intentDecision.targetCategory()) + " 후보 화면으로 이동했습니다."
-                ));
-                logBuildChatPath("FAST_FILTER_ROUTE", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback());
-                return response;
-            }
-        }
-        Optional<PartRouteResolver.ResolvedRoute> partRoute = intentDecision.intent() == BuildChatIntent.NAVIGATE_PART_DETAIL
-                ? partRouteResolver.resolveFastRoute(message, text(body.get("selectedCategory")))
-                : Optional.empty();
-        if (partRoute.isPresent()) {
-            PartRouteResolver.ResolvedRoute resolved = partRoute.get();
-            Map<String, Object> response = routeResponse(new RouteIntent(resolved.route(), resolved.label(), resolved.message()));
-            String pathType = resolved.route().startsWith("/parts/") ? "FAST_PART_ROUTE" : "FAST_FILTER_ROUTE";
-            logBuildChatPath(pathType, startedNanos, userId, requestedAiProfile, false,
-                    "FAST_FILTER_ROUTE".equals(pathType) ? BuildChatGuardStats.routeFallback() : BuildChatGuardStats.empty());
-            return response;
-        }
-        Optional<Map<String, Object>> simulationResponse = intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT
-                ? performanceSimulationResponse(body, message)
-                : Optional.empty();
-        if (simulationResponse.isPresent()) {
-            Map<String, Object> response = simulationResponse.get();
+        if (intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT) {
+            Map<String, Object> response = performanceSimulationResponse(body, message)
+                    .orElseGet(() -> simulationClarificationResponse(body, message));
             logBuildChatPath("FAST_SIMULATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
@@ -209,41 +186,84 @@ public class BuildChatService {
             Map<String, Object> response = fastResponse(
                     "GENERAL",
                     "추천 기준을 조금 더 정하면 더 정확합니다. 예산, 해상도, 주 사용 게임이나 작업을 알려주세요.",
-                    null,
-                    List.of(),
                     intentDecision.ambiguityReasons()
             );
             logBuildChatPath("FAST_CLARIFICATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
-        Optional<Map<String, Object>> fastDraftResponse = intentDecision.isMutation()
-                ? fastDraftActionResponse(body, message)
-                : Optional.empty();
-        if (fastDraftResponse.isPresent()) {
-            Map<String, Object> response = fastDraftResponse.get();
-            logBuildChatPath("FAST_DRAFT_ACTION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
+        if (intentDecision.intent() == BuildChatIntent.UNSUPPORTED) {
+            Map<String, Object> response = fastResponse(
+                    "GENERAL",
+                    "이 어시스턴트는 예산 견적 추천, 현재 견적 완성, 부품 교체 성능 비교를 도와드립니다. "
+                            + "부품 탐색이나 견적 담기/빼기는 셀프 견적 그래프에서 직접 할 수 있어요. "
+                            + "예: \"200만원 게이밍 PC 추천\", \"CPU를 9700X로 바꾸면?\"",
+                    List.of("UNSUPPORTED_INTENT")
+            );
+            logBuildChatPath("FAST_UNSUPPORTED", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
+        long stageStartNanos = System.nanoTime();
         var cachedResponse = buildChatCacheService.lookup(body, requestedAiProfile, userId);
+        long redisMs = elapsedMs(stageStartNanos);
         if (cachedResponse.isPresent()) {
             Map<String, Object> response = cachedResponse.get();
-            logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty());
+            logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
+                    "redisMs=" + redisMs);
             return response;
         }
+        if (tierSnapshotStore != null
+                && rawBudgetIntent.hasBudget()
+                && !rawBudgetIntent.explicitHardConstraint()
+                && objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()) {
+            stageStartNanos = System.nanoTime();
+            Optional<BuildChatTierSnapshotStore.TierSnapshot> tierSnapshot =
+                    tierSnapshotStore.bestFor(rawBudgetIntent.budget(), rawBudgetIntent.mode(), tierSnapshotTolerancePct);
+            long tierMs = elapsedMs(stageStartNanos);
+            if (tierSnapshot.isPresent()) {
+                BuildChatTierSnapshotStore.TierSnapshot snapshot = tierSnapshot.get();
+                Map<String, Object> response = fastResponse(
+                        "BUDGET",
+                        "내부 자산과 Tool 검증 기준으로 미리 계산한 추천 조합을 바로 가져왔습니다.",
+                        snapshot.builds(),
+                        snapshot.warnings()
+                );
+                buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+                logBuildChatPath("FAST_TIER_SNAPSHOT", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty(),
+                        "redisMs=" + redisMs + " tierMs=" + tierMs + " tierBudgetWon=" + snapshot.tierBudgetWon());
+                return response;
+            }
+        }
+        stageStartNanos = System.nanoTime();
+        Optional<Map<String, Object>> completionResponse = draftCompletionFastResponse(body, message, rawBudgetIntent);
+        long completionMs = elapsedMs(stageStartNanos);
+        if (completionResponse.isPresent()) {
+            Map<String, Object> response = completionResponse.get();
+            buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+            logBuildChatPath("FAST_DRAFT_COMPLETION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
+                    "redisMs=" + redisMs + " completionMs=" + completionMs);
+            return response;
+        }
+        stageStartNanos = System.nanoTime();
         Optional<Map<String, Object>> deterministicResponse = deterministicFastResponse(body, message, rawBudgetIntent);
+        long deterministicMs = elapsedMs(stageStartNanos);
         if (deterministicResponse.isPresent()) {
             Map<String, Object> response = deterministicResponse.get();
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
             semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
-            logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback());
+            logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
+                    "redisMs=" + redisMs + " deterministicMs=" + deterministicMs);
             return response;
         }
+        stageStartNanos = System.nanoTime();
         var semanticCachedResponse = semanticCacheService.lookup(body, requestedAiProfile, intentDecision);
+        long semanticMs = elapsedMs(stageStartNanos);
         if (semanticCachedResponse.isPresent()) {
             Map<String, Object> response = semanticCachedResponse.get();
-            logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty());
+            logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
+                    "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return response;
         }
+        stageStartNanos = System.nanoTime();
         AiChatEngineResponse engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
                 message,
                 "HOME",
@@ -253,21 +273,71 @@ public class BuildChatService {
                 body,
                 userId
         ), requestedAiProfile);
+        long engineMs = elapsedMs(stageStartNanos);
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
-        Map<String, Object> response = responseMap(engineResponse, body, rawBudgetIntent, guardStats);
+        Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
+        // 라우터가 전체 견적(BUILD_RECOMMEND)으로 판정했는데 LLM 엔진이 내부적으로 부품 추천으로
+        // 분류해 answerType=PART가 되는 경우를 교정한다 (조합 카드가 있으면 BUDGET으로 표기).
+        if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
+                && !objectMaps(response.get("builds")).isEmpty()
+                && "PART".equals(text(response.get("answerType")))) {
+            response.put("answerType", "BUDGET");
+        }
+        // 데모 안전망: 견적 요청인데 LLM이 빈 조합을 반환하면(용도-only 등) 내부 자산 기준
+        // 폴백 조합으로 보강해 빈 화면을 막는다. 라우터가 이미 BUILD_RECOMMEND로 판정한 경우만.
+        if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
+                && objectMaps(response.get("builds")).isEmpty()) {
+            List<String> fallbackWarnings = new ArrayList<>();
+            List<Map<String, Object>> fallbackBuilds = rawBudgetIntent.hasBudget()
+                    ? nearBudgetLadderBuilds(rawBudgetIntent.budget(), List.of(), fallbackWarnings, new BuildChatGuardStats())
+                    : openBudgetFallbackBuilds(fallbackWarnings);
+            if (!fallbackBuilds.isEmpty()) {
+                response.put("answerType", "BUDGET");
+                response.put("builds", fallbackBuilds);
+                List<String> mergedWarnings = new ArrayList<>(stringList(response.get("warnings")));
+                mergedWarnings.addAll(fallbackWarnings);
+                response.put("warnings", distinct(mergedWarnings));
+            }
+        }
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
         log.debug("Build Chat response generated: userId={}, requestedAiProfile={}, cacheStore=true", userId, requestedAiProfile);
         buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
         semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
-        logBuildChatPath("LLM_FULL", startedNanos, userId, requestedAiProfile, false, guardStats);
+        logBuildChatPath("LLM_FULL", startedNanos, userId, requestedAiProfile, false, guardStats,
+                "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs + " engineMs=" + engineMs);
         return response;
+    }
+
+    private static long elapsedMs(long startNanos) {
+        return Math.max(0, (System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    public record TierBuilds(List<Map<String, Object>> builds, List<String> warnings) {
+    }
+
+    // 예산 티어 스냅샷용 계산: "티어 이하 & 최대 근접" 사다리 탐색 (총액 ≤ 티어 보장)
+    public TierBuilds computeBudgetTierBuilds(int budgetWon) {
+        List<String> warnings = new ArrayList<>();
+        List<Map<String, Object>> builds = nearBudgetLadderBuilds(budgetWon, List.of(), warnings, new BuildChatGuardStats());
+        if (!builds.isEmpty()) {
+            warnings.add("명시 예산 범위에 맞춰 내부 자산 기준 보조 견적을 재구성했습니다.");
+        }
+        return new TierBuilds(builds, warnings);
     }
 
     static Integer parseBudgetWon(String message) {
         if (message == null) {
             return null;
         }
-        String normalized = message.replace(",", "").toLowerCase(Locale.ROOT);
+        String normalized = normalizeKoreanNumerals(message.replace(",", "").toLowerCase(Locale.ROOT));
+        Matcher cheonManWonMatcher = BUDGET_CHEONMANWON.matcher(normalized);
+        // "천만에요" 같은 관용구 오탐을 막기 위해 선행 숫자, 백 단위, "원" 중 하나는 있어야 예산으로 본다
+        if (cheonManWonMatcher.find()
+                && (cheonManWonMatcher.group(1) != null || cheonManWonMatcher.group(2) != null || cheonManWonMatcher.group(3) != null)) {
+            double thousands = cheonManWonMatcher.group(1) == null ? 1 : Double.parseDouble(cheonManWonMatcher.group(1));
+            double hundreds = cheonManWonMatcher.group(2) == null ? 0 : Double.parseDouble(cheonManWonMatcher.group(2));
+            return (int) Math.round(thousands * 10_000_000 + hundreds * 1_000_000);
+        }
         Matcher baekManWonMatcher = BUDGET_BAEKMANWON.matcher(normalized);
         if (baekManWonMatcher.find()) {
             return (int) Math.round(Double.parseDouble(baekManWonMatcher.group(1)) * 1_000_000);
@@ -281,6 +351,16 @@ public class BuildChatService {
             return Integer.parseInt(wonMatcher.group(1));
         }
         return null;
+    }
+
+    // "삼백만원", "일천삼백만원", "2천만원" 같은 한글/혼합 숫자 표기를 아라비아 숫자로 정규화한다
+    private static String normalizeKoreanNumerals(String value) {
+        String result = value;
+        String digits = "일이삼사오육칠팔구";
+        for (int index = 0; index < digits.length(); index += 1) {
+            result = result.replace(String.valueOf(digits.charAt(index)), String.valueOf(index + 1));
+        }
+        return result;
     }
 
     static BudgetIntent budgetIntent(String message) {
@@ -300,26 +380,6 @@ public class BuildChatService {
         return new BudgetIntent(budget, mode, hasRawHardPartConstraint(message));
     }
 
-    private static boolean isPriceAlertIntent(String message) {
-        String normalized = normalizeCommand(message);
-        return parseBudgetWon(message) != null
-                && containsAnyNormalized(normalized, "알림", "알려줘", "알려")
-                && !containsAnyNormalized(normalized, "추천", "교체", "바꿔", "넣어", "담아");
-    }
-
-    private static boolean isStandalonePartRecommend(String message, Map<String, Object> request, String category) {
-        if (category == null || !objectMap(request.get("currentQuoteDraft")).isEmpty()) {
-            return false;
-        }
-        String normalized = normalizeCommand(message);
-        boolean recommendLike = containsAnyNormalized(normalized, "추천", "골라", "뭐가좋", "좋은");
-        boolean mutationLike = containsAnyNormalized(normalized,
-                "맞춰", "바꿔", "교체", "담아", "넣어", "빼", "삭제", "상세", "이동", "열어");
-        boolean buildLike = containsAnyNormalized(normalized, "pc", "컴퓨터", "견적", "본체");
-        boolean buildPreferenceLike = containsAnyNormalized(normalized, "위주", "말고", "cuda", "로컬ai", "실험용", "그래픽카드로추천");
-        return recommendLike && !mutationLike && !buildLike && !buildPreferenceLike;
-    }
-
     private static boolean isStandaloneBuildRecommend(String message, Map<String, Object> request, BudgetIntent rawBudgetIntent) {
         if (!objectMap(request.get("currentQuoteDraft")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
             return false;
@@ -327,10 +387,11 @@ public class BuildChatService {
         String normalized = normalizeCommand(message);
         boolean preferenceBuildLike = containsAnyNormalized(normalized, "위주", "말고", "cuda", "로컬ai", "실험용", "그래픽카드로추천");
         boolean buildLike = containsAnyNormalized(normalized,
-                "pc", "컴퓨터", "견적", "본체", "구성",
+                "pc", "피시", "컴퓨터", "컴", "견적", "본체", "구성", "데스크탑", "데스크톱", "워크스테이션", "머신", "사양", "조합",
                 "목표", "게임", "게이밍", "qhd", "fhd", "4k", "hz", "배그", "발로란트", "오버워치", "사이버펑크", "로스트아크")
                 || preferenceBuildLike;
-        boolean recommendLike = containsAnyNormalized(normalized, "추천", "맞춰", "구성", "용pc", "pc");
+        boolean recommendLike = containsAnyNormalized(normalized,
+                "추천", "맞춰", "맞추", "구성", "용pc", "pc", "뽑아", "짜줘", "짜주", "골라", "조립", "만들어", "세팅", "내줘", "부탁", "필요", "구해줘");
         boolean budgetUseCaseLike = rawBudgetIntent != null
                 && rawBudgetIntent.hasBudget()
                 && hasSpecificBuildSignal(message, normalized);
@@ -342,10 +403,13 @@ public class BuildChatService {
     private static boolean hasSpecificBuildSignal(String message, String normalized) {
         return parseBudgetWon(message) != null
                 || containsAnyNormalized(normalized,
-                "게임", "게이밍", "qhd", "4k", "144", "배그", "발로란트", "오버워치", "사이버펑크",
-                "영상", "편집", "프리미어", "블렌더", "개발", "ai", "cuda", "로컬ai", "실험용",
-                "엔비디아", "라데온", "nvidia", "고성능", "최고급", "끝판왕", "저소음", "조용",
-                "작은", "컴팩트", "저장", "로딩", "사무", "학습", "흰색", "화이트", "업그레이드",
+                "게임", "게이밍", "qhd", "fhd", "4k", "144", "hz", "배그", "발로란트", "발로", "오버워치", "옵치",
+                "사이버펑크", "로스트아크", "로아", "디아블로", "디아", "몬헌", "몬스터헌터", "배틀필드", "스타크래프트",
+                "스타2", "롤", "리그오브레전드", "메이플", "피파", "롤토체스", "레이드", "오픈월드",
+                "영상", "편집", "프리미어", "블렌더", "렌더", "개발", "도커", "docker", "ide", "코딩", "ai", "cuda", "로컬ai", "실험용",
+                "방송", "스트리밍", "송출", "유튜브", "포토샵", "디자인", "3d",
+                "엔비디아", "라데온", "nvidia", "고성능", "최고급", "끝판왕", "하이엔드", "풀스펙", "저소음", "조용",
+                "작은", "컴팩트", "저장", "로딩", "사무", "문서작업", "엑셀", "학습", "흰색", "화이트", "업그레이드",
                 "가성비", "입문", "보급", "균형");
     }
 
@@ -357,8 +421,8 @@ public class BuildChatService {
                 new CategoryKeywords("STORAGE", List.of("ssd", "스토리지", "저장장치", "저장 공간", "nvme")),
                 new CategoryKeywords("PSU", List.of("파워", "psu", "전원공급", "전원 공급")),
                 new CategoryKeywords("CASE", List.of("케이스", "case")),
-                new CategoryKeywords("GPU", List.of("gpu", "그래픽카드", "그래픽 카드", "그래픽", "vga", "rtx", "cuda", "nvidia", "엔비디아", "geforce", "지포스")),
-                new CategoryKeywords("CPU", List.of("cpu", "프로세서", "라이젠", "ryzen", "intel", "인텔")),
+                new CategoryKeywords("GPU", List.of("gpu", "지피유", "그래픽카드", "그래픽 카드", "그래픽", "글카", "vga", "rtx", "cuda", "nvidia", "엔비디아", "geforce", "지포스")),
+                new CategoryKeywords("CPU", List.of("cpu", "씨퓨", "씨피유", "프로세서", "라이젠", "ryzen", "intel", "인텔")),
                 new CategoryKeywords("RAM", List.of("ram", "램", "메모리", "memory"))
         );
         return checks.stream()
@@ -370,107 +434,21 @@ public class BuildChatService {
 
     private Map<String, Object> responseMap(
             AiChatEngineResponse engineResponse,
-            Map<String, Object> request,
             BudgetIntent rawBudgetIntent,
             BuildChatGuardStats guardStats
     ) {
         List<String> warnings = new ArrayList<>();
-        List<AiChatEngineResponse.PartRecommendation> safePartRecommendations = failSafePartRecommendations(engineResponse.partRecommendations(), request, warnings, guardStats);
-        List<Map<String, Object>> builds = switch (engineResponse.intent()) {
-            case FULL_BUILD_RECOMMEND -> engineBuilds(engineResponse, rawBudgetIntent, warnings, guardStats);
-            case PART_RECOMMEND, BUILD_MODIFY -> changedCurrentBuilds(engineResponse, request, safePartRecommendations, warnings);
-            default -> engineBuilds(engineResponse, rawBudgetIntent, warnings, guardStats);
-        };
-        Map<String, Object> partRecommendation = partRecommendation(safePartRecommendations, engineResponse.parsedContext());
-        List<Map<String, Object>> actions = new ArrayList<>();
-        actions.addAll(publicEngineActions(engineResponse.actions()));
-        actions.addAll(draftActions(engineResponse, request, safePartRecommendations));
+        List<Map<String, Object>> builds = engineBuilds(engineResponse, rawBudgetIntent, warnings, guardStats);
         warnings.addAll(buildWarnings(builds));
         warnings.addAll(stringList(engineResponse.parsedContext().get("warnings")));
         return MockData.map(
                 "answerType", answerType(engineResponse.intent()),
                 "message", engineResponse.assistantMessage(),
                 "builds", builds,
-                "partRecommendation", partRecommendation,
-                "actions", actions,
                 "warnings", distinct(warnings),
                 "evidenceIds", engineResponse.evidenceIds(),
                 "agentSessionId", engineResponse.agentSessionId()
         );
-    }
-
-    private Map<String, Object> routeResponse(RouteIntent routeIntent) {
-        return MockData.map(
-                "answerType", "GENERAL",
-                "message", routeIntent.message(),
-                "builds", List.of(),
-                "partRecommendation", null,
-                "actions", List.of(actionMap(
-                        "OPEN_ROUTE",
-                        routeIntent.label(),
-                        routeIntent.message(),
-                        MockData.map(
-                                "route", routeIntent.route(),
-                                "source", "AI_BUILD_CHAT",
-                                "reason", "FAST_ROUTE"
-                        ),
-                        false
-                )),
-                "warnings", List.of(),
-                "evidenceIds", List.of(),
-                "agentSessionId", null
-        );
-    }
-
-    private List<Map<String, Object>> publicEngineActions(List<AiChatAction> actions) {
-        if (actions == null || actions.isEmpty()) {
-            return List.of();
-        }
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (AiChatAction action : actions) {
-            if (action == null || action.type() == null) {
-                continue;
-            }
-            if ("OPEN_ROUTE".equals(action.type().name())) {
-                String route = text(action.payload() == null ? null : action.payload().get("route"));
-                if (route != null && isAllowedRoute(route)) {
-                    result.add(actionMap(
-                            "OPEN_ROUTE",
-                            firstText(action.label(), "화면 이동"),
-                            routeMessage(route),
-                            MockData.map(
-                                    "route", route,
-                                    "source", "AI_BUILD_CHAT",
-                                    "reason", "ENGINE_ROUTE"
-                            ),
-                            false
-                    ));
-                }
-            } else if ("ADD_PART_TO_DRAFT".equals(action.type().name())) {
-                Map<String, Object> payload = action.payload() == null ? Map.of() : action.payload();
-                if (text(payload.get("partId")) != null && text(payload.get("category")) != null && numberValue(payload.get("quantity")) != null) {
-                    result.add(actionMap(
-                            "ADD_PART_TO_DRAFT",
-                            firstText(action.label(), categoryLabel(text(payload.get("category"))) + " 추가"),
-                            firstText(text(payload.get("name")), categoryLabel(text(payload.get("category")))) + "을(를) 견적에 추가합니다.",
-                            new LinkedHashMap<>(payload),
-                            false
-                    ));
-                }
-            } else if ("CREATE_PRICE_ALERT".equals(action.type().name())) {
-                Map<String, Object> payload = action.payload() == null ? Map.of() : action.payload();
-                if (numberValue(payload.get("targetPrice")) != null) {
-                    result.add(actionMap(
-                            "CREATE_PRICE_ALERT",
-                            firstText(action.label(), "목표가 알림 설정"),
-                            "요청한 목표가 조건으로 가격 알림을 준비합니다.",
-                            new LinkedHashMap<>(payload),
-                            false
-                    ));
-                }
-            }
-        }
-        return result;
     }
 
     private Optional<Map<String, Object>> performanceSimulationResponse(Map<String, Object> request, String message) {
@@ -497,8 +475,6 @@ public class BuildChatService {
             return Optional.of(fastResponse(
                     "GENERAL",
                     categoryLabel(category) + " 시뮬레이션을 하려면 바꿀 제품을 조금 더 구체적으로 알려주세요.",
-                    null,
-                    List.of(),
                     List.of("SIMULATION_TARGET_NOT_FOUND")
             ));
         }
@@ -520,13 +496,26 @@ public class BuildChatService {
         Map<String, Object> response = fastResponse(
                 "GENERAL",
                 simulationSummary(category, currentPart, target, !simulationFpsComparisons(currentFps, targetFps).isEmpty()),
-                null,
-                List.of(),
                 warnings
         );
         response.put("simulation", simulation);
 
         return Optional.of(response);
+    }
+
+    private Map<String, Object> simulationClarificationResponse(Map<String, Object> request, String message) {
+        Map<String, Object> currentQuoteDraft = objectMap(request.get("currentQuoteDraft"));
+        List<Map<String, Object>> draftItems = objectMaps(currentQuoteDraft.get("items"));
+        String category = firstText(detectPartCategory(message), EXPLICIT_GPU_MODEL.matcher(message == null ? "" : message).find() ? "GPU" : null);
+        String guidance;
+        if (draftItems.isEmpty()) {
+            guidance = "성능 비교는 현재 견적 기준으로 계산합니다. 먼저 셀프 견적 그래프에서 부품을 담거나 견적 추천을 받아주세요.";
+        } else if (category == null) {
+            guidance = "어떤 부품을 바꿀지 알려주세요. 예: \"CPU를 9700X로 바꾸면?\", \"그래픽카드를 5090으로 바꾸면?\"";
+        } else {
+            guidance = categoryLabel(category) + " 시뮬레이션을 하려면 바꿀 제품을 조금 더 구체적으로 알려주세요.";
+        }
+        return fastResponse("GENERAL", guidance, List.of("SIMULATION_TARGET_NOT_FOUND"));
     }
 
     private static boolean isPerformanceSimulationIntent(String message) {
@@ -567,10 +556,11 @@ public class BuildChatService {
             params.add(wattage);
         }
 
+        // 바꿀 대상 제품을 특정할 신호(모델/용량/와트)가 하나도 없으면 임의 후보를 잡지 않는다.
+        // 축소 정책상 target 불명확 시뮬레이션은 임의 비교 대신 되묻기로 처리해야 한다
+        // (호출부 performanceSimulationResponse가 empty를 받으면 simulationClarificationResponse로 유도).
         if (filters.isEmpty()) {
-            return partRecommendations(category, 1).stream()
-                    .findFirst()
-                    .map(this::partCandidate);
+            return Optional.empty();
         }
 
         List<String> order = new ArrayList<>();
@@ -802,7 +792,7 @@ public class BuildChatService {
         result.put("fpsComparisons", fpsComparisons);
         result.put("specComparisons", specComparisons);
         result.put("warnings", distinct(simulationWarnings));
-        result.put("disclaimer", "실제 FPS는 게임 버전, 옵션, 드라이버, 냉각 상태에 따라 달라질 수 있습니다.");
+        result.put("disclaimer", SIMULATION_DISCLAIMER);
         return result;
     }
 
@@ -823,7 +813,7 @@ public class BuildChatService {
             return null;
         }
         return MockData.map(
-                "label", "벤치마크 기반 점수",
+                "label", "내부 벤치마크 정규화 점수 (참고용)",
                 "currentScore", current,
                 "targetScore", target,
                 "delta", current == null || target == null ? null : target - current
@@ -1037,281 +1027,6 @@ public class BuildChatService {
         return false;
     }
 
-    private Optional<Map<String, Object>> fastDraftActionResponse(Map<String, Object> request, String message) {
-        Map<String, Object> currentQuoteDraft = objectMap(request.get("currentQuoteDraft"));
-        List<Map<String, Object>> draftItems = objectMaps(currentQuoteDraft.get("items"));
-        String category = detectPartCategory(message);
-        if (draftItems.isEmpty()) {
-            return fastNoDraftPartSelectionResponse(request, message, category);
-        }
-
-        if (isRemoveIntent(message)) {
-            Map<String, Object> item = findDraftItem(draftItems, category, message);
-            if (!item.isEmpty()) {
-                return Optional.of(fastResponse(
-                        "PART",
-                        categoryLabel(text(item.get("category"))) + " 제거 변경안을 준비했습니다.",
-                        null,
-                        List.of(removeAction(item)),
-                        List.of()
-                ));
-            }
-            return Optional.empty();
-        }
-
-        if (isFastQuantityIntent(message)) {
-            Map<String, Object> item = findDraftItem(draftItems, category, message);
-            String itemCategory = text(item.get("category"));
-            if (!item.isEmpty() && ("RAM".equals(itemCategory) || "STORAGE".equals(itemCategory))) {
-                return Optional.of(fastResponse(
-                        "PART",
-                        categoryLabel(itemCategory) + " 수량 변경안을 준비했습니다.",
-                        null,
-                        List.of(quantityAction(item, message)),
-                        List.of()
-                ));
-            }
-            return Optional.empty();
-        }
-
-        String priceDirection = fastPriceDirection(message);
-        if (priceDirection == null || partReplacementRanker == null) {
-            return Optional.empty();
-        }
-        Map<String, Object> currentItem = category == null && "CHEAPER".equals(priceDirection)
-                ? highestPricedDraftItem(draftItems)
-                : findDraftItem(draftItems, category, message);
-        if (currentItem.isEmpty()) {
-            return Optional.empty();
-        }
-        String effectiveCategory = text(currentItem.get("category"));
-        if (effectiveCategory == null) {
-            return Optional.empty();
-        }
-        Optional<Map<String, Object>> directReplacement = directReplacementResponse(request, message, effectiveCategory, draftItems);
-        if (directReplacement.isPresent()) {
-            return directReplacement;
-        }
-
-        Integer targetMaxPrice = category == null ? null : parseBudgetWon(message);
-        List<AiChatEngineResponse.PartRecommendation> messageMatchedCandidates = messageMatchedBrandRecommendations(effectiveCategory, message, 80);
-        List<AiChatEngineResponse.PartRecommendation> candidates = messageMatchedCandidates.isEmpty()
-                ? preferMessageMatchedRecommendations(partRecommendations(effectiveCategory, 200), message)
-                : messageMatchedCandidates;
-        PartReplacementRanker.SelectionResult selection = partReplacementRanker.select(
-                effectiveCategory,
-                currentItem,
-                priceDirection,
-                targetMaxPrice,
-                candidates,
-                24
-        );
-        List<String> warnings = new ArrayList<>(selection.warnings());
-        List<AiChatEngineResponse.PartRecommendation> safeRecommendations = failSafePartRecommendations(selection.parts(), request, warnings);
-        List<Map<String, Object>> actions = replacementActions(safeRecommendations, draftItems, false);
-        if (actions.isEmpty()) {
-            return Optional.of(fastResponse(
-                    "PART",
-                    categoryLabel(effectiveCategory) + " 조건에 맞는 안전한 교체 후보를 찾지 못했습니다. 조건을 조금 넓혀 다시 요청해 주세요.",
-                    null,
-                    List.of(askFollowUpAction(categoryLabel(effectiveCategory) + " 조건 조정 필요", "현재 견적 기준에서 바로 적용 가능한 안전 후보가 부족합니다.")),
-                    distinct(warnings)
-            ));
-        }
-        return Optional.of(fastResponse(
-                "PART",
-                categoryLabel(effectiveCategory) + " 교체 후보를 바로 찾았습니다.",
-                partRecommendation(safeRecommendations, Map.of()),
-                actions,
-                warnings
-        ));
-    }
-
-    private Optional<Map<String, Object>> directReplacementResponse(
-            Map<String, Object> request,
-            String message,
-            String category,
-            List<Map<String, Object>> draftItems
-    ) {
-        List<AiChatEngineResponse.PartRecommendation> directCandidates = directReplacementCandidates(category, message);
-        if (directCandidates.isEmpty()) {
-            return Optional.empty();
-        }
-        List<String> warnings = new ArrayList<>();
-        List<AiChatEngineResponse.PartRecommendation> safeRecommendations = failSafePartRecommendations(directCandidates, request, warnings)
-                .stream()
-                .limit(3)
-                .toList();
-        List<Map<String, Object>> actions = replacementActions(safeRecommendations, draftItems, false);
-        if (actions.isEmpty()) {
-            return Optional.of(fastResponse(
-                    "PART",
-                    categoryLabel(category) + " 조건에 맞는 안전한 교체 후보를 찾지 못했습니다. 조건을 조금 넓혀 다시 요청해 주세요.",
-                    null,
-                    List.of(askFollowUpAction(categoryLabel(category) + " 조건 조정 필요", "현재 견적 기준에서 바로 적용 가능한 안전 후보가 부족합니다.")),
-                    distinct(warnings)
-            ));
-        }
-        return Optional.of(fastResponse(
-                "PART",
-                categoryLabel(category) + " 조건에 맞는 교체 후보를 바로 찾았습니다.",
-                partRecommendation(safeRecommendations, Map.of()),
-                actions,
-                warnings
-        ));
-    }
-
-    private Optional<Map<String, Object>> fastNoDraftPartSelectionResponse(
-            Map<String, Object> request,
-            String message,
-            String category
-    ) {
-        if (category == null) {
-            return Optional.empty();
-        }
-        List<AiChatEngineResponse.PartRecommendation> directCandidates = directReplacementCandidates(category, message);
-        List<AiChatEngineResponse.PartRecommendation> candidates = directCandidates.isEmpty()
-                ? noDraftPartSelectionCandidates(category, message)
-                : directCandidates;
-        if (candidates.isEmpty()) {
-            return Optional.empty();
-        }
-        List<String> warnings = new ArrayList<>();
-        List<AiChatEngineResponse.PartRecommendation> safeRecommendations = failSafePartRecommendations(candidates, request, warnings)
-                .stream()
-                .limit(3)
-                .toList();
-        if (safeRecommendations.isEmpty()) {
-            return Optional.of(fastResponse(
-                    "PART",
-                    categoryLabel(category) + " 조건에 맞는 안전한 후보를 찾지 못했습니다. 조건을 조금 넓혀 다시 요청해 주세요.",
-                    null,
-                    List.of(askFollowUpAction(categoryLabel(category) + " 조건 조정 필요", "현재 조건에서 바로 제안할 수 있는 안전 후보가 부족합니다.")),
-                    distinct(warnings)
-            ));
-        }
-        return Optional.of(fastResponse(
-                "PART",
-                categoryLabel(category) + " 후보를 바로 찾았습니다. 적용 전 확인해 주세요.",
-                partRecommendation(safeRecommendations, Map.of()),
-                replacementActions(safeRecommendations, List.of(), false),
-                warnings
-        ));
-    }
-
-    private List<AiChatEngineResponse.PartRecommendation> directReplacementCandidates(String category, String message) {
-        List<AiChatEngineResponse.PartRecommendation> brandCandidates = messageMatchedBrandRecommendations(category, message, 80);
-        if (!brandCandidates.isEmpty()) {
-            return brandCandidates;
-        }
-        Integer wattage = parseWattage(message);
-        if ("PSU".equals(category) && wattage != null && wattage > 0) {
-            return partRecommendations(category, 200).stream()
-                    .filter(part -> Math.max(
-                            firstNumber(part.attributes().get("capacityW"), 0),
-                            firstNumber(part.attributes().get("wattage"), 0)
-                    ) >= wattage)
-                    .toList();
-        }
-        return List.of();
-    }
-
-    private List<AiChatEngineResponse.PartRecommendation> noDraftPartSelectionCandidates(String category, String message) {
-        List<AiChatEngineResponse.PartRecommendation> candidates = partRecommendations(category, 200);
-        Integer capacityGb = parseCapacityGb(message);
-        if (capacityGb != null && ("RAM".equals(category) || "STORAGE".equals(category))) {
-            List<AiChatEngineResponse.PartRecommendation> capacityMatches = candidates.stream()
-                    .filter(part -> firstNumber(part.attributes().get("capacityGb"), 0) >= capacityGb)
-                    .toList();
-            if (!capacityMatches.isEmpty()) {
-                return capacityMatches;
-            }
-        }
-        return preferMessageMatchedRecommendations(candidates, message);
-    }
-
-    private List<AiChatEngineResponse.PartRecommendation> preferMessageMatchedRecommendations(
-            List<AiChatEngineResponse.PartRecommendation> candidates,
-            String message
-    ) {
-        if (candidates == null || candidates.isEmpty()) {
-            return List.of();
-        }
-        String normalized = normalizeCommand(message);
-        List<AiChatEngineResponse.PartRecommendation> matched = candidates.stream()
-                .filter(candidate -> messageMatchesPartCandidate(normalized, candidate))
-                .toList();
-        return matched.isEmpty() ? candidates : matched;
-    }
-
-    private boolean messageMatchesPartCandidate(String normalizedMessage, AiChatEngineResponse.PartRecommendation candidate) {
-        if (normalizedMessage == null || normalizedMessage.isBlank() || candidate == null) {
-            return false;
-        }
-        String manufacturer = normalizeCommand(candidate.manufacturer());
-        if (!manufacturer.isBlank() && normalizedMessage.contains(manufacturer)) {
-            return true;
-        }
-        String name = normalizeCommand(candidate.name());
-        for (String token : normalizedMessage.split("[^0-9a-zA-Z가-힣]+")) {
-            if (token.length() >= 3 && name.contains(token)) {
-                return true;
-            }
-        }
-        for (String token : List.of("msi", "asus", "gigabyte", "기가바이트", "리안리", "lianli", "corsair", "커세어", "samsung", "삼성")) {
-            String normalizedToken = normalizeCommand(token);
-            if (normalizedMessage.contains(normalizedToken) && name.contains(normalizedToken)) {
-                return true;
-            }
-        }
-        Matcher numericToken = Pattern.compile("\\d{3,5}[a-zA-Z]*").matcher(normalizedMessage);
-        while (numericToken.find()) {
-            if (name.contains(normalizeCommand(numericToken.group()))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private List<AiChatEngineResponse.PartRecommendation> messageMatchedBrandRecommendations(String category, String message, int limit) {
-        String brandToken = brandToken(message);
-        if (category == null || brandToken == null) {
-            return List.of();
-        }
-        return jdbcTemplate.queryForList("""
-                        SELECT p.public_id::text AS id,
-                               p.category,
-                               p.name,
-                               p.manufacturer,
-                               p.price,
-                               p.attributes,
-                               b.score AS benchmark_score,
-                               b.summary AS benchmark_summary
-                        FROM parts p
-                        LEFT JOIN LATERAL (
-                          SELECT score, summary
-                          FROM benchmark_summaries bs
-                          WHERE bs.part_id = p.id
-                            AND bs.deleted_at IS NULL
-                          ORDER BY bs.score DESC NULLS LAST, bs.created_at DESC
-                          LIMIT 1
-                        ) b ON true
-                        WHERE p.category = ?
-                          AND p.status = 'ACTIVE'
-                          AND p.deleted_at IS NULL
-                          AND p.price IS NOT NULL
-                          AND (
-                            lower(coalesce(p.manufacturer, '')) LIKE '%' || lower(?) || '%'
-                            OR lower(p.name) LIKE '%' || lower(?) || '%'
-                          )
-                        ORDER BY b.score DESC NULLS LAST, p.price ASC, p.name ASC
-                        LIMIT ?
-                        """, category, brandToken, brandToken, Math.max(1, limit))
-                .stream()
-                .map(this::partRecommendation)
-                .toList();
-    }
-
     private static String brandToken(String message) {
         String normalized = normalizeCommand(message);
         for (String token : List.of(
@@ -1325,60 +1040,241 @@ public class BuildChatService {
         return null;
     }
 
-    private Map<String, Object> fastResponse(
-            String answerType,
-            String message,
-            Map<String, Object> partRecommendation,
-            List<Map<String, Object>> actions,
-            List<String> warnings
-    ) {
-        return fastResponse(answerType, message, List.of(), partRecommendation, actions, warnings);
+    private Map<String, Object> fastResponse(String answerType, String message, List<String> warnings) {
+        return fastResponse(answerType, message, List.of(), warnings);
     }
 
     private Map<String, Object> fastResponse(
             String answerType,
             String message,
             List<Map<String, Object>> builds,
-            Map<String, Object> partRecommendation,
-            List<Map<String, Object>> actions,
             List<String> warnings
     ) {
         return MockData.map(
                 "answerType", answerType,
                 "message", message,
                 "builds", builds == null ? List.of() : builds,
-                "partRecommendation", partRecommendation,
-                "actions", actions,
                 "warnings", distinct(warnings),
                 "evidenceIds", List.of(),
                 "agentSessionId", null
         );
     }
 
+    // 그래프(드래프트) 기반 견적 완성: 담긴 부품은 고정하고 빈 카테고리만 채운다. LLM 미경유.
+    private Optional<Map<String, Object>> draftCompletionFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(request.get("currentQuoteDraft")).get("items"));
+        String normalized = normalizeCommand(message);
+        if (draftItems.isEmpty() || !containsAnyNormalized(normalized, "채워", "완성", "나머지", "마저")) {
+            return Optional.empty();
+        }
+        if (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint()) {
+            return Optional.empty();
+        }
+
+        List<PartCandidate> fixedParts = new ArrayList<>();
+        Map<String, Integer> fixedQuantities = new LinkedHashMap<>();
+        java.util.Set<String> fixedCategories = new java.util.LinkedHashSet<>();
+        int fixedTotal = 0;
+        for (Map<String, Object> item : draftItems) {
+            PartCandidate candidate = draftPartCandidate(item);
+            Integer quantityValue = numberValue(item.get("quantity"));
+            int quantity = quantityValue == null || quantityValue < 1 ? 1 : quantityValue;
+            fixedParts.add(candidate);
+            fixedQuantities.put(candidate.publicId() == null ? candidate.name() : candidate.publicId(), quantity);
+            if (candidate.category() != null) {
+                fixedCategories.add(candidate.category());
+            }
+            fixedTotal += Math.max(0, candidate.price() == null ? 0 : candidate.price()) * quantity;
+        }
+
+        List<String> missingCategories = fallbackCategories(true, true).stream()
+                .filter(category -> !fixedCategories.contains(category))
+                .toList();
+        List<String> warnings = new ArrayList<>();
+        Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
+
+        if (missingCategories.isEmpty()) {
+            List<Map<String, Object>> toolResults = toolResults(fixedParts, budget == null ? fixedTotal : budget, warnings);
+            warnings.addAll(toolWarnings(toolResults));
+            Map<String, Object> build = completionBuildMap(TIERS.get(1), fixedParts, fixedQuantities, List.of(), budget, toolResults, warnings);
+            return Optional.of(fastResponse("BUDGET", "이미 모든 카테고리가 채워져 있어 현재 구성 그대로 검증했습니다.", List.of(build), warnings));
+        }
+
+        int pickBudget = budget == null ? Integer.MAX_VALUE : budget - fixedTotal;
+        if (budget != null && pickBudget <= 0) {
+            return Optional.of(fastResponse(
+                    "GENERAL",
+                    "현재 담긴 부품 합계(" + formatBudgetLabel(fixedTotal) + ")가 이미 요청 예산을 넘어 나머지를 채울 수 없습니다. 예산을 높이거나 그래프에서 부품을 조정해 주세요.",
+                    List.of("DRAFT_COMPLETION_BUDGET_TOO_LOW")
+            ));
+        }
+
+        Map<String, List<PartCandidate>> pools = new LinkedHashMap<>();
+        for (String category : missingCategories) {
+            List<PartCandidate> pool = nearBudgetPartCandidates(category, fallbackCandidateLimit(category, true), pickBudget);
+            if (pool.isEmpty()) {
+                return Optional.empty();
+            }
+            pools.put(category, pool);
+        }
+
+        LinkedHashMap<String, Map<String, Object>> byComposition = new LinkedHashMap<>();
+        for (int strategy = 0; strategy < 3 && byComposition.size() < 3; strategy += 1) {
+            List<PartCandidate> picked = pickCompletionParts(pools, strategy, pickBudget);
+            if (picked == null) {
+                continue;
+            }
+            List<PartCandidate> previewParts = new ArrayList<>(fixedParts);
+            previewParts.addAll(picked);
+            List<String> localWarnings = new ArrayList<>();
+            int totalPrice = fixedTotal + picked.stream().mapToInt(BuildChatService::completionCandidatePrice).sum();
+            List<Map<String, Object>> toolResults = toolResults(previewParts, budget == null ? totalPrice : budget, localWarnings);
+            if (hasBlockingToolFailure(toolResults)) {
+                continue;
+            }
+            localWarnings.addAll(toolWarnings(toolResults));
+            Map<String, Object> build = completionBuildMap(TIERS.get(strategy), fixedParts, fixedQuantities, picked, budget, toolResults, localWarnings);
+            byComposition.putIfAbsent(buildItemsKey(build), build);
+        }
+        if (byComposition.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Map<String, Object>> builds = new ArrayList<>(byComposition.values());
+        relabelCompletionBuilds(builds);
+        return Optional.of(fastResponse(
+                "BUDGET",
+                "현재 견적에 담긴 부품은 유지하고 나머지 카테고리를 내부 자산과 Tool 검증 기준으로 채웠습니다.",
+                builds,
+                warnings
+        ));
+    }
+
+    // 전략 0=가성비(저가), 1=균형(중간), 2=고성능(예산 안 최대) — 남은 예산을 넘지 않게 선택한다
+    private List<PartCandidate> pickCompletionParts(Map<String, List<PartCandidate>> pools, int strategy, int pickBudget) {
+        List<PartCandidate> picked = new ArrayList<>();
+        long runningTotal = 0;
+        List<String> categories = new ArrayList<>(pools.keySet());
+        for (int index = 0; index < categories.size(); index += 1) {
+            List<PartCandidate> pool = pools.get(categories.get(index));
+            long minRemaining = 0;
+            for (int rest = index + 1; rest < categories.size(); rest += 1) {
+                List<PartCandidate> restPool = pools.get(categories.get(rest));
+                minRemaining += completionCandidatePrice(restPool.get(0));
+            }
+            int preferredIndex = switch (strategy) {
+                case 0 -> 0;
+                case 1 -> pool.size() / 2;
+                default -> pool.size() - 1;
+            };
+            PartCandidate chosen = null;
+            for (int candidateIndex = preferredIndex; candidateIndex >= 0; candidateIndex -= 1) {
+                PartCandidate candidate = pool.get(candidateIndex);
+                long candidatePrice = completionCandidatePrice(candidate);
+                if (runningTotal + candidatePrice + minRemaining <= pickBudget) {
+                    chosen = candidate;
+                    break;
+                }
+            }
+            if (chosen == null) {
+                return null;
+            }
+            picked.add(chosen);
+            runningTotal += completionCandidatePrice(chosen);
+        }
+        return picked;
+    }
+
+    private static int completionCandidatePrice(PartCandidate candidate) {
+        return Math.max(0, candidate.price() == null ? 0 : candidate.price()) * defaultQuantity(candidate.category());
+    }
+
+    private Map<String, Object> completionBuildMap(
+            Tier tier,
+            List<PartCandidate> fixedParts,
+            Map<String, Integer> fixedQuantities,
+            List<PartCandidate> pickedParts,
+            Integer budget,
+            List<Map<String, Object>> toolResults,
+            List<String> warnings
+    ) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        int totalPrice = 0;
+        List<String> appliedCategories = new ArrayList<>();
+        for (PartCandidate part : fixedParts) {
+            int quantity = fixedQuantities.getOrDefault(part.publicId() == null ? part.name() : part.publicId(), 1);
+            items.add(partItem(part, "현재 견적에서 유지", quantity));
+            totalPrice += Math.max(0, part.price() == null ? 0 : part.price()) * quantity;
+            if (part.category() != null && !appliedCategories.contains(part.category())) {
+                appliedCategories.add(part.category());
+            }
+        }
+        for (PartCandidate part : pickedParts) {
+            int quantity = defaultQuantity(part.category());
+            items.add(partItem(part, "빈 카테고리 자동 채움", quantity));
+            totalPrice += Math.max(0, part.price() == null ? 0 : part.price()) * quantity;
+        }
+        return MockData.map(
+                "id", "ai-draft-completion-" + tier.id() + "-" + Math.abs(items.hashCode()),
+                "tier", tier.id(),
+                "label", tier.label(),
+                "title", tier.title() + " 견적 완성 조합",
+                "summary", "현재 견적의 부품은 그대로 두고 빈 카테고리만 내부 자산으로 채웠습니다.",
+                "recommendedFor", List.of("견적 완성", "내부 자산", "Tool 검증"),
+                "totalPrice", totalPrice,
+                "badges", List.of(tier.title(), "DRAFT_COMPLETION"),
+                "budgetWon", budget == null ? totalPrice : budget,
+                "budgetLabel", budget == null ? "예산 미지정" : formatBudgetLabel(budget),
+                "tierLabel", tier.title(),
+                "appliedPartCategories", appliedCategories,
+                "items", items,
+                "toolResults", toolResults,
+                "warnings", distinct(warnings),
+                "confidence", confidence(toolResults, warnings),
+                "evidenceIds", List.of()
+        );
+    }
+
+    private static void relabelCompletionBuilds(List<Map<String, Object>> builds) {
+        builds.sort(java.util.Comparator.comparingInt(build -> {
+            Integer total = numberValue(build.get("totalPrice"));
+            return total == null ? 0 : total;
+        }));
+        for (int index = 0; index < builds.size(); index += 1) {
+            Tier tier = TIERS.get(Math.min(index, TIERS.size() - 1));
+            Map<String, Object> build = builds.get(index);
+            build.put("tier", tier.id());
+            build.put("label", tier.label());
+            build.put("title", tier.title() + " 견적 완성 조합");
+            build.put("tierLabel", tier.title());
+        }
+    }
+
     private Optional<Map<String, Object>> deterministicFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
-        if (isPriceAlertIntent(message)) {
-            Optional<Map<String, Object>> priceAlert = deterministicPriceAlertResponse(request, message);
-            if (priceAlert.isPresent()) {
-                return priceAlert;
+        Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
+        if (budget != null && objectMap(request.get("currentQuoteDraft")).isEmpty()) {
+            int minimumTotal = minimumBuildTotal();
+            if (minimumTotal > 0 && budget < minimumTotal) {
+                // 요청 예산으로는 구성이 어려우므로 "가능한 최소 구성" 카드를 실제로 만들어 함께 제공한다
+                List<String> warnings = new ArrayList<>();
+                warnings.add("BUDGET_BELOW_MINIMUM");
+                Optional<GreedyBuild> minimumBuild = greedyTargetBuild(
+                        (int) Math.round(minimumTotal * 1.25), (int) Math.round(minimumTotal * 1.25), false);
+                String guidance = "요청 예산(" + formatBudgetLabel(budget) + ")으로는 내부 자산 기준 완전한 구성이 어렵습니다. "
+                        + "가능한 최소 구성은 약 " + formatBudgetLabel(minimumTotal) + "부터이며, 약 "
+                        + formatBudgetLabel(Math.max(0, minimumTotal - budget)) + "을(를) 더 준비하시면 됩니다.";
+                if (minimumBuild.isPresent()) {
+                    GreedyBuild greedy = minimumBuild.get();
+                    warnings.addAll(greedy.warnings());
+                    Map<String, Object> build = budgetFallbackBuildMap(
+                            TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false), 1,
+                            greedy.toolResults(), greedy.warnings(), List.of());
+                    build.put("title", "가능한 최소 구성");
+                    build.put("summary", "내부 ACTIVE 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
+                    return Optional.of(fastResponse("BUDGET", guidance, List.of(build), warnings));
+                }
+                return Optional.of(fastResponse("GENERAL", guidance, warnings));
             }
         }
-
-        String category = detectPartCategory(message);
-        if (isStandalonePartRecommend(message, request, category)) {
-            List<AiChatEngineResponse.PartRecommendation> recommendations = partRecommendations(category, 3);
-            if (!recommendations.isEmpty()) {
-                Map<String, Object> parsedContext = Map.of();
-                return Optional.of(fastResponse(
-                        "PART",
-                        categoryLabel(category) + " 후보를 내부 자산과 벤치마크 기준으로 바로 골랐습니다.",
-                        List.of(),
-                        partRecommendation(recommendations, parsedContext),
-                        replacementActions(recommendations, List.of(), false),
-                        List.of()
-                ));
-            }
-        }
-
         if (isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
             AiChatEngineResponse engineResponse = new AiChatEngineResponse(
                     "내부 자산과 Tool 검증 기준으로 바로 추천 조합을 구성했습니다.",
@@ -1401,51 +1297,11 @@ public class BuildChatService {
                         "BUDGET",
                         "내부 자산과 Tool 검증 기준으로 추천 조합 3개를 바로 구성했습니다.",
                         builds,
-                        null,
-                        List.of(),
                         warnings
                 ));
             }
         }
         return Optional.empty();
-    }
-
-    private Optional<Map<String, Object>> deterministicPriceAlertResponse(Map<String, Object> request, String message) {
-        Integer targetPrice = parseBudgetWon(message);
-        if (targetPrice == null || targetPrice <= 0) {
-            return Optional.empty();
-        }
-        Map<String, Object> currentQuoteDraft = objectMap(request.get("currentQuoteDraft"));
-        List<Map<String, Object>> draftItems = objectMaps(currentQuoteDraft.get("items"));
-        if (draftItems.isEmpty()) {
-            return Optional.empty();
-        }
-        String category = detectPartCategory(message);
-        Map<String, Object> item = findDraftItem(draftItems, category, message);
-        if (item.isEmpty()) {
-            item = draftItems.get(0);
-        }
-        String itemCategory = text(item.get("category"));
-        String itemName = firstText(text(item.get("name")), categoryLabel(itemCategory));
-        Map<String, Object> action = actionMap(
-                "CREATE_PRICE_ALERT",
-                itemName + " 목표가 알림",
-                itemName + " 가격이 " + formatBudgetLabel(targetPrice) + " 이하가 되면 알림을 받을 수 있게 준비합니다.",
-                MockData.map(
-                        "partId", text(item.get("partId")),
-                        "category", itemCategory,
-                        "targetPrice", targetPrice,
-                        "source", "AI_BUILD_CHAT"
-                )
-        );
-        return Optional.of(fastResponse(
-                "GENERAL",
-                itemName + " 목표가 알림을 바로 준비했습니다.",
-                List.of(),
-                null,
-                List.of(action),
-                List.of()
-        ));
     }
 
     private List<Map<String, Object>> openBudgetFallbackBuilds(List<String> warnings) {
@@ -1559,197 +1415,375 @@ public class BuildChatService {
             return List.of();
         }
 
-        int ramQuantity = rawBudgetIntent.budget() <= 1_200_000 ? 1 : 2;
-        List<Map<String, Object>> result = new ArrayList<>();
-        boolean preferLiteBuild = rawBudgetIntent.budget() <= 1_500_000;
-        if (preferLiteBuild) {
-            collectBudgetFallbackBuilds(false, false, ramQuantity, rawBudgetIntent, engineResponse.evidenceIds(), result);
-            collectBudgetFallbackBuilds(true, true, ramQuantity, rawBudgetIntent, engineResponse.evidenceIds(), result);
-        } else {
-            collectBudgetFallbackBuilds(true, true, ramQuantity, rawBudgetIntent, engineResponse.evidenceIds(), result);
-            collectBudgetFallbackBuilds(false, false, ramQuantity, rawBudgetIntent, engineResponse.evidenceIds(), result);
+        int budgetWon = rawBudgetIntent.budget();
+        if ("MIN".equals(rawBudgetIntent.mode())) {
+            // "이상" 요청: 예산 하한을 지키는 조합을 우선 찾고, 없으면 이하 최대 구성으로 완화한다
+            Optional<GreedyBuild> aboveBudget = greedyTargetBuild(
+                    (int) Math.min(Integer.MAX_VALUE, Math.round(budgetWon * 1.15)),
+                    (int) Math.min(Integer.MAX_VALUE, Math.round(budgetWon * 1.5)),
+                    true
+            );
+            if (aboveBudget.isPresent()
+                    && aboveBudget.get().parts().stream().mapToLong(BuildChatService::completionCandidatePrice).sum() >= budgetWon) {
+                GreedyBuild greedy = aboveBudget.get();
+                Map<String, Object> build = budgetFallbackBuildMap(
+                        TIERS.get(2), greedy.parts(), rawBudgetIntent, 2, greedy.toolResults(), greedy.warnings(), engineResponse.evidenceIds());
+                warnings.add("명시 예산 범위에 맞춰 내부 자산 기준 보조 견적을 재구성했습니다.");
+                if (guardStats != null) {
+                    guardStats.routeFallbackUsed = true;
+                }
+                return List.of(build);
+            }
+            List<Map<String, Object>> relaxed = nearBudgetLadderBuilds(budgetWon, engineResponse.evidenceIds(), warnings, guardStats);
+            if (!relaxed.isEmpty()) {
+                warnings.add("요청 예산 하한 이상의 조합을 내부 자산으로 구성하지 못해, 예산 이하에서 구성 가능한 최대 조합을 추천합니다.");
+            }
+            return relaxed;
         }
 
-        if (!result.isEmpty()) {
+        // TARGET/MAX: 예산을 넘지 않으면서 최대한 근접한 조합을 사다리 방식으로 찾는다
+        List<Map<String, Object>> ladder = nearBudgetLadderBuilds(budgetWon, engineResponse.evidenceIds(), warnings, guardStats);
+        if (!ladder.isEmpty()) {
             warnings.add("명시 예산 범위에 맞춰 내부 자산 기준 보조 견적을 재구성했습니다.");
-            if (guardStats != null) {
-                guardStats.routeFallbackUsed = true;
-            }
         }
-        return result.stream().limit(3).toList();
+        return ladder;
     }
 
-    private void collectBudgetFallbackBuilds(
-            boolean includeGpu,
-            boolean includeCooler,
-            int ramQuantity,
-            BudgetIntent rawBudgetIntent,
+    // 3개 추천의 다양성을 위한 타깃 예산 비율: 가성비 / 균형 / 예산 근접.
+    // 느슨한 가격 밴드 탐색은 가지치기가 무력해져 수십 초가 걸리므로,
+    // 타깃 예산을 낮춰 "타깃의 87.5%~100%" 타이트한 탐색을 3번 수행한다.
+    private static final double[] NEAR_BUDGET_TIER_TARGETS = {0.55, 0.75, 1.0};
+
+    private List<Map<String, Object>> nearBudgetLadderBuilds(
+            int budgetWon,
             List<String> evidenceIds,
-            List<Map<String, Object>> result
+            List<String> warnings,
+            BuildChatGuardStats guardStats
     ) {
-        if (result.size() >= 3) {
-            return;
-        }
-        List<List<PartCandidate>> groups = new ArrayList<>();
-        for (String category : fallbackCategories(includeGpu, includeCooler)) {
-            List<PartCandidate> candidates = pricePartCandidates(category, fallbackCandidateLimit(category, includeGpu));
-            if (candidates.isEmpty()) {
-                return;
+        // 타깃 예산별로 1개씩 뽑아 가성비/균형/근접 다양성을 확보한다
+        LinkedHashMap<String, Map<String, Object>> byComposition = new LinkedHashMap<>();
+        for (double targetRatio : NEAR_BUDGET_TIER_TARGETS) {
+            int targetBudget = (int) Math.floor(budgetWon * targetRatio);
+            List<Map<String, Object>> targetResult = singleTargetLadderBuilds(targetBudget, evidenceIds);
+            if (!targetResult.isEmpty()) {
+                Map<String, Object> build = targetResult.get(0);
+                byComposition.putIfAbsent(buildItemsKey(build), build);
             }
-            groups.add(candidates);
         }
-        int lowerBound = budgetLowerBound(rawBudgetIntent);
-        int upperBound = budgetUpperBound(rawBudgetIntent);
-        int[] minRemaining = minRemainingPrices(groups, ramQuantity);
-        int[] maxRemaining = maxRemainingPrices(groups, ramQuantity);
-        collectBudgetFallbackCombination(
-                groups,
-                0,
-                new ArrayList<>(),
-                new LinkedHashSet<>(),
-                0,
-                lowerBound,
-                upperBound,
-                minRemaining,
-                maxRemaining,
-                ramQuantity,
-                rawBudgetIntent,
-                evidenceIds,
-                result
+
+        // 부족분은 예산 근접 탐색 결과로 보충한다
+        if (byComposition.size() < 3) {
+            for (Map<String, Object> build : singleTargetLadderBuilds(budgetWon, evidenceIds)) {
+                if (byComposition.size() >= 3) {
+                    break;
+                }
+                byComposition.putIfAbsent(buildItemsKey(build), build);
+            }
+        }
+
+        if (byComposition.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> builds = new ArrayList<>(byComposition.values());
+        // 총액 오름차순으로 정렬해 가성비→균형→고성능 순서와 티어 라벨을 일치시킨다
+        builds.sort(java.util.Comparator.comparingInt(build -> {
+            Integer total = numberValue(build.get("totalPrice"));
+            return total == null ? 0 : total;
+        }));
+        relabelTierBuilds(builds);
+        int bestTotal = builds.stream()
+                .map(build -> numberValue(build.get("totalPrice")))
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+        if (bestTotal < Math.floor(budgetWon * 0.875)) {
+            warnings.add("예산에 근접한 조합을 내부 자산으로 구성하지 못해, 구성 가능한 범위에서 예산 이하 최대 조합을 추천합니다.");
+        }
+        if (guardStats != null) {
+            guardStats.routeFallbackUsed = true;
+        }
+        return builds.stream().limit(3).toList();
+    }
+
+    // 카테고리별 예산 비중 — 그리디 초기 배분 기준
+    private static final Map<String, Double> BUDGET_SHARE_WITH_GPU = Map.of(
+            "CPU", 0.20, "MOTHERBOARD", 0.11, "RAM", 0.08, "GPU", 0.33,
+            "STORAGE", 0.08, "PSU", 0.07, "CASE", 0.06, "COOLER", 0.07);
+    private static final Map<String, Double> BUDGET_SHARE_NO_GPU = Map.of(
+            "CPU", 0.32, "MOTHERBOARD", 0.18, "RAM", 0.14, "STORAGE", 0.14, "PSU", 0.11, "CASE", 0.11);
+    private static final List<String> GREEDY_PICK_ORDER =
+            List.of("CPU", "MOTHERBOARD", "RAM", "COOLER", "GPU", "PSU", "CASE", "STORAGE");
+    private static final List<String> GREEDY_UPGRADE_ORDER = List.of("GPU", "CPU", "STORAGE", "RAM");
+
+    /**
+     * 타깃 예산에 근접한 조합 1개를 그리디로 구성한다.
+     * 조합 DFS는 소켓 비호환 조합마다 Tool 검증(SQL)을 반복해 수십 초가 걸렸다 —
+     * 여기서는 비중 배분 + 호환 프리필터로 후보를 만들고 Tool 검증은 1~4회만 수행한다.
+     */
+    private List<Map<String, Object>> singleTargetLadderBuilds(int targetBudget, List<String> evidenceIds) {
+        if (targetBudget <= 0) {
+            return List.of();
+        }
+        boolean includeGpu = targetBudget >= 1_000_000;
+        Optional<GreedyBuild> build = greedyTargetBuild(targetBudget, targetBudget, includeGpu);
+        if (build.isEmpty() && includeGpu) {
+            build = greedyTargetBuild(targetBudget, targetBudget, false);
+        }
+        if (build.isEmpty()) {
+            return List.of();
+        }
+        GreedyBuild greedy = build.get();
+        Map<String, Object> map = budgetFallbackBuildMap(
+                TIERS.get(1),
+                greedy.parts(),
+                new BudgetIntent(targetBudget, "MAX", false),
+                2,
+                greedy.toolResults(),
+                greedy.warnings(),
+                evidenceIds
         );
+        return List.of(map);
     }
 
-    private void collectBudgetFallbackCombination(
-            List<List<PartCandidate>> groups,
-            int groupIndex,
-            List<PartCandidate> selected,
-            LinkedHashSet<String> seenKeys,
-            int partialPrice,
-            int lowerBound,
-            int upperBound,
-            int[] minRemaining,
-            int[] maxRemaining,
-            int ramQuantity,
-            BudgetIntent rawBudgetIntent,
-            List<String> evidenceIds,
-            List<Map<String, Object>> result
-    ) {
-        if (result.size() >= 3) {
-            return;
-        }
-        if (partialPrice + minRemaining[groupIndex] > upperBound) {
-            return;
-        }
-        if (partialPrice + maxRemaining[groupIndex] < lowerBound) {
-            return;
-        }
-        if (groupIndex >= groups.size()) {
-            String key = selected.stream().map(PartCandidate::publicId).toList().toString();
-            if (!seenKeys.add(key)) {
-                return;
+    private record GreedyBuild(List<PartCandidate> parts, List<Map<String, Object>> toolResults, List<String> warnings) {
+    }
+
+    private Optional<GreedyBuild> greedyTargetBuild(int targetBudget, int poolUpperBound, boolean includeGpu) {
+        Map<String, Double> shares = includeGpu ? BUDGET_SHARE_WITH_GPU : BUDGET_SHARE_NO_GPU;
+        LinkedHashMap<String, List<PartCandidate>> pools = new LinkedHashMap<>();
+        for (String category : fallbackCategories(includeGpu, includeGpu)) {
+            List<PartCandidate> pool = nearBudgetPartCandidates(category, 8, poolUpperBound);
+            if (pool.isEmpty()) {
+                return Optional.empty();
             }
-            int totalPrice = partialPrice;
-            if (!withinBudgetGuard(MockData.map("totalPrice", totalPrice), Map.of(), rawBudgetIntent)) {
-                return;
-            }
-            List<String> localWarnings = new ArrayList<>();
-            int toolBudget = "MAX".equals(rawBudgetIntent.mode()) ? rawBudgetIntent.budget() : totalPrice;
-            List<Map<String, Object>> toolResults = toolResults(selected, toolBudget, localWarnings);
-            if (hasBlockingToolFailure(toolResults)) {
-                return;
-            }
-            localWarnings.addAll(toolWarnings(toolResults));
-            Tier tier = TIERS.get(Math.min(result.size(), TIERS.size() - 1));
-            result.add(budgetFallbackBuildMap(tier, selected, rawBudgetIntent, ramQuantity, toolResults, localWarnings, evidenceIds));
-            return;
+            pools.put(category, pool);
         }
-        for (PartCandidate candidate : groups.get(groupIndex)) {
-            int candidatePrice = effectiveCandidatePrice(candidate, ramQuantity);
-            int nextPartialPrice = partialPrice + candidatePrice;
-            if (nextPartialPrice + minRemaining[groupIndex + 1] > upperBound) {
-                break;
-            }
-            if (nextPartialPrice + maxRemaining[groupIndex + 1] < lowerBound) {
+
+        LinkedHashMap<String, PartCandidate> chosen = new LinkedHashMap<>();
+        for (String category : GREEDY_PICK_ORDER) {
+            List<PartCandidate> pool = pools.get(category);
+            if (pool == null) {
                 continue;
             }
-            selected.add(candidate);
-            collectBudgetFallbackCombination(
-                    groups,
-                    groupIndex + 1,
-                    selected,
-                    seenKeys,
-                    nextPartialPrice,
-                    lowerBound,
-                    upperBound,
-                    minRemaining,
-                    maxRemaining,
-                    ramQuantity,
-                    rawBudgetIntent,
-                    evidenceIds,
-                    result
-            );
-            selected.remove(selected.size() - 1);
-            if (result.size() >= 3) {
-                return;
+            List<PartCandidate> filtered = compatibleCandidates(pool, category, chosen);
+            if (filtered.isEmpty()) {
+                filtered = pool;
+            }
+            int shareBudget = (int) Math.floor(targetBudget * shares.getOrDefault(category, 0.05));
+            chosen.put(category, pickNearestPrice(filtered, shareBudget));
+        }
+
+        // 예산 초과 시 가장 큰 절감이 가능한 카테고리부터 한 단계씩 하향
+        for (int guard = 0; guard < 32 && greedyTotal(chosen) > targetBudget; guard += 1) {
+            if (!shiftOneStep(pools, chosen, targetBudget, false)) {
+                return Optional.empty();
             }
         }
+        if (greedyTotal(chosen) > targetBudget) {
+            return Optional.empty();
+        }
+        // 남은 예산은 GPU→CPU→저장장치→램 순으로 상향해 타깃에 근접시킨다
+        for (int guard = 0; guard < 32; guard += 1) {
+            if (!shiftOneStep(pools, chosen, targetBudget, true)) {
+                break;
+            }
+        }
+
+        List<String> warnings = new ArrayList<>();
+        List<Map<String, Object>> toolResults = toolResults(new ArrayList<>(chosen.values()), targetBudget, warnings);
+        for (int attempt = 0; attempt < 3 && hasBlockingToolFailure(toolResults); attempt += 1) {
+            if (!repairBlockingFailure(pools, chosen, toolResults, targetBudget)) {
+                return Optional.empty();
+            }
+            warnings = new ArrayList<>();
+            toolResults = toolResults(new ArrayList<>(chosen.values()), targetBudget, warnings);
+        }
+        if (hasBlockingToolFailure(toolResults)) {
+            return Optional.empty();
+        }
+        warnings.addAll(toolWarnings(toolResults));
+        return Optional.of(new GreedyBuild(new ArrayList<>(chosen.values()), toolResults, warnings));
     }
 
-    private static int budgetLowerBound(BudgetIntent rawBudgetIntent) {
-        if (rawBudgetIntent == null || !rawBudgetIntent.hasBudget()) {
-            return 0;
+    // upgrade=false: 예산 초과 해소(최대 절감 스왑), upgrade=true: 예산 내 최대 상향(우선순위 카테고리)
+    private boolean shiftOneStep(
+            Map<String, List<PartCandidate>> pools,
+            LinkedHashMap<String, PartCandidate> chosen,
+            int targetBudget,
+            boolean upgrade
+    ) {
+        List<String> categories = upgrade ? GREEDY_UPGRADE_ORDER : new ArrayList<>(chosen.keySet());
+        String bestCategory = null;
+        PartCandidate bestCandidate = null;
+        long bestDelta = 0;
+        for (String category : categories) {
+            PartCandidate current = chosen.get(category);
+            List<PartCandidate> pool = pools.get(category);
+            if (current == null || pool == null) {
+                continue;
+            }
+            int currentIndex = pool.indexOf(current);
+            int nextIndex = upgrade ? currentIndex + 1 : currentIndex - 1;
+            while (nextIndex >= 0 && nextIndex < pool.size()) {
+                PartCandidate candidate = pool.get(nextIndex);
+                long delta = completionCandidatePrice(candidate) - completionCandidatePrice(current);
+                LinkedHashMap<String, PartCandidate> trial = new LinkedHashMap<>(chosen);
+                trial.put(category, candidate);
+                boolean fitsBudget = !upgrade || greedyTotal(trial) <= targetBudget;
+                if (fitsBudget && pairwiseCompatible(trial)) {
+                    if (upgrade) {
+                        // 상향은 우선순위 첫 후보를 즉시 적용
+                        chosen.put(category, candidate);
+                        return true;
+                    }
+                    if (delta < bestDelta) {
+                        bestDelta = delta;
+                        bestCategory = category;
+                        bestCandidate = candidate;
+                    }
+                    break;
+                }
+                nextIndex = upgrade ? nextIndex + 1 : nextIndex - 1;
+            }
         }
-        if ("MIN".equals(rawBudgetIntent.mode())) {
-            return rawBudgetIntent.budget();
+        if (!upgrade && bestCategory != null) {
+            chosen.put(bestCategory, bestCandidate);
+            return true;
         }
-        if ("TARGET".equals(rawBudgetIntent.mode())) {
-            return (int) Math.floor(rawBudgetIntent.budget() * 0.875);
-        }
-        return 0;
+        return false;
     }
 
-    private static int budgetUpperBound(BudgetIntent rawBudgetIntent) {
-        if (rawBudgetIntent == null || !rawBudgetIntent.hasBudget()) {
-            return Integer.MAX_VALUE;
+    // Tool FAIL 종류별 표적 교체: 전력→PSU 상향, 규격→케이스 상향, 호환→보드/쿨러/램 재선택
+    private boolean repairBlockingFailure(
+            Map<String, List<PartCandidate>> pools,
+            LinkedHashMap<String, PartCandidate> chosen,
+            List<Map<String, Object>> toolResults,
+            int targetBudget
+    ) {
+        for (Map<String, Object> result : toolResults) {
+            if (!"FAIL".equals(text(result.get("status")))) {
+                continue;
+            }
+            String tool = text(result.get("tool"));
+            List<String> targets = switch (firstText(tool, "")) {
+                case "power" -> List.of("PSU", "GPU");
+                case "size" -> List.of("CASE", "GPU", "COOLER");
+                default -> List.of("MOTHERBOARD", "COOLER", "RAM");
+            };
+            for (String category : targets) {
+                PartCandidate current = chosen.get(category);
+                List<PartCandidate> pool = pools.get(category);
+                if (current == null || pool == null) {
+                    continue;
+                }
+                LinkedHashMap<String, PartCandidate> without = new LinkedHashMap<>(chosen);
+                without.remove(category);
+                for (PartCandidate candidate : compatibleCandidates(pool, category, without)) {
+                    if (candidate == current) {
+                        continue;
+                    }
+                    LinkedHashMap<String, PartCandidate> trial = new LinkedHashMap<>(chosen);
+                    trial.put(category, candidate);
+                    if (greedyTotal(trial) <= targetBudget && pairwiseCompatible(trial)) {
+                        chosen.put(category, candidate);
+                        return true;
+                    }
+                }
+            }
         }
-        if ("MAX".equals(rawBudgetIntent.mode())) {
-            return rawBudgetIntent.budget();
-        }
-        if ("TARGET".equals(rawBudgetIntent.mode())) {
-            return (int) Math.ceil(rawBudgetIntent.budget() * 1.125);
-        }
-        return Integer.MAX_VALUE;
+        return false;
     }
 
-    private static int[] minRemainingPrices(List<List<PartCandidate>> groups, int ramQuantity) {
-        int[] remaining = new int[groups.size() + 1];
-        remaining[groups.size()] = 0;
-        for (int index = groups.size() - 1; index >= 0; index -= 1) {
-            int min = groups.get(index).stream()
-                    .mapToInt(candidate -> effectiveCandidatePrice(candidate, ramQuantity))
-                    .min()
-                    .orElse(0);
-            remaining[index] = remaining[index + 1] + min;
-        }
-        return remaining;
+    private static long greedyTotal(Map<String, PartCandidate> chosen) {
+        return chosen.values().stream().mapToLong(BuildChatService::completionCandidatePrice).sum();
     }
 
-    private static int[] maxRemainingPrices(List<List<PartCandidate>> groups, int ramQuantity) {
-        int[] remaining = new int[groups.size() + 1];
-        remaining[groups.size()] = 0;
-        for (int index = groups.size() - 1; index >= 0; index -= 1) {
-            int max = groups.get(index).stream()
-                    .mapToInt(candidate -> effectiveCandidatePrice(candidate, ramQuantity))
-                    .max()
-                    .orElse(0);
-            remaining[index] = remaining[index + 1] + max;
+    private static PartCandidate pickNearestPrice(List<PartCandidate> pool, int shareBudget) {
+        PartCandidate best = pool.get(0);
+        long bestDistance = Long.MAX_VALUE;
+        for (PartCandidate candidate : pool) {
+            long distance = Math.abs(completionCandidatePrice(candidate) - (long) shareBudget);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = candidate;
+            }
         }
-        return remaining;
+        return best;
     }
 
-    private static int effectiveCandidatePrice(PartCandidate candidate, int ramQuantity) {
-        int quantity = "RAM".equals(candidate.category()) ? Math.max(1, Math.min(4, ramQuantity)) : defaultQuantity(candidate.category());
-        return Math.max(0, candidate.price() == null ? 0 : candidate.price()) * quantity;
+    // ToolCheckService의 blocking 규칙(소켓/메모리/쿨러/전력/규격)을 값싼 속성 비교로 선반영한다
+    private static List<PartCandidate> compatibleCandidates(
+            List<PartCandidate> pool,
+            String category,
+            Map<String, PartCandidate> chosen
+    ) {
+        return pool.stream().filter(candidate -> {
+            LinkedHashMap<String, PartCandidate> trial = new LinkedHashMap<>(chosen);
+            trial.put(category, candidate);
+            return pairwiseCompatible(trial);
+        }).toList();
+    }
+
+    private static boolean pairwiseCompatible(Map<String, PartCandidate> chosen) {
+        PartCandidate cpu = chosen.get("CPU");
+        PartCandidate motherboard = chosen.get("MOTHERBOARD");
+        PartCandidate ram = chosen.get("RAM");
+        PartCandidate cooler = chosen.get("COOLER");
+        PartCandidate gpu = chosen.get("GPU");
+        PartCandidate psu = chosen.get("PSU");
+        PartCandidate pcCase = chosen.get("CASE");
+
+        String cpuSocket = cpu == null ? null : firstAttributeText(cpu, "socket");
+        String boardSocket = motherboard == null ? null : firstAttributeText(motherboard, "socket");
+        if (cpuSocket != null && boardSocket != null && !cpuSocket.equalsIgnoreCase(boardSocket)) {
+            return false;
+        }
+        String ramType = ram == null ? null : firstAttributeText(ram, "memoryType");
+        String boardMemory = motherboard == null ? null : firstAttributeText(motherboard, "memoryType");
+        if (ramType != null && boardMemory != null && !ramType.equalsIgnoreCase(boardMemory)) {
+            return false;
+        }
+        if (cooler != null && cpuSocket != null && cooler.attributes().get("socketSupport") instanceof List<?> supports
+                && !supports.isEmpty()
+                && supports.stream().noneMatch(item -> cpuSocket.equalsIgnoreCase(String.valueOf(item)))) {
+            return false;
+        }
+        Integer psuCapacity = psu == null ? null : firstAttributeNumber(psu, "capacityW");
+        Integer gpuRequired = gpu == null ? null : firstAttributeNumber(gpu, "requiredSystemPowerW");
+        if (psuCapacity != null && gpuRequired != null && psuCapacity < gpuRequired) {
+            return false;
+        }
+        Integer gpuLength = gpu == null ? null : firstAttributeNumber(gpu, "lengthMm");
+        Integer maxGpuLength = pcCase == null ? null : firstAttributeNumber(pcCase, "maxGpuLengthMm");
+        if (gpuLength != null && maxGpuLength != null && maxGpuLength > 0 && gpuLength > maxGpuLength) {
+            return false;
+        }
+        Integer coolerHeight = cooler == null ? null : firstAttributeNumber(cooler, "heightMm", "coolerHeightMm");
+        Integer maxCoolerHeight = pcCase == null ? null : firstAttributeNumber(pcCase, "maxCpuCoolerHeightMm");
+        if (coolerHeight != null && maxCoolerHeight != null && maxCoolerHeight > 0 && coolerHeight > maxCoolerHeight) {
+            return false;
+        }
+        return true;
+    }
+
+    private static String buildItemsKey(Map<String, Object> build) {
+        return objectMaps(build.get("items")).stream()
+                .map(item -> item.get("partId") + ":" + item.get("quantity"))
+                .sorted()
+                .toList()
+                .toString();
+    }
+
+    private static void relabelTierBuilds(List<Map<String, Object>> builds) {
+        for (int index = 0; index < builds.size(); index += 1) {
+            Tier tier = TIERS.get(Math.min(index, TIERS.size() - 1));
+            Map<String, Object> build = builds.get(index);
+            build.put("tier", tier.id());
+            build.put("label", tier.label());
+            build.put("title", tier.title() + " 예산 맞춤 조합");
+            build.put("tierLabel", tier.title());
+        }
     }
 
     private Map<String, Object> budgetFallbackBuildMap(
@@ -1834,221 +1868,6 @@ public class BuildChatService {
         );
     }
 
-    private List<Map<String, Object>> changedCurrentBuilds(
-            AiChatEngineResponse engineResponse,
-            Map<String, Object> request,
-            List<AiChatEngineResponse.PartRecommendation> options,
-            List<String> warnings
-    ) {
-        if (options == null || options.isEmpty()) {
-            return List.of();
-        }
-        String category = options.get(0).category();
-        List<AiBuildCandidate> baseBuilds = currentBuilds(request.get("currentBuilds"), warnings);
-        if (baseBuilds.isEmpty()) {
-            return List.of();
-        }
-        List<PartCandidate> replacements = options.stream().map(this::partCandidate).toList();
-        List<Map<String, Object>> updatedBuilds = new ArrayList<>();
-        for (int index = 0; index < baseBuilds.size(); index += 1) {
-            AiBuildCandidate baseBuild = baseBuilds.get(index);
-            PartCandidate replacement = replacements.get(Math.min(index, replacements.size() - 1));
-            List<PartCandidate> nextParts = baseBuild.parts().stream()
-                    .map(part -> category.equals(part.category()) ? replacement : part)
-                    .toList();
-            List<String> applied = new ArrayList<>(baseBuild.appliedPartCategories());
-            applied.add(category);
-            updatedBuilds.add(buildMap(new AiBuildCandidate(baseBuild.tier(), baseBuild.budgetWon(), baseBuild.budgetLabel(), nextParts, distinct(applied))));
-        }
-        return updatedBuilds;
-    }
-
-    private Map<String, Object> partRecommendation(List<AiChatEngineResponse.PartRecommendation> parts, Map<String, Object> parsedContext) {
-        if (parts == null || parts.isEmpty()) {
-            return null;
-        }
-        String category = parts.get(0).category();
-        return MockData.map(
-                "category", category,
-                "label", categoryLabel(category),
-                "intro", categoryLabel(category) + " 후보를 AI 엔진과 내부 자산 DB 기준으로 정리했습니다.",
-                "options", parts.stream()
-                        .map(part -> {
-                            PartCandidate candidate = partCandidate(part);
-                            return partItem(candidate, "AI 엔진 내부 자산 추천", quantityForRecommendation(candidate, parsedContext));
-                        })
-                        .toList()
-        );
-    }
-
-    private List<Map<String, Object>> draftActions(
-            AiChatEngineResponse engineResponse,
-            Map<String, Object> request,
-            List<AiChatEngineResponse.PartRecommendation> safePartRecommendations
-    ) {
-        Map<String, Object> currentQuoteDraft = objectMap(request.get("currentQuoteDraft"));
-        if (currentQuoteDraft.isEmpty()) {
-            return List.of();
-        }
-        String message = text(request.get("message"));
-        List<Map<String, Object>> draftItems = objectMaps(currentQuoteDraft.get("items"));
-        Map<String, Object> parsedContext = engineResponse.parsedContext() == null ? Map.of() : engineResponse.parsedContext();
-        Map<String, Object> draftEdit = objectMap(parsedContext.get("draftEdit"));
-        String category = firstText(text(draftEdit.get("category")), firstText(detectPartCategory(message), firstRecommendedCategory(engineResponse)));
-        String operation = text(draftEdit.get("operation"));
-        String priceDirection = text(draftEdit.get("priceDirection"));
-
-        if ("REMOVE".equals(operation) || isRemoveIntent(message)) {
-            Map<String, Object> item = findDraftItem(draftItems, category, message);
-            if (!item.isEmpty()) {
-                return List.of(removeAction(item));
-            }
-            return List.of(askFollowUpAction("삭제할 부품을 찾지 못했습니다.", "예: GPU 빼줘, RAM 삭제해줘처럼 부품 종류를 함께 알려주세요."));
-        }
-
-        if ("UPDATE_QUANTITY".equals(operation) || isQuantityIntent(message) || parseCapacityGb(message) != null) {
-            Map<String, Object> item = findDraftItem(draftItems, category, message);
-            if (!item.isEmpty()) {
-                return List.of(quantityAction(item, message));
-            }
-        }
-
-        if ("CHEAPER".equals(priceDirection) || isBudgetIntent(message)) {
-            List<Map<String, Object>> actions = replacementActions(safePartRecommendations, draftItems, true);
-            return actions.isEmpty()
-                    ? List.of(askFollowUpAction("예산 조정 후보가 부족합니다.", "CPU/GPU/RAM처럼 낮추고 싶은 부품을 알려주면 교체안을 제안할 수 있습니다."))
-                    : actions;
-        }
-
-        List<Map<String, Object>> actions = replacementActions(safePartRecommendations, draftItems, false);
-        if (!actions.isEmpty()) {
-            return actions;
-        }
-
-        return List.of();
-    }
-
-    private List<Map<String, Object>> replacementActions(
-            List<AiChatEngineResponse.PartRecommendation> recommendations,
-            List<Map<String, Object>> draftItems,
-            boolean multiple
-    ) {
-        if (recommendations == null || recommendations.isEmpty()) {
-            return List.of();
-        }
-        List<Map<String, Object>> actions = new ArrayList<>();
-        int limit = 1;
-        for (int index = 0; index < limit; index += 1) {
-            AiChatEngineResponse.PartRecommendation candidate = recommendations.get(index);
-            Map<String, Object> existing = findDraftItem(draftItems, candidate.category(), candidate.name());
-            String type = existing.isEmpty() ? "ADD_PART_TO_DRAFT" : "REPLACE_DRAFT_PART";
-            int quantity = quantityForRecommendation(partCandidate(candidate), Map.of());
-            actions.add(actionMap(
-                    type,
-                    categoryLabel(candidate.category()) + " " + (existing.isEmpty() ? "추가" : "교체"),
-                    candidate.name() + "을(를) 견적에 " + (existing.isEmpty() ? "추가합니다." : "반영합니다."),
-                    MockData.map(
-                            "partId", candidate.partId(),
-                            "category", candidate.category(),
-                            "quantity", quantity,
-                            "source", "AI_BUILD_CHAT",
-                            "currentPartId", text(existing.get("partId"))
-                    )
-            ));
-        }
-        return actions;
-    }
-
-    private List<AiChatEngineResponse.PartRecommendation> failSafePartRecommendations(
-            List<AiChatEngineResponse.PartRecommendation> recommendations,
-            Map<String, Object> request,
-            List<String> warnings
-    ) {
-        return failSafePartRecommendations(recommendations, request, warnings, null);
-    }
-
-    private List<AiChatEngineResponse.PartRecommendation> failSafePartRecommendations(
-            List<AiChatEngineResponse.PartRecommendation> recommendations,
-            Map<String, Object> request,
-            List<String> warnings,
-            BuildChatGuardStats guardStats
-    ) {
-        if (recommendations == null || recommendations.isEmpty()) {
-            return List.of();
-        }
-        Map<String, Object> currentQuoteDraft = objectMap(request.get("currentQuoteDraft"));
-        List<Map<String, Object>> draftItems = objectMaps(currentQuoteDraft.get("items"));
-        if (draftItems.isEmpty()) {
-            return recommendations;
-        }
-        List<AiChatEngineResponse.PartRecommendation> safe = new ArrayList<>();
-        int excluded = 0;
-        for (AiChatEngineResponse.PartRecommendation recommendation : recommendations) {
-            if (!hasToolCheckContextForRecommendation(draftItems, recommendation.category())) {
-                safe.add(recommendation);
-                continue;
-            }
-            List<PartCandidate> nextParts = replacementPreviewParts(draftItems, recommendation);
-            List<String> localWarnings = new ArrayList<>();
-            List<Map<String, Object>> toolResults = toolResults(nextParts, totalPrice(nextParts), localWarnings);
-            if (hasBlockingToolFailure(toolResults)) {
-                excluded += 1;
-                continue;
-            }
-            safe.add(recommendation);
-        }
-        if (excluded > 0) {
-            if (guardStats != null) {
-                guardStats.blockingFailDropped += excluded;
-            }
-            warnings.add("Tool FAIL 후보 " + excluded + "개를 추천/적용 후보에서 제외했습니다.");
-        }
-        return safe;
-    }
-
-    private boolean hasToolCheckContextForRecommendation(List<Map<String, Object>> draftItems, String replacementCategory) {
-        LinkedHashSet<String> categories = new LinkedHashSet<>();
-        for (Map<String, Object> item : draftItems) {
-            String category = text(item.get("category"));
-            if (category != null) {
-                categories.add(category);
-            }
-        }
-        return switch (replacementCategory) {
-            case "CPU" -> categories.contains("MOTHERBOARD");
-            case "MOTHERBOARD" -> categories.contains("CPU") || categories.contains("RAM");
-            case "RAM" -> categories.contains("MOTHERBOARD");
-            case "GPU" -> categories.contains("CASE") || categories.contains("PSU");
-            case "PSU" -> categories.contains("GPU");
-            case "CASE" -> categories.contains("GPU") || categories.contains("COOLER") || categories.contains("PSU");
-            case "COOLER" -> categories.contains("CPU") || categories.contains("CASE");
-            default -> false;
-        };
-    }
-
-    private List<PartCandidate> replacementPreviewParts(List<Map<String, Object>> draftItems, AiChatEngineResponse.PartRecommendation recommendation) {
-        String category = recommendation.category();
-        List<PartCandidate> nextParts = new ArrayList<>();
-        boolean replaced = false;
-        for (Map<String, Object> item : draftItems) {
-            if (category.equals(text(item.get("category")))) {
-                if (!replaced) {
-                    nextParts.add(partCandidate(recommendation));
-                    replaced = true;
-                }
-                continue;
-            }
-            PartCandidate draftPart = partCandidateFromDraftItem(item);
-            if (draftPart != null) {
-                nextParts.add(draftPart);
-            }
-        }
-        if (!replaced) {
-            nextParts.add(partCandidate(recommendation));
-        }
-        return nextParts;
-    }
-
     private PartCandidate partCandidateFromDraftItem(Map<String, Object> item) {
         String partId = text(item.get("partId"));
         String category = text(item.get("category"));
@@ -2073,102 +1892,6 @@ public class BuildChatService {
                 .anyMatch(result -> "FAIL".equals(text(result.get("status"))));
     }
 
-    private Map<String, Object> removeAction(Map<String, Object> item) {
-        String category = text(item.get("category"));
-        String name = firstText(text(item.get("name")), categoryLabel(category));
-        return actionMap(
-                "REMOVE_DRAFT_PART",
-                categoryLabel(category) + " 빼기",
-                name + "을(를) 견적에서 제거합니다. 필수 부품을 제거하면 조합 검증에서 경고가 발생할 수 있습니다.",
-                MockData.map(
-                        "partId", text(item.get("partId")),
-                        "category", category,
-                        "source", "AI_BUILD_CHAT"
-                )
-        );
-    }
-
-    private Map<String, Object> quantityAction(Map<String, Object> item, String message) {
-        String category = text(item.get("category"));
-        if (!"RAM".equals(category) && !"STORAGE".equals(category)) {
-            return askFollowUpAction("수량 변경은 RAM/SSD에 우선 적용됩니다.", categoryLabel(category) + "은 보통 1개 구성이라 교체할 제품을 알려주세요.");
-        }
-        int currentQuantity = Math.max(1, number(item.get("quantity"), 1));
-        int nextQuantity = parseQuantity(message);
-        Integer targetCapacityGb = parseCapacityGb(message);
-        if (nextQuantity <= 0 && targetCapacityGb != null) {
-            int perUnitGb = Math.max(1, capacityPerUnitGb(item));
-            nextQuantity = Math.max(1, (int) Math.ceil(targetCapacityGb / (double) perUnitGb));
-        }
-        if (nextQuantity <= 0) {
-            nextQuantity = currentQuantity + 1;
-        }
-        nextQuantity = Math.max(1, Math.min(9, nextQuantity));
-        String name = firstText(text(item.get("name")), categoryLabel(category));
-        return actionMap(
-                "UPDATE_DRAFT_QUANTITY",
-                categoryLabel(category) + " 수량 " + nextQuantity + "개로 변경",
-                name + " 수량을 " + currentQuantity + "개에서 " + nextQuantity + "개로 변경합니다.",
-                MockData.map(
-                        "partId", text(item.get("partId")),
-                        "category", category,
-                        "quantity", nextQuantity,
-                        "source", "AI_BUILD_CHAT"
-                )
-        );
-    }
-
-    private Map<String, Object> askFollowUpAction(String label, String description) {
-        return actionMap(
-                "ASK_FOLLOW_UP",
-                label,
-                description,
-                MockData.map("source", "AI_BUILD_CHAT")
-        );
-    }
-
-    private Map<String, Object> actionMap(String type, String label, String description, Map<String, Object> payload) {
-        return actionMap(type, label, description, payload, false);
-    }
-
-    private Map<String, Object> actionMap(String type, String label, String description, Map<String, Object> payload, boolean requiresConfirmation) {
-        Map<String, Object> payloadWithPolicy = new LinkedHashMap<>(payload == null ? Map.of() : payload);
-        applyActionSafetyMetadata(type, payloadWithPolicy);
-        String suffix = firstText(text(payloadWithPolicy.get("partId")), firstText(text(payloadWithPolicy.get("category")), label));
-        return MockData.map(
-                "id", "draft-action-" + type.toLowerCase(Locale.ROOT).replace('_', '-') + "-" + slug(suffix),
-                "type", type,
-                "label", label,
-                "description", description,
-                "payload", payloadWithPolicy,
-                "requiresConfirmation", requiresConfirmation
-        );
-    }
-
-    private static void applyActionSafetyMetadata(String type, Map<String, Object> payload) {
-        if (payload.containsKey("intentConfidence") && payload.containsKey("sideEffectRisk")) {
-            return;
-        }
-        switch (type) {
-            case "OPEN_ROUTE" -> {
-                payload.put("intentConfidence", "HIGH");
-                payload.put("sideEffectRisk", "NONE");
-            }
-            case "REMOVE_DRAFT_PART", "UPDATE_DRAFT_QUANTITY" -> {
-                payload.put("intentConfidence", "HIGH");
-                payload.put("sideEffectRisk", "LOW");
-            }
-            case "ASK_FOLLOW_UP" -> {
-                payload.put("intentConfidence", "LOW");
-                payload.put("sideEffectRisk", "NONE");
-            }
-            default -> {
-                payload.put("intentConfidence", "MEDIUM");
-                payload.put("sideEffectRisk", "MEDIUM");
-            }
-        }
-    }
-
     private Map<String, Object> findDraftItem(List<Map<String, Object>> draftItems, String category, String message) {
         if (category != null) {
             return draftItems.stream()
@@ -2184,151 +1907,6 @@ public class BuildChatService {
                 .orElse(Map.of());
     }
 
-    private String firstRecommendedCategory(AiChatEngineResponse engineResponse) {
-        if (engineResponse.partRecommendations() == null || engineResponse.partRecommendations().isEmpty()) {
-            return null;
-        }
-        return engineResponse.partRecommendations().get(0).category();
-    }
-
-    private Map<String, Object> highestPricedDraftItem(List<Map<String, Object>> draftItems) {
-        return draftItems.stream()
-                .filter(item -> text(item.get("category")) != null)
-                .max((left, right) -> Integer.compare(
-                        number(firstNumber(left.get("lineTotal"), left.get("currentPrice"), left.get("price"), left.get("unitPriceAtAdd")), 0),
-                        number(firstNumber(right.get("lineTotal"), right.get("currentPrice"), right.get("price"), right.get("unitPriceAtAdd")), 0)
-                ))
-                .orElse(Map.of());
-    }
-
-    private boolean isRemoveIntent(String message) {
-        return containsAny(message, "빼", "삭제", "제거", "remove", "delete");
-    }
-
-    private boolean isQuantityIntent(String message) {
-        return containsAny(message, "수량", "개로", "개", "장", "늘려", "줄여");
-    }
-
-    private boolean isBudgetIntent(String message) {
-        return containsAny(message, "예산", "낮춰", "줄여", "안으로", "이하", "초과", "비싸");
-    }
-
-    private boolean isFastQuantityIntent(String message) {
-        String normalized = normalizeCommand(message);
-        return parseQuantity(message) > 0
-                || parseCapacityGb(message) != null
-                || containsAnyNormalized(normalized, "수량", "개로", "장으로", "늘려", "줄여");
-    }
-
-    private String fastPriceDirection(String message) {
-        String normalized = normalizeCommand(message);
-        if (!isFastReplacementCommand(normalized)) {
-            return null;
-        }
-        if (containsAnyNormalized(normalized, "비슷한가격", "비슷한금액", "그가격대", "동급", "유사한가격", "비슷한걸로")) {
-            return "SIMILAR_PRICE";
-        }
-        if (containsAnyNormalized(normalized, "더싼", "싼걸", "저렴", "비싸", "낮춰", "예산낮", "가격낮", "가성비")) {
-            return "CHEAPER";
-        }
-        if (containsAnyNormalized(normalized, "더좋", "상위", "업그레이드", "더빠른", "빠른걸", "여유", "넉넉", "잘식히", "조용", "고성능", "큰그래픽카드", "이상")) {
-            return "MORE_EXPENSIVE";
-        }
-        if (containsAnyNormalized(normalized, "맞춰", "걸로", "브랜드", "모델")) {
-            return "SIMILAR_PRICE";
-        }
-        return null;
-    }
-
-    private static boolean isFastReplacementCommand(String normalized) {
-        return containsAnyNormalized(
-                normalized,
-                "바꿔",
-                "교체",
-                "걸로",
-                "맞춰",
-                "추천",
-                "더싼",
-                "더좋",
-                "비슷한가격",
-                "업그레이드",
-                "여유",
-                "넉넉",
-                "빠른",
-                "조용",
-                "잘식히",
-                "낮춰",
-                "이상"
-        );
-    }
-
-    private RouteIntent routeIntent(String message) {
-        String normalized = normalizeCommand(message);
-        String category = detectPartCategory(message);
-        if (category != null && hasRouteVerb(normalized) && !isProductDetailIntent(normalized) && !hasProductFilterHint(message)) {
-            String route = "/self-quote?category=" + category;
-            return new RouteIntent(route, categoryLabel(category) + " 부품 보기", categoryLabel(category) + " 부품 화면으로 이동했습니다.");
-        }
-        if (containsAnyNormalized(normalized, "셀프견적", "수동견적", "견적장바구니", "장바구니")
-                && !isDraftMutationCommand(normalized)) {
-            return new RouteIntent("/self-quote", "셀프 견적 열기", "셀프 견적 화면으로 이동했습니다.");
-        }
-        if (containsAnyNormalized(normalized, "내견적함", "견적함", "저장된견적", "견적목록")) {
-            return new RouteIntent("/my/quotes", "내 견적함 열기", "내 견적함 화면으로 이동했습니다.");
-        }
-        if (containsAnyNormalized(normalized, "ai견적", "자연어견적", "요구사항", "견적입력")) {
-            return new RouteIntent("/requirements/new", "AI 견적 열기", "AI 견적 입력 화면으로 이동했습니다.");
-        }
-        if (containsAnyNormalized(normalized, "as접수", "수리접수", "지원접수", "고장접수")) {
-            return new RouteIntent("/support/new", "AS 접수 열기", "AS 접수 화면으로 이동했습니다.");
-        }
-        if (containsAnyNormalized(normalized, "as챗봇", "asai", "수리챗봇", "지원챗봇")) {
-            return new RouteIntent("/support/ai-chat", "AS AI 챗봇 열기", "AS AI 챗봇 화면으로 이동했습니다.");
-        }
-        if (containsAnyNormalized(normalized, "구매하기", "결제", "checkout")) {
-            return new RouteIntent("/checkout", "구매하기 열기", "구매하기 화면으로 이동했습니다.");
-        }
-        return null;
-    }
-
-    private static boolean hasRouteVerb(String normalized) {
-        boolean routeLike = containsAnyNormalized(normalized, "보여", "열어", "이동", "가자", "목록", "페이지", "카테고리", "부품", "화면");
-        boolean recommendationOnly = normalized.contains("추천")
-                && !containsAnyNormalized(normalized, "보여", "열어", "목록", "페이지", "부품");
-        return routeLike && !recommendationOnly;
-    }
-
-    private static boolean isDraftMutationCommand(String normalized) {
-        return containsAnyNormalized(normalized, "담아", "넣어", "적용", "추가", "빼", "삭제", "제거", "바꿔", "교체", "수량", "변경");
-    }
-
-    private static boolean isProductDetailIntent(String normalized) {
-        boolean detailWord = containsAnyNormalized(normalized, "상세", "상품페이지", "제품페이지", "제품상세", "상품상세");
-        boolean concreteProductHint = Pattern.compile("\\d{3,5}").matcher(normalized).find()
-                || containsAnyNormalized(normalized, "asus", "msi", "gigabyte", "lianli", "리안리", "samsung", "삼성", "corsair", "커세어", "noctua", "녹투아", "arctic");
-        return detailWord && concreteProductHint;
-    }
-
-    private static boolean hasProductFilterHint(String message) {
-        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
-        String compact = normalizeCommand(message);
-        return Pattern.compile("\\d{3,5}").matcher(normalized).find()
-                || containsAnyNormalized(compact,
-                "asus", "msi", "gigabyte", "기가바이트", "lianli", "리안리", "samsung", "삼성",
-                "corsair", "커세어", "noctua", "녹투아", "arctic", "nvidia", "엔비디아", "amd", "intel", "인텔",
-                "라이젠", "ddr5", "ddr4", "nvme", "수랭", "공랭", "aio");
-    }
-
-    private static boolean containsAny(String message, String... keywords) {
-        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
-        for (String keyword : keywords) {
-            if (normalized.contains(keyword.toLowerCase(Locale.ROOT))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static boolean containsAnyNormalized(String normalized, String... keywords) {
         for (String keyword : keywords) {
             if (normalized.contains(normalizeCommand(keyword))) {
@@ -2342,42 +1920,6 @@ public class BuildChatService {
         return message == null ? "" : message.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
-    private static boolean isAllowedRoute(String route) {
-        if (List.of(
-                "/self-quote",
-                "/my/quotes",
-                "/requirements/new",
-                "/support/new",
-                "/support/ai-chat",
-                "/checkout"
-        ).contains(route)) {
-            return true;
-        }
-        return route.matches("^/self-quote\\?category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)(?:&q=[^#\\s]+)?$")
-                || route.matches("^/parts/[0-9a-fA-F-]{8,}$");
-    }
-
-    private static String routeMessage(String route) {
-        if (route.startsWith("/self-quote?category=")) {
-            String category = routeCategory(route);
-            return categoryLabel(category) + " 부품 화면으로 이동했습니다.";
-        }
-        return switch (route) {
-            case "/self-quote" -> "셀프 견적 화면으로 이동했습니다.";
-            case "/my/quotes" -> "내 견적함 화면으로 이동했습니다.";
-            case "/requirements/new" -> "AI 견적 입력 화면으로 이동했습니다.";
-            case "/support/new" -> "AS 접수 화면으로 이동했습니다.";
-            case "/support/ai-chat" -> "AS AI 챗봇 화면으로 이동했습니다.";
-            case "/checkout" -> "구매하기 화면으로 이동했습니다.";
-            default -> "요청한 화면으로 이동했습니다.";
-        };
-    }
-
-    private static String routeCategory(String route) {
-        Matcher matcher = Pattern.compile("[?&]category=(CPU|MOTHERBOARD|RAM|GPU|STORAGE|PSU|CASE|COOLER)").matcher(route == null ? "" : route);
-        return matcher.find() ? matcher.group(1) : null;
-    }
-
     private void logBuildChatPath(
             String pathType,
             long startedNanos,
@@ -2386,10 +1928,22 @@ public class BuildChatService {
             boolean cacheHit,
             BuildChatGuardStats guardStats
     ) {
+        logBuildChatPath(pathType, startedNanos, userId, requestedAiProfile, cacheHit, guardStats, null);
+    }
+
+    private void logBuildChatPath(
+            String pathType,
+            long startedNanos,
+            Long userId,
+            String requestedAiProfile,
+            boolean cacheHit,
+            BuildChatGuardStats guardStats,
+            String stageSummary
+    ) {
         long latencyMs = Math.max(0, (System.nanoTime() - startedNanos) / 1_000_000);
         BuildChatGuardStats stats = guardStats == null ? BuildChatGuardStats.empty() : guardStats;
         log.info(
-                "Build Chat pathType={} latencyMs={} userId={} requestedAiProfile={} cacheHit={} budgetGuardDropped={} blockingFailDropped={} routeFallbackUsed={}",
+                "Build Chat pathType={} latencyMs={} userId={} requestedAiProfile={} cacheHit={} budgetGuardDropped={} blockingFailDropped={} routeFallbackUsed={} stages=[{}]",
                 pathType,
                 latencyMs,
                 userId,
@@ -2397,14 +1951,9 @@ public class BuildChatService {
                 cacheHit,
                 stats.budgetGuardDropped,
                 stats.blockingFailDropped,
-                stats.routeFallbackUsed
+                stats.routeFallbackUsed,
+                stageSummary == null ? "" : stageSummary
         );
-    }
-
-    private static int parseQuantity(String message) {
-        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
-        Matcher matcher = QUANTITY_PATTERN.matcher(normalized);
-        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
     }
 
     private static Integer parseCapacityGb(String message) {
@@ -2417,76 +1966,6 @@ public class BuildChatService {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
         Matcher matcher = WATT_PATTERN.matcher(normalized);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
-    }
-
-    private static int capacityPerUnitGb(Map<String, Object> item) {
-        Map<String, Object> attributes = objectMap(item.get("attributes"));
-        Integer capacity = numberValue(attributes.get("capacityGb"));
-        if (capacity == null) {
-            capacity = numberValue(attributes.get("kitCapacityGb"));
-        }
-        if (capacity == null) {
-            capacity = numberValue(attributes.get("memoryGb"));
-        }
-        if (capacity != null && capacity > 0) {
-            return capacity;
-        }
-        Integer nameCapacity = parseCapacityGb(firstText(text(item.get("name")), ""));
-        return nameCapacity == null || nameCapacity <= 0 ? 32 : nameCapacity;
-    }
-
-    private List<AiBuildCandidate> currentBuilds(Object value, List<String> warnings) {
-        List<Map<String, Object>> rawBuilds = objectMaps(value);
-        if (rawBuilds.isEmpty()) {
-            return List.of();
-        }
-        try {
-            List<AiBuildCandidate> candidates = new ArrayList<>();
-            for (int index = 0; index < rawBuilds.size(); index += 1) {
-                Map<String, Object> rawBuild = rawBuilds.get(index);
-                Tier tier = tier(text(rawBuild.get("tier")), index);
-                List<PartCandidate> parts = objectMaps(rawBuild.get("items")).stream()
-                        .map(item -> partByPublicId(text(item.get("partId"))))
-                        .toList();
-                String budgetLabel = text(rawBuild.get("budgetLabel"));
-                int budgetWon = number(rawBuild.get("budgetWon"), totalPrice(parts));
-                candidates.add(new AiBuildCandidate(tier, budgetWon, budgetLabel, parts, stringList(rawBuild.get("appliedPartCategories"))));
-            }
-            return candidates;
-        } catch (RuntimeException error) {
-            warnings.add("이전 AI 추천 조합을 최신 DB 가격으로 복원하지 못해 부품 후보만 표시합니다.");
-            return List.of();
-        }
-    }
-
-    private Map<String, Object> buildMap(AiBuildCandidate build) {
-        List<String> warnings = new ArrayList<>();
-        List<Map<String, Object>> items = build.parts().stream()
-                .map(part -> partItem(part, "DB 현재가 기준"))
-                .toList();
-        int totalPrice = totalPrice(build.parts());
-        boolean unspecifiedBudget = "예산 미지정".equals(build.budgetLabel());
-        int toolBudget = build.budgetWon() <= 0 || unspecifiedBudget ? totalPrice : build.budgetWon();
-        List<Map<String, Object>> toolResults = toolResults(build.parts(), toolBudget, warnings);
-        warnings.addAll(toolWarnings(toolResults));
-        String budgetLabel = firstText(build.budgetLabel(), build.budgetWon() <= 0 ? "예산 미지정" : formatBudgetLabel(build.budgetWon()));
-        return MockData.map(
-                "id", "ai-engine-current-" + build.tier().id() + "-" + appliedSuffix(build.appliedPartCategories()),
-                "tier", build.tier().id(),
-                "label", build.tier().label(),
-                "title", build.tier().title() + " 추천 조합",
-                "summary", "AI 엔진 추천 부품을 기존 추천 조합에 반영했습니다.",
-                "totalPrice", totalPrice,
-                "badges", badges(build.tier().title(), Map.of()),
-                "budgetWon", toolBudget,
-                "budgetLabel", budgetLabel,
-                "tierLabel", build.tier().title(),
-                "appliedPartCategories", build.appliedPartCategories(),
-                "items", items,
-                "toolResults", toolResults,
-                "warnings", distinct(warnings),
-                "confidence", confidence(toolResults, warnings)
-        );
     }
 
     private List<Map<String, Object>> toolResults(List<PartCandidate> parts, int budgetWon, List<String> warnings) {
@@ -2600,6 +2079,62 @@ public class BuildChatService {
                 DbValueMapper.integer(row, "price"),
                 attributes
         );
+    }
+
+    // 예산 근접 탐색용 후보 풀: 저가 N개 + (상한 이하) 고가 N개 유니언을 가격 오름차순으로.
+    // 조합 탐색기의 가지치기가 오름차순 정렬을 가정하므로 정렬을 유지해야 한다.
+    private List<PartCandidate> nearBudgetPartCandidates(String category, int limit, int upperBound) {
+        List<PartCandidate> cheap = pricePartCandidates(category, limit);
+        List<PartCandidate> expensive = topPricePartCandidates(category, limit, upperBound);
+        LinkedHashMap<String, PartCandidate> merged = new LinkedHashMap<>();
+        for (PartCandidate candidate : cheap) {
+            merged.put(candidate.publicId(), candidate);
+        }
+        for (PartCandidate candidate : expensive) {
+            merged.putIfAbsent(candidate.publicId(), candidate);
+        }
+        return merged.values().stream()
+                .sorted(java.util.Comparator.comparingInt(PartCandidate::price))
+                .toList();
+    }
+
+    // GPU/쿨러 제외 기본 구성의 최저 조합 가격 — 예산 미달 고지용
+    private int minimumBuildTotal() {
+        int total = 0;
+        for (String category : fallbackCategories(false, false)) {
+            List<PartCandidate> cheapest = pricePartCandidates(category, 1);
+            if (cheapest.isEmpty()) {
+                return 0;
+            }
+            total += Math.max(0, cheapest.get(0).price() == null ? 0 : cheapest.get(0).price());
+        }
+        return total;
+    }
+
+    private List<PartCandidate> topPricePartCandidates(String category, int limit, int upperBound) {
+        if (category == null) {
+            return List.of();
+        }
+        return jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               category,
+                               name,
+                               manufacturer,
+                               price,
+                               attributes
+                        FROM parts
+                        WHERE category = ?
+                          AND status = 'ACTIVE'
+                          AND deleted_at IS NULL
+                          AND price IS NOT NULL
+                          AND price <= ?
+                        ORDER BY price DESC, name ASC
+                        LIMIT ?
+                        """, category, upperBound, Math.max(1, limit))
+                .stream()
+                .map(this::partCandidate)
+                .toList();
     }
 
     private List<PartCandidate> pricePartCandidates(String category, int limit) {
@@ -2794,18 +2329,6 @@ public class BuildChatService {
         return List.of("TARGET", "MAX", "MIN", "OPEN", "UNSPECIFIED").contains(upper) ? upper : "UNSPECIFIED";
     }
 
-    private static Tier tier(String tierId, int index) {
-        if (tierId != null) {
-            String normalized = tierId.toLowerCase(Locale.ROOT);
-            for (Tier tier : TIERS) {
-                if (tier.id().equals(normalized)) {
-                    return tier;
-                }
-            }
-        }
-        return TIERS.get(Math.max(0, Math.min(index, TIERS.size() - 1)));
-    }
-
     private static List<String> badges(String tierTitle, Map<String, Object> parsedContext) {
         List<String> badges = new ArrayList<>();
         badges.add(tierTitle);
@@ -2815,13 +2338,6 @@ public class BuildChatService {
         }
         stringList(parsedContext.get("requiredGpuClasses")).forEach(badges::add);
         return distinct(badges);
-    }
-
-    private static String appliedSuffix(List<String> appliedPartCategories) {
-        if (appliedPartCategories == null || appliedPartCategories.isEmpty()) {
-            return "base";
-        }
-        return String.join("-", appliedPartCategories).toLowerCase(Locale.ROOT);
     }
 
     private static String formatBudgetLabel(int budgetWon) {
@@ -2888,11 +2404,6 @@ public class BuildChatService {
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    private static int number(Object value, int fallback) {
-        Integer number = numberValue(value);
-        return number == null ? fallback : number;
-    }
-
     private static Integer numberValue(Object value) {
         if (value instanceof Number number) {
             return number.intValue();
@@ -2913,16 +2424,6 @@ public class BuildChatService {
             return null;
         }
         return Double.parseDouble(text.replace(",", ""));
-    }
-
-    private static String formatScore(Double value) {
-        if (value == null) {
-            return "-";
-        }
-        if (Math.abs(value - Math.rint(value)) < 0.05) {
-            return String.valueOf(Math.round(value));
-        }
-        return String.format(Locale.ROOT, "%.1f", value);
     }
 
     private static boolean isUuid(String value) {
@@ -3007,12 +2508,6 @@ public class BuildChatService {
             stats.routeFallbackUsed = true;
             return stats;
         }
-    }
-
-    private record RouteIntent(String route, String label, String message) {
-    }
-
-    private record AiBuildCandidate(Tier tier, int budgetWon, String budgetLabel, List<PartCandidate> parts, List<String> appliedPartCategories) {
     }
 
     private record BenchmarkSnapshot(Double score, String summary) {

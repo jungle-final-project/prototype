@@ -56,11 +56,14 @@ docker compose up --build
 | `BUILD_CHAT_DEFAULT_PROFILE` | 선택 | Build Chat 기본 profile | 기본값은 실측 benchmark 기준 `BUILD_CHAT_54_MINI_FAST`입니다. |
 | `BUILD_CHAT_CACHE_ENABLED` | 선택 | Build Chat Redis cache | 기본값은 `true`입니다. Redis 장애 시 자동 우회하며 응답 body에는 cache 상태를 노출하지 않습니다. |
 | `BUILD_CHAT_CACHE_TTL_SECONDS` | 선택 | Build Chat Redis cache | 기본값은 `600`초입니다. 문맥 없는 견적/부품 추천은 shared key를 사용하고, 장바구니 문맥이 있으면 사용자/profile/draft와 parts/benchmark/FPS/RAG/alias version이 바뀔 때 key도 달라집니다. cache hit 응답은 이전 실행의 agent trace id를 재사용하지 않습니다. |
-| `BUILD_CHAT_CACHE_PREWARM_ENABLED` | 선택 | Build Chat Redis cache prewarm | 기본값은 `true`입니다. 서버 준비 후 자동입력칩용 LLM 요청을 비동기로 캐시에 올립니다. OpenAI key 없음/Redis 장애는 서버 시작을 막지 않습니다. |
-| `BUILD_CHAT_CACHE_PREWARM_TTL_SECONDS` | 선택 | Build Chat Redis cache prewarm | 기본값은 `3600`초입니다. 데모용 공통 칩 응답 유지 시간을 조절합니다. |
+| `BUILD_CHAT_CACHE_PREWARM_ENABLED` | 선택 | Build Chat Redis cache prewarm | 기본값은 `true`입니다. 서버 준비 후 + 주기적으로 데모 대표 프롬프트(예산·용도 견적)를 비동기로 캐시에 올립니다. OpenAI key 없음/Redis 장애는 서버 시작을 막지 않습니다. |
+| `BUILD_CHAT_CACHE_PREWARM_TTL_SECONDS` | 선택 | Build Chat Redis cache prewarm | 기본값은 `3600`초입니다. 프리웜한 응답의 캐시 유지 시간입니다. |
+| `BUILD_CHAT_CACHE_PREWARM_REFRESH_DELAY_MS` | 선택 | Build Chat 프리웜 재실행 주기 | 기본값은 `2700000`(45분)입니다. 프리웜 TTL이 만료돼 캐시가 식기 전에 서버가 스스로 재프리웜해 항상 캐시를 유지하므로, 배포 환경에서 별도 워밍 스크립트를 수동 실행할 필요가 없습니다. |
 | `BUILD_CHAT_SEMANTIC_CACHE_ENABLED` | 선택 | Build Chat pgvector semantic cache | 기본값은 `true`입니다. 문맥 없는 읽기/추천 요청만 embedding similarity로 재사용하고, 장바구니 변경/시뮬레이션/라우팅 요청은 제외합니다. |
 | `BUILD_CHAT_SEMANTIC_CACHE_THRESHOLD` | 선택 | Build Chat semantic cache hit 기준 | 기본값은 `0.94`입니다. constraint signature가 다른 요청은 similarity가 높아도 cache hit로 보지 않습니다. |
 | `BUILD_CHAT_SEMANTIC_CACHE_TTL_SECONDS` | 선택 | Build Chat semantic cache TTL | 기본값은 `600`초입니다. OpenAI embedding 또는 DB 오류 시 기존 LLM/RAG 흐름으로 우회합니다. |
+| `BUILD_CHAT_TIER_SNAPSHOT_ENABLED` | 선택 | Build Chat 예산 티어 스냅샷 | 기본값은 `true`입니다. 200만~1300만원(100만원 간격) 추천 조합을 백그라운드에서 미리 계산해 두고, 예산 요청이 티어와 허용 오차(기본 15%) 안이면 LLM/조합 탐색 없이 즉시 응답합니다. 명시적 부품 제약이나 견적 드래프트 문맥이 있으면 기존 경로로 폴백합니다. |
+| `BUILD_CHAT_TIER_SNAPSHOT_REFRESH_DELAY_MS` | 선택 | 티어 스냅샷 재계산 주기 | 기본값은 `3600000`(1시간)입니다. 범위/간격/허용오차는 `BUILD_CHAT_TIER_SNAPSHOT_MIN_BUDGET_WON`/`MAX_BUDGET_WON`/`STEP_WON`/`TOLERANCE_PCT`로 조절합니다. |
 | `RECOMMENDATION_RERANKER_ENDPOINT` | 선택 | 홈 추천부품 XGBoost scorer | Docker 기본값은 `http://xgb-reranker:8091/score`입니다. 로컬 jar 단독 실행 시에는 `http://localhost:8091/score`로 바꿉니다. |
 | `RECOMMENDATION_RERANKER_MODEL_PATH` | 선택 | XGBoost scorer 모델 파일 | Docker에서는 `/models/<model-file>.json` 형식입니다. 비어 있으면 baseline scorer로 동작합니다. |
 | `RECOMMENDATION_RERANKER_MODEL_VOLUME` | 선택 | XGBoost scorer 모델 저장소 | Docker Compose 기본값은 named volume `recommendation-models`입니다. 로컬 파일을 직접 연결할 때만 공유 가능한 host 경로로 바꿉니다. |
@@ -94,7 +97,7 @@ docker compose up --build
 
 | 화면 | 주소 | 확인할 내용 |
 | --- | --- | --- |
-| 홈 | http://localhost:5173 | 로그인 진입, 주요 쇼핑몰 메뉴 |
+| 홈 | http://localhost:5173 | fullPage 배너, 주요 이동 버튼, 추천상품, 인기 부품 랭킹 |
 | 셀프 견적 | http://localhost:5173/self-quote | 내부 자산 부품 목록, 카테고리 선택, 견적 담기 |
 | AS Chat | http://localhost:5173/support/ai-chat | 로그인 후 AS AI 챗봇 화면. 실제 답변 생성은 `OPENAI_API_KEY` 필요 |
 | API health | http://localhost:8080/api/health | API와 DB 연결 상태 |
@@ -304,7 +307,7 @@ python tools/benchmark_build_chat_profiles.py --variant-label vector-on
 
 ## 홈 추천부품 XGBoost scorer
 
-홈 하단 추천부품 4장은 `GET /api/recommendations/home-parts`가 반환합니다. Docker Compose는 `xgb-reranker` 서비스를 함께 실행하며, trained model scorer가 정상 응답하면 XGBoost score를 홈 추천부품 순서에 반영합니다. 모델 파일이 없거나 scorer가 baseline-shadow/오류를 반환하면 API는 deterministic fallback으로 4장을 반환해 사용자 화면을 유지합니다.
+홈 인기 부품 랭킹은 `GET /api/recommendations/home-parts`가 반환합니다. 현재 홈 화면은 `limit=8`로 2줄 랭킹을 표시하며, API의 기본값은 파라미터를 생략했을 때 4개입니다. Docker Compose는 `xgb-reranker` 서비스를 함께 실행하며, trained model scorer가 정상 응답하면 XGBoost score를 홈 추천부품 순서에 반영합니다. 모델 파일이 없거나 scorer가 baseline-shadow/오류를 반환하면 API는 deterministic fallback으로 사용자 화면을 유지합니다.
 
 권장 운영 순서:
 

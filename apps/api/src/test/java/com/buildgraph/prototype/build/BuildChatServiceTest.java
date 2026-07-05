@@ -16,14 +16,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.agent.AiChatAction;
-import com.buildgraph.prototype.agent.AiChatActionType;
 import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.agent.AiChatEngineRequest;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
 import com.buildgraph.prototype.agent.AiChatIntent;
-import com.buildgraph.prototype.agent.PartReplacementRanker;
-import com.buildgraph.prototype.part.PartAliasReviewService;
-import com.buildgraph.prototype.part.ToolBuildPart;
 import com.buildgraph.prototype.part.ToolCheckService;
 import com.buildgraph.prototype.recommendation.CandidateReranker;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -43,6 +39,12 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.parseBudgetWon("3백만원 PC 추천")).isEqualTo(300 * 10_000);
         assertThat(BuildChatService.parseBudgetWon("300만원대로 맞춰줘")).isEqualTo(3_000_000);
         assertThat(BuildChatService.parseBudgetWon("2,000,000원 안에서")).isEqualTo(200 * 10_000);
+        assertThat(BuildChatService.parseBudgetWon("삼백만원 정도로 디자인 작업용 컴")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("일천삼백만원 예산으로")).isEqualTo(13_000_000);
+        assertThat(BuildChatService.parseBudgetWon("천팔백만원 예산으로 방송용 컴퓨터")).isEqualTo(18_000_000);
+        assertThat(BuildChatService.parseBudgetWon("2천만원 예산인데")).isEqualTo(20_000_000);
+        assertThat(BuildChatService.parseBudgetWon("돈은 3천만원까지 괜찮으니")).isEqualTo(30_000_000);
+        assertThat(BuildChatService.parseBudgetWon("천만에요 감사합니다")).isNull();
         assertThat(BuildChatService.budgetIntent("800만원으로 최고급 PC 추천해줘").mode()).isEqualTo("TARGET");
         assertThat(BuildChatService.budgetIntent("300만원 이하 RTX 5090 PC").mode()).isEqualTo("MAX");
         assertThat(BuildChatService.budgetIntent("300만원 이상으로 게임용 PC 맞춰줘").mode()).isEqualTo("MIN");
@@ -53,6 +55,62 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.detectPartCategory("GPU 추천해줘")).isEqualTo("GPU");
         assertThat(BuildChatService.detectPartCategory("CPU는 뭐가 좋아?")).isEqualTo("CPU");
         assertThat(BuildChatService.detectPartCategory("쿨러 추천")).isEqualTo("COOLER");
+    }
+
+    @Test
+    void buildChatServesTierSnapshotWithoutEngineWhenBudgetIsNearTier() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        BuildChatTierSnapshotStore store = new BuildChatTierSnapshotStore();
+        store.put(new BuildChatTierSnapshotStore.TierSnapshot(
+                4_000_000,
+                List.of(Map.of("id", "tier-build-400", "tier", "balanced")),
+                List.of("미리 계산된 조합"),
+                java.time.Instant.now()
+        ));
+        service.setTierSnapshotStore(store);
+
+        Map<String, Object> response = service.chat(Map.of("message", "437만원 PC 추천해줘"));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> builds = (List<Map<String, Object>>) response.get("builds");
+        assertThat(builds).extracting(build -> build.get("id")).containsExactly("tier-build-400");
+        assertThat(response.get("warnings")).asList().contains("미리 계산된 조합");
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatSkipsTierSnapshotForExplicitPartConstraintOrDraftContext() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        BuildChatTierSnapshotStore store = new BuildChatTierSnapshotStore();
+        store.put(new BuildChatTierSnapshotStore.TierSnapshot(
+                4_000_000,
+                List.of(Map.of("id", "tier-build-400", "tier", "balanced")),
+                List.of(),
+                java.time.Instant.now()
+        ));
+        service.setTierSnapshotStore(store);
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(buildResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+
+        // 명시적 부품 제약(5090)이 있으면 티어 즉시 응답을 쓰지 않는다
+        Map<String, Object> constrained = service.chat(Map.of("message", "437만원 RTX 5090 넣어서 PC 추천해줘"));
+        assertThat(constrained.get("builds")).asList()
+                .noneMatch(build -> "tier-build-400".equals(((Map<?, ?>) build).get("id")));
+
+        // 드래프트 문맥이 있으면 티어 즉시 응답을 쓰지 않는다
+        Map<String, Object> withDraft = service.chat(Map.of(
+                "message", "437만원 PC 추천해줘",
+                "currentQuoteDraft", Map.of("items", List.of(Map.of("partId", "gpu-1", "category", "GPU", "quantity", 1)))
+        ));
+        assertThat(withDraft.get("builds")).asList()
+                .noneMatch(build -> "tier-build-400".equals(((Map<?, ?>) build).get("id")));
     }
 
     @Test
@@ -147,102 +205,110 @@ class BuildChatServiceTest {
     }
 
     @Test
-    void buildChatReturnsDraftRemoveActionWhenCurrentQuoteDraftIsProvided() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+    void buildChatReturnsFixedUnsupportedGuidanceForOutOfScopeMessagesWithoutLlmOrCache() {
+        for (String message : List.of(
+                "GPU 빼줘",
+                "GPU 보여줘",
+                "추천 조합 장바구니에 넣어줘",
+                "GPU 추천해줘",
+                "5090 가격 떨어지면 알림 줘"
+        )) {
+            JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+            ToolCheckService toolCheckService = mock(ToolCheckService.class);
+            AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+            BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+            BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
 
-        Map<String, Object> response = service.chat(Map.of(
-                "message", "GPU 빼줘",
-                "currentQuoteDraft", draftWithItems(List.of(draftItem("part-gpu-1", "GPU", "RTX 5070", 1, Map.of())))
-        ));
+            Map<String, Object> response = service.chat(Map.of("message", message));
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).hasSize(1);
-        assertThat(actions.get(0)).containsEntry("type", "REMOVE_DRAFT_PART");
-        assertThat(actions.get(0)).containsEntry("requiresConfirmation", false);
-        assertThat(actions.get(0).get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                .containsEntry("partId", "part-gpu-1")
-                .containsEntry("category", "GPU");
-        verifyNoInteractions(aiChatEngine);
+            assertThat(response).containsEntry("answerType", "GENERAL");
+            assertThat(response.get("message").toString())
+                    .contains("예산 견적 추천")
+                    .contains("부품 교체 성능 비교");
+            assertThat(response.get("warnings")).asList().contains("UNSUPPORTED_INTENT");
+            assertThat(response.get("builds")).asList().isEmpty();
+            assertThat(response).doesNotContainKeys("actions", "partRecommendation", "simulation");
+            verifyNoInteractions(aiChatEngine, cacheService);
+        }
     }
 
     @Test
-    void buildChatReturnsOpenRouteFastPathWithoutCallingLlmOrCache() {
+    void buildChatReturnsFixedClarificationForLowInformationMessagesWithoutLlmOrCache() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
 
-        Map<String, Object> response = service.chat(Map.of("message", "GPU 보여줘"));
+        Map<String, Object> response = service.chat(Map.of("message", "아무거나 사줘"));
 
         assertThat(response).containsEntry("answerType", "GENERAL");
-        assertThat(response).containsEntry("message", "GPU 부품 화면으로 이동했습니다.");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> {
-                    assertThat(action)
-                            .containsEntry("type", "OPEN_ROUTE")
-                            .containsEntry("requiresConfirmation", false);
-                    assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                            .containsEntry("route", "/self-quote?category=GPU")
-                            .containsEntry("source", "AI_BUILD_CHAT");
-                });
+        assertThat(response).containsEntry("message", "추천 기준을 조금 더 정하면 더 정확합니다. 예산, 해상도, 주 사용 게임이나 작업을 알려주세요.");
+        assertThat(response.get("warnings")).asList().contains("LOW_INFORMATION");
+        assertThat(response).doesNotContainKeys("actions", "partRecommendation", "simulation");
         verifyNoInteractions(aiChatEngine, cacheService);
     }
 
     @Test
-    void buildChatPublishesEngineOpenRouteActionWhenLocalFastRouteDoesNotMatch() {
+    void buildChatReturnsSimulationClarificationWhenDraftIsEmptyWithoutFallingToLlm() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(new AiChatEngineResponse(
-                "저장한 조합 목록으로 이동하겠습니다.",
-                AiChatIntent.ASK_FOLLOW_UP,
-                List.of(new AiChatAction(
-                        AiChatActionType.OPEN_ROUTE,
-                        "내 견적함 열기",
-                        Map.of("route", "/my/quotes", "source", "AI_CHAT_ENGINE_LLM")
-                )),
-                List.of(),
-                List.of(),
-                Map.of(),
-                List.of(),
-                List.of(),
-                null
-        ));
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
 
-        Map<String, Object> response = service.chat(Map.of("message", "지난번 만든 조합 목록 열어줘"));
+        Map<String, Object> response = service.chat(Map.of("message", "그래픽카드를 5080으로 바꾸면 성능이 얼마나 좋아져?"));
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> {
-                    assertThat(action).containsEntry("type", "OPEN_ROUTE");
-                    assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                            .containsEntry("route", "/my/quotes")
-                            .containsEntry("source", "AI_BUILD_CHAT");
-                });
-        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response).containsEntry("message", "성능 비교는 현재 견적 기준으로 계산합니다. 먼저 셀프 견적 그래프에서 부품을 담거나 견적 추천을 받아주세요.");
+        assertThat(response.get("warnings")).asList().contains("SIMULATION_TARGET_NOT_FOUND");
+        assertThat(response).doesNotContainKeys("simulation", "actions", "partRecommendation");
+        verifyNoInteractions(aiChatEngine, cacheService);
     }
 
     @Test
-    void buildChatDoesNotFastRouteCartMutationCommands() {
+    void buildChatReturnsSimulationClarificationWhenTargetPartCannotBeResolved() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(buildResponse());
-        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of());
 
-        service.chat(Map.of("message", "추천 조합 장바구니에 넣어줘"));
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "그래픽카드를 5080으로 바꾸면 성능이 얼마나 좋아져?",
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("gpu-current", "GPU", "RTX 5070 Ti", 1, Map.of("gpuClass", "RTX_5070_TI"))
+                ))
+        ));
 
-        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("warnings")).asList().contains("SIMULATION_TARGET_NOT_FOUND");
+        assertThat(response).doesNotContainKeys("simulation", "actions", "partRecommendation");
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void buildChatDoesNotPickArbitrarySimulationTargetWhenModelIsUnspecified() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        // 구체적 교체 대상(모델/용량/와트) 신호가 없는 시뮬레이션 요청
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "그래픽카드 바꾸면 성능 어떻게 돼?",
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("gpu-current", "GPU", "RTX 5060", 1, Map.of("gpuClass", "RTX_5060"))
+                ))
+        ));
+
+        // 임의 후보(카탈로그 최상위 GPU)를 잡지 않고 되묻기로 유도해야 한다
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("warnings")).asList().contains("SIMULATION_TARGET_NOT_FOUND");
+        assertThat(response).doesNotContainKey("simulation");
+        verifyNoInteractions(aiChatEngine, cacheService);
     }
 
     @Test
@@ -263,177 +329,6 @@ class BuildChatServiceTest {
     }
 
     @Test
-    void buildChatFastRoutesSingleProductDetailWithoutCallingLlmOrCache() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
-        when(jdbcTemplate.queryForList(
-                anyString(),
-                eq("GPU"),
-                eq("5090"),
-                eq("5090"),
-                eq("5090")
-        )).thenReturn(List.of(Map.of(
-                "id", "00000000-0000-4000-8000-000000005090",
-                "category", "GPU",
-                "name", "ASUS ROG Astral GeForce RTX 5090 OC 32GB",
-                "manufacturer", "ASUS"
-        )));
-
-        Map<String, Object> response = service.chat(Map.of("message", "ASUS Astral 5090 상세 보여줘"));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> {
-                    assertThat(action).containsEntry("type", "OPEN_ROUTE");
-                    assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                            .containsEntry("route", "/parts/00000000-0000-4000-8000-000000005090")
-                            .containsEntry("source", "AI_BUILD_CHAT");
-                });
-        verifyNoInteractions(aiChatEngine, cacheService);
-    }
-
-    @Test
-    void buildChatFastRoutesExactKoreanProductDetailBeforePrefixMatch() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
-        when(jdbcTemplate.queryForList(
-                anyString(),
-                eq("CPU"),
-                eq("9950X3D"),
-                eq("9950X3D"),
-                eq("9950X3D")
-        )).thenReturn(List.of(
-                Map.of(
-                        "id", "a75d6544-2296-4c4c-a7cd-64596e66f6d7",
-                        "category", "CPU",
-                        "name", "AMD 라이젠9-6세대 9950X3D 그래니트 릿지 정품(멀티팩)",
-                        "manufacturer", "AMD"
-                ),
-                Map.of(
-                        "id", "4d3f5a5f-4580-4a1c-a514-be7b34ac97c9",
-                        "category", "CPU",
-                        "name", "AMD 라이젠9-6세대 9950X3D2 Dual Edition 그래니트 릿지 정품(멀티팩)",
-                        "manufacturer", "AMD"
-                )
-        ));
-
-        Map<String, Object> response = service.chat(Map.of("message", "AMD 라이젠9-6세대 9950X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해"));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                        .containsEntry("route", "/parts/a75d6544-2296-4c4c-a7cd-64596e66f6d7"));
-        verifyNoInteractions(aiChatEngine, cacheService);
-    }
-
-    @Test
-    void buildChatFallsBackToCategoryForShortModelTokenEvenWhenSingleActivePartMatches() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
-        when(jdbcTemplate.queryForList(
-                anyString(),
-                eq("CPU"),
-                eq("9950X3D"),
-                eq("9950X3D"),
-                eq("9950X3D")
-        )).thenReturn(List.of(Map.of(
-                "id", "a75d6544-2296-4c4c-a7cd-64596e66f6d7",
-                "category", "CPU",
-                "name", "AMD 라이젠9-6세대 9950X3D 그래니트 릿지 정품(멀티팩)",
-                "manufacturer", "AMD"
-        )));
-
-        Map<String, Object> response = service.chat(Map.of("message", "9950X3D 상세페이지 보여줘"));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                        .containsEntry("route", "/self-quote?category=CPU&q=9950X3D"));
-        verifyNoInteractions(aiChatEngine, cacheService);
-    }
-
-    @Test
-    void buildChatFallsBackToCategoryForAmbiguousProductDetailRequests() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
-        when(jdbcTemplate.queryForList(
-                anyString(),
-                eq("GPU"),
-                eq("5090"),
-                eq("5090"),
-                eq("5090")
-        )).thenReturn(List.of(
-                Map.of(
-                        "id", "00000000-0000-4000-8000-000000005090",
-                        "category", "GPU",
-                        "name", "ASUS ROG Astral GeForce RTX 5090 OC 32GB",
-                        "manufacturer", "ASUS"
-                ),
-                Map.of(
-                        "id", "00000000-0000-4000-8000-000000005091",
-                        "category", "GPU",
-                        "name", "MSI GeForce RTX 5090 SUPRIM 32GB",
-                        "manufacturer", "MSI"
-                )
-        ));
-
-        Map<String, Object> response = service.chat(Map.of("message", "5090 보여줘"));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                        .containsEntry("route", "/self-quote?category=GPU&q=5090"));
-        verifyNoInteractions(aiChatEngine, cacheService);
-    }
-
-    @Test
-    void buildChatReturnsNoDraftPartCandidateFastPathWithoutRoutingOrCallingLlm() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
-        when(jdbcTemplate.queryForList(anyString(), eq("MOTHERBOARD"), eq("msi"), eq("msi"), eq(80))).thenReturn(List.of(
-                partRow("board-msi-x870", "MOTHERBOARD", "MSI MAG X870E TOMAHAWK WIFI", 540_000,
-                        Map.of("chipset", "X870E", "socket", "AM5", "toolReady", true), 92)
-        ));
-
-        Map<String, Object> response = service.chat(Map.of("message", "메인보드 MSI 걸로 맞춰줘"));
-
-        assertThat(response).containsEntry("answerType", "PART");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> partRecommendation = (Map<String, Object>) response.get("partRecommendation");
-        assertThat(partRecommendation).containsEntry("category", "MOTHERBOARD");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement().satisfies(action -> {
-            assertThat(action).containsEntry("type", "ADD_PART_TO_DRAFT");
-            assertThat(action.get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                    .containsEntry("partId", "board-msi-x870")
-                    .containsEntry("category", "MOTHERBOARD")
-                    .containsEntry("intentConfidence", "MEDIUM")
-                    .containsEntry("sideEffectRisk", "MEDIUM");
-        });
-        verifyNoInteractions(aiChatEngine, cacheService);
-    }
-
-    @Test
     void buildChatPassesRequestedAiProfileToEngine() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
@@ -445,75 +340,6 @@ class BuildChatServiceTest {
         service.chat(Map.of("message", "5090 글카 들어간 PC 추천해줘"), "BUILD_CHAT_54_MINI_FAST");
 
         verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST"));
-    }
-
-    @Test
-    void buildChatReturnsDraftQuantityActionForRamCapacityRequest() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-
-        Map<String, Object> response = service.chat(Map.of(
-                "message", "RAM 64GB로 바꿔줘",
-                "currentQuoteDraft", draftWithItems(List.of(draftItem("part-ram-1", "RAM", "DDR5 32GB Kit", 1, Map.of("capacityGb", 32))))
-        ));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).hasSize(1);
-        assertThat(actions.get(0)).containsEntry("type", "UPDATE_DRAFT_QUANTITY");
-        assertThat(actions.get(0).get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                .containsEntry("partId", "part-ram-1")
-                .containsEntry("quantity", 2);
-        verifyNoInteractions(aiChatEngine);
-    }
-
-    @Test
-    void buildChatReturnsDraftReplacementFastPathWithoutCallingLlmOrCache() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        PartReplacementRanker ranker = new PartReplacementRanker(mock(PartAliasReviewService.class));
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService, ranker);
-        when(jdbcTemplate.queryForList(anyString(), eq("GPU"), eq(200))).thenReturn(List.of(
-                partRow("gpu-5070", "GPU", "RTX 5070", 900_000, Map.of("gpuClass", "RTX_5070", "vramGb", 12), 72),
-                partRow("gpu-5080", "GPU", "RTX 5080", 1_700_000, Map.of("gpuClass", "RTX_5080", "vramGb", 16), 88),
-                partRow("gpu-5090", "GPU", "RTX 5090", 3_000_000, Map.of("gpuClass", "RTX_5090", "vramGb", 32), 100)
-        ));
-
-        Map<String, Object> response = service.chat(Map.of(
-                "message", "그래픽카드 더 좋은 걸로 바꿔줘",
-                "currentQuoteDraft", draftWithItems(List.of(draftItem(
-                        "gpu-current",
-                        "GPU",
-                        "RTX 5070 Ti",
-                        1,
-                        Map.of("gpuClass", "RTX_5070_TI", "vramGb", 16)
-                )))
-        ));
-
-        assertThat(response).containsEntry("answerType", "PART");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> partRecommendation = (Map<String, Object>) response.get("partRecommendation");
-        assertThat(partRecommendation).containsEntry("category", "GPU");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> options = (List<Map<String, Object>>) partRecommendation.get("options");
-        assertThat(options)
-                .extracting(option -> option.get("partId"))
-                .containsExactly("gpu-5080", "gpu-5090");
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        assertThat(actions).singleElement()
-                .satisfies(action -> assertThat(action)
-                        .containsEntry("type", "REPLACE_DRAFT_PART")
-                        .containsEntry("requiresConfirmation", false));
-        assertThat(actions.get(0).get("payload")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-                .containsEntry("partId", "gpu-5080")
-                .containsEntry("category", "GPU");
-        verifyNoInteractions(aiChatEngine, cacheService);
     }
 
     @Test
@@ -582,8 +408,7 @@ class BuildChatServiceTest {
                 .containsEntry("gameTitle", "PUBG")
                 .containsEntry("resolution", "QHD")
                 .containsEntry("targetFps", 180.0);
-        assertThat(response.get("actions")).asList().isEmpty();
-        assertThat(response.get("partRecommendation")).isNull();
+        assertThat(response).doesNotContainKeys("actions", "partRecommendation");
         verifyNoInteractions(aiChatEngine, cacheService);
     }
 
@@ -647,7 +472,7 @@ class BuildChatServiceTest {
                         .containsEntry("currentValue", "32GB")
                         .containsEntry("targetValue", "64GB")
                         .containsEntry("deltaText", "+32GB"));
-        assertThat(response.get("actions")).asList().isEmpty();
+        assertThat(response).doesNotContainKeys("actions", "partRecommendation");
         verifyNoInteractions(aiChatEngine, cacheService);
     }
 
@@ -704,143 +529,8 @@ class BuildChatServiceTest {
                         .containsEntry("label", "코어")
                         .containsEntry("currentValue", "16개")
                         .containsEntry("targetValue", "8개"));
-        assertThat(response.get("actions")).asList().isEmpty();
-        assertThat(response.get("partRecommendation")).isNull();
+        assertThat(response).doesNotContainKeys("actions", "partRecommendation");
         verifyNoInteractions(aiChatEngine, cacheService);
-    }
-
-    @Test
-    void partQuestionWithoutCurrentBuildsKeepsBuildsEmptyAndReturnsPartRecommendation() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(partResponse());
-
-        Map<String, Object> response = service.chat(Map.of("message", "GPU 추천해줘"));
-
-        assertThat(response).containsEntry("answerType", "PART");
-        assertThat(response.get("builds")).asList().isEmpty();
-        assertThat(response.get("partRecommendation")).isNotNull();
-    }
-
-    @Test
-    void partQuestionWithCurrentBuildsReturnsChangedBuildPreviewAndPartRecommendation() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(partResponse());
-        stubCurrentBuildParts(jdbcTemplate);
-        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
-
-        Map<String, Object> response = service.chat(Map.of(
-                "message", "그래픽카드 추천해줘",
-                "currentBuilds", currentBuilds("gpu-current")
-        ));
-
-        assertThat(response).containsEntry("answerType", "PART");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> builds = (List<Map<String, Object>>) response.get("builds");
-        assertThat(builds).hasSize(1);
-        assertThat(builds.get(0).get("appliedPartCategories")).asList().containsExactly("GPU");
-        assertThat(response.get("partRecommendation")).isNotNull();
-    }
-
-    @Test
-    void buildModifyWithCurrentBuildsReturnsChangedBuildPreview() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(modifyResponse());
-        stubCurrentBuildParts(jdbcTemplate);
-        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
-
-        Map<String, Object> response = service.chat(Map.of(
-                "message", "방금 견적에서 그래픽카드 더 싼 걸로 바꿔줘",
-                "currentBuilds", currentBuilds("gpu-current")
-        ));
-
-        assertThat(response).containsEntry("answerType", "PART");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> builds = (List<Map<String, Object>>) response.get("builds");
-        assertThat(builds).hasSize(1);
-        assertThat(builds.get(0).get("appliedPartCategories")).asList().containsExactly("GPU");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> items = (List<Map<String, Object>>) builds.get(0).get("items");
-        assertThat(items.stream().map(item -> String.valueOf(item.get("partId"))).toList())
-                .contains("gpu-1")
-                .doesNotContain("gpu-current");
-    }
-
-    @Test
-    void partQuestionUsesExplicitRamSingleQuantityInResponseOptions() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(singleRamResponse());
-
-        Map<String, Object> response = service.chat(Map.of("message", "램 32기가 한 개 달린 거 추천해줘"));
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> partRecommendation = (Map<String, Object>) response.get("partRecommendation");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> options = (List<Map<String, Object>>) partRecommendation.get("options");
-        assertThat(options).singleElement()
-                .satisfies(option -> assertThat(option)
-                        .containsEntry("partId", "ram-32-single")
-                        .containsEntry("quantity", 1));
-    }
-
-    @Test
-    void buildChatExcludesPartRecommendationAndDraftActionWhenToolReturnsBlockingFail() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
-        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(partResponse());
-        when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
-            @SuppressWarnings("unchecked")
-            List<ToolBuildPart> parts = (List<ToolBuildPart>) invocation.getArgument(0);
-            boolean unsafeGpu = parts.stream().anyMatch(part -> "gpu-1".equals(part.publicId()));
-            return List.of(Map.of(
-                    "tool", "size",
-                    "status", unsafeGpu ? "FAIL" : "PASS",
-                    "confidence", "HIGH",
-                    "summary", unsafeGpu
-                            ? "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
-                            : "GPU 길이와 쿨러 높이가 케이스 제약 안에 있습니다."
-            ));
-        });
-
-        Map<String, Object> response = service.chat(Map.of(
-                "message", "그래픽카드 더 좋은 걸로 추천해줘",
-                "currentQuoteDraft", draftWithItems(List.of(
-                        draftItem("part-gpu-current", "GPU", "RTX 5070", 1, Map.of()),
-                        draftItem("part-case-current", "CASE", "Compact Case", 1, Map.of("maxGpuLengthMm", 330))
-                ))
-        ));
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> partRecommendation = (Map<String, Object>) response.get("partRecommendation");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> options = (List<Map<String, Object>>) partRecommendation.get("options");
-        assertThat(options)
-                .extracting(option -> option.get("partId"))
-                .containsExactly("gpu-2", "gpu-3");
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> actions = (List<Map<String, Object>>) response.get("actions");
-        List<String> actionPartIds = actions.stream()
-                .map(action -> (Map<?, ?>) action.get("payload"))
-                .map(payload -> String.valueOf(payload.get("partId")))
-                .toList();
-        assertThat(actionPartIds).containsExactly("gpu-2");
-        @SuppressWarnings("unchecked")
-        List<String> warnings = (List<String>) response.get("warnings");
-        assertThat(warnings).contains("Tool FAIL 후보 1개를 추천/적용 후보에서 제외했습니다.");
     }
 
     @Test
@@ -867,17 +557,15 @@ class BuildChatServiceTest {
         BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
         CurrentUserService.CurrentUser user = new CurrentUserService.CurrentUser(42L, "user-id", "user@example.com", "사용자", "USER", null);
         Map<String, Object> cached = new LinkedHashMap<>();
-        cached.put("answerType", "PART");
+        cached.put("answerType", "BUDGET");
         cached.put("message", "캐시된 응답");
         cached.put("builds", List.of());
-        cached.put("partRecommendation", Map.of());
-        cached.put("actions", List.of());
         cached.put("warnings", List.of());
         cached.put("evidenceIds", List.of());
         cached.put("agentSessionId", null);
         when(cacheService.lookup(anyMap(), eq("BUILD_CHAT_54_MINI_FAST"), eq(42L))).thenReturn(Optional.of(cached));
 
-        Map<String, Object> response = service.chat(Map.of("message", "그래픽카드 더 싼 걸로 추천해줘"), "BUILD_CHAT_54_MINI_FAST", user);
+        Map<String, Object> response = service.chat(Map.of("message", "200만원 게임용 PC 추천해줘"), "BUILD_CHAT_54_MINI_FAST", user);
 
         assertThat(response).containsEntry("message", "캐시된 응답");
         assertThat(response).containsEntry("agentSessionId", null);
@@ -979,63 +667,6 @@ class BuildChatServiceTest {
         );
     }
 
-    private static AiChatEngineResponse partResponse() {
-        return new AiChatEngineResponse(
-                "GPU 후보를 정리했습니다.",
-                AiChatIntent.PART_RECOMMEND,
-                List.<AiChatAction>of(),
-                List.of(),
-                List.of(
-                        part("GPU", "gpu-1", 1_200_000),
-                        part("GPU", "gpu-2", 900_000),
-                        part("GPU", "gpu-3", 700_000)
-                ),
-                Map.of("category", "GPU"),
-                List.of("evidence-1"),
-                List.of(),
-                null
-        );
-    }
-
-    private static AiChatEngineResponse modifyResponse() {
-        return new AiChatEngineResponse(
-                "현재 견적 기준으로 GPU 교체 후보를 정리했습니다.",
-                AiChatIntent.BUILD_MODIFY,
-                List.<AiChatAction>of(),
-                List.of(),
-                List.of(
-                        part("GPU", "gpu-1", 900_000),
-                        part("GPU", "gpu-2", 800_000),
-                        part("GPU", "gpu-3", 700_000)
-                ),
-                Map.of("category", "GPU", "draftEdit", Map.of("category", "GPU", "operation", "REPLACE", "priceDirection", "CHEAPER")),
-                List.of("evidence-1"),
-                List.of(),
-                null
-        );
-    }
-
-    private static AiChatEngineResponse singleRamResponse() {
-        return new AiChatEngineResponse(
-                "램 32GB 1개 구성으로 추천해드릴게요.",
-                AiChatIntent.PART_RECOMMEND,
-                List.<AiChatAction>of(),
-                List.of(),
-                List.of(new AiChatEngineResponse.PartRecommendation(
-                        "ram-32-single",
-                        "RAM",
-                        "Samsung DDR5 32GB UDIMM",
-                        "Samsung",
-                        117_4250,
-                        Map.of("toolReady", true, "shortSpec", "32GB x1, DDR5-5600", "capacityGb", 32, "moduleCount", 1)
-                )),
-                Map.of("category", "RAM", "targetCapacityGb", 32, "targetModuleCount", 1, "targetQuantity", 1),
-                List.of("evidence-1"),
-                List.of(),
-                null
-        );
-    }
-
     private static AiChatEngineResponse.PartRecommendation part(String category, String id, int price) {
         return new AiChatEngineResponse.PartRecommendation(
                 id,
@@ -1077,35 +708,6 @@ class BuildChatServiceTest {
                 "lineTotal", 100_000 * quantity,
                 "attributes", attributes
         );
-    }
-
-    private static List<Map<String, Object>> currentBuilds(String gpuPartId) {
-        return List.of(Map.of(
-                "id", "ai-engine-current",
-                "tier", "balanced",
-                "budgetWon", 2_000_000,
-                "budgetLabel", "200만원",
-                "items", List.of(
-                        Map.of("partId", "cpu-current", "category", "CPU", "quantity", 1),
-                        Map.of("partId", gpuPartId, "category", "GPU", "quantity", 1),
-                        Map.of("partId", "ram-current", "category", "RAM", "quantity", 1)
-                ),
-                "appliedPartCategories", List.of()
-        ));
-    }
-
-    private static void stubCurrentBuildParts(JdbcTemplate jdbcTemplate) {
-        Map<String, Map<String, Object>> rows = Map.of(
-                "cpu-current", partRow("cpu-current", "CPU", "CPU current part", 420_000, Map.of("toolReady", true, "shortSpec", "CPU spec"), 50),
-                "gpu-current", partRow("gpu-current", "GPU", "GPU current part", 1_200_000, Map.of("toolReady", true, "shortSpec", "GPU spec"), 70),
-                "ram-current", partRow("ram-current", "RAM", "RAM current part", 140_000, Map.of("toolReady", true, "shortSpec", "RAM spec"), 30)
-        );
-        when(jdbcTemplate.queryForList(anyString(), (Object) any())).thenAnswer(invocation -> {
-            Object rawArgument = invocation.getArgument(1);
-            Object publicId = rawArgument instanceof Object[] arguments ? arguments[0] : rawArgument;
-            Map<String, Object> row = rows.get(String.valueOf(publicId));
-            return row == null ? List.of() : List.of(row);
-        });
     }
 
     private static Map<String, Object> partRow(
