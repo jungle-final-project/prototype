@@ -948,15 +948,15 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
           layoutKey: 'DEFAULT',
           source: 'DEFAULT',
           positions: {
-            CPU: { x: 20, y: 170 },
-            MOTHERBOARD: { x: 300, y: 36 },
-            RAM: { x: 640, y: 56 },
-            GPU: { x: 300, y: 270 },
-            PSU: { x: 640, y: 250 },
-            CASE: { x: 640, y: 440 },
-            COOLER: { x: 300, y: 500 },
-            STORAGE: { x: 20, y: 650 },
-            PRICE: { x: 300, y: 660 }
+            CPU: { x: 9, y: 6 },
+            MOTHERBOARD: { x: 31, y: 76 },
+            RAM: { x: 43, y: 8 },
+            GPU: { x: 61, y: 53 },
+            PSU: { x: 58, y: 78 },
+            CASE: { x: 8, y: 76 },
+            COOLER: { x: 9, y: 30 },
+            STORAGE: { x: 74, y: 25 },
+            PRICE: { x: 50, y: 50 }
           }
         })
       });
@@ -984,8 +984,8 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
           layoutKey: 'DEFAULT',
           source: 'DEFAULT',
           positions: {
-            CPU: { x: 20, y: 170 },
-            GPU: { x: 300, y: 270 }
+            CPU: { x: 9, y: 6 },
+            GPU: { x: 61, y: 53 }
           }
         })
       });
@@ -1000,7 +1000,7 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
   await expect(page.getByRole('link', { name: '슬롯 보드 배치' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('admin-slot-layout-board')).toBeVisible();
   await expect(page.getByTestId('admin-slot-layout-card-GPU')).toContainText('GPU');
-  await expect(page.getByText('x 3 · y 37')).toBeVisible();
+  await expect(page.getByText('x 61 · y 53')).toBeVisible();
 
   const gpuSlot = page.getByTestId('admin-slot-layout-card-GPU');
   await expect(gpuSlot).toBeVisible();
@@ -1013,16 +1013,16 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
 
   await expect(page.getByText('저장되지 않은 변경')).toBeVisible();
   await page.getByRole('button', { name: '고정하기' }).click();
-  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 0).toBeGreaterThan(3);
-  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 999).toBeLessThanOrEqual(72);
-  await expect.poll(() => savedPayload?.positions?.GPU?.y ?? 0).toBeGreaterThan(37);
+  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 0).toBeGreaterThan(61);
+  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 999).toBeLessThanOrEqual(66);
+  await expect.poll(() => savedPayload?.positions?.GPU?.y ?? 0).toBeGreaterThan(53);
   await expect.poll(() => savedPayload?.positions?.PRICE).toBeUndefined();
   await expect(page.getByText('저장 완료')).toBeVisible();
 
   await page.getByRole('button', { name: '기본값으로 초기화' }).click();
   await expect.poll(() => resetCalled).toBe(true);
   await expect(page.getByText('기본 배치로 초기화됨')).toBeVisible();
-  await expect(page.getByText('x 3 · y 37')).toBeVisible();
+  await expect(page.getByText('x 61 · y 53')).toBeVisible();
 });
 
 test('renders price job and load test admin menu pages for ADMIN role', async ({ page }) => {
