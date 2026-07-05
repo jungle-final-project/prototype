@@ -56,8 +56,9 @@ docker compose up --build
 | `BUILD_CHAT_DEFAULT_PROFILE` | 선택 | Build Chat 기본 profile | 기본값은 실측 benchmark 기준 `BUILD_CHAT_54_MINI_FAST`입니다. |
 | `BUILD_CHAT_CACHE_ENABLED` | 선택 | Build Chat Redis cache | 기본값은 `true`입니다. Redis 장애 시 자동 우회하며 응답 body에는 cache 상태를 노출하지 않습니다. |
 | `BUILD_CHAT_CACHE_TTL_SECONDS` | 선택 | Build Chat Redis cache | 기본값은 `600`초입니다. 문맥 없는 견적/부품 추천은 shared key를 사용하고, 장바구니 문맥이 있으면 사용자/profile/draft와 parts/benchmark/FPS/RAG/alias version이 바뀔 때 key도 달라집니다. cache hit 응답은 이전 실행의 agent trace id를 재사용하지 않습니다. |
-| `BUILD_CHAT_CACHE_PREWARM_ENABLED` | 선택 | Build Chat Redis cache prewarm | 기본값은 `true`입니다. 서버 준비 후 자동입력칩용 LLM 요청을 비동기로 캐시에 올립니다. OpenAI key 없음/Redis 장애는 서버 시작을 막지 않습니다. |
-| `BUILD_CHAT_CACHE_PREWARM_TTL_SECONDS` | 선택 | Build Chat Redis cache prewarm | 기본값은 `3600`초입니다. 데모용 공통 칩 응답 유지 시간을 조절합니다. |
+| `BUILD_CHAT_CACHE_PREWARM_ENABLED` | 선택 | Build Chat Redis cache prewarm | 기본값은 `true`입니다. 서버 준비 후 + 주기적으로 데모 대표 프롬프트(예산·용도 견적)를 비동기로 캐시에 올립니다. OpenAI key 없음/Redis 장애는 서버 시작을 막지 않습니다. |
+| `BUILD_CHAT_CACHE_PREWARM_TTL_SECONDS` | 선택 | Build Chat Redis cache prewarm | 기본값은 `3600`초입니다. 프리웜한 응답의 캐시 유지 시간입니다. |
+| `BUILD_CHAT_CACHE_PREWARM_REFRESH_DELAY_MS` | 선택 | Build Chat 프리웜 재실행 주기 | 기본값은 `2700000`(45분)입니다. 프리웜 TTL이 만료돼 캐시가 식기 전에 서버가 스스로 재프리웜해 항상 캐시를 유지하므로, 배포 환경에서 별도 워밍 스크립트를 수동 실행할 필요가 없습니다. |
 | `BUILD_CHAT_SEMANTIC_CACHE_ENABLED` | 선택 | Build Chat pgvector semantic cache | 기본값은 `true`입니다. 문맥 없는 읽기/추천 요청만 embedding similarity로 재사용하고, 장바구니 변경/시뮬레이션/라우팅 요청은 제외합니다. |
 | `BUILD_CHAT_SEMANTIC_CACHE_THRESHOLD` | 선택 | Build Chat semantic cache hit 기준 | 기본값은 `0.94`입니다. constraint signature가 다른 요청은 similarity가 높아도 cache hit로 보지 않습니다. |
 | `BUILD_CHAT_SEMANTIC_CACHE_TTL_SECONDS` | 선택 | Build Chat semantic cache TTL | 기본값은 `600`초입니다. OpenAI embedding 또는 DB 오류 시 기존 LLM/RAG 흐름으로 우회합니다. |
