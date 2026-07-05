@@ -16,6 +16,6 @@ ALTER TABLE as_tickets
   );
 
 ALTER TABLE as_tickets
-  ADD COLUMN incident_window JSONB,
-  ADD COLUMN log_summary JSONB,
-  ADD COLUMN support_routing JSONB;
+  ADD COLUMN IF NOT EXISTS incident_window JSONB,
+  ADD COLUMN IF NOT EXISTS log_summary JSONB,
+  ADD COLUMN IF NOT EXISTS support_routing JSONB;

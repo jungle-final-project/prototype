@@ -106,8 +106,8 @@ Mock 구매
 | Idempotency request wrapper | `apps/api/src/main/java/com/buildgraph/prototype/config/security/CachedBodyHttpServletRequest.java` |
 | 공통 예외 처리 | `apps/api/src/main/java/com/buildgraph/prototype/common/ApiExceptionHandler.java` |
 | 공통 실패 응답 | `apps/api/src/main/java/com/buildgraph/prototype/common/ApiErrorResponse.java` |
-| Agent/AS DB migration | `apps/api/src/main/resources/db/migration/V53__pc_agent_gold_mode_contract.sql` |
-| Idempotency DB migration | `apps/api/src/main/resources/db/migration/V54__agent_idempotency_records.sql` |
+| Agent/AS DB migration | `apps/api/src/main/resources/db/migration/V69__pc_agent_gold_mode_contract.sql` |
+| Idempotency DB migration | `apps/api/src/main/resources/db/migration/V70__agent_idempotency_records.sql` |
 | Agent 보안 테스트 | `apps/api/src/test/java/com/buildgraph/prototype/config/security/AgentSecurityChainTest.java` |
 | Idempotency 서비스 테스트 | `apps/api/src/test/java/com/buildgraph/prototype/config/security/AgentIdempotencyServiceTest.java` |
 | Idempotency migration 테스트 | `apps/api/src/test/java/com/buildgraph/prototype/agent/persistence/AgentIdempotencyMigrationContractTest.java` |

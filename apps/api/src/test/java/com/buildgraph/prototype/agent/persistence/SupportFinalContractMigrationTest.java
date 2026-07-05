@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class SupportFinalContractMigrationTest {
-    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V55__support_final_contracts.sql");
+    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V71__support_final_contracts.sql");
 
     @Test
     void migrationExtendsSupportDecisionConstraint() throws Exception {
@@ -29,9 +29,9 @@ class SupportFinalContractMigrationTest {
         String sql = normalizedSql();
 
         assertThat(sql)
-                .contains("ADD COLUMN incident_window JSONB")
-                .contains("ADD COLUMN log_summary JSONB")
-                .contains("ADD COLUMN support_routing JSONB");
+                .contains("ADD COLUMN IF NOT EXISTS incident_window JSONB")
+                .contains("ADD COLUMN IF NOT EXISTS log_summary JSONB")
+                .contains("ADD COLUMN IF NOT EXISTS support_routing JSONB");
     }
 
     private static String normalizedSql() throws Exception {

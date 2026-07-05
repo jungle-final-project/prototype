@@ -74,6 +74,29 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
       })
     });
   });
+  await page.route('**/api/quote-drafts/current', async (route) => {
+    recordApiCall(apiCalls, route.request());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: null,
+        status: 'EMPTY',
+        name: '빈 견적',
+        items: [],
+        totalPrice: 0,
+        itemCount: 0
+      })
+    });
+  });
+  await page.route('**/api/support/chat-sessions/current', async (route) => {
+    recordApiCall(apiCalls, route.request());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ contact: null, messages: [] })
+    });
+  });
   await page.route(/\/api\/as-tickets\/[^/]+$/, async (route) => {
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());

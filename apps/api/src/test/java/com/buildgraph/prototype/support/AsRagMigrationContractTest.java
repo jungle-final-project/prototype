@@ -7,11 +7,11 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class AsRagMigrationContractTest {
-    private static final Path V58_MIGRATION = Path.of("src/main/resources/db/migration/V58__as_page_rag_separate_contract.sql");
-    private static final Path V59_MIGRATION = Path.of("src/main/resources/db/migration/V59__as_rag_final_visit_policy_alignment.sql");
-    private static final Path V60_MIGRATION = Path.of("src/main/resources/db/migration/V60__as_rag_remote_catalog_coverage.sql");
-    private static final Path V61_MIGRATION = Path.of("src/main/resources/db/migration/V61__as_rag_real_world_signal_coverage.sql");
-    private static final Path V62_MIGRATION = Path.of("src/main/resources/db/migration/V62__as_rag_expanded_realistic_signal_corpus.sql");
+    private static final Path V74_MIGRATION = Path.of("src/main/resources/db/migration/V74__as_page_rag_separate_contract.sql");
+    private static final Path V75_MIGRATION = Path.of("src/main/resources/db/migration/V75__as_rag_final_visit_policy_alignment.sql");
+    private static final Path V76_MIGRATION = Path.of("src/main/resources/db/migration/V76__as_rag_remote_catalog_coverage.sql");
+    private static final Path V77_MIGRATION = Path.of("src/main/resources/db/migration/V77__as_rag_real_world_signal_coverage.sql");
+    private static final Path V78_MIGRATION = Path.of("src/main/resources/db/migration/V78__as_rag_expanded_realistic_signal_corpus.sql");
 
     @Test
     void migrationCreatesSeparateAsRagEvidenceTable() throws Exception {
@@ -37,7 +37,7 @@ class AsRagMigrationContractTest {
 
     @Test
     void v59AlignsVisitPolicyForAlreadyMigratedDatabases() throws Exception {
-        String sql = normalizedSql(V59_MIGRATION);
+        String sql = normalizedSql(V75_MIGRATION);
 
         assertThat(sql)
                 .contains("source_id = 'as-rag-visit-disk-failure'")
@@ -51,7 +51,7 @@ class AsRagMigrationContractTest {
 
     @Test
     void v60AddsMissingRemoteCatalogCoverage() throws Exception {
-        String sql = normalizedSql(V60_MIGRATION);
+        String sql = normalizedSql(V76_MIGRATION);
 
         assertThat(sql)
                 .contains("as-rag-remote-agent")
@@ -66,7 +66,7 @@ class AsRagMigrationContractTest {
 
     @Test
     void v61AddsRealWorldWindowsAndAgentSignals() throws Exception {
-        String sql = normalizedSql(V61_MIGRATION);
+        String sql = normalizedSql(V77_MIGRATION);
 
         assertThat(sql)
                 .contains("display driver stopped responding")
@@ -82,7 +82,7 @@ class AsRagMigrationContractTest {
 
     @Test
     void v62ExpandsRealisticWindowsEventAndAgentSignalCoverage() throws Exception {
-        String sql = normalizedSql(V62_MIGRATION);
+        String sql = normalizedSql(V78_MIGRATION);
 
         assertThat(sql)
                 .contains("jsonb_build_object")
@@ -103,7 +103,7 @@ class AsRagMigrationContractTest {
     }
 
     private static String normalizedSql() throws Exception {
-        return normalizedSql(V58_MIGRATION);
+        return normalizedSql(V74_MIGRATION);
     }
 
     private static String normalizedSql(Path migration) throws Exception {

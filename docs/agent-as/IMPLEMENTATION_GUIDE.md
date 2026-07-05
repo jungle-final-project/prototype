@@ -47,8 +47,8 @@ ResponseDto handle(@AuthenticationPrincipal AgentPrincipal principal, @RequestBo
 현재 naming 예:
 
 ```text
-V56__pc_agent_gold_mode_contract.sql
-V57__agent_idempotency_records.sql
+V69__pc_agent_gold_mode_contract.sql
+V70__agent_idempotency_records.sql
 ```
 
 ## AgentPrincipal 사용 방식
