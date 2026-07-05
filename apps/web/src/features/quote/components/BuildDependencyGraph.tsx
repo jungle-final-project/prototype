@@ -925,6 +925,11 @@ function graphNodePosition(position: BuildGraphNode['position']) {
   if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
     return null;
   }
+  // `/self-quote` 슬롯 보드 배치는 같은 API를 통해 0~100 퍼센트 좌표로 저장될 수 있다.
+  // 일반 관계도는 픽셀 좌표계를 쓰므로 이 값은 무시하고 기존 category 기본 좌표를 유지한다.
+  if (position.x <= 100 && position.y <= 100) {
+    return null;
+  }
   return {
     x: Math.max(0, position.x),
     y: Math.max(0, position.y)

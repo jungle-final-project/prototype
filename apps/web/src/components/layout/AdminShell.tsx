@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, Bot, Cpu, Download, Gauge, GitBranch, Home, LifeBuoy, Play, RefreshCw, Search } from 'lucide-react';
+import { Activity, Bot, Cpu, Download, Gauge, Home, LayoutGrid, LifeBuoy, Play, RefreshCw, Search } from 'lucide-react';
 
 type ExportValue = string | number | boolean | null | undefined;
 
@@ -76,7 +76,7 @@ function AdminSidebar() {
         { to: '/admin/agent-sessions', label: '에이전트 세션', Icon: Bot, match: (path: string) => path.startsWith('/admin/agent-sessions') },
         { to: '/admin/tool-invocations', label: '도구 이력', Icon: Activity, match: (path: string) => path.startsWith('/admin/tool-invocations') },
         { to: '/admin/rag-evidence', label: '검색 근거', Icon: Search, match: (path: string) => path.startsWith('/admin/rag-evidence') },
-        { to: '/admin/build-graph-layouts', label: '관계도 배치', Icon: GitBranch, match: (path: string) => path.startsWith('/admin/build-graph-layouts') }
+        { to: '/admin/build-graph-layouts', label: '슬롯 보드 배치', Icon: LayoutGrid, match: (path: string) => path.startsWith('/admin/build-graph-layouts') }
       ]
     },
     {

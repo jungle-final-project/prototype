@@ -57,6 +57,62 @@ background:
   box-shadow: 0 10px 26px rgba(17, 24, 39, 0.05);
 }
 
+/* 슬롯 보드 장착/교체 애니메이션. 신규 의존성 없이 CSS keyframes만 사용한다. */
+@keyframes slot-attach-flash {
+  0% {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45);
+  }
+  55% {
+    border-color: #16a34a;
+    box-shadow: 0 0 0 10px rgba(22, 163, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0);
+  }
+}
+
+.slot-attach-flash {
+  animation: slot-attach-flash 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes slot-empty-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.22);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+  }
+}
+
+.slot-empty-pulse {
+  animation: slot-empty-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes slot-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.slot-panel-in {
+  animation: slot-panel-in 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot-attach-flash,
+  .slot-empty-pulse,
+  .slot-panel-in {
+    animation: none;
+  }
+}
+
 .home-fullpage-shell {
   position: relative;
   height: calc(100vh - 230px);
