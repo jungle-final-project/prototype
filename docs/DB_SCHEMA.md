@@ -707,11 +707,12 @@ Index:
 | `source_type` | `VARCHAR(50)` | no | - | `NEWS`, `PRODUCT_RELEASE`, `SUPPORT_NEWS`, `RSS`, `SITEMAP` |
 | `source_url` | `TEXT` | no | - | 공식 제조사 source URL |
 | `enabled` | `BOOLEAN` | no | - | scan 대상 여부 |
-| `poll_interval_minutes` | `INTEGER` | no | - | 권장 scan 주기 |
+| `poll_interval_minutes` | `INTEGER` | no | - | scan 주기(분). scanAll이 주기가 지난 소스만 스캔한다 (V92부터 실제 적용) |
 | `last_checked_at` | `TIMESTAMPTZ` | yes | - | 마지막 scan 시각 |
 | `last_etag` | `VARCHAR(255)` | yes | - | HTTP ETag |
 | `last_modified` | `VARCHAR(255)` | yes | - | HTTP Last-Modified |
 | `last_content_hash` | `VARCHAR(128)` | yes | - | source 본문 hash |
+| `consecutive_failures` | `INTEGER` | no | - | 연속 스캔 실패 횟수. 차단(403/429) 연속 3회면 자동 PAUSED (V92) |
 | `parser_config` | `JSONB` | yes | - | source별 selector/파싱 설정 |
 | `status` | `VARCHAR(30)` | no | - | `ACTIVE`, `PAUSED`, `ERROR` |
 | `error_summary` | `TEXT` | yes | - | 마지막 scan 실패 요약 |
@@ -829,7 +830,7 @@ Index:
 | `public_id` | `UUID` | no | - | 외부 ID |
 | `job_name` | `TEXT` | no | - | `PART_PRICE_REFRESH`, `DANAWA_SNAPSHOT_REFRESH`, `DANAWA_TREND_REFRESH`, `MANUFACTURER_RELEASE_SCAN`, `SHADOW_SCORE_RETENTION` |
 | `trigger_type` | `TEXT` | no | - | `SCHEDULED` |
-| `status` | `TEXT` | no | - | `SUCCEEDED`, `FAILED`, `SKIPPED_FROZEN` |
+| `status` | `TEXT` | no | - | `SUCCEEDED`, `FAILED`, `SKIPPED_FROZEN`, `SKIPPED_LOCKED` |
 | `result_summary` | `JSONB` | yes | - | 서비스 결과 맵(attempted/updated/errors 등) |
 | `error_summary` | `TEXT` | yes | - | 실패/스킵 사유 |
 | `started_at` | `TIMESTAMPTZ` | no | - | 시작 시각 |

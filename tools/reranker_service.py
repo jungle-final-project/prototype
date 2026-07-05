@@ -159,6 +159,16 @@ def read_model_version(model_path: str) -> str | None:
     return None
 
 
+# 최소 관측성: 요청/오류 카운터. 예전에는 액세스 로그 억제 + 지표 부재로 실패율 집계가 불가능했다(감사 B11).
+COUNTERS = {"scoreRequests": 0, "scoreErrors": 0, "reloadRequests": 0}
+COUNTERS_LOCK = threading.Lock()
+
+
+def bump(counter: str):
+    with COUNTERS_LOCK:
+        COUNTERS[counter] = COUNTERS.get(counter, 0) + 1
+
+
 def make_handler(state: ScorerState):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib callback name
@@ -166,11 +176,14 @@ def make_handler(state: ScorerState):
                 self.send_error(404)
                 return
             scorer = state.current()
+            with COUNTERS_LOCK:
+                counters = dict(COUNTERS)
             self.write_json({
                 "status": "UP",
                 "modelVersion": scorer.model_version,
                 "modelLoaded": scorer.model is not None,
                 "modelLoadError": scorer.load_error,
+                "counters": counters,
             })
 
         def do_POST(self):  # noqa: N802 - stdlib callback name
@@ -183,16 +196,32 @@ def make_handler(state: ScorerState):
             self.send_error(404)
 
         def handle_score(self):
-            payload = self.read_json()
-            scorer = state.current()
-            candidates = payload.get("candidates") or []
-            scores = []
-            for candidate in candidates:
-                scores.append({
-                    "candidateId": candidate.get("candidateId"),
-                    "partId": candidate.get("partId"),
-                    "score": scorer.score(candidate),
-                })
+            # malformed 요청이 커넥션 리셋으로만 끝나 원인 파악이 불가능하던 것(감사 B11) →
+            # 400 JSON으로 응답하고 오류 카운터에 집계한다.
+            bump("scoreRequests")
+            try:
+                payload = self.read_json()
+                candidates = payload.get("candidates") or []
+                if not isinstance(candidates, list):
+                    raise ValueError("candidates must be a list")
+                scorer = state.current()
+                scores = []
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        raise ValueError("each candidate must be an object")
+                    scores.append({
+                        "candidateId": candidate.get("candidateId"),
+                        "partId": candidate.get("partId"),
+                        "score": scorer.score(candidate),
+                    })
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                bump("scoreErrors")
+                self.write_json({"error": "INVALID_REQUEST", "message": str(exc)}, status=400)
+                return
+            except Exception as exc:  # 예기치 못한 스코어링 실패도 JSON 500으로 관측 가능하게.
+                bump("scoreErrors")
+                self.write_json({"error": "SCORING_FAILED", "message": str(exc)}, status=500)
+                return
             self.write_json({
                 "modelName": "xgboost-reranker" if scorer.model is not None else "baseline-shadow-reranker",
                 "modelVersion": scorer.model_version,
@@ -203,6 +232,7 @@ def make_handler(state: ScorerState):
             })
 
         def handle_reload(self):
+            bump("reloadRequests")
             payload = self.read_json()
             model_path = payload.get("modelPath")
             scorer = state.reload(str(model_path) if model_path else None)

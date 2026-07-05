@@ -29,17 +29,50 @@ public class PipelineJobRunRecorder {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /** 잡 본문을 감싸 성공/실패/소요시간을 기록한다. 예외는 기록 후 그대로 전파하지 않고 로그로 종결(스케줄 잡 관례 유지). */
+    /**
+     * 잡 본문을 감싸 성공/실패/소요시간을 기록한다. 예외는 기록 후 전파하지 않고 로그로 종결(스케줄 잡 관례 유지).
+     *
+     * Postgres advisory lock으로 잡 이름 단위 상호배제를 건다(감사 O7): API를 다중 인스턴스로
+     * 늘려도 같은 크론이 중복 실행되지 않는다(외부 사이트 2배 두드림·중복 수집 방지).
+     * 세션 락은 같은 커넥션에서 해제해야 하므로 ConnectionCallback 안에서 잡 전체를 수행한다.
+     * (주의: 잡이 도는 동안 커넥션 1개를 점유한다 — 장시간 잡 5종 동시여도 풀 여유 내)
+     */
     public void run(String jobName, Supplier<Map<String, Object>> body) {
         OffsetDateTime startedAt = OffsetDateTime.now();
         long startNanos = System.nanoTime();
-        try {
-            Map<String, Object> result = body.get();
-            insert(jobName, "SUCCEEDED", result, null, startedAt, elapsedMs(startNanos));
-        } catch (RuntimeException exception) {
-            insert(jobName, "FAILED", null, limited(exception.getMessage()), startedAt, elapsedMs(startNanos));
-            LOGGER.warn("Pipeline job {} failed: {}", jobName, exception.getMessage());
-        }
+        long lockKey = advisoryLockKey(jobName);
+        jdbcTemplate.execute((java.sql.Connection connection) -> {
+            boolean locked = false;
+            try (java.sql.PreparedStatement tryLock = connection.prepareStatement("SELECT pg_try_advisory_lock(?)")) {
+                tryLock.setLong(1, lockKey);
+                try (java.sql.ResultSet resultSet = tryLock.executeQuery()) {
+                    locked = resultSet.next() && resultSet.getBoolean(1);
+                }
+            }
+            if (!locked) {
+                insert(jobName, "SKIPPED_LOCKED", null, "다른 인스턴스가 같은 잡을 실행 중이라 건너뛰었습니다.", startedAt, elapsedMs(startNanos));
+                LOGGER.info("Pipeline job {} skipped: advisory lock held by another instance", jobName);
+                return null;
+            }
+            try {
+                Map<String, Object> result = body.get();
+                insert(jobName, "SUCCEEDED", result, null, startedAt, elapsedMs(startNanos));
+            } catch (RuntimeException exception) {
+                insert(jobName, "FAILED", null, limited(exception.getMessage()), startedAt, elapsedMs(startNanos));
+                LOGGER.warn("Pipeline job {} failed: {}", jobName, exception.getMessage());
+            } finally {
+                try (java.sql.PreparedStatement unlock = connection.prepareStatement("SELECT pg_advisory_unlock(?)")) {
+                    unlock.setLong(1, lockKey);
+                    unlock.execute();
+                }
+            }
+            return null;
+        });
+    }
+
+    // 잡 이름 → 64bit advisory lock 키. 고정 네임스페이스(상위 32bit)로 다른 용도의 advisory lock과 충돌을 피한다.
+    private static long advisoryLockKey(String jobName) {
+        return (0x42474A4CL << 32) | (jobName.hashCode() & 0xFFFFFFFFL); // "BGJL"
     }
 
     /** 데모 동결 등으로 실행을 건너뛴 사실도 이력에 남긴다(침묵 스킵 방지). */
