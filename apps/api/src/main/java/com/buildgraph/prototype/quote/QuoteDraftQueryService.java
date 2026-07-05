@@ -174,7 +174,9 @@ public class QuoteDraftQueryService {
                         """, publicId)
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "부품을 찾을 수 없습니다."));
+                // 비활성/삭제된 부품이면 어떤 부품이 실패했는지 프론트가 알 수 있도록 partId를 메시지에 포함한다
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "부품을 찾을 수 없습니다. (비활성 또는 삭제된 부품일 수 있습니다. partId=" + publicId + ")"));
     }
 
     private List<ResolvedAiItem> resolveAiItems(Object value) {
@@ -377,7 +379,12 @@ public class QuoteDraftQueryService {
         if (value instanceof Number number) {
             parsed = number.intValue();
         } else if (value != null && !String.valueOf(value).isBlank()) {
-            parsed = Integer.valueOf(String.valueOf(value).trim());
+            // 비숫자/소수/전각 문자열은 NumberFormatException으로 500이 났다. 사용자 입력 오류이므로 400으로 돌린다.
+            try {
+                parsed = Integer.valueOf(String.valueOf(value).trim());
+            } catch (NumberFormatException exception) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "quantity 형식이 올바르지 않습니다.");
+            }
         }
         int quantity = parsed == null ? 1 : parsed;
         if (quantity < 1 || quantity > 9) {

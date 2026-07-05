@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -57,10 +57,13 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [pendingSubmit, setPendingSubmit] = useState<string | null>(null);
   const hasToken = Boolean(getToken());
+  // 패널을 실제로 연 뒤에만 현재 견적(드래프트)을 미리 받는다. 전역 렌더라 로그인만으로
+  // 모든 페이지에서 draft API가 선행되던 것을 없앤다. 완성/시뮬레이션 요청은 패널 open 시점에
+  // 이미 prefetch돼 있어 체감 저하가 없고, 예산/미지원/명확화는 draft 없이 즉시 전송된다.
   const quoteDraftQuery = useQuery({
     queryKey: ['quote-draft', 'current'],
     queryFn: getCurrentQuoteDraft,
-    enabled: hasToken
+    enabled: hasToken && open
   });
 
   useEffect(() => {
@@ -223,10 +226,10 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     }
   }
 
-  async function selectBuild(build: AiRecommendedBuild) {
+  // 새 메시지 추가로 리스트가 리렌더될 때 ChatMessage memo가 유지되도록 참조를 안정화한다.
+  const selectBuild = useCallback(async (build: AiRecommendedBuild) => {
     if (applyingBuildId) return;
     const normalizedBuild = normalizeAiRecommendedBuild(build);
-    saveSelectedAiBuild(normalizedBuild);
     setApplyError(null);
     setFailedBuild(null);
     setApplyingBuildId(normalizedBuild.id);
@@ -240,6 +243,8 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
           quantity: item.quantity
         }))
       });
+      // 적용이 성공한 뒤에만 선택 빌드를 저장한다. 실패 시 /self-quote 패널이 미적용 빌드를 보여주는 불일치를 막는다.
+      saveSelectedAiBuild(normalizedBuild);
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
       void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       setOpen(false);
@@ -250,7 +255,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     } finally {
       setApplyingBuildId(null);
     }
-  }
+  }, [applyingBuildId, queryClient, navigate]);
 
   if (!open && isDesktopAssistant) {
     return null;
@@ -327,6 +332,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
               key={message.id}
               message={message}
               onSelectBuild={selectBuild}
+              applyingBuildId={applyingBuildId}
             />
           ))}
           {isSending ? (
@@ -429,12 +435,14 @@ function toolFromPrompt(prompt: string): BuildGraphFocus['tool'] {
   return undefined;
 }
 
-function ChatMessage({
+const ChatMessage = memo(function ChatMessage({
   message,
-  onSelectBuild
+  onSelectBuild,
+  applyingBuildId
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
+  applyingBuildId: string | null;
 }) {
   const isUser = message.role === 'user';
 
@@ -460,14 +468,21 @@ function ChatMessage({
         {message.builds ? (
           <div className="mt-2 grid gap-2">
             {message.builds.map((build) => (
-              <CompactBuildCard key={`${message.id}-${build.id}`} build={build} onSelectBuild={onSelectBuild} />
+              <CompactBuildCard key={`${message.id}-${build.id}`} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} />
             ))}
           </div>
         ) : null}
       </div>
     </div>
   );
-}
+}, (prev, next) => (
+  // 세션 저장→syncSession이 메시지 객체를 매번 새로 만들기 때문에 참조 비교로는 memo가 무효다.
+  // 메시지는 id당 내용이 불변이므로 id + 콜백 참조로 비교해 기존 메시지 리렌더를 막는다.
+  // applyingBuildId가 바뀌면 카드 버튼의 로딩/비활성 상태가 갱신되도록 비교에 포함한다.
+  prev.message.id === next.message.id
+  && prev.onSelectBuild === next.onSelectBuild
+  && prev.applyingBuildId === next.applyingBuildId
+));
 
 function SimulationResultCard({ simulation }: { simulation: AiPerformanceSimulation }) {
   const fpsRows = simulation.fpsComparisons ?? [];
@@ -590,12 +605,17 @@ function MiniBar({ value, max, className }: { value?: number | null; max: number
 
 function CompactBuildCard({
   build,
-  onSelectBuild
+  onSelectBuild,
+  applyingBuildId
 }: {
   build: AiRecommendedBuild;
   onSelectBuild: (build: AiRecommendedBuild) => void;
+  applyingBuildId: string | null;
 }) {
   const primaryItems = build.items.slice(0, 5);
+  // 이 카드가 적용 중이면 로딩 표시, 다른 카드가 적용 중이면 클릭이 조용히 무시되지 않도록 함께 비활성화한다.
+  const isApplyingThis = applyingBuildId === build.id;
+  const isApplyDisabled = Boolean(applyingBuildId);
 
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -641,10 +661,11 @@ function CompactBuildCard({
       <button
         type="button"
         onClick={() => onSelectBuild(build)}
-        className="mt-3 flex w-full min-h-10 items-center justify-center gap-2 rounded-full border border-blue-200 bg-white px-3 text-xs font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-100"
+        disabled={isApplyDisabled}
+        className="mt-3 flex w-full min-h-10 items-center justify-center gap-2 rounded-full border border-blue-200 bg-white px-3 text-xs font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
       >
         <ShoppingCart size={15} />
-        이 조합으로 셀프 견적 보기
+        {isApplyingThis ? '셀프 견적에 적용 중...' : '이 조합으로 셀프 견적 보기'}
       </button>
     </article>
   );

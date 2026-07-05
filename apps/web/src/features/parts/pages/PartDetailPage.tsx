@@ -1,12 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { getToken } from '../../../lib/api';
 import { partImageUrl, partShortSpec, specRows } from '../partDisplay';
 import { getPart, getPartPriceHistory, putQuoteDraftItem, recordRecommendationEvent } from '../partsApi';
 import type { PartPriceHistory, PartPriceHistoryPoint } from '../types';
+
+// 부품 이미지 로드 실패 시 보여줄 대체 이미지(partImageUrl의 placeholder SVG와 동일 톤).
+const PART_IMAGE_PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112"><rect width="112" height="112" rx="14" fill="#f8fafc"/><rect x="12" y="20" width="88" height="56" rx="10" fill="#334155" opacity="0.92"/><rect x="20" y="28" width="72" height="40" rx="6" fill="#ffffff" opacity="0.16"/><text x="56" y="54" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#ffffff">NO IMAGE</text><rect x="24" y="84" width="64" height="6" rx="3" fill="#cbd5e1"/></svg>'
+)}`;
+
+// onError 재귀 방지 가드: 대체 이미지 자체가 실패해도 무한 루프를 돌지 않도록 dataset으로 1회만 교체한다.
+function handlePartImageError(event: SyntheticEvent<HTMLImageElement>) {
+  const target = event.currentTarget;
+  if (!target.dataset.fallback) {
+    target.dataset.fallback = '1';
+    target.src = PART_IMAGE_PLACEHOLDER;
+  }
+}
 
 export function PartDetailPage() {
   const { partId = '' } = useParams();
@@ -114,7 +128,7 @@ export function PartDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,620px)_minmax(0,1fr)]">
         <section className="rounded border border-slate-200 bg-white p-6">
-          <img src={partImageUrl(part)} alt={`${part.name} 제품 사진`} className="h-[320px] w-full object-contain sm:h-[420px] lg:h-[520px]" />
+          <img src={partImageUrl(part)} alt={`${part.name} 제품 사진`} onError={handlePartImageError} className="h-[320px] w-full object-contain sm:h-[420px] lg:h-[520px]" />
         </section>
 
         <section className="rounded border border-slate-200 bg-white p-6">

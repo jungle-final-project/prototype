@@ -336,19 +336,26 @@ public class BuildChatService {
                 && (cheonManWonMatcher.group(1) != null || cheonManWonMatcher.group(2) != null || cheonManWonMatcher.group(3) != null)) {
             double thousands = cheonManWonMatcher.group(1) == null ? 1 : Double.parseDouble(cheonManWonMatcher.group(1));
             double hundreds = cheonManWonMatcher.group(2) == null ? 0 : Double.parseDouble(cheonManWonMatcher.group(2));
-            return (int) Math.round(thousands * 10_000_000 + hundreds * 1_000_000);
+            return clampWon(thousands * 10_000_000 + hundreds * 1_000_000);
         }
         Matcher baekManWonMatcher = BUDGET_BAEKMANWON.matcher(normalized);
         if (baekManWonMatcher.find()) {
-            return (int) Math.round(Double.parseDouble(baekManWonMatcher.group(1)) * 1_000_000);
+            return clampWon(Double.parseDouble(baekManWonMatcher.group(1)) * 1_000_000);
         }
         Matcher manWonMatcher = BUDGET_MANWON.matcher(normalized);
         if (manWonMatcher.find()) {
-            return (int) Math.round(Double.parseDouble(manWonMatcher.group(1)) * 10_000);
+            return clampWon(Double.parseDouble(manWonMatcher.group(1)) * 10_000);
         }
         Matcher wonMatcher = BUDGET_WON.matcher(normalized);
         if (wonMatcher.find()) {
-            return Integer.parseInt(wonMatcher.group(1));
+            // 원 단위 숫자는 상한이 없으므로 Integer 범위를 넘으면 NumberFormatException으로 500이 났다.
+            // 다른 예산 파서(만원/백만원/천만원)와 동일하게 포화 캐스팅한다.
+            try {
+                long won = Long.parseLong(wonMatcher.group(1));
+                return (int) Math.min(won, Integer.MAX_VALUE);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
         }
         return null;
     }
@@ -361,6 +368,12 @@ public class BuildChatService {
             result = result.replace(String.valueOf(digits.charAt(index)), String.valueOf(index + 1));
         }
         return result;
+    }
+
+    // 곱셈 결과가 Integer 범위를 넘으면 (int) 캐스팅이 조용히 랩어라운드해 음수/잘못된 예산이
+    // 그리디 엔진에 유입됐다. Integer.MAX_VALUE로 포화시켜 방지한다.
+    private static int clampWon(double won) {
+        return (int) Math.min(Math.round(won), (long) Integer.MAX_VALUE);
     }
 
     static BudgetIntent budgetIntent(String message) {
@@ -381,7 +394,8 @@ public class BuildChatService {
     }
 
     private static boolean isStandaloneBuildRecommend(String message, Map<String, Object> request, BudgetIntent rawBudgetIntent) {
-        if (!objectMap(request.get("currentQuoteDraft")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
+        // 견적 초안 존재 여부는 map이 비었는지가 아니라 items가 있는지로 판정해야 함(빈 items 배열을 "초안 있음"으로 오인 방지)
+        if (!objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
             return false;
         }
         String normalized = normalizeCommand(message);
@@ -1251,7 +1265,8 @@ public class BuildChatService {
 
     private Optional<Map<String, Object>> deterministicFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
         Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
-        if (budget != null && objectMap(request.get("currentQuoteDraft")).isEmpty()) {
+        // 견적 초안 유무는 map 비었는지가 아니라 items 존재로 판정(빈 items 배열을 "초안 있음"으로 오인하지 않도록 표준화)
+        if (budget != null && objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty()) {
             int minimumTotal = minimumBuildTotal();
             if (minimumTotal > 0 && budget < minimumTotal) {
                 // 요청 예산으로는 구성이 어려우므로 "가능한 최소 구성" 카드를 실제로 만들어 함께 제공한다
