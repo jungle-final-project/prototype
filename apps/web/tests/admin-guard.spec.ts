@@ -790,10 +790,11 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
         detectedProductName: 'ROG Astral GeForce RTX 5090 OC 32GB',
         confidence: 0.95,
         candidateId: '00000000-0000-4000-8000-000000009601',
-        candidateStatus: 'PUBLISHED',
-        partId: '00000000-0000-4000-8000-000000009701',
-        partStatus: 'INACTIVE',
-        messages: ['AI가 제조사 게시글을 신제품 후보로 구조화했습니다.', '후보를 INACTIVE 내부 자산 초안으로 연결했습니다.']
+        // AI 초안은 더 이상 INACTIVE 자산을 자동 연결하지 않는다(감사 A3) — 검수 대기 후보까지만.
+        candidateStatus: 'PENDING_REVIEW',
+        partId: null,
+        partStatus: null,
+        messages: ['AI가 제조사 게시글을 신제품 후보로 구조화했습니다.', 'AI 초안이 후보에 반영되었습니다. 검수 후 \'후보 승인\'으로 INACTIVE 자산 초안을 생성하세요.']
       })
     });
   });
@@ -846,7 +847,7 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
   await expect(page.locator('main')).toContainText('ASUS launches ROG Astral GeForce RTX 5090 OC 32GB graphics card');
   await page.getByRole('button', { name: 'AI 초안화' }).click();
   expect(aiAssetDraftCalls).toBe(1);
-  await expect(page.locator('main')).toContainText('AI INACTIVE 초안 생성');
+  await expect(page.locator('main')).toContainText('AI 초안 · 후보 검수 대기');
   await page.getByRole('button', { name: '신제품 후보함' }).click();
   await expect(page.locator('main')).toContainText('ASUS ROG Astral GeForce RTX 5090 OC 32GB');
   await expect(page.locator('main')).toContainText('리안리 O11 VISION-M 화이트');

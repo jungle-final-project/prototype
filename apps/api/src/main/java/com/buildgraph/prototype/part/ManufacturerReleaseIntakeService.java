@@ -363,6 +363,12 @@ public class ManufacturerReleaseIntakeService {
             String contentHash = sha256(fetch.body());
             boolean unchanged = contentHash.equals(stringValue(source.get("last_content_hash")));
             List<PostDraft> drafts = unchanged ? List.of() : extractPosts(source, fetch.body(), safeLimit);
+            // RSS 피드(item 마커 존재)인데 파싱 0건이면 파서 형식 불일치(예: 미지원 마크업)다.
+            // 예전에는 이걸 '성공'으로 기록하고 해시까지 저장해, 수집 0건이 조용히 굳어졌다(감사 A2).
+            // 예외로 전환하면 소스가 ERROR로 남고 해시가 갱신되지 않아 다음 주기에 재시도된다.
+            if (!unchanged && drafts.isEmpty() && fetch.body().contains("<item")) {
+                throw new IllegalStateException("RSS 본문이 변경되었지만 게시물을 1건도 파싱하지 못했습니다. 파서 형식 불일치 가능성이 있습니다.");
+            }
             int newPosts = 0;
             int updatedPosts = 0;
             int ignored = 0;
@@ -380,7 +386,9 @@ public class ManufacturerReleaseIntakeService {
                 if ("IGNORED".equals(classification.status())) {
                     ignored += 1;
                 }
-                if ("PRODUCT_CANDIDATE".equals(classification.status())) {
+                if ("PRODUCT_CANDIDATE".equals(classification.status()) && !post.reviewLocked()) {
+                    // reviewLocked(관리자/AI 확정) 게시물은 룰 분류가 PRODUCT_CANDIDATE여도 후보를 재생성하지
+                    // 않는다 — 관리자가 IGNORED 처리한 오탐의 후보 부활을 막는다(감사 A1).
                     productPosts += 1;
                     if (shouldCreateCandidates && post.createdCatalogCandidateId() == null) {
                         Map<String, Object> candidateResult = createCandidateForPost(source, post, draft, classification);
@@ -500,7 +508,7 @@ public class ManufacturerReleaseIntakeService {
         String productName = value(request, "detectedProductName", null);
         Double confidence = confidenceValue(request.get("confidence"));
         OffsetDateTime publishedAt = parsePublishedAt(value(request, "publishedAt", null));
-        String contentHash = sha256(title + "|" + externalUrl + "|" + (excerpt == null ? "" : excerpt));
+        String contentHash = postContentHash(title, externalUrl, excerpt);
         String rawPayload = json(MockData.map(
                 "manualPost", true,
                 "createdBy", admin == null ? null : admin.email(),
@@ -563,7 +571,7 @@ public class ManufacturerReleaseIntakeService {
         OffsetDateTime publishedAt = request.containsKey("publishedAt")
                 ? parsePublishedAt(value(request, "publishedAt", null))
                 : offsetDateTimeValue(existing.get("published_at"));
-        String contentHash = sha256(title + "|" + externalUrl + "|" + (excerpt == null ? "" : excerpt));
+        String contentHash = postContentHash(title, externalUrl, excerpt);
         try {
             jdbcTemplate.update("""
                     UPDATE manufacturer_posts
@@ -573,6 +581,7 @@ public class ManufacturerReleaseIntakeService {
                         content_hash = ?,
                         excerpt = ?,
                         classification_status = ?,
+                        classification_source = 'ADMIN',
                         detected_category = ?,
                         detected_product_name = ?,
                         confidence = ?,
@@ -748,8 +757,10 @@ public class ManufacturerReleaseIntakeService {
             messages.add("이미 연결된 후보에 AI 스펙 초안을 다시 반영했습니다.");
         }
 
-        Map<String, Object> approval = naverShoppingOfferService.approveCatalogCandidateAsInactive(candidateId, admin);
-        messages.add("후보를 INACTIVE 내부 자산 초안으로 연결했습니다.");
+        // AI 실행이 곧바로 INACTIVE 자산 초안 연결까지 자동 체이닝하지 않는다(감사 A3).
+        // 잘못된 분류/불완전 스펙이 검수 게이트 없이 내부 자산으로 전파되는 것을 막기 위해,
+        // INACTIVE 연결은 관리자의 명시적 '후보 승인'(/admin/part-catalog-candidates/{id}/approve)으로 분리한다.
+        messages.add("AI 초안이 후보에 반영되었습니다. 검수 후 '후보 승인'으로 INACTIVE 자산 초안을 생성하세요.");
         Map<String, Object> refreshedPost = postByPublicId(postId, false);
         return MockData.map(
                 "postId", postId,
@@ -758,10 +769,10 @@ public class ManufacturerReleaseIntakeService {
                 "detectedCategory", refreshedPost.get("detected_category"),
                 "detectedProductName", refreshedPost.get("detected_product_name"),
                 "confidence", refreshedPost.get("confidence"),
-                "candidateId", approval.get("candidateId"),
-                "candidateStatus", approval.get("status"),
-                "partId", approval.get("publishedPartId"),
-                "partStatus", approval.get("partStatus"),
+                "candidateId", candidateId,
+                "candidateStatus", "PENDING_REVIEW",
+                "partId", null,
+                "partStatus", null,
                 "messages", messages
         );
     }
@@ -917,6 +928,7 @@ public class ManufacturerReleaseIntakeService {
                 SELECT id,
                        public_id::text AS public_id,
                        content_hash,
+                       classification_source,
                        created_catalog_candidate_id
                 FROM manufacturer_posts
                 WHERE manufacturer_source_id = ?
@@ -943,13 +955,14 @@ public class ManufacturerReleaseIntakeService {
                       excerpt,
                       raw_payload,
                       classification_status,
+                      classification_source,
                       detected_category,
                       detected_product_name,
                       confidence,
                       created_at,
                       updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, now(), now())
+                    VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, 'RULE', ?, ?, ?, now(), now())
                     RETURNING id, public_id::text AS public_id
                     """,
                     sourceId,
@@ -964,43 +977,69 @@ public class ManufacturerReleaseIntakeService {
                     limited(classification.productName(), 255),
                     classification.confidence()
             );
-            return new PostRecord(((Number) row.get("id")).longValue(), stringValue(row.get("public_id")), true, true, null);
+            return new PostRecord(((Number) row.get("id")).longValue(), stringValue(row.get("public_id")), true, true, null, false);
         }
         Map<String, Object> existing = existingRows.get(0);
         boolean contentChanged = !draft.contentHash().equals(stringValue(existing.get("content_hash")));
         if (contentChanged) {
-            jdbcTemplate.update("""
-                    UPDATE manufacturer_posts
-                    SET title = ?,
-                        published_at = ?,
-                        content_hash = ?,
-                        excerpt = ?,
-                        raw_payload = ?::jsonb,
-                        classification_status = ?,
-                        detected_category = ?,
-                        detected_product_name = ?,
-                        confidence = ?,
-                        updated_at = now()
-                    WHERE id = ?
-                    """,
-                    limited(draft.title(), 500),
-                    draft.publishedAt(),
-                    draft.contentHash(),
-                    draft.excerpt(),
-                    rawPayload,
-                    classification.status(),
-                    classification.category(),
-                    limited(classification.productName(), 255),
-                    classification.confidence(),
-                    existing.get("id")
-            );
+            // 관리자(ADMIN)/AI가 확정한 분류는 재스캔이 덮어쓰지 않는다. 예전에는 룰 기반 분류로 무조건
+            // 되돌려서 관리자가 IGNORED 처리한 오탐이 다음 스캔에 PRODUCT_CANDIDATE로 부활했다(감사 A1).
+            boolean reviewLocked = !"RULE".equals(stringValue(existing.get("classification_source")));
+            if (reviewLocked) {
+                jdbcTemplate.update("""
+                        UPDATE manufacturer_posts
+                        SET title = ?,
+                            published_at = ?,
+                            content_hash = ?,
+                            excerpt = ?,
+                            raw_payload = coalesce(raw_payload, '{}'::jsonb) || ?::jsonb,
+                            updated_at = now()
+                        WHERE id = ?
+                        """,
+                        limited(draft.title(), 500),
+                        draft.publishedAt(),
+                        draft.contentHash(),
+                        draft.excerpt(),
+                        rawPayload,
+                        existing.get("id")
+                );
+            } else {
+                // raw_payload는 전체 교체가 아닌 병합: AI 초안(aiAssetDraft)·관리자 이력(adminReview)·
+                // 후보 연결(naverCandidate) 등 다른 경로가 쌓은 키를 보존한다.
+                jdbcTemplate.update("""
+                        UPDATE manufacturer_posts
+                        SET title = ?,
+                            published_at = ?,
+                            content_hash = ?,
+                            excerpt = ?,
+                            raw_payload = coalesce(raw_payload, '{}'::jsonb) || ?::jsonb,
+                            classification_status = ?,
+                            detected_category = ?,
+                            detected_product_name = ?,
+                            confidence = ?,
+                            updated_at = now()
+                        WHERE id = ?
+                        """,
+                        limited(draft.title(), 500),
+                        draft.publishedAt(),
+                        draft.contentHash(),
+                        draft.excerpt(),
+                        rawPayload,
+                        classification.status(),
+                        classification.category(),
+                        limited(classification.productName(), 255),
+                        classification.confidence(),
+                        existing.get("id")
+                );
+            }
         }
         return new PostRecord(
                 ((Number) existing.get("id")).longValue(),
                 stringValue(existing.get("public_id")),
                 false,
                 contentChanged,
-                longValue(existing.get("created_catalog_candidate_id"))
+                longValue(existing.get("created_catalog_candidate_id")),
+                !"RULE".equals(stringValue(existing.get("classification_source")))
         );
     }
 
@@ -1209,6 +1248,7 @@ public class ManufacturerReleaseIntakeService {
         jdbcTemplate.update("""
                 UPDATE manufacturer_posts
                 SET classification_status = ?,
+                    classification_source = 'AI',
                     detected_category = ?,
                     detected_product_name = ?,
                     confidence = ?,
@@ -1396,7 +1436,7 @@ public class ManufacturerReleaseIntakeService {
                     title,
                     parsePublishedAt(cleanText(tagValue(item, "pubDate"))),
                     limited(description, 1000),
-                    sha256(title + "|" + link + "|" + description)
+                    postContentHash(title, link, description)
             ));
         }
         return posts;
@@ -1420,7 +1460,7 @@ public class ManufacturerReleaseIntakeService {
                     title,
                     null,
                     null,
-                    sha256(title + "|" + url)
+                    postContentHash(title, url, null)
             ));
         }
         return posts;
@@ -1637,14 +1677,20 @@ public class ManufacturerReleaseIntakeService {
         return matcher.find() ? matcher.group(1) : null;
     }
 
-    private static OffsetDateTime parsePublishedAt(String value) {
+    static OffsetDateTime parsePublishedAt(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
         }
         try {
             return OffsetDateTime.parse(value);
         } catch (DateTimeParseException ignored) {
-            return null;
+            // RSS 표준 pubDate는 RFC-1123 형식(Tue, 01 Jul 2026 09:00:00 GMT)이다.
+            // ISO만 지원하면 실제 제조사 피드의 발행 시각이 전부 null이 된다(감사 A2).
+            try {
+                return OffsetDateTime.parse(value.trim(), java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME);
+            } catch (DateTimeParseException alsoIgnored) {
+                return null;
+            }
         }
     }
 
@@ -1660,6 +1706,13 @@ public class ManufacturerReleaseIntakeService {
         } catch (Exception exception) {
             throw new IllegalStateException("SHA-256 hash 생성 실패", exception);
         }
+    }
+
+    // 게시물 content_hash의 단일 공식. 예전에는 HTML draft가 sha256(title|url) 2요소,
+    // 관리자 updatePost가 sha256(title|url|excerpt) 3요소로 서로 달라 — 관리자가 게시물을 한 번
+    // 수정하면 해시가 영구 불일치해 매 재파싱마다 contentChanged로 오판됐다(감사 A1).
+    static String postContentHash(String title, String url, String excerpt) {
+        return sha256(title + "|" + url + "|" + (excerpt == null ? "" : excerpt));
     }
 
     private static String categoryScope(String value) {
@@ -1902,11 +1955,15 @@ public class ManufacturerReleaseIntakeService {
         return value.substring(0, maxLength);
     }
 
-    private static String cleanText(String value) {
+    static String cleanText(String value) {
         if (value == null) {
             return null;
         }
         return value
+                // CDATA는 태그 제거보다 먼저 언랩해야 한다. 실제 제조사/워드프레스 계열 RSS는
+                // title/description을 <![CDATA[...]]>로 감싸는데, <[^>]+> 정규식이 CDATA 블록
+                // 전체(내부 텍스트 포함)를 삼켜 제목이 빈 문자열이 되고 전 게시물이 미탐됐다(감사 A2).
+                .replaceAll("(?s)<!\\[CDATA\\[(.*?)]]>", "$1")
                 .replaceAll("<[^>]+>", "")
                 .replace("&quot;", "\"")
                 .replace("&amp;", "&")
@@ -1964,7 +2021,7 @@ public class ManufacturerReleaseIntakeService {
     private record PostDraft(String url, String title, OffsetDateTime publishedAt, String excerpt, String contentHash) {
     }
 
-    private record PostRecord(long id, String publicId, boolean newPost, boolean contentChanged, Long createdCatalogCandidateId) {
+    private record PostRecord(long id, String publicId, boolean newPost, boolean contentChanged, Long createdCatalogCandidateId, boolean reviewLocked) {
     }
 
     private record CategoryScore(String category, int score) {

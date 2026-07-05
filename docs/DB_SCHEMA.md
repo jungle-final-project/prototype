@@ -748,6 +748,7 @@ Index:
 | `excerpt` | `TEXT` | yes | - | 게시글 요약 |
 | `raw_payload` | `JSONB` | yes | - | 공식 게시글, 분류 결과, 네이버 후보 생성 결과 |
 | `classification_status` | `VARCHAR(30)` | no | - | `PENDING`, `PRODUCT_CANDIDATE`, `IGNORED`, `FAILED` |
+| `classification_source` | `TEXT` | no | - | 분류 출처 `RULE`, `AI`, `ADMIN`. RULE만 재스캔이 분류를 갱신하며, AI/ADMIN 확정 상태는 재스캔이 덮어쓰지 않는다 (V69) |
 | `detected_category` | `VARCHAR(50)` | yes | - | 감지 category |
 | `detected_product_name` | `VARCHAR(255)` | yes | - | 감지 제품명 |
 | `confidence` | `NUMERIC(5,4)` | yes | - | 0~1 신뢰도 |
