@@ -354,13 +354,13 @@ export function SelfQuotePage() {
           />
         ) : null}
 
-        {/* 본문: 체크리스트(품목 지도) + 보드(보조 그래프) + 우측 상세 패널 */}
+        {/* 본문: 체크리스트(품목 지도) + 보드(보조 그래프) + 우측 상세 패널.
+            세 열의 세로 길이는 보드에 맞춘다 — 체크리스트는 스트레치, 우측 패널은 내부 스크롤. */}
         <div className="grid gap-4 lg:grid-cols-[230px_minmax(0,1fr)_380px] lg:items-start">
           <QuoteChecklist
             draftItems={draftItems}
             selectedCategory={selectedCategory}
             nextCategory={nextCategory}
-            totalPrice={selectedTotal}
             onSelect={selectSlot}
           />
           <SlotBoard
@@ -389,6 +389,9 @@ export function SelfQuotePage() {
           )}
         </div>
 
+        {/* 멘토 피드백: 지금까지 고른 부품 한눈에 — 그리드 아래 비어 있던 띠를 전폭 견적 테이블로 채운다. */}
+        <QuoteItemsTable draftItems={draftItems} />
+
         {/* 하단 상태바 */}
         <SlotStatusBar
           quoteDraft={quoteDraft}
@@ -414,19 +417,18 @@ function QuoteChecklist({
   draftItems,
   selectedCategory,
   nextCategory,
-  totalPrice,
   onSelect
 }: {
   draftItems: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
   nextCategory: PartCategory | null;
-  totalPrice: number;
   onSelect: (category: PartCategory) => void;
 }) {
   const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
 
   return (
-    <aside data-testid="quote-checklist" className="panel h-fit p-4 lg:sticky lg:top-4">
+    // lg: 보드(구성 관계도) 높이에 맞춰 늘어난다 — 좌·중 열의 아래 끝이 나란해진다.
+    <aside data-testid="quote-checklist" className="panel h-fit p-4 lg:h-auto lg:self-stretch">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-black text-commerce-ink">견적 체크리스트</h2>
         <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
@@ -488,13 +490,46 @@ function QuoteChecklist({
           );
         })}
       </ol>
-      <div className="mt-3 flex items-center justify-between border-t border-commerce-line pt-3">
-        <span className="text-xs font-bold text-slate-500">총액</span>
-        <span data-testid="quote-checklist-total" className="text-base font-black text-commerce-sale">
-          {totalPrice.toLocaleString()}원
-        </span>
-      </div>
     </aside>
+  );
+}
+
+// 멘토 피드백: 지금까지 고른 부품을 엑셀 견적서처럼 — 그리드 아래 전폭 테이블 박스.
+// 합계는 하단 상태바(견적 합계)가 담당하므로 여기선 품목 행만 보여준다.
+// RAM/SSD처럼 한 슬롯에 여러 상품이면 상품별 행으로 푼다.
+function QuoteItemsTable({ draftItems }: { draftItems: QuoteDraftItem[] }) {
+  const rows = RECOMMENDED_SLOT_ORDER.flatMap((category) =>
+    draftItems.filter((item) => item.category === category).map((item) => ({ category, item }))
+  );
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <section data-testid="quote-items-table" className="panel p-4">
+      <h2 className="mb-2 text-sm font-black text-commerce-ink">담은 부품 {rows.length}개</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="border-b border-commerce-line text-left text-slate-400">
+              <th scope="col" className="w-24 py-1.5 pr-2 font-bold">부품</th>
+              <th scope="col" className="py-1.5 pr-2 font-bold">상품명</th>
+              <th scope="col" className="w-12 py-1.5 pr-2 text-right font-bold">수량</th>
+              <th scope="col" className="w-28 py-1.5 text-right font-bold">금액</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ category, item }) => (
+              <tr key={item.id} data-testid={`quote-items-row-${category}`} className="border-b border-slate-100">
+                <td className="py-1.5 pr-2 font-black text-slate-600">{PART_CATEGORY_LABELS[category] ?? category}</td>
+                <td className="max-w-0 truncate py-1.5 pr-2 text-slate-600" title={item.name}>{item.name}</td>
+                <td className="py-1.5 pr-2 text-right text-slate-600">{item.quantity}</td>
+                <td className="py-1.5 text-right font-black text-commerce-ink">{item.lineTotal.toLocaleString()}원</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
