@@ -93,7 +93,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.4"
+DEFAULT_AGENT_VERSION = "0.1.6"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -4432,23 +4432,6 @@ def show_log_viewer(
 
     header = tk.Frame(content, background=colors["app_bg"])
     header.pack(fill="x")
-    update_status_label = tk.Label(
-        header,
-        textvariable=update_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="e",
-    )
-    update_status_label.pack(side="right", padx=(8, 0), pady=(0, 8))
-    rounded_button(
-        header,
-        "업데이트 확인",
-        lambda: check_for_agent_update(),
-        "secondary",
-        width=116,
-        height=30,
-    ).pack(side="right", pady=(0, 8))
     range_badge = tk.Label(
         header,
         textvariable=range_status,
@@ -4481,10 +4464,18 @@ def show_log_viewer(
         status_title_row,
         "업데이트 확인",
         lambda: check_for_agent_update(),
-        "secondary",
-        width=116,
-        height=30,
+        "primary",
+        width=118,
+        height=32,
     ).pack(side="right", padx=(8, 0))
+    tk.Label(
+        status_title_row,
+        textvariable=update_status,
+        font=ui_font(FONT_SECONDARY_PX),
+        foreground=colors["muted"],
+        background=colors["app_bg"],
+        anchor="e",
+    ).pack(side="right", fill="x", expand=True)
     tk.Label(
         status_header,
         text="PCAgent가 시스템을 안전하게 보호하고 있습니다.",
