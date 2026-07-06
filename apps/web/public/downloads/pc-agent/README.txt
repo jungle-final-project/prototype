@@ -1,14 +1,17 @@
-BuildGraph PC Agent download
+PCAgent download
 
 This local demo build does not ship a signed installer or Windows Service yet.
 
-Double-click agent.exe:
+Web download gives you PCAgent.exe and pcagent-activation.json.
+Keep both files in the same folder, then double-click PCAgent.exe:
 
   Creates %LOCALAPPDATA%\BuildGraphAgent\agent-config.json when missing.
   Creates %LOCALAPPDATA%\BuildGraphAgent\logs.
   Registers a startup command in the current user's Startup folder.
   Starts demo metric collection in the background.
-  Shows a BuildGraph PC Agent tray icon.
+  Reads pcagent-activation.json once to register this device.
+  Deletes pcagent-activation.json after successful registration.
+  Shows a PCAgent tray icon.
 
 Tray menu:
 
@@ -39,7 +42,7 @@ The build creates:
 
 Run examples:
 
-  agent.exe
+  PCAgent.exe
   agent-cli.exe doctor --config agent-config.json
   agent-cli.exe collect --config agent-config.json --iterations 1
   agent-cli.exe upload --config agent-config.json --no-open

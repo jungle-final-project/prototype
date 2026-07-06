@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from '../../components/ui';
-import { ApiError } from '../../lib/api';
+import { API_BASE_URL, ApiError } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
@@ -284,8 +284,8 @@ export function SupportNewPage() {
     const draft = draftQuery.data;
     if (!draft) return;
     setDraftLogUploadId(draft.logUploadId);
-    setSymptomTitle(draft.title || 'PC Agent가 문제를 감지했습니다');
-    setSymptomDetail(draft.detailDescription || draft.symptom || 'PC Agent가 문제 이벤트를 감지했습니다.');
+    setSymptomTitle(draft.title || 'PCAgent가 문제를 감지했습니다');
+    setSymptomDetail(draft.detailDescription || draft.symptom || 'PCAgent가 문제 이벤트를 감지했습니다.');
     setSymptomType(draft.symptomType || 'REMOTE_AGENT');
     setSupportRequestKind(toSupportRequestKind(draft.supportRequestKind));
     setDetectedAt(datetimeLocalFromIso(draft.detectedAt) || datetimeLocalValue(new Date()));
@@ -295,7 +295,7 @@ export function SupportNewPage() {
     if (draftEndedAt) setWindowEndedAt(draftEndedAt);
     setConsentAccepted(true);
     setSelectedFile(null);
-    setLogPreview('PC Agent가 감지 시점 기준 선택 구간 로그를 gzip으로 이미 업로드했습니다.');
+    setLogPreview('PCAgent가 감지 시점 기준 선택 구간 로그를 gzip으로 이미 업로드했습니다.');
     setAsRagPreview(null);
     setAsRagPreviewState('idle');
     setAsRagPreviewError('');
@@ -376,11 +376,11 @@ export function SupportNewPage() {
       const activation = await issueAgentActivationToken();
       await downloadAgentExe(activation.activationToken);
       setAgentDownloadState('done');
-      setAgentDownloadMessage('사용자 등록 토큰이 포함된 PC Agent 실행 파일을 내려받았습니다. 실행하면 자동 등록됩니다.');
+      setAgentDownloadMessage('PCAgent.exe와 등록 파일을 내려받았습니다. 두 파일을 같은 폴더에 둔 채 PCAgent.exe를 실행하면 자동 등록됩니다.');
     } catch (cause) {
       setAgentDownloadState('error');
       setAgentDownloadMessage(cause instanceof ApiError && cause.status === 401
-        ? '로그인 후 PC Agent를 다운로드해 주세요.'
+        ? '로그인 후 PCAgent를 다운로드해 주세요.'
         : 'Agent 등록 토큰 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.');
     }
   }
@@ -408,7 +408,7 @@ export function SupportNewPage() {
     }
     if (!selectedFile && !draftLogUploadId) {
       setSubmitState('validation_error');
-      setError('선택한 문제 발생 전후 로그 구간의 PC Agent 로그 파일을 선택해 주세요. .jsonl 또는 .ndjson 파일을 사용할 수 있습니다.');
+      setError('선택한 문제 발생 전후 로그 구간의 PCAgent 로그 파일을 선택해 주세요. .jsonl 또는 .ndjson 파일을 사용할 수 있습니다.');
       return;
     }
     if (!consentAccepted) {
@@ -468,7 +468,7 @@ export function SupportNewPage() {
   return (
     <Screen>
       <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
+        <Panel title="AS 접수" subtitle="증상과 PCAgent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
             {draftQuery.isLoading ? <StateMessage type="info" title="Agent 초안 불러오는 중" body="감지된 문제와 선택 구간 로그 정보를 확인하고 있습니다." /> : null}
             {draftQuery.isError ? <StateMessage type="warn" title="Agent 초안 조회 실패" body="초안을 불러오지 못했습니다. 로그인 상태를 확인하거나 수동으로 AS를 접수해 주세요." /> : null}
@@ -581,7 +581,7 @@ export function SupportNewPage() {
                   onClick={downloadPcAgent}
                   disabled={agentDownloadState === 'issuing'}
                 >
-                  {agentDownloadState === 'issuing' ? '등록 토큰 발급 중...' : 'PC Agent 다운로드'}
+                  {agentDownloadState === 'issuing' ? '등록 토큰 발급 중...' : 'PCAgent 다운로드'}
                 </button>
                 <a
                   className="rounded border border-slate-300 px-3 py-2 text-xs font-bold"
@@ -600,8 +600,8 @@ export function SupportNewPage() {
               </div>
               <p className="mb-2 text-xs leading-5 text-slate-500">
                 {draftLogUploadId
-                  ? 'PC Agent가 선택한 구간의 로그를 이미 gzip으로 전송했습니다. 다른 로그로 교체할 때만 파일을 선택해 주세요.'
-                  : 'PC Agent는 더블클릭 시 트레이 아이콘으로 백그라운드 수집을 시작합니다. 선택한 구간의 로그만 gzip 또는 JSONL로 전송합니다.'}
+                  ? 'PCAgent가 선택한 구간의 로그를 이미 gzip으로 전송했습니다. 다른 로그로 교체할 때만 파일을 선택해 주세요.'
+                  : 'PCAgent는 더블클릭 시 트레이 아이콘으로 백그라운드 수집을 시작합니다. 선택한 구간의 로그만 gzip 또는 JSONL로 전송합니다.'}
               </p>
               {agentDownloadMessage ? (
                 <p className={`mb-2 text-xs font-semibold ${agentDownloadState === 'error' ? 'text-red-600' : 'text-emerald-700'}`}>
@@ -637,7 +637,7 @@ export function SupportNewPage() {
         <Panel title="접수 상태">
           {submitState === 'default' ? <StateMessage type="info" title="접수 준비" body="증상 유형, 발생 시각, 선택 구간 로그를 함께 제출하면 AS 접수가 시작됩니다." /> : null}
           {submitState === 'validation_error' ? <StateMessage type="warn" title="입력 확인 필요" body={error || '증상과 로그 파일 입력값을 확인해 주세요.'} /> : null}
-          {submitState === 'consent_required' ? <StateMessage type="warn" title="동의 필요" body="PC Agent 로그에는 사용 환경 정보가 포함될 수 있어 업로드 동의가 필요합니다." /> : null}
+          {submitState === 'consent_required' ? <StateMessage type="warn" title="동의 필요" body="PCAgent 로그에는 사용 환경 정보가 포함될 수 있어 업로드 동의가 필요합니다." /> : null}
           {submitState === 'uploading' ? <StateMessage type="info" title="접수 중" body="로그를 업로드한 뒤 AS 티켓을 생성하고 있습니다." /> : null}
           {submitState === 'upload_error' ? <StateMessage type="warn" title="로그 업로드 실패" body={error || '로그 파일과 백엔드 실행 상태를 확인해 주세요.'} /> : null}
           {submitState === 'ticket_error' ? <StateMessage type="warn" title="티켓 생성 실패" body={error || 'AS 티켓을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.'} /> : null}
@@ -1013,8 +1013,40 @@ async function downloadAgentExe(activationToken: string) {
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
-  downloadUrl(url, `BuildGraphAgent-${activationToken}.exe`);
+  downloadUrl(url, 'PCAgent.exe');
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadActivationConfig(activationToken);
+}
+
+function downloadActivationConfig(activationToken: string) {
+  const config = {
+    apiBaseUrl: resolveAgentApiBaseUrl(),
+    webBaseUrl: window.location.origin,
+    activationToken,
+    environment: import.meta.env.MODE ?? 'local'
+  };
+  const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  downloadUrl(url, 'pcagent-activation.json');
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function resolveAgentApiBaseUrl() {
+  const configured = API_BASE_URL.trim().replace(/\/$/, '');
+  if (/^https?:\/\//.test(configured)) {
+    return configured;
+  }
+  if (configured.startsWith('/')) {
+    return `${window.location.origin}${configured}`;
+  }
+  if (isLocalDevWebOrigin()) {
+    return `${window.location.protocol}//${window.location.hostname}:8080`;
+  }
+  return window.location.origin;
+}
+
+function isLocalDevWebOrigin() {
+  return ['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port === '5173';
 }
 
 function downloadUrl(url: string, filename: string) {

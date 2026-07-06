@@ -1484,7 +1484,8 @@ class AgentGoal1112Test(unittest.TestCase):
 
         self.assertIn("다시 다운로드", preview_message)
         self.assertIn("등록 토큰", preview_message)
-        self.assertIn("BuildGraphAgent-*.exe", compact_message)
+        self.assertIn("PCAgent.exe", compact_message)
+        self.assertIn("pcagent-activation.json", compact_message)
         self.assertNotIn("secret", preview_message.lower())
         self.assertNotIn("c:\\users", preview_message.lower())
         self.assertNotIn("invalid", preview_message.lower())

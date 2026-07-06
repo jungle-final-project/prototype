@@ -187,6 +187,18 @@ class AgentConfigTest(unittest.TestCase):
     def test_import_activation_config_reads_token_from_executable_name(self) -> None:
         path = self.write_config(self.valid_config(activationToken="old-token", agentToken="old-agent-token"))
 
+        with patch("buildgraph_agent.sys.executable", r"C:\Users\me\Downloads\PCAgent-download-token-1234567890.exe"):
+            with patch.object(agent.sys, "frozen", True, create=True):
+                changed = agent.import_activation_config(path)
+
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(changed)
+        self.assertEqual(saved["activationToken"], "download-token-1234567890")
+        self.assertIsNone(saved["agentToken"])
+
+    def test_import_activation_config_keeps_legacy_download_filename_compatible(self) -> None:
+        path = self.write_config(self.valid_config(activationToken="old-token", agentToken="old-agent-token"))
+
         with patch("buildgraph_agent.sys.executable", r"C:\Users\me\Downloads\BuildGraphAgent-download-token-1234567890.exe"):
             with patch.object(agent.sys, "frozen", True, create=True):
                 changed = agent.import_activation_config(path)

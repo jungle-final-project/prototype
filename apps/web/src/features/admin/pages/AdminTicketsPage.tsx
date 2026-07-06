@@ -28,7 +28,7 @@ export function AdminTicketsPage() {
   return (
     <AdminShell title="AS 티켓 관리">
       <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
-        <Panel title="처리할 AS 티켓" subtitle="사용자 증상과 PC Agent 로그가 접수된 티켓을 확인합니다.">
+        <Panel title="처리할 AS 티켓" subtitle="사용자 증상과 PCAgent 로그가 접수된 티켓을 확인합니다.">
           {isLoading ? <StateMessage type="info" title="AS 티켓 로딩 중" body="관리자 AS 티켓 목록을 불러오고 있습니다." /> : null}
           {isError ? <StateMessage type="warn" title="AS 티켓 조회 실패" body="AS 티켓 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." /> : null}
           {!isLoading && !isError && ticketRows.length === 0 ? (

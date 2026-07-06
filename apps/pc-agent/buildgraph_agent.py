@@ -53,7 +53,8 @@ KST = timezone(timedelta(hours=9))
 DEFAULT_CONFIG_PATH = Path("agent-config.json")
 DEFAULT_LOG_DIR = Path("out/logs")
 DEFAULT_LOG_FILE = "agent-metrics.jsonl"
-ACTIVATION_CONFIG_FILE = "buildgraph-agent-activation.json"
+ACTIVATION_CONFIG_FILE = "pcagent-activation.json"
+LEGACY_ACTIVATION_CONFIG_FILES = ("buildgraph-agent-activation.json",)
 DEFAULT_RANGE_MINUTES = 30
 DEFAULT_SCHEMA_VERSION = 1
 REMOTE_SYMPTOM_TYPES = {
@@ -78,7 +79,12 @@ AS_DRAFT_PATH = "/api/agent/as-drafts"
 AS_RAG_PREVIEW_PATH = "/api/agent/log-uploads/as-rag-preview"
 REGISTERED_STATUS = "REGISTERED"
 UNREGISTERED_STATUS = "UNREGISTERED"
-APP_NAME = "BuildGraphAgent"
+DISPLAY_APP_NAME = "PCAgent"
+DATA_APP_NAME = "BuildGraphAgent"
+LEGACY_DISPLAY_APP_NAMES = ("BuildGraphAgent", "PC Agent", "BuildGraph PC Agent")
+DOWNLOAD_FILE_PREFIX = DISPLAY_APP_NAME
+LEGACY_DOWNLOAD_FILE_PREFIXES = ("BuildGraphAgent",)
+APP_NAME = DISPLAY_APP_NAME
 APP_ASSET_DIR = "assets"
 AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
@@ -522,8 +528,8 @@ def load_config(path: Path) -> AgentConfig:
 def app_data_dir() -> Path:
     root = os.environ.get("LOCALAPPDATA")
     if root:
-        return Path(root) / APP_NAME
-    return Path.home() / f".{APP_NAME.lower()}"
+        return Path(root) / DATA_APP_NAME
+    return Path.home() / f".{DATA_APP_NAME.lower()}"
 
 
 def runtime_asset_path(relative_path: Path) -> Path:
@@ -654,19 +660,27 @@ def downloads_dir() -> Path:
 
 
 def activation_config_candidates() -> list[Path]:
-    candidates: list[Path] = [
-        Path.cwd() / ACTIVATION_CONFIG_FILE,
-        downloads_dir() / ACTIVATION_CONFIG_FILE,
-        app_data_dir() / ACTIVATION_CONFIG_FILE,
-    ]
+    config_names = (ACTIVATION_CONFIG_FILE, *LEGACY_ACTIVATION_CONFIG_FILES)
+    candidates: list[Path] = []
+    for directory in (Path.cwd(), downloads_dir(), app_data_dir()):
+        candidates.extend(directory / name for name in config_names)
     for directory in (Path.cwd(), downloads_dir(), app_data_dir()):
         if directory.exists():
+            candidates.extend(directory.glob("pcagent-activation*.json"))
             candidates.extend(directory.glob("buildgraph-agent-activation*.json"))
     unique: dict[Path, Path] = {}
     for path in candidates:
         if path.exists():
             unique[path.resolve()] = path
     return list(unique.values())
+
+
+def cleanup_activation_config_files() -> None:
+    for path in activation_config_candidates():
+        try:
+            path.unlink()
+        except Exception:
+            continue
 
 
 def latest_activation_config() -> Path | None:
@@ -678,7 +692,8 @@ def latest_activation_config() -> Path | None:
 
 def activation_token_from_executable_name() -> str | None:
     name = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(sys.argv[0]).name
-    match = re.search(r"BuildGraphAgent-([A-Za-z0-9_-]{20,})", name)
+    prefixes = "|".join(re.escape(prefix) for prefix in (DOWNLOAD_FILE_PREFIX, *LEGACY_DOWNLOAD_FILE_PREFIXES))
+    match = re.search(rf"(?:{prefixes})-([A-Za-z0-9_-]{{20,}})", name)
     return match.group(1) if match else None
 
 
@@ -2804,7 +2819,7 @@ def event_panel_model(signals: Sequence[dict[str, Any]]) -> dict[str, Any] | Non
 def event_panel_symptom(signals: Sequence[dict[str, Any]]) -> str:
     summaries = [event_panel_signal_summary(signal) for signal in event_panel_signals(signals)]
     if not summaries:
-        return "PC Agent가 확인이 필요한 이벤트를 감지했습니다."
+        return "PCAgent가 확인이 필요한 이벤트를 감지했습니다."
     return " / ".join(summaries[:EVENT_PANEL_SIGNAL_LIMIT])
 
 
@@ -2819,13 +2834,13 @@ AGENT_REGISTRATION_ERROR_MARKERS = (
 )
 
 AGENT_REGISTRATION_EVENT_HELP = (
-    "Agent 등록이 필요합니다. 웹 지원 페이지에서 PC Agent를 다시 다운로드해 실행해 주세요."
+    "Agent 등록이 필요합니다. 웹 지원 페이지에서 PCAgent를 다시 다운로드해 실행해 주세요."
 )
 AGENT_REGISTRATION_PREVIEW_HELP = (
-    "Agent 등록이 필요합니다. 웹 지원 페이지에서 등록 토큰이 포함된 PC Agent를 다시 다운로드해 실행해 주세요."
+    "Agent 등록이 필요합니다. 웹 지원 페이지에서 등록 토큰이 포함된 PCAgent를 다시 다운로드해 실행해 주세요."
 )
 AGENT_REGISTRATION_COMPACT_HELP = (
-    "진단 실패: 웹에서 PC Agent를 다시 다운로드해 BuildGraphAgent-*.exe를 실행해 주세요."
+    "진단 실패: 웹에서 PCAgent.exe와 pcagent-activation.json을 다시 받아 실행해 주세요."
 )
 
 
@@ -2853,7 +2868,7 @@ def as_rag_preview_failure_message(exception: Exception) -> str:
     if "consent" in text or "consentaccepted" in text:
         return "서버 업로드 동의가 필요해 AI 추천을 받을 수 없습니다."
     if "no log rows" in text or "log file does not exist" in text:
-        return "분석할 로그가 아직 없습니다. PC Agent가 로그를 수집한 뒤 다시 시도해 주세요."
+        return "분석할 로그가 아직 없습니다. PCAgent가 로그를 수집한 뒤 다시 시도해 주세요."
     if (
         "timed out" in text
         or "timeout" in text
@@ -3097,7 +3112,7 @@ def diagnosis_detail_model(config: AgentConfig, path: Path) -> dict[str, Any]:
         "lastDiagnosticTime": format_log_timestamp(latest_row) if latest_row else "-",
         "summary": summary,
         "emptyTitle": "아직 진단 결과가 없습니다.",
-        "emptyMessage": "PC Agent가 로그를 수집하면 상세 결과를 확인할 수 있습니다.",
+        "emptyMessage": "PCAgent가 로그를 수집하면 상세 결과를 확인할 수 있습니다.",
         "metrics": [
             diagnosis_metric_card(metric_row, "CPU", ("cpuUsage", "cpuUsagePercent"), "현재 사용률", threshold),
             diagnosis_metric_card(
@@ -3335,7 +3350,7 @@ function Get-FilteredLogText {{
 }}
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "PC Agent"
+$form.Text = "PCAgent"
 $form.Size = New-Object System.Drawing.Size(1000, 720)
 $form.MinimumSize = New-Object System.Drawing.Size(1000, 720)
 $form.MaximumSize = New-Object System.Drawing.Size(1000, 720)
@@ -3351,7 +3366,7 @@ $sidebar.BackColor = $sidebarBg
 $form.Controls.Add($sidebar)
 
 $brand = New-Object System.Windows.Forms.Label
-$brand.Text = "PC Agent"
+$brand.Text = "PCAgent"
 $brand.Font = New-UIFont 14
 $brand.ForeColor = $textColor
 $brand.BackColor = $sidebarBg
@@ -3675,7 +3690,7 @@ def show_log_viewer(
         return config
 
     root = tk.Tk()
-    root.title("PC Agent")
+    root.title(DISPLAY_APP_NAME)
     apply_agent_window_icon(root)
     root.geometry("1000x740")
     root.minsize(1000, 740)
@@ -4026,7 +4041,7 @@ def show_log_viewer(
     ).pack(fill="x")
     tk.Label(
         status_header,
-        text="PC Agent가 시스템을 안전하게 보호하고 있습니다.",
+        text="PCAgent가 시스템을 안전하게 보호하고 있습니다.",
         font=ui_font(FONT_SECONDARY_PX),
         foreground=colors["muted"],
         background=colors["app_bg"],
@@ -4820,9 +4835,9 @@ def show_log_viewer(
     symptom_title = tk.StringVar(value="")
     symptom_type = tk.StringVar(value="REMOTE_DRIVER_OS")
     symptom_time = tk.StringVar(value="")
-    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PC Agent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
+    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
     support_mode = tk.StringVar(value="우선 진단만 받기")
-    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PC Agent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
+    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
     support_status = tk.StringVar(value="")
     incident_window_value = tk.StringVar(value="전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
     support_signal_value: dict[str, Any] | None = None
@@ -5126,7 +5141,7 @@ def show_log_viewer(
         symptom_time.set("")
         symptom_detail.delete("1.0", "end")
         support_mode.set(support_mode_label_for_service("DIAGNOSIS_ONLY"))
-        rag_preview_status.set("AI 추천 확인을 누르면 PC Agent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
+        rag_preview_status.set("AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
         incident_window_value.set("문제 발생 전후 로그 범위는 증상 유형과 발생 시각 기준으로 계산합니다.")
 
     def fill_support_from_signal(signal: dict[str, Any] | None) -> None:
@@ -5145,7 +5160,7 @@ def show_log_viewer(
         symptom_title.set(event_panel_signal_summary(signal))
         if not support_detail_text():
             set_support_detail(
-                "PC Agent가 확인이 필요한 이벤트를 감지했습니다.\n"
+                "PCAgent가 확인이 필요한 이벤트를 감지했습니다.\n"
                 f"- {event_panel_signal_summary(signal)}\n"
                 "로그 전송 후 담당자가 내용을 검토합니다."
             )
@@ -5169,7 +5184,7 @@ def show_log_viewer(
             gzip_path = current_config.log_dir.parent / "uploads" / f"{window.incident_id}.jsonl.gz"
             gzip_window(current_path, gzip_path, window)
             symptom_parts = [
-                symptom_title.get().strip() or "PC Agent AS 접수",
+                symptom_title.get().strip() or "PCAgent AS 접수",
                 support_mode.get(),
                 support_detail_text(),
             ]
@@ -5267,7 +5282,7 @@ def show_log_viewer(
         fill_support_from_signal(signal if isinstance(signal, dict) else None)
         if signal is None:
             symptom_title.set("PC 상태 진단")
-            set_support_detail("PC Agent가 최근 30분 로그를 기준으로 상태를 진단합니다.")
+            set_support_detail("PCAgent가 최근 30분 로그를 기준으로 상태를 진단합니다.")
 
     def run_home_diagnosis() -> None:
         prepare_home_support_context()
@@ -5705,7 +5720,7 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
 
     tk.Label(
         body,
-        text="PC Agent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다.",
+        text="PCAgent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다.",
         font=ui_font(FONT_BODY_PX),
         foreground=colors["deep"],
         background=colors["card"],
@@ -5858,15 +5873,15 @@ def issue_macro(row: dict) -> IssueDraftMacro:
         return IssueDraftMacro(
             symptom_type="REMOTE_DRIVER_OS",
             title="디스플레이 드라이버 경고가 감지되었습니다",
-            detail="PC Agent가 디스플레이 드라이버 관련 경고 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.",
-            symptom=f"PC Agent 자동 감지: {message or 'Display driver warning observed.'}",
+            detail="PCAgent가 디스플레이 드라이버 관련 경고 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.",
+            symptom=f"PCAgent 자동 감지: {message or 'Display driver warning observed.'}",
             support_request_kind="REMOTE_REQUESTED",
         )
     return IssueDraftMacro(
         symptom_type="REMOTE_AGENT",
-        title="PC Agent가 문제를 감지했습니다",
-        detail="PC Agent가 문제 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.",
-        symptom=f"PC Agent 자동 감지: {message or event_type or 'Unknown issue'}",
+        title="PCAgent가 문제를 감지했습니다",
+        detail="PCAgent가 문제 이벤트를 감지했습니다. 선택된 구간의 로그를 함께 전송합니다.",
+        symptom=f"PCAgent 자동 감지: {message or event_type or 'Unknown issue'}",
         support_request_kind="DIAGNOSIS_ONLY",
     )
 
@@ -5919,7 +5934,7 @@ def show_issue_notification(config_path: Path, row: dict) -> None:
     message = str(row.get("message") or row.get("eventType") or "알 수 없는 문제가 감지되었습니다.").strip()
     if not message:
         message = "알 수 없는 문제가 감지되었습니다."
-    title = "BuildGraph PC Agent"
+    title = DISPLAY_APP_NAME
     body = f"컴퓨터에 문제가 감지되었습니다: {message}"
     support_url_text = support_new_url(config)
     issue_file = app_data_dir() / "pending-issues" / f"issue-{uuid.uuid4()}.json"
@@ -6070,7 +6085,7 @@ $windowLabel.BackColor = $softBg
 $infoPanel.Controls.Add($windowLabel)
 
 $bodyText = New-Object System.Windows.Forms.Label
-$bodyText.Text = "PC Agent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다."
+$bodyText.Text = "PCAgent가 관련 경고 이벤트를 감지했습니다. 필요하면 자동으로 정리된 제목과 로그 구간으로 AS 접수를 진행할 수 있습니다."
 $bodyText.Location = New-Object System.Drawing.Point(18, 196)
 $bodyText.Size = New-Object System.Drawing.Size(310, 58)
 $bodyText.ForeColor = $textColor
@@ -6150,7 +6165,7 @@ $send.Add_Click({{
     $script:submitProcess.BeginOutputReadLine()
     $script:submitProcess.BeginErrorReadLine()
   }} catch {{
-    [System.Windows.Forms.MessageBox]::Show("AS 접수 실행에 실패했습니다.`r`n`r`n" + $_.Exception.Message, "BuildGraph PC Agent") | Out-Null
+    [System.Windows.Forms.MessageBox]::Show("AS 접수 실행에 실패했습니다.`r`n`r`n" + $_.Exception.Message, "PCAgent") | Out-Null
     $send.Enabled = $true
     $send.Text = "접수하기"
     $ignore.Enabled = $true
@@ -6166,10 +6181,10 @@ $send.Add_Click({{
     $stdout = $script:submitStdout.ToString().Trim()
     $stderr = $script:submitStderr.ToString().Trim()
     if ($script:submitProcess.ExitCode -eq 0) {{
-      [System.Windows.Forms.MessageBox]::Show("AS 접수가 완료되었습니다.`r`n`r`n" + $stdout, "BuildGraph PC Agent") | Out-Null
+      [System.Windows.Forms.MessageBox]::Show("AS 접수가 완료되었습니다.`r`n`r`n" + $stdout, "PCAgent") | Out-Null
       $form.Close()
     }} else {{
-      [System.Windows.Forms.MessageBox]::Show("AS 접수에 실패했습니다.`r`n`r`n" + $stderr, "BuildGraph PC Agent") | Out-Null
+      [System.Windows.Forms.MessageBox]::Show("AS 접수에 실패했습니다.`r`n`r`n" + $stderr, "PCAgent") | Out-Null
       $send.Enabled = $true
       $send.Text = "접수하기"
       $ignore.Enabled = $true
@@ -6253,8 +6268,10 @@ def run_background(
     try:
         path = ensure_default_config(config_path or default_background_config_path())
         try:
-            import_activation_config(path)
+            imported_activation = import_activation_config(path)
             auto_register_agent(path)
+            if imported_activation:
+                cleanup_activation_config_files()
         except Exception as exception:
             error_log = app_data_dir() / "agent-error.log"
             error_log.parent.mkdir(parents=True, exist_ok=True)
@@ -6279,7 +6296,7 @@ def run_background(
             icon = pystray.Icon(
                 APP_NAME,
                 create_tray_image(),
-                "PC Agent",
+                DISPLAY_APP_NAME,
                 menu=pystray.Menu(
                     pystray.MenuItem("Open log viewer", lambda icon, item: show_log_viewer(path), default=True),
                     pystray.MenuItem("Open log folder", lambda icon, item: open_log_folder(path)),
@@ -6440,7 +6457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not argv:
         return run_background(open_viewer_when_running=True)
 
-    parser = argparse.ArgumentParser(description="PC Agent prototype CLI")
+    parser = argparse.ArgumentParser(description="PCAgent prototype CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sample = sub.add_parser("sample", help="generate sample JSONL hardware metrics")
