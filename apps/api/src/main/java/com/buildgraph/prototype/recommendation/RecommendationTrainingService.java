@@ -409,12 +409,17 @@ public class RecommendationTrainingService {
      * @return 경고 문구(없으면 null)
      */
     private String evaluatePromotionVerdict(Map<String, Object> comparison) {
+        return evaluatePromotionVerdict(comparison, currentActiveModelVersion());
+    }
+
+    // DB 조회를 분리한 순수 판정 로직(단위 테스트 대상). activeModelVersion은 현재 ACTIVE 챔피언의 버전.
+    static String evaluatePromotionVerdict(Map<String, Object> comparison, String activeModelVersion) {
         String verdict = text(comparison.get("verdict"));
         if (verdict == null || "CHALLENGER_BETTER".equals(verdict)) {
             return null;
         }
         if ("CHAMPION_BETTER".equals(verdict)) {
-            boolean sameChampion = Objects.equals(text(comparison.get("champion")), currentActiveModelVersion());
+            boolean sameChampion = Objects.equals(text(comparison.get("champion")), activeModelVersion);
             boolean fairHoldout = comparison.containsKey("holdoutOverlapWithChampion")
                     && doubleValue(comparison.get("holdoutOverlapWithChampion")) == 0.0;
             if (sameChampion && fairHoldout) {
@@ -983,20 +988,22 @@ public class RecommendationTrainingService {
      */
     private void assertServingSchemaCompatible(Map<String, Object> model) {
         List<String> modelFeatures = featureNames(json(model.get("feature_schema")).get("features"));
-        if (modelFeatures.isEmpty()) {
-            return;
-        }
         List<String> scorerFeatures;
         try {
             scorerFeatures = featureNames(json(scoringClient.health().get("featureSchema")).get("features"));
         } catch (RuntimeException probeFailed) {
             return;
         }
-        if (scorerFeatures.isEmpty() || scorerFeatures.equals(modelFeatures)) {
-            return;
+        if (servingSchemaMismatch(modelFeatures, scorerFeatures)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "이 모델은 현재 서빙 피처 스키마와 다르게 훈련되었습니다(학습-서빙 스큐). 최신 워커로 재훈련 후 활성화하세요.");
         }
-        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "이 모델은 현재 서빙 피처 스키마와 다르게 훈련되었습니다(학습-서빙 스큐). 최신 워커로 재훈련 후 활성화하세요.");
+    }
+
+    // 순수 스큐 판정(단위 테스트 대상). 양쪽 스키마를 모두 확정할 수 있고 서로 다를 때만 true.
+    // 어느 한쪽이 비면(구모델 스키마 부재 등) 판정 불능으로 보고 차단하지 않는다.
+    static boolean servingSchemaMismatch(List<String> modelFeatures, List<String> scorerFeatures) {
+        return !modelFeatures.isEmpty() && !scorerFeatures.isEmpty() && !scorerFeatures.equals(modelFeatures);
     }
 
     private static List<String> featureNames(Object value) {

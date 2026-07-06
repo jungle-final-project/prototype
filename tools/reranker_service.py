@@ -587,28 +587,35 @@ def build_champion_comparison(
         comparison["verdictReason"] = skip_reason
         return comparison
 
-    y_keep = [y_holdout[i] for i in keep]
-    challenger_keep = [challenger_predictions[i] for i in keep]
-    champion_keep = [predict_fn(holdout_rows[i].get("features_snapshot") or {}) for i in keep]
-    positives = sum(1 for value in y_keep if value > 0)
+    # champion 예측(predict-time)·지표 계산도 방어한다. champion 아티팩트가 로드는 됐으나 xgboost 버전
+    # 스큐/부분 손상으로 predict에서 던지는 경우, 정상 학습된 challenger를 버리지 않고 verdict를
+    # INCONCLUSIVE로 강등한다(설계 2b/2c: 비교 실패는 승급 허용 대상, 학습은 계속).
+    try:
+        y_keep = [y_holdout[i] for i in keep]
+        challenger_keep = [challenger_predictions[i] for i in keep]
+        champion_keep = [predict_fn(holdout_rows[i].get("features_snapshot") or {}) for i in keep]
+        positives = sum(1 for value in y_keep if value > 0)
 
-    challenger_spearman = spearman_correlation(challenger_keep, y_keep)
-    champion_spearman = spearman_correlation(champion_keep, y_keep)
-    both_defined = challenger_spearman is not None and champion_spearman is not None
-    ci = paired_spearman_diff_ci(challenger_keep, champion_keep, y_keep) if both_defined else None
-    challenger_ndcg = ndcg_at_k(challenger_keep, y_keep, 4)
-    verdict, reason = decide_verdict(challenger_spearman, champion_spearman, ci, positives, challenger_ndcg)
+        challenger_spearman = spearman_correlation(challenger_keep, y_keep)
+        champion_spearman = spearman_correlation(champion_keep, y_keep)
+        both_defined = challenger_spearman is not None and champion_spearman is not None
+        ci = paired_spearman_diff_ci(challenger_keep, champion_keep, y_keep) if both_defined else None
+        challenger_ndcg = ndcg_at_k(challenger_keep, y_keep, 4)
+        verdict, reason = decide_verdict(challenger_spearman, champion_spearman, ci, positives, challenger_ndcg)
 
-    comparison.update({
-        "holdoutPositives": positives,
-        "challengerSpearman": challenger_spearman,
-        "championSpearman": champion_spearman,
-        "spearmanCi95": list(ci) if ci else None,
-        "challengerNdcgAt4": challenger_ndcg,
-        "championNdcgAt4": ndcg_at_k(champion_keep, y_keep, 4),
-        "verdict": verdict,
-        "verdictReason": reason,
-    })
+        comparison.update({
+            "holdoutPositives": positives,
+            "challengerSpearman": challenger_spearman,
+            "championSpearman": champion_spearman,
+            "spearmanCi95": list(ci) if ci else None,
+            "challengerNdcgAt4": challenger_ndcg,
+            "championNdcgAt4": ndcg_at_k(champion_keep, y_keep, 4),
+            "verdict": verdict,
+            "verdictReason": reason,
+        })
+    except Exception as exc:
+        comparison["verdict"] = "INCONCLUSIVE"
+        comparison["verdictReason"] = f"comparisonFailed:{exc}"
     return comparison
 
 
@@ -633,9 +640,10 @@ def train_model(job_id: int, dataset_id: int, rows: list[dict[str, Any]], worker
 
     # M1 2a: early stopping 검증셋은 train 내부의 마지막 ~15%로 분리한다. holdout을 early stopping에
     # 소비하면 challenger가 그 위에서 iteration을 '선택'해 champion 비교가 부풀려지므로(모델 선택과
-    # 평가의 분리), holdout은 순수 평가/비교 전용으로 남긴다.
-    if len(x_train) >= 2:
-        earlyval_size = max(1, len(x_train) // 7)
+    # 평가의 분리), holdout은 순수 평가/비교 전용으로 남긴다. train이 너무 작아(< 10) fit 세트가 붕괴하면
+    # early stopping 없이 x_train 전체로 학습한다(검증셋 1행짜리 무의미 학습 방지).
+    if len(x_train) >= 10:
+        earlyval_size = max(2, len(x_train) // 7)
         x_fit, y_fit = x_train[:-earlyval_size], y_train[:-earlyval_size]
         x_earlyval, y_earlyval = x_train[-earlyval_size:], y_train[-earlyval_size:]
         model = XGBRegressor(
