@@ -1,0 +1,454 @@
+package com.buildgraph.prototype.ticket;
+
+import com.buildgraph.prototype.common.DbValueMapper;
+import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.user.CurrentUserService;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class SupportChatService {
+    private static final int POLLING_INTERVAL_MS = 5000;
+    private static final int MAX_MESSAGE_LENGTH = 2000;
+    private static final int ADMIN_LIST_LIMIT = 100;
+    private static final int MESSAGE_PAGE_LIMIT = 100;
+    private static final Set<String> TERMINAL_TICKET_STATUSES = Set.of("CLOSED", "CANCELLED");
+    static final String SYSTEM_OPEN_MESSAGE = "상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.";
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public SupportChatService(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    public Map<String, Object> current(CurrentUserService.CurrentUser user, String asTicketId) {
+        String ticketId = stringOrNull(asTicketId);
+        if (ticketId != null) {
+            TicketRef ticket = requireUserTicket(ticketId, user);
+            RoomRef room = ensureRoom(ticket, user);
+            return detail(room.publicId(), user, false);
+        }
+        return findLatestUserRoom(user)
+                .map(room -> detail(room.publicId(), user, false))
+                .orElseGet(this::empty);
+    }
+
+    public Map<String, Object> detail(String roomId, CurrentUserService.CurrentUser user) {
+        return detail(roomId, user, true);
+    }
+
+    public Map<String, Object> adminList() {
+        List<Map<String, Object>> items = jdbcTemplate.queryForList(roomSelect() + """
+                        WHERE r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                          AND r.status = 'ACTIVE'
+                          AND t.status NOT IN ('CLOSED', 'CANCELLED')
+                        ORDER BY COALESCE(r.last_message_at, r.updated_at, r.created_at) DESC, r.id DESC
+                        LIMIT ?
+                        """, ADMIN_LIST_LIMIT)
+                .stream()
+                .map(row -> contactMap(roomRow(row)))
+                .toList();
+        return MockData.map("items", items, "pollingIntervalMs", POLLING_INTERVAL_MS);
+    }
+
+    public Map<String, Object> adminDetail(String roomId, CurrentUserService.CurrentUser admin) {
+        requireUuid(roomId);
+        RoomRow room = roomForAdmin(roomId);
+        jdbcTemplate.update("""
+                UPDATE support_chat_rooms
+                SET admin_unread_count = 0,
+                    updated_at = COALESCE(updated_at, now())
+                WHERE id = ?
+                """, room.internalId());
+        return response(roomForAdmin(roomId), messages(room.internalId()));
+    }
+
+    @Transactional
+    public Map<String, Object> postUserMessage(String roomId, Map<String, Object> request, CurrentUserService.CurrentUser user) {
+        String content = requireMessage(request);
+        RoomRow room = roomForUser(roomId, user);
+        requireMessageAllowed(room);
+        insertMessage(room.internalId(), "USER", content, user.internalId());
+        updateAfterMessage(room.internalId(), content, "USER");
+        return detail(roomId, user, false);
+    }
+
+    @Transactional
+    public Map<String, Object> postAdminMessage(String roomId, Map<String, Object> request, CurrentUserService.CurrentUser admin) {
+        String content = requireMessage(request);
+        RoomRow room = roomForAdmin(roomId);
+        requireMessageAllowed(room);
+        insertMessage(room.internalId(), "ADMIN", content, admin.internalId());
+        updateAfterMessage(room.internalId(), content, "ADMIN");
+        jdbcTemplate.update("""
+                UPDATE as_tickets
+                SET assigned_admin_id = COALESCE(assigned_admin_id, ?),
+                    updated_at = now()
+                WHERE id = ?
+                """, admin.internalId(), room.ticketInternalId());
+        return adminDetail(roomId, admin);
+    }
+
+    boolean userCanAccess(String roomId, CurrentUserService.CurrentUser user) {
+        try {
+            roomForUser(roomId, user);
+            return true;
+        } catch (ResponseStatusException error) {
+            return false;
+        }
+    }
+
+    boolean adminCanAccess(String roomId) {
+        try {
+            roomForAdmin(roomId);
+            return true;
+        } catch (ResponseStatusException error) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> detail(String roomId, CurrentUserService.CurrentUser user, boolean markRead) {
+        requireUuid(roomId);
+        RoomRow room = roomForUser(roomId, user);
+        if (markRead) {
+            jdbcTemplate.update("""
+                    UPDATE support_chat_rooms
+                    SET user_unread_count = 0,
+                        updated_at = COALESCE(updated_at, now())
+                    WHERE id = ?
+                    """, room.internalId());
+            room = roomForUser(roomId, user);
+        }
+        return response(room, messages(room.internalId()));
+    }
+
+    private java.util.Optional<RoomRef> findLatestUserRoom(CurrentUserService.CurrentUser user) {
+        return jdbcTemplate.queryForList("""
+                        SELECT r.public_id::text AS id
+                        FROM support_chat_rooms r
+                        JOIN as_tickets t ON t.id = r.as_ticket_id
+                        WHERE r.user_id = ?
+                          AND r.status = 'ACTIVE'
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                        ORDER BY COALESCE(r.last_message_at, r.updated_at, r.created_at) DESC, r.id DESC
+                        LIMIT 1
+                        """, user.internalId())
+                .stream()
+                .findFirst()
+                .map(row -> new RoomRef(DbValueMapper.string(row, "id")));
+    }
+
+    private TicketRef requireUserTicket(String ticketId, CurrentUserService.CurrentUser user) {
+        requireUuid(ticketId);
+        return jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               symptom,
+                               status
+                        FROM as_tickets
+                        WHERE public_id = ?::uuid
+                          AND user_id = ?
+                          AND deleted_at IS NULL
+                        """, ticketId, user.internalId())
+                .stream()
+                .findFirst()
+                .map(row -> new TicketRef(
+                        longValue(row, "internal_id"),
+                        DbValueMapper.string(row, "id"),
+                        DbValueMapper.string(row, "symptom"),
+                        DbValueMapper.string(row, "status")
+                ))
+                .orElseThrow(() -> notFound("AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private RoomRef ensureRoom(TicketRef ticket, CurrentUserService.CurrentUser user) {
+        return jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id
+                        FROM support_chat_rooms
+                        WHERE user_id = ?
+                          AND as_ticket_id = ?
+                          AND status = 'ACTIVE'
+                          AND deleted_at IS NULL
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """, user.internalId(), ticket.internalId())
+                .stream()
+                .findFirst()
+                .map(row -> new RoomRef(DbValueMapper.string(row, "id")))
+                .orElseGet(() -> createRoom(user.internalId(), ticket.internalId()));
+    }
+
+    private RoomRef createRoom(Long userInternalId, Long ticketInternalId) {
+        return new RoomRef(SupportChatRoomCreator.ensureRoom(jdbcTemplate, userInternalId, ticketInternalId).publicId());
+    }
+
+    private RoomRow roomForUser(String roomId, CurrentUserService.CurrentUser user) {
+        requireUuid(roomId);
+        return jdbcTemplate.queryForList(roomSelect() + """
+                        WHERE r.public_id = ?::uuid
+                          AND r.user_id = ?
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                        """, roomId, user.internalId())
+                .stream()
+                .findFirst()
+                .map(row -> roomRow(row))
+                .orElseThrow(() -> notFound("상담방을 찾을 수 없습니다."));
+    }
+
+    private RoomRow roomForAdmin(String roomId) {
+        requireUuid(roomId);
+        return jdbcTemplate.queryForList(roomSelect() + """
+                        WHERE r.public_id = ?::uuid
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                        """, roomId)
+                .stream()
+                .findFirst()
+                .map(row -> roomRow(row))
+                .orElseThrow(() -> notFound("상담방을 찾을 수 없습니다."));
+    }
+
+    private String roomSelect() {
+        return """
+                SELECT r.id AS internal_id,
+                       r.public_id::text AS id,
+                       r.status,
+                       r.title,
+                       r.last_message_preview,
+                       r.last_message_at,
+                       r.user_unread_count,
+                       r.admin_unread_count,
+                       r.created_at,
+                       r.updated_at,
+                       t.id AS ticket_internal_id,
+                       t.public_id::text AS as_ticket_id,
+                       t.status AS ticket_status,
+                       t.symptom AS ticket_symptom,
+                       owner.public_id::text AS user_id,
+                       owner.email AS user_email,
+                       owner.name AS user_name,
+                       admin.public_id::text AS assigned_admin_id
+                FROM support_chat_rooms r
+                JOIN as_tickets t ON t.id = r.as_ticket_id
+                JOIN users owner ON owner.id = r.user_id
+                LEFT JOIN users admin ON admin.id = t.assigned_admin_id
+                """;
+    }
+
+    private void insertMessage(Long roomInternalId, String role, String content, Long senderUserId) {
+        jdbcTemplate.update("""
+                INSERT INTO support_chat_messages (
+                  room_id,
+                  role,
+                  content,
+                  sender_user_id
+                )
+                VALUES (?, ?, ?, ?)
+                """, roomInternalId, role, content, senderUserId);
+    }
+
+    private void updateAfterMessage(Long roomInternalId, String content, String role) {
+        int userUnreadDelta = "ADMIN".equals(role) ? 1 : 0;
+        int adminUnreadDelta = "USER".equals(role) ? 1 : 0;
+        jdbcTemplate.update("""
+                UPDATE support_chat_rooms
+                SET last_message_preview = ?,
+                    last_message_at = now(),
+                    user_unread_count = CASE WHEN ? = 1 THEN user_unread_count + 1 ELSE 0 END,
+                    admin_unread_count = CASE WHEN ? = 1 THEN admin_unread_count + 1 ELSE 0 END,
+                    updated_at = now()
+                WHERE id = ?
+                """, preview(content), userUnreadDelta, adminUnreadDelta, roomInternalId);
+    }
+
+    private List<Map<String, Object>> messages(Long roomInternalId) {
+        return jdbcTemplate.queryForList("""
+                        SELECT recent.id_text AS id,
+                               recent.role,
+                               recent.content,
+                               recent.created_at,
+                               recent.sender_id,
+                               recent.sender_name
+                        FROM (
+                          SELECT m.id AS sort_id,
+                                 m.public_id::text AS id_text,
+                                 m.role,
+                                 m.content,
+                                 m.created_at,
+                                 sender.public_id::text AS sender_id,
+                                 sender.name AS sender_name
+                          FROM support_chat_messages m
+                          LEFT JOIN users sender ON sender.id = m.sender_user_id
+                          WHERE m.room_id = ?
+                          ORDER BY m.created_at DESC, m.id DESC
+                          LIMIT ?
+                        ) recent
+                        ORDER BY recent.created_at, recent.sort_id
+                        """, roomInternalId, MESSAGE_PAGE_LIMIT)
+                .stream()
+                .map(row -> MockData.map(
+                        "id", DbValueMapper.string(row, "id"),
+                        "role", DbValueMapper.string(row, "role"),
+                        "content", DbValueMapper.string(row, "content"),
+                        "senderId", DbValueMapper.string(row, "sender_id"),
+                        "senderName", DbValueMapper.string(row, "sender_name"),
+                        "createdAt", DbValueMapper.timestamp(row, "created_at")
+                ))
+                .toList();
+    }
+
+    private Map<String, Object> response(RoomRow room, List<Map<String, Object>> messages) {
+        return MockData.map(
+                "contact", contactMap(room),
+                "messages", messages,
+                "supportNewPath", "/support/new",
+                "pollingIntervalMs", POLLING_INTERVAL_MS
+        );
+    }
+
+    private Map<String, Object> empty() {
+        return MockData.map(
+                "contact", null,
+                "messages", List.of(),
+                "supportNewPath", "/support/new",
+                "pollingIntervalMs", POLLING_INTERVAL_MS
+        );
+    }
+
+    private Map<String, Object> contactMap(RoomRow room) {
+        return MockData.map(
+                "id", room.publicId(),
+                "asTicketId", room.ticketPublicId(),
+                "status", room.status(),
+                "ticketStatus", room.ticketStatus(),
+                "title", room.title(),
+                "symptom", room.ticketSymptom(),
+                "lastMessagePreview", room.lastMessagePreview(),
+                "lastMessageAt", room.lastMessageAt(),
+                "userUnreadCount", room.userUnreadCount(),
+                "adminUnreadCount", room.adminUnreadCount(),
+                "assignedAdminId", room.assignedAdminId(),
+                "user", MockData.map(
+                        "id", room.userPublicId(),
+                        "email", room.userEmail(),
+                        "name", room.userName()
+                ),
+                "canSendMessage", !TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())
+        );
+    }
+
+    private RoomRow roomRow(Map<String, Object> row) {
+        return new RoomRow(
+                longValue(row, "internal_id"),
+                DbValueMapper.string(row, "id"),
+                longValue(row, "ticket_internal_id"),
+                DbValueMapper.string(row, "as_ticket_id"),
+                DbValueMapper.string(row, "ticket_status"),
+                DbValueMapper.string(row, "ticket_symptom"),
+                DbValueMapper.string(row, "status"),
+                DbValueMapper.string(row, "title"),
+                DbValueMapper.string(row, "last_message_preview"),
+                DbValueMapper.timestamp(row, "last_message_at"),
+                intValue(row, "user_unread_count"),
+                intValue(row, "admin_unread_count"),
+                DbValueMapper.string(row, "user_id"),
+                DbValueMapper.string(row, "user_email"),
+                DbValueMapper.string(row, "user_name"),
+                DbValueMapper.string(row, "assigned_admin_id")
+        );
+    }
+
+    private static String requireMessage(Map<String, Object> request) {
+        String content = request == null ? null : stringOrNull(request.get("content"));
+        if (content == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "메시지 내용을 입력해 주세요.");
+        }
+        if (content.length() > MAX_MESSAGE_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "메시지는 2000자 이하로 입력해 주세요.");
+        }
+        return content;
+    }
+
+    private static void requireMessageAllowed(RoomRow room) {
+        if (TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "종료된 AS 티켓 상담방에는 메시지를 보낼 수 없습니다.");
+        }
+    }
+
+    private static void requireUuid(String value) {
+        try {
+            UUID.fromString(value);
+        } catch (Exception error) {
+            throw notFound("상담방을 찾을 수 없습니다.");
+        }
+    }
+
+    private static ResponseStatusException notFound(String message) {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+    }
+
+    private static Long longValue(Map<String, Object> row, String key) {
+        Object value = row.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private static int intValue(Map<String, Object> row, String key) {
+        Object value = row.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return value == null ? 0 : Integer.parseInt(value.toString());
+    }
+
+    private static String stringOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isBlank() || "null".equalsIgnoreCase(text) ? null : text;
+    }
+
+    private static String preview(String content) {
+        String normalized = content.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 240 ? normalized : normalized.substring(0, 240);
+    }
+
+    private record TicketRef(Long internalId, String publicId, String symptom, String status) {
+    }
+
+    private record RoomRef(String publicId) {
+    }
+
+    private record RoomRow(
+            Long internalId,
+            String publicId,
+            Long ticketInternalId,
+            String ticketPublicId,
+            String ticketStatus,
+            String ticketSymptom,
+            String status,
+            String title,
+            String lastMessagePreview,
+            Object lastMessageAt,
+            int userUnreadCount,
+            int adminUnreadCount,
+            String userPublicId,
+            String userEmail,
+            String userName,
+            String assignedAdminId
+    ) {
+    }
+}

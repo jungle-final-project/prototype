@@ -10,6 +10,7 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -30,6 +31,7 @@ public class TicketQueryService {
                 .toList();
     }
 
+    @Transactional
     public Map<String, Object> create(Map<String, Object> request, CurrentUserService.CurrentUser user) {
         String symptom = request == null ? "게임 중 프레임 급락" : String.valueOf(request.getOrDefault("symptom", "게임 중 프레임 급락"));
         String logUploadId = request == null ? null : stringOrNull(request.get("logUploadId"));
@@ -44,8 +46,9 @@ public class TicketQueryService {
                   upgrade_candidates
                 )
                 VALUES (?, ?, ?, 'OPEN', '[]'::jsonb, '[]'::jsonb)
-                RETURNING public_id::text AS id
+                RETURNING id AS internal_id, public_id::text AS id
                 """, user.internalId(), logUploadInternalId, symptom);
+        SupportChatRoomCreator.ensureRoom(jdbcTemplate, user.internalId(), numberLong(row.get("internal_id")));
         return ticket(DbValueMapper.string(row, "id"), user);
     }
 
@@ -201,6 +204,10 @@ public class TicketQueryService {
                        atl.recommendation_id AS as_label_recommendation_id,
                        atl.use_for_recommendation_training AS as_label_use_for_recommendation_training,
                        atl.note AS as_label_note,
+                       room.public_id::text AS support_chat_room_id,
+                       room.user_unread_count AS support_chat_user_unread_count,
+                       room.admin_unread_count AS support_chat_admin_unread_count,
+                       room.last_message_at AS support_chat_last_message_at,
                        admin.public_id::text AS assigned_admin_id,
                        t.cause_candidates,
                        t.upgrade_candidates,
@@ -214,6 +221,11 @@ public class TicketQueryService {
                 LEFT JOIN agent_log_summaries als ON als.as_ticket_id = t.id
                 LEFT JOIN as_ticket_labels atl ON atl.as_ticket_id = t.id
                 LEFT JOIN parts related_part ON related_part.id = atl.related_part_id
+                LEFT JOIN support_chat_rooms room
+                  ON room.as_ticket_id = t.id
+                 AND room.user_id = t.user_id
+                 AND room.status = 'ACTIVE'
+                 AND room.deleted_at IS NULL
                 LEFT JOIN users admin ON admin.id = t.assigned_admin_id
                 """;
     }
@@ -236,6 +248,10 @@ public class TicketQueryService {
                 "logFeaturePayload", DbValueMapper.json(row, "log_feature_payload", Map.of()),
                 "logRiskFlags", DbValueMapper.json(row, "log_risk_flags", Map.of()),
                 "asTrainingLabel", asTrainingLabel(row),
+                "supportChatRoomId", DbValueMapper.string(row, "support_chat_room_id"),
+                "supportChatUserUnreadCount", numberInt(row.get("support_chat_user_unread_count")),
+                "supportChatAdminUnreadCount", numberInt(row.get("support_chat_admin_unread_count")),
+                "supportChatLastMessageAt", DbValueMapper.timestamp(row, "support_chat_last_message_at"),
                 "assignedAdminId", DbValueMapper.string(row, "assigned_admin_id"),
                 "causeCandidates", DbValueMapper.json(row, "cause_candidates", List.of()),
                 "upgradeCandidates", DbValueMapper.json(row, "upgrade_candidates", List.of()),
@@ -295,6 +311,13 @@ public class TicketQueryService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private static Integer numberInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return value == null ? 0 : Integer.valueOf(value.toString());
     }
 
     private static String stringOrNull(Object value) {

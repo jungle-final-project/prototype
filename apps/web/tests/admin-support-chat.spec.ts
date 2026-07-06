@@ -1,0 +1,173 @@
+import { expect, test, type Page } from '@playwright/test';
+
+test('admin manages support chat rooms from the admin page', async ({ page }) => {
+  let postedMessage: unknown = null;
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, (payload) => {
+    postedMessage = payload;
+  });
+
+  await page.goto('/admin/support-chat-sessions');
+
+  await expect(page.getByRole('heading', { name: '상담방 관리' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'user-a@example.com', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'user-b@example.com', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'GPU 온도 상승' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'user-b@example.com 상담방 선택' }).click();
+  await expect(page.getByRole('cell', { name: '전원이 갑자기 꺼집니다.' })).toBeVisible();
+
+  await page.getByPlaceholder('관리자 답변을 입력하세요').fill('파워 로그를 추가로 확인하겠습니다.');
+  await page.getByRole('button', { name: '답변 전송' }).click();
+
+  await expect.poll(() => postedMessage).toEqual({ content: '파워 로그를 추가로 확인하겠습니다.' });
+  await expect(page.getByText('파워 로그를 추가로 확인하겠습니다.')).toBeVisible();
+});
+
+async function mockAdmin(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: '00000000-0000-4000-8000-000000000001',
+      email: 'admin@example.com',
+      name: 'BuildGraph Admin',
+      role: 'ADMIN'
+    }));
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: '00000000-0000-4000-8000-000000000001',
+        email: 'admin@example.com',
+        name: 'BuildGraph Admin',
+        role: 'ADMIN'
+      })
+    });
+  });
+}
+
+async function mockAdminSupportChats(page: Page, setPostedMessage: (payload: unknown) => void) {
+  const roomA = {
+    id: '00000000-0000-4000-8000-000000009001',
+    asTicketId: '00000000-0000-4000-8000-000000006001',
+    status: 'ACTIVE',
+    ticketStatus: 'OPEN',
+    title: 'AS 상담방',
+    symptom: 'GPU 온도 상승',
+    lastMessagePreview: '게임 실행 후 온도가 95도까지 올라갑니다.',
+    lastMessageAt: '2026-07-06T10:02:00Z',
+    userUnreadCount: 0,
+    adminUnreadCount: 2,
+    canSendMessage: true,
+    user: {
+      id: '00000000-0000-4000-8000-000000001004',
+      email: 'user-a@example.com',
+      name: 'User A'
+    }
+  };
+  const roomB = {
+    id: '00000000-0000-4000-8000-000000009002',
+    asTicketId: '00000000-0000-4000-8000-000000006002',
+    status: 'ACTIVE',
+    ticketStatus: 'OPEN',
+    title: 'AS 상담방',
+    symptom: '전원이 갑자기 꺼집니다.',
+    lastMessagePreview: '방금 다시 꺼졌습니다.',
+    lastMessageAt: '2026-07-06T10:04:00Z',
+    userUnreadCount: 0,
+    adminUnreadCount: 1,
+    canSendMessage: true,
+    user: {
+      id: '00000000-0000-4000-8000-000000001005',
+      email: 'user-b@example.com',
+      name: 'User B'
+    }
+  };
+  const detailA = {
+    contact: roomA,
+    messages: [
+      {
+        id: '00000000-0000-4000-8000-000000009101',
+        role: 'SYSTEM',
+        content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
+        createdAt: '2026-07-06T10:00:00Z'
+      },
+      {
+        id: '00000000-0000-4000-8000-000000009102',
+        role: 'USER',
+        content: '게임 실행 후 온도가 95도까지 올라갑니다.',
+        senderName: 'User A',
+        createdAt: '2026-07-06T10:02:00Z'
+      }
+    ],
+    pollingIntervalMs: 5000
+  };
+  const detailB = {
+    contact: roomB,
+    messages: [
+      {
+        id: '00000000-0000-4000-8000-000000009201',
+        role: 'SYSTEM',
+        content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
+        createdAt: '2026-07-06T10:00:00Z'
+      },
+      {
+        id: '00000000-0000-4000-8000-000000009202',
+        role: 'USER',
+        content: '방금 다시 꺼졌습니다.',
+        senderName: 'User B',
+        createdAt: '2026-07-06T10:04:00Z'
+      }
+    ],
+    pollingIntervalMs: 5000
+  };
+
+  await page.route('**/api/admin/support/chat-sessions', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [roomA, roomB], pollingIntervalMs: 5000 })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detailA) });
+  });
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009002', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detailB) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009002/messages', async (route) => {
+    if (route.request().method() === 'POST') {
+      const payload = route.request().postDataJSON();
+      setPostedMessage(payload);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...detailB,
+          messages: [
+            ...detailB.messages,
+            {
+              id: '00000000-0000-4000-8000-000000009203',
+              role: 'ADMIN',
+              content: String((payload as { content?: string }).content ?? ''),
+              senderName: 'BuildGraph Admin',
+              createdAt: '2026-07-06T10:05:00Z'
+            }
+          ]
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+}
