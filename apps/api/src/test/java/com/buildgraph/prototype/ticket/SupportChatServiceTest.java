@@ -118,8 +118,24 @@ class SupportChatServiceTest {
     }
 
     @Test
+    void detailIncludesLatestVisitReservation() {
+        mockRoom("ACTIVE", "OPEN", 0, 0);
+        mockMessages();
+        mockVisitReservation("SCHEDULED");
+
+        Map<String, Object> detail = service.detailSnapshot(ROOM_ID, USER);
+
+        Map<String, Object> contact = (Map<String, Object>) detail.get("contact");
+        assertThat((Map<String, Object>) contact.get("visitReservation"))
+                .containsEntry("id", "00000000-0000-4000-8000-000000008001")
+                .containsEntry("status", "SCHEDULED")
+                .containsEntry("scheduledAt", "2099-07-10T14:30+09:00");
+    }
+
+    @Test
     void adminQueueContactSnapshotReturnsContactWhenRoomBelongsInAdminList() {
         mockAdminRoom("ACTIVE", "OPEN", 0, 4);
+        mockVisitReservation("REQUESTED");
 
         Optional<Map<String, Object>> contact = service.adminQueueContactSnapshot(ROOM_ID);
 
@@ -128,6 +144,8 @@ class SupportChatServiceTest {
                 .containsEntry("id", ROOM_ID)
                 .containsEntry("adminUnreadCount", 4)
                 .containsEntry("canSendMessage", true);
+        assertThat((Map<String, Object>) contact.orElseThrow().get("visitReservation"))
+                .containsEntry("status", "REQUESTED");
     }
 
     @Test
@@ -162,6 +180,19 @@ class SupportChatServiceTest {
     private void mockMessages() {
         when(jdbcTemplate.queryForList(anyString(), eq(7001L), eq(100)))
                 .thenReturn(List.of());
+    }
+
+    private void mockVisitReservation(String status) {
+        when(jdbcTemplate.queryForList(contains("latest_visit_reservation"), eq(6001L)))
+                .thenReturn(List.of(Map.ofEntries(
+                        Map.entry("id", "00000000-0000-4000-8000-000000008001"),
+                        Map.entry("status", status),
+                        Map.entry("scheduled_at", java.time.OffsetDateTime.parse("2099-07-10T14:30:00+09:00")),
+                        Map.entry("address_snapshot", "서울시 강남구"),
+                        Map.entry("technician_note", "방문 전 연락"),
+                        Map.entry("created_at", java.time.OffsetDateTime.parse("2099-07-01T00:00:00+09:00")),
+                        Map.entry("updated_at", java.time.OffsetDateTime.parse("2099-07-02T00:00:00+09:00"))
+                )));
     }
 
     private Map<String, Object> roomRow(String roomStatus, String ticketStatus, int userUnreadCount, int adminUnreadCount) {

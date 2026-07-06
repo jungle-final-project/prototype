@@ -2,9 +2,11 @@ package com.buildgraph.prototype.ticket;
 
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.Map;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -18,19 +20,22 @@ public class AdminSupportChatController {
     private final SupportChatWebSocketHandler supportChatWebSocketHandler;
     private final AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
     private final SupportChatWebSocketTicketService supportChatWebSocketTicketService;
+    private final VisitSupportReservationService visitSupportReservationService;
 
     public AdminSupportChatController(
             SupportChatService supportChatService,
             CurrentUserService currentUserService,
             SupportChatWebSocketHandler supportChatWebSocketHandler,
             AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler,
-            SupportChatWebSocketTicketService supportChatWebSocketTicketService
+            SupportChatWebSocketTicketService supportChatWebSocketTicketService,
+            VisitSupportReservationService visitSupportReservationService
     ) {
         this.supportChatService = supportChatService;
         this.currentUserService = currentUserService;
         this.supportChatWebSocketHandler = supportChatWebSocketHandler;
         this.adminSupportChatQueueWebSocketHandler = adminSupportChatQueueWebSocketHandler;
         this.supportChatWebSocketTicketService = supportChatWebSocketTicketService;
+        this.visitSupportReservationService = visitSupportReservationService;
     }
 
     @GetMapping
@@ -57,6 +62,31 @@ public class AdminSupportChatController {
     ) {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
         Map<String, Object> detail = supportChatService.postAdminMessage(id, request == null ? Map.of() : request, admin);
+        supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(id);
+        return detail;
+    }
+
+    @PutMapping("/{id}/visit-reservation")
+    Map<String, Object> putVisitReservation(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        Map<String, Object> detail = visitSupportReservationService.scheduleAdminReservation(id, request == null ? Map.of() : request, admin);
+        supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(id);
+        return detail;
+    }
+
+    @DeleteMapping("/{id}/visit-reservation")
+    Map<String, Object> deleteVisitReservation(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        Map<String, Object> detail = visitSupportReservationService.cancelAdminReservation(id, admin);
         supportChatWebSocketHandler.broadcastRoomUpdate(id);
         adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(id);
         return detail;

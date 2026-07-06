@@ -373,7 +373,45 @@ public class SupportChatService {
                         "email", room.userEmail(),
                         "name", room.userName()
                 ),
+                "visitReservation", visitReservationMap(room.ticketInternalId()),
                 "canSendMessage", "ACTIVE".equals(room.status()) && !TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())
+        );
+    }
+
+    private Map<String, Object> visitReservationMap(Long ticketInternalId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                        SELECT *
+                        FROM (
+                          SELECT public_id::text AS id,
+                                 status,
+                                 scheduled_at,
+                                 address_snapshot,
+                                 technician_note,
+                                 created_at,
+                                 updated_at
+                          FROM visit_support_reservations
+                          WHERE as_ticket_id = ?
+                          ORDER BY CASE
+                                     WHEN status IN ('REQUESTED', 'RESCHEDULE_REQUESTED', 'SCHEDULED', 'VISIT_IN_PROGRESS') THEN 0
+                                     ELSE 1
+                                   END,
+                                   COALESCE(updated_at, created_at) DESC,
+                                   id DESC
+                          LIMIT 1
+                        ) latest_visit_reservation
+                        """, ticketInternalId);
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> row = rows.get(0);
+        return MockData.map(
+                "id", DbValueMapper.string(row, "id"),
+                "status", DbValueMapper.string(row, "status"),
+                "scheduledAt", DbValueMapper.timestamp(row, "scheduled_at"),
+                "addressSnapshot", DbValueMapper.string(row, "address_snapshot"),
+                "technicianNote", DbValueMapper.string(row, "technician_note"),
+                "createdAt", DbValueMapper.timestamp(row, "created_at"),
+                "updatedAt", DbValueMapper.timestamp(row, "updated_at")
         );
     }
 
