@@ -118,6 +118,22 @@ class SupportChatControllerTest {
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("chat-session-id");
     }
 
+    @Test
+    void adminCanLoadChatDetailWithoutMarkingUnread() throws Exception {
+        when(currentUserService.requireAdmin(ADMIN_TOKEN)).thenReturn(ADMIN);
+        when(supportChatService.adminDetail("chat-session-id", ADMIN, false))
+                .thenReturn(chatDetail("chat-session-id", "사용자 메시지"));
+
+        mockMvc.perform(get("/api/admin/support/chat-sessions/chat-session-id")
+                        .queryParam("markRead", "false")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contact.id").value("chat-session-id"));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(supportChatService).adminDetail("chat-session-id", ADMIN, false);
+    }
+
     private static Map<String, Object> chatDetail(String sessionId, String content) {
         return MockData.map(
                 "contact", MockData.map(

@@ -36,10 +36,11 @@ public class AdminSupportChatController {
     @GetMapping("/{id}")
     Map<String, Object> detail(
             @PathVariable String id,
+            @org.springframework.web.bind.annotation.RequestParam(value = "markRead", defaultValue = "true") boolean markRead,
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
-        return supportChatService.adminDetail(id, admin);
+        return supportChatService.adminDetail(id, admin, markRead);
     }
 
     @PostMapping("/{id}/messages")
