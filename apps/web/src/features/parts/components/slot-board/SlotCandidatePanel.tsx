@@ -112,7 +112,7 @@ export function SlotCandidatePanel({
       <div className="flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-base font-black text-commerce-ink">{slot.label} 부품 목록</h2>
-          <p className="mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 안 맞는 후보는 회색으로 표시하고 사유를 알려드려요</p>
+          <p className="mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 안 맞는 후보도 담아서 사유를 확인할 수 있어요</p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center rounded-md border border-commerce-line bg-white px-2 py-1">
@@ -228,27 +228,27 @@ export function SlotCandidatePanel({
                 key={part.id}
                 data-compat={part.compatibility?.status ?? 'NONE'}
                 className={`flex items-center gap-3 rounded-md border p-2.5 ${
-                  isFail ? 'border-slate-200 bg-slate-50 opacity-70' : 'border-commerce-line bg-white'
+                  isFail ? 'border-red-200 bg-red-50/40' : 'border-commerce-line bg-white'
                 }`}
               >
                 <img
                   src={partImageUrl(part)}
                   alt={`${part.name} 제품 사진`}
-                  className={`h-12 w-12 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover ${isFail ? 'grayscale' : ''}`}
+                  className="h-12 w-12 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover"
                 />
                 <div className="min-w-0 flex-1 text-xs">
-                  <div className={`line-clamp-2 font-black leading-4 ${isFail ? 'text-slate-500' : 'text-commerce-ink'}`}>{part.name}</div>
+                  <div className="line-clamp-2 font-black leading-4 text-commerce-ink">{part.name}</div>
                   <div className="mt-0.5 text-[11px] text-slate-500">
                     {part.manufacturer ?? '-'}
                     {part.externalOffer?.supplierName ? ` · ${part.externalOffer.supplierName}` : ''}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    <span className={`font-black ${isFail ? 'text-slate-500' : 'text-commerce-ink'}`}>{part.price.toLocaleString()}원</span>
+                    <span className="font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
                     {part.compatibility?.status === 'WARN' ? (
                       <span className="rounded border border-amber-100 bg-amber-50 px-1.5 py-0.5 text-[10px] font-black text-amber-700">간섭 주의</span>
                     ) : null}
                     {isFail ? (
-                      <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-black text-red-700">선택 불가</span>
+                      <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-black text-red-700">장착 불가</span>
                     ) : null}
                   </div>
                   {part.compatibility?.status === 'WARN' && part.compatibility.summary ? (
@@ -259,20 +259,21 @@ export function SlotCandidatePanel({
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col items-stretch gap-1.5">
+                  {/* 비호환(FAIL)도 담을 수 있다 — 왜 안 되는지 보드에서 빨강으로 보고 교체하는 UX(구매는 여전히 차단). */}
                   <button
                     type="button"
-                    aria-label={isFail ? `${part.name} 선택 불가` : actionLabel}
-                    disabled={isMutating || isSelected || isFail}
+                    aria-label={isFail ? `${actionLabel} (장착 불가 — 담아서 확인)` : actionLabel}
+                    disabled={isMutating || isSelected}
                     onClick={() => replaceTarget ? onReplacePart(replaceTarget.partId, part) : onAddPart(part)}
                     className={`rounded-md px-2.5 py-2 text-xs font-black transition disabled:cursor-not-allowed ${
-                      isFail
-                        ? 'border border-slate-200 bg-slate-100 text-slate-400'
-                        : isSelected
-                          ? 'border border-commerce-line bg-slate-50 text-slate-400 disabled:opacity-60'
+                      isSelected
+                        ? 'border border-commerce-line bg-slate-50 text-slate-400 disabled:opacity-60'
+                        : isFail
+                          ? 'border border-red-300 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60'
                           : 'bg-commerce-ink text-white hover:bg-slate-700 disabled:opacity-60'
                     }`}
                   >
-                    {isFail ? '선택 불가' : isSelected ? '장착됨' : actionText}
+                    {isSelected ? '장착됨' : actionText}
                   </button>
                   {/* 교체 성능 비교: 현재 부품 → 후보 시뮬레이션을 챗봇에 프리필(읽기 전용, 드래프트 무변경). */}
                   {canComparePerf && !isSelected ? (

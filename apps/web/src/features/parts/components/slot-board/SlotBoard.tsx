@@ -191,7 +191,16 @@ function BoardSlot({
               // 데스크톱 실장 지점: 아트의 빈 소켓/슬롯이 보이도록 투명 — hover에만 윤곽을 드러낸다.
               ? 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue lg:border-transparent lg:bg-transparent lg:hover:border-brand-blue/60 lg:hover:bg-blue-50/20'
               : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
-  const surfaceClass = !filled && isBoardMount ? 'bg-white/95 lg:bg-transparent lg:backdrop-blur-0' : 'bg-white/95';
+  // 장착된 박스는 상태색으로 칠한다 — 정상=초록, 간섭 주의=주황, 장착 불가=빨강 (은은한 틴트라 상품 이미지·칩은 그대로 보인다).
+  const surfaceClass = filled
+    ? slotStatus === 'FAIL'
+      ? 'bg-red-50/95'
+      : slotStatus === 'WARN'
+        ? 'bg-amber-50/95'
+        : 'bg-emerald-50/95'
+    : isBoardMount
+      ? 'bg-white/95 lg:bg-transparent lg:backdrop-blur-0'
+      : 'bg-white/95';
   const visibleName = filled
     ? items.length > 1 ? `${primaryItem.name} 외 ${items.length - 1}개` : primaryItem.name
     : '';

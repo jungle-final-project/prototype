@@ -77,9 +77,10 @@ cd apps/api && ./gradlew test --tests "com.buildgraph.prototype.user.UserControl
 - Reuse existing `GET /api/parts`.
 - Include `compatibilitySource=QUOTE_DRAFT_CURRENT`.
 - Load candidates in 20 item pages.
-- **Show ALL candidates**: PASS/WARN은 선택 가능, FAIL은 숨기지 말고 회색 비활성 + 선택 불가 사유를 함께 표시한다(사용자가 "왜 안 되는지" 알 수 있어야 함).
+- **Show ALL candidates**: PASS/WARN/FAIL 전부 담을 수 있다. FAIL(장착 불가) 후보는 숨기지 말고 빨강 경고 스타일(빨간 테두리 버튼 + '장착 불가' 뱃지 + 사유)로 표시하되 담기 자체는 허용한다 — 담으면 보드에서 빨강으로 보고 교체하는 UX다(구매는 여전히 호환 FAIL이면 차단). "왜 안 되는지"를 눈으로 확인할 수 있어야 함.
 - WARN candidates are selectable and keep `간섭 주의`.
 - 버튼 문구: 빈 슬롯 = `담기`, 채워진 단일 슬롯 = `교체`, 교체 대상 지정 시 = `이걸로 교체`.
+- **장착된 슬롯 박스는 상태색으로 칠한다**: 정상=초록(bg-emerald-50), 간섭 주의=주황(bg-amber-50), 장착 불가=빨강(bg-red-50) 은은한 틴트 + 상태색 테두리. 상품 이미지·칩은 그대로 보이게 한다.
 
 ## Onboarding / guidance
 - 견적이 비어 있으면 AI 시작 CTA(챗봇 열기)와 "직접 고르기" 진입을 함께 노출한다 — 숨은 AI 버튼에 의존하지 않는다.
