@@ -1782,7 +1782,10 @@ Index:
 MVP 기준 결정값:
 
 - 한 사용자와 한 AS 티켓에는 active 상담방 1개만 유지한다(partial unique).
+- 한 사용자는 `support_chat_rooms.status='ACTIVE'`이고 연결 티켓이 `CLOSED`, `CANCELLED`가 아닌 진행 중 상담방을 1개만 가질 수 있다. 이 제약은 P1에서 DB migration 없이 `POST /api/as-tickets`의 사용자 row `FOR UPDATE` 잠금과 서비스 검증으로 보장한다.
 - `POST /api/as-tickets`는 active 상담방과 최초 `SYSTEM` 메시지를 `ON CONFLICT DO NOTHING`으로 멱등하게 생성한다.
+- `V95__support_chat_rooms_backfill_repair.sql`은 기존 non-deleted AS 티켓 중 상담방이 누락된 데이터를 보정하고, 잘못 `ARCHIVED`된 최신 room을 active room 부재 시에만 `ACTIVE`로 복구한다.
+- 티켓 종료만으로 `support_chat_rooms.status`를 `ARCHIVED`로 바꾸지 않는다. 종료 티켓의 상담 기록은 읽기 가능해야 하며 전송 지점에서만 차단한다.
 - `GET /api/support/chat-sessions/current`는 티켓이 없는 사용자에게 row를 만들지 않고 `supportNewPath=/support/new`를 반환한다.
 - `GET /api/support/chat-sessions/current?asTicketId=...`는 로그인 사용자 소유 티켓이면 active 상담방을 보장한다.
 - 관리자 목록은 `as_tickets.status NOT IN ('CLOSED','CANCELLED')`인 상담방만 노출한다.

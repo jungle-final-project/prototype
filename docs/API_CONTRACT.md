@@ -529,27 +529,34 @@ Support Chat Rooms는 로그인 사용자와 관리자가 AS 티켓을 기준으
 | `GET` | `/api/support/chat-sessions/current` | USER | 4번 | `?asTicketId=4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` optional | `{ "contact": { "id": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "asTicketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "ticketStatus": "OPEN", "title": "AS 상담방", "symptom": "게임 중 프레임 급락", "userUnreadCount": 0, "adminUnreadCount": 1, "canSendMessage": true }, "messages": [], "supportNewPath": "/support/new", "pollingIntervalMs": 5000 }` | `support_chat_rooms`, `support_chat_messages`, `as_tickets`, `users` |
 | `GET` | `/api/support/chat-sessions/{id}` | USER | 4번 | - | `SupportChatSessionResponse` | `support_chat_rooms`, `support_chat_messages`, `as_tickets`, `users` |
 | `POST` | `/api/support/chat-sessions/{id}/messages` | USER | 4번 | `{ "content": "담당자님, 재부팅 후에도 같은 증상이 있습니다." }` | `SupportChatSessionResponse` | `support_chat_messages`, `support_chat_rooms` |
+| `POST` | `/api/support/chat-sessions/{id}/ws-ticket` | USER | 4번 | - | `{ "ticket": "opaque-token", "expiresAt": "2026-07-06T10:01:00Z", "expiresInSeconds": 60 }` | Redis `support-chat:ws-ticket:*`, `support_chat_rooms` |
 | `GET` | `/api/admin/support/chat-sessions` | ADMIN | 4번 | - | `{ "items": [{ "id": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "asTicketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "ticketStatus": "OPEN", "adminUnreadCount": 1, "user": { "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com" } }], "pollingIntervalMs": 5000 }` | `support_chat_rooms`, `as_tickets`, `users` |
-| `GET` | `/api/admin/support/chat-sessions/{id}` | ADMIN | 4번 | - | `SupportChatSessionResponse` | `support_chat_rooms`, `support_chat_messages`, `as_tickets`, `users` |
+| `GET` | `/api/admin/support/chat-sessions/{id}` | ADMIN | 4번 | `?markRead=false` optional | `SupportChatSessionResponse` | `support_chat_rooms`, `support_chat_messages`, `as_tickets`, `users` |
 | `POST` | `/api/admin/support/chat-sessions/{id}/messages` | ADMIN | 4번 | `{ "content": "담당자가 확인 중입니다. 최근 재현 시각을 알려주세요." }` | `SupportChatSessionResponse` | `support_chat_messages`, `support_chat_rooms`, `as_tickets` |
-| WebSocket | `/ws/support-chat?mode=user&sessionId={id}&token={jwt}` | USER/ADMIN | 4번 | `{ "type": "MESSAGE", "content": "추가 증상입니다." }` | `{ "type": "CHAT_UPDATED", "detail": SupportChatSessionResponse }` | `support_chat_messages`, `support_chat_rooms` |
+| `POST` | `/api/admin/support/chat-sessions/{id}/ws-ticket` | ADMIN | 4번 | - | `{ "ticket": "opaque-token", "expiresAt": "2026-07-06T10:01:00Z", "expiresInSeconds": 60 }` | Redis `support-chat:ws-ticket:*`, `support_chat_rooms` |
+| WebSocket | `/ws/support-chat?mode=user&sessionId={id}` | USER/ADMIN | 4번 | 연결 후 5초 안에 `{ "type": "AUTH", "ticket": "opaque-token" }`. 수신 전용. client `MESSAGE`는 저장하지 않고 `{ "type": "ERROR", "code": "WS_MESSAGE_DISABLED", "retryable": false }` 반환 | `{ "type": "CHAT_UPDATED", "detail": SupportChatSessionResponse }` | `support_chat_rooms` |
 
 Support Chat Rooms 규칙:
 
 - 전역 상담방 UI는 로그인 사용자 화면에 떠 있으며, `/login`, `/signup`, `/admin/**`, `/support/new`에서는 표시하지 않는다.
 - 상담 메시지 전송은 AS 티켓과 연결된 active 상담방이 있을 때만 허용한다.
+- 사용자당 진행 중 상담방은 1개만 허용한다. 진행 중 상담은 `support_chat_rooms.status='ACTIVE'`이고 연결된 티켓이 `CLOSED`, `CANCELLED`가 아닌 상태다.
 - 로그인 사용자가 상담방이 없으면 `GET /api/support/chat-sessions/current`는 DB row를 만들지 않고 `contact: null`, `supportNewPath: "/support/new"`를 반환한다.
 - `asTicketId`를 지정한 `GET /api/support/chat-sessions/current`는 로그인 사용자의 AS 티켓인지 확인하고, 티켓이 있으면 active 상담방을 보장한다.
 - `POST /api/as-tickets`로 AS 티켓이 생성되면 같은 transaction에서 active 상담방과 최초 `SYSTEM` 메시지를 생성한다.
+- `POST /api/as-tickets`는 생성 전 사용자 row를 잠그고 진행 중 상담방을 다시 확인한다. 진행 중 상담방이 있으면 새 티켓을 만들지 않고 `409 CONFLICT_STATE`와 `details.asTicketId`, `details.supportChatRoomId`를 반환한다.
 - `POST /api/support/chat-sessions/{id}/messages`는 사용자 본인 티켓 상담방에만 쓸 수 있으며, 본인 소유가 아니면 `404 NOT_FOUND`다.
 - `POST /api/admin/support/chat-sessions/{id}/messages`는 관리자 권한이 필요하며, 첫 관리자 응답 시 `as_tickets.assigned_admin_id`가 비어 있으면 현재 관리자로 배정한다.
 - `content`는 trim 후 1자 이상 2000자 이하만 허용한다.
 - `CLOSED`, `CANCELLED` 티켓 상담방에는 새 메시지를 보낼 수 없고 `409 CONFLICT_STATE`를 반환한다.
-- 사용자 메시지는 `adminUnreadCount`를 증가시키고, 관리자 메시지는 `userUnreadCount`를 증가시킨다. 상세 조회 시 조회자 쪽 unread count를 0으로 초기화한다.
+- 사용자 메시지는 `adminUnreadCount`를 증가시키고, 관리자 메시지는 `userUnreadCount`를 증가시킨다. REST 상세 조회는 기본적으로 조회자 쪽 unread count를 0으로 초기화한다. 관리자 상세는 `markRead=false`로 읽음 처리 없이 조회할 수 있고, WebSocket push snapshot은 unread count를 초기화하지 않는다.
 - `GET /api/admin/support/chat-sessions`는 `as_tickets.status`가 `CLOSED`, `CANCELLED`가 아닌 상담방만 최근순 최대 100개까지 반환한다.
 - 상세 조회의 `messages`는 최근 100개만 시간순으로 반환한다.
 - WebSocket은 실시간 갱신용이며 클라이언트는 연결 실패 시 REST polling(`pollingIntervalMs`)으로 fallback한다. 소켓이 연결된 상태에서도 낮은 빈도의 fallback polling을 유지한다.
-- 메시지가 저장되면(WebSocket `MESSAGE` 전송이든 REST `POST .../messages`든) 서버는 해당 상담방에 연결된 모든 WebSocket 세션에 `CHAT_UPDATED`를 push한다. 각 세션은 자신의 모드(user/admin) 기준 `SupportChatSessionResponse`를 받는다.
+- WebSocket 인증은 query string JWT를 쓰지 않는다. REST `ws-ticket` endpoint가 Redis에 60초 TTL, 1회 사용 ticket을 저장하고, WebSocket 연결 후 첫 `AUTH` frame으로 소비한다. Redis 장애 시 ticket 발급은 `503 UPSTREAM_ERROR`이며 클라이언트는 REST polling으로 fallback한다.
+- REST CORS와 WebSocket allowed origin은 공통 `buildgraph.cors.allowed-origins` property를 사용한다. 기본값은 `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174`이고 배포 환경에서는 명시 설정해야 한다.
+- 현재 WebSocket session map은 API JVM 메모리 기반이다. P2에서는 단일 API 인스턴스 push만 보장하며, 여러 API 인스턴스에서 다른 인스턴스에 붙은 소켓 push는 누락될 수 있다. 이 경우 `pollingIntervalMs` REST polling이 복구 경로이고, Redis pub/sub fan-out은 다음 단계 과제다.
+- 메시지는 REST `POST .../messages` 성공 시에만 저장된다. 저장 후 서버는 해당 상담방에 연결된 모든 WebSocket 세션에 `CHAT_UPDATED`를 push한다. 각 세션은 자신의 모드(user/admin) 기준 unread-safe `SupportChatSessionResponse` snapshot을 받는다.
 
 ### PC Agent/AS
 
@@ -560,7 +567,7 @@ Support Chat Rooms 규칙:
 | `POST` | `/api/agent/heartbeat` | AGENT | 4번 | `Idempotency-Key` header + `{ "agentVersion": "0.1.0", "serviceStatus": "RUNNING" }` | `{ "id": "d2f1...", "deviceId": "b7e1...", "status": "ACTIVE", "receivedAt": "2026-07-03T10:00:00Z", "pendingCommands": [] }` | `agent_heartbeats`, `agent_devices` |
 | `POST` | `/api/agent-logs/upload` | USER | 4번 | `multipart/form-data` | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "fileSize": 12000, "rangeMinutes": 30, "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
 | `GET` | `/api/agent-logs/{id}` | USER | 4번 | - | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "rangeMinutes": 30, "summary": "GPU driver error 반복", "createdAt": "2026-06-29T10:40:00Z", "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
-| `POST` | `/api/as-tickets` | USER | 4번 | `{ "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "symptom": "화면이 멈춤" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "supportChatRoomId": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "supportChatUserUnreadCount": 0, "supportChatAdminUnreadCount": 0, "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets`, `agent_log_uploads`, `support_chat_rooms`, `support_chat_messages` |
+| `POST` | `/api/as-tickets` | USER | 4번 | `{ "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "symptom": "화면이 멈춤" }` | `201 { "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "supportChatRoomId": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "supportChatUserUnreadCount": 0, "supportChatAdminUnreadCount": 0, "createdAt": "2026-06-29T10:42:00Z" }`, 진행 중 상담방 존재 시 `409 CONFLICT_STATE { "details": { "asTicketId": "...", "supportChatRoomId": "..." } }` | `as_tickets`, `agent_log_uploads`, `support_chat_rooms`, `support_chat_messages` |
 | `GET` | `/api/as-tickets/{id}` | USER | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "supportChatRoomId": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "supportChatUserUnreadCount": 0, "supportChatAdminUnreadCount": 0, "supportChatLastMessageAt": "2026-06-29T10:42:00Z", "adminNote": null, "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets`, `support_chat_rooms` |
 | `GET` | `/api/admin/as-tickets` | ADMIN | 4번 | `?page=0&size=20` | `{ "items": [{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "userId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "assignedAdminId": null, "createdAt": "2026-06-29T10:42:00Z" }], "page": 0, "size": 20, "total": 1 }` | `as_tickets` |
 | `GET` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "assignedAdminId": null, "causeCandidates": [], "upgradeCandidates": [], "adminNote": null }` | `as_tickets`, `agent_log_uploads` |
