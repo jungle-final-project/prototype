@@ -23,7 +23,7 @@ export const adminTicketDetailRows = [
   { field: 'ticketId', value: '00000000-0000-4000-8000-000000006001' },
   { field: 'user', value: 'user@example.com' },
   { field: 'symptom', value: '게임 중 프레임 급락' },
-  { field: 'logRange', value: '최근 30분' },
+  { field: 'logRange', value: '선택한 IncidentWindow' },
   { field: 'consent', value: '로그 업로드 명시 동의 필요' },
   { field: 'retention', value: '업로드 로그 30일 보관 후 삭제 예정' },
   { field: 'causeCandidate1', value: 'GPU 온도 과열 가능성' },

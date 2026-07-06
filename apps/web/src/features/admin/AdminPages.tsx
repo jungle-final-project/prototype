@@ -6,6 +6,7 @@ export { AdminPartsPage } from './pages/AdminPartsPage';
 export { AdminPriceJobsPage } from './pages/AdminPriceJobsPage';
 export { AdminTicketDetailPage } from './pages/AdminTicketDetailPage';
 export { AdminTicketsPage } from './pages/AdminTicketsPage';
+export { AdminCustomerContactsPage } from './pages/AdminCustomerContactsPage';
 export { AgentSessionAdminPage } from './pages/AgentSessionAdminPage';
 export { AgentSessionsListAdminPage } from './pages/AgentSessionsListAdminPage';
 export { RagEvidenceAdminPage } from './pages/RagEvidenceAdminPage';

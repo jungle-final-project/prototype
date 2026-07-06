@@ -5,7 +5,7 @@ import { RequireUser } from './features/auth/RequireUser';
 import { CheckoutCompletePage, CheckoutPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, LatestBuildResultPage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
 import { AsChatPage, SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
-import { AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
+import { AdminBuildGraphLayoutsPage, AdminCustomerContactsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
 import { AiBuildAssistant } from './features/quote/components/AiBuildAssistant';
 
 export default function App() {
@@ -40,6 +40,7 @@ export default function App() {
         <Route path="/admin/load-tests" element={<RequireAdmin><AdminLoadTestsPage /></RequireAdmin>} />
         <Route path="/admin/as-tickets" element={<RequireAdmin><AdminTicketsPage /></RequireAdmin>} />
         <Route path="/admin/as-tickets/:ticketId" element={<RequireAdmin><AdminTicketDetailPage /></RequireAdmin>} />
+        <Route path="/admin/customer-contacts" element={<RequireAdmin><AdminCustomerContactsPage /></RequireAdmin>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <GlobalAiBuildAssistant />

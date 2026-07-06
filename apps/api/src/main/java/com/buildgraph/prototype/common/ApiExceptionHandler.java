@@ -11,6 +11,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -40,6 +41,7 @@ public class ApiExceptionHandler {
             BindException.class,
             ConstraintViolationException.class,
             HttpMessageNotReadableException.class,
+            MissingRequestHeaderException.class,
             MissingServletRequestParameterException.class,
             MethodArgumentTypeMismatchException.class
     })

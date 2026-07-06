@@ -276,6 +276,12 @@ export type AdminAsTicket = {
   supportDecision?: AsSupportDecision | string | null;
   riskLevel?: RiskLevel | string | null;
   autoResponseAllowed?: boolean | null;
+  safetyAdviceLevel?: string | null;
+  safetyNotices?: Record<string, unknown>[] | null;
+  feedbackRating?: number | null;
+  feedbackComment?: string | null;
+  feedbackCreatedAt?: string | null;
+  diagnosticAccuracy?: string | null;
   symptom: string;
   title?: string | null;
   description?: string | null;
@@ -301,6 +307,12 @@ export type AdminAsTicket = {
   causeCandidates: Record<string, unknown>[];
   upgradeCandidates: Record<string, unknown>[];
   adminNote?: string | null;
+  remoteSupportLink?: string | null;
+  remoteSupportStatus?: string | null;
+  visitSupportRequired?: boolean | null;
+  visitSupportStatus?: string | null;
+  visitPreferredDate?: string | null;
+  visitTimeSlot?: string | null;
   resolvedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -320,9 +332,63 @@ export type AdminAsTicketUpdateRequest = {
   supportDecision?: AsSupportDecision | string | null;
   riskLevel?: RiskLevel | string | null;
   autoResponseAllowed?: boolean | null;
+  diagnosticAccuracy?: string | null;
+  remoteSupportLink?: string | null;
+  remoteSupportUrl?: string | null;
+  visitSupportRequired?: boolean | null;
+  visitPreferredDate?: string | null;
+  visitTimeSlot?: string | null;
+  visitAddressSnapshot?: string | null;
+  visitTechnicianNote?: string | null;
 };
 
 export type AdminTicketPayload = AdminAsTicketUpdateRequest;
+
+export type CustomerContactSummary = {
+  id: string;
+  title?: string | null;
+  status: 'ACTIVE' | 'ADMIN_REVIEWING' | 'TICKET_CREATED' | 'ARCHIVED';
+  supportRequestType: 'REMOTE' | 'VISIT' | 'DIAGNOSIS_ONLY';
+  lastMessagePreview?: string | null;
+  lastMessageAt?: string | null;
+  adminUnreadCount?: number;
+  userUnreadCount?: number;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  assignedAdminId?: string | null;
+  ticketId?: string | null;
+  ticketDraft?: Record<string, unknown>;
+};
+
+export type CustomerContactMessage = {
+  id: string;
+  role: 'USER' | 'ADMIN' | 'SYSTEM' | 'ASSISTANT';
+  content: string;
+  attachmentMetadata?: Record<string, unknown>;
+  readAt?: string | null;
+  createdAt?: string;
+};
+
+export type CustomerContactDetail = {
+  contact: CustomerContactSummary;
+  messages: CustomerContactMessage[];
+  ticketDraft?: Record<string, unknown>;
+  userIntegration?: Record<string, unknown>;
+};
+
+export type CustomerContactsResponse = {
+  items: CustomerContactSummary[];
+  userIntegration?: Record<string, unknown>;
+};
+
+export type CustomerContactTicketRequest = {
+  symptomType: string;
+  symptomSummary: string;
+  supportRequestType: string;
+  preferredScheduleAt?: string;
+  adminNote?: string;
+};
 
 export type AsRecommendationFeedbackPayload = {
   failureCategory: string;
@@ -912,6 +978,34 @@ export function createAsRecommendationFeedback(ticketId: string, payload: AsReco
   return api<Record<string, unknown>>(`/api/admin/recommendation-feedback/as-tickets/${ticketId}`, {
     method: 'POST',
     body: JSON.stringify(payload)
+  });
+}
+
+export function getCustomerContacts() {
+  return api<CustomerContactsResponse>('/api/admin/customer-contacts');
+}
+
+export function getCustomerContact(sessionId: string) {
+  return api<CustomerContactDetail>(`/api/admin/customer-contacts/${sessionId}`);
+}
+
+export function postCustomerContactMessage(sessionId: string, content: string) {
+  return api<CustomerContactDetail>(`/api/admin/customer-contacts/${sessionId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content })
+  });
+}
+
+export function createCustomerContactTicket(sessionId: string, request: CustomerContactTicketRequest) {
+  return api<CustomerContactDetail>(`/api/admin/customer-contacts/${sessionId}/ticket`, {
+    method: 'POST',
+    body: JSON.stringify(request)
+  });
+}
+
+export function archiveCustomerContact(sessionId: string) {
+  return api<{ id: string; status: string }>(`/api/admin/customer-contacts/${sessionId}/archive`, {
+    method: 'PATCH'
   });
 }
 

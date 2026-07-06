@@ -3,6 +3,7 @@ package com.buildgraph.prototype.log;
 import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.support.AsLogRagAnalysisService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,9 +47,11 @@ public class AgentLogQueryService {
     );
 
     private final JdbcTemplate jdbcTemplate;
+    private final AsLogRagAnalysisService asLogRagAnalysisService;
 
-    public AgentLogQueryService(JdbcTemplate jdbcTemplate) {
+    public AgentLogQueryService(JdbcTemplate jdbcTemplate, AsLogRagAnalysisService asLogRagAnalysisService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.asLogRagAnalysisService = asLogRagAnalysisService;
     }
 
     public Map<String, Object> upload(
@@ -62,7 +65,7 @@ public class AgentLogQueryService {
         }
         ValidatedLogFile validated = validateLogFile(file);
         Integer minutes = rangeMinutes == null ? 30 : rangeMinutes;
-        String summary = "Validated JSONL log upload (" + validated.lineCount() + " lines).";
+        Map<String, Object> asRagAnalysis = asLogRagAnalysisService.analyze(file, minutes);
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_log_uploads (
                   user_id,
@@ -72,6 +75,7 @@ public class AgentLogQueryService {
                   file_size,
                   storage_path,
                   summary,
+                  as_rag_analysis,
                   consent_accepted_at,
                   delete_after
                 )
@@ -83,17 +87,31 @@ public class AgentLogQueryService {
                   ?,
                   'seed/agent-logs/' || ?,
                   ?,
+                  ?::jsonb,
                   now(),
                   now() + interval '30 days'
                 )
-                RETURNING public_id::text AS id, status, file_name, file_size, range_minutes, summary, created_at, delete_after
-                """, user.internalId(), minutes, validated.fileName(), validated.fileSize(), validated.fileName(), summary);
+                RETURNING public_id::text AS id, status, file_name, file_size, range_minutes, summary, as_rag_analysis::text AS as_rag_analysis, created_at, delete_after
+                """,
+                user.internalId(),
+                minutes,
+                validated.fileName(),
+                validated.fileSize(),
+                validated.fileName(),
+                asRagAnalysis.get("summaryText"),
+                toJson(asRagAnalysis));
         return logMap(row);
+    }
+
+    public Map<String, Object> previewAsRag(MultipartFile file, Integer rangeMinutes) {
+        validateLogFile(file);
+        Integer minutes = rangeMinutes == null ? 30 : rangeMinutes;
+        return asLogRagAnalysisService.analyze(file, minutes);
     }
 
     public Map<String, Object> detail(String id, CurrentUserService.CurrentUser user) {
         return jdbcTemplate.queryForList("""
-                        SELECT public_id::text AS id, status, file_name, file_size, range_minutes, summary, created_at, delete_after
+                        SELECT public_id::text AS id, status, file_name, file_size, range_minutes, summary, as_rag_analysis::text AS as_rag_analysis, created_at, delete_after
                         FROM agent_log_uploads
                         WHERE public_id = ?::uuid
                           AND user_id = ?
@@ -112,9 +130,18 @@ public class AgentLogQueryService {
                 "fileSize", DbValueMapper.integer(row, "file_size"),
                 "rangeMinutes", DbValueMapper.integer(row, "range_minutes"),
                 "summary", DbValueMapper.string(row, "summary"),
+                "asRagAnalysis", DbValueMapper.json(row, "as_rag_analysis", null),
                 "createdAt", DbValueMapper.timestamp(row, "created_at"),
                 "deleteAfter", DbValueMapper.timestamp(row, "delete_after")
         );
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new IllegalStateException("JSON serialization failed", exception);
+        }
     }
 
     static ValidatedLogFile validateLogFile(MultipartFile file) {

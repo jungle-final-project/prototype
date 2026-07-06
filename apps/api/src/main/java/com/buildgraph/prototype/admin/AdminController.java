@@ -1,6 +1,7 @@
 package com.buildgraph.prototype.admin;
 
 import com.buildgraph.prototype.agent.AgentQueryService;
+import com.buildgraph.prototype.agent.PcAgentAsService;
 import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
@@ -32,6 +33,7 @@ public class AdminController {
     private final PriceQueryService priceQueryService;
     private final BuildGraphLayoutService buildGraphLayoutService;
     private final CurrentUserService currentUserService;
+    private final PcAgentAsService pcAgentAsService;
 
     public AdminController(
             AdminQueryService adminQueryService,
@@ -41,7 +43,8 @@ public class AdminController {
             TicketQueryService ticketQueryService,
             PriceQueryService priceQueryService,
             BuildGraphLayoutService buildGraphLayoutService,
-            CurrentUserService currentUserService
+            CurrentUserService currentUserService,
+            PcAgentAsService pcAgentAsService
     ) {
         this.adminQueryService = adminQueryService;
         this.agentQueryService = agentQueryService;
@@ -51,6 +54,7 @@ public class AdminController {
         this.priceQueryService = priceQueryService;
         this.buildGraphLayoutService = buildGraphLayoutService;
         this.currentUserService = currentUserService;
+        this.pcAgentAsService = pcAgentAsService;
     }
 
     @GetMapping("/dashboard")
@@ -152,6 +156,16 @@ public class AdminController {
     ) {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
         return ticketQueryService.update(id, request, admin);
+    }
+
+    @PostMapping("/agent-activation-tokens")
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> issueAgentActivationToken(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return pcAgentAsService.issueActivationToken(request == null ? Map.of() : request);
     }
 
     @GetMapping("/price-jobs")

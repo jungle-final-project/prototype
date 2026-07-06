@@ -6,10 +6,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.ApiException;
+import com.buildgraph.prototype.support.AsLogRagAnalysisService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -28,7 +30,8 @@ class AgentLogQueryServiceTest {
     );
 
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-    private final AgentLogQueryService service = new AgentLogQueryService(jdbcTemplate);
+    private final AsLogRagAnalysisService asLogRagAnalysisService = mock(AsLogRagAnalysisService.class);
+    private final AgentLogQueryService service = new AgentLogQueryService(jdbcTemplate, asLogRagAnalysisService);
 
     @Test
     void uploadStoresRowAfterJsonlValidation() {
@@ -37,6 +40,10 @@ class AgentLogQueryServiceTest {
                 {"timestamp":"2026-07-02T10:00:01Z","gpu":45}
                 """;
         MockMultipartFile file = file("agent-log.jsonl", "application/x-ndjson", content);
+        when(asLogRagAnalysisService.analyze(eq(file), eq(30))).thenReturn(Map.of(
+                "summaryText", "Validated JSONL log upload (2 lines).",
+                "confidence", "LOW"
+        ));
         when(jdbcTemplate.queryForMap(
                 anyString(),
                 eq(USER.internalId()),
@@ -44,7 +51,8 @@ class AgentLogQueryServiceTest {
                 eq("agent-log.jsonl"),
                 eq(file.getSize()),
                 eq("agent-log.jsonl"),
-                contains("2 lines")
+                eq("Validated JSONL log upload (2 lines)."),
+                contains("Validated JSONL log upload (2 lines).")
         )).thenReturn(Map.of(
                 "id", "log-public-id",
                 "status", "UPLOADED",
@@ -52,6 +60,7 @@ class AgentLogQueryServiceTest {
                 "file_size", file.getSize(),
                 "range_minutes", 30,
                 "summary", "Validated JSONL log upload (2 lines).",
+                "as_rag_analysis", "{\"summaryText\":\"Validated JSONL log upload (2 lines).\",\"confidence\":\"LOW\"}",
                 "created_at", "2026-07-02T10:00:00Z",
                 "delete_after", "2026-08-01T10:00:00Z"
         ));
@@ -61,6 +70,8 @@ class AgentLogQueryServiceTest {
         assertThat(result).containsEntry("id", "log-public-id");
         assertThat(result).containsEntry("fileName", "agent-log.jsonl");
         assertThat(result).containsEntry("rangeMinutes", 30);
+        assertThat(result).containsKey("asRagAnalysis");
+        verify(asLogRagAnalysisService).analyze(file, 30);
     }
 
     @Test
@@ -72,7 +83,7 @@ class AgentLogQueryServiceTest {
                     assertThat(exception.code()).isEqualTo("FILE_VALIDATION_ERROR");
                     assertThat(exception.details()).containsEntry("reason", "INVALID_EXTENSION");
                 });
-        verifyNoInteractions(jdbcTemplate);
+        verifyNoInteractions(jdbcTemplate, asLogRagAnalysisService);
     }
 
     @Test
@@ -84,7 +95,7 @@ class AgentLogQueryServiceTest {
                     assertThat(exception.code()).isEqualTo("FILE_VALIDATION_ERROR");
                     assertThat(exception.details()).containsEntry("reason", "INVALID_MIME");
                 });
-        verifyNoInteractions(jdbcTemplate);
+        verifyNoInteractions(jdbcTemplate, asLogRagAnalysisService);
     }
 
     @Test
@@ -99,7 +110,7 @@ class AgentLogQueryServiceTest {
                     assertThat(exception.code()).isEqualTo("FILE_VALIDATION_ERROR");
                     assertThat(exception.details()).containsEntry("reason", "INVALID_JSONL");
                 });
-        verifyNoInteractions(jdbcTemplate);
+        verifyNoInteractions(jdbcTemplate, asLogRagAnalysisService);
     }
 
     @Test
@@ -117,7 +128,7 @@ class AgentLogQueryServiceTest {
                     assertThat(exception.code()).isEqualTo("FILE_VALIDATION_ERROR");
                     assertThat(exception.details()).containsEntry("reason", "LINE_LIMIT_EXCEEDED");
                 });
-        verifyNoInteractions(jdbcTemplate);
+        verifyNoInteractions(jdbcTemplate, asLogRagAnalysisService);
     }
 
     @Test
