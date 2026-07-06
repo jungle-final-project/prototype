@@ -126,9 +126,6 @@ function BoardPlanArt() {
       {/* M.2 (핫스팟: 128..152 × 80..93) */}
       <rect x="129" y="84" width="20" height="5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
       <circle cx="147.5" cy="86.5" r="1" fill="#ffffff" stroke="#cbd5e1" strokeWidth="0.5" />
-      {/* 24핀 전원 커넥터 — 파워 연결선의 고정 접점 (파워가 좌하 도킹이라 보드 좌측 엣지에 둔다) */}
-      <rect x="57" y="30" width="6" height="18" rx="1" fill="#eef2f7" stroke="#cbd5e1" strokeWidth="0.7" />
-      <line x1="60" y1="31.5" x2="60" y2="46.5" stroke="#cbd5e1" strokeWidth="0.5" />
       {/* 칩셋 방열판 */}
       <rect x="130" y="66" width="13" height="11" rx="1.2" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.7" />
       <rect x="132.5" y="68.5" width="8" height="6" rx="0.8" fill="none" stroke="#cbd5e1" strokeWidth="0.5" />
@@ -461,10 +458,6 @@ type Point = { x: number; y: number };
 
 // 보드 기판 사각형(아트 56..154 × 20..97)의 실제 중심 — 실장 상태 점·bow 바깥 방향·꽂힘 모션의 기준.
 const BOARD_CENTER: Point = { x: 65.6, y: 58.5 };
-// 물리적 의미가 있는 고정 접점 — 파워 24핀 커넥터(평면도 아트의 커넥터 위치와 동일 상수 계보).
-const EDGE_POINT_OVERRIDES: Record<string, Point> = {
-  'PSU-MOTHERBOARD': { x: 37.5, y: 39 }
-};
 
 function boxCenter(box: Box): Point {
   return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
@@ -516,19 +509,7 @@ function edgeGeometryOnLine(config: SlotEdgeConfig) {
     return { path: '', start: point, end: point, label: point };
   }
 
-  const override = EDGE_POINT_OVERRIDES[`${config.from}-${config.to}`] ?? EDGE_POINT_OVERRIDES[`${config.to}-${config.from}`];
   const labelT = config.labelT ?? 0.5;
-  if (override) {
-    // 고정 접점(24핀 등)으로 향하는 직선 — 접점이 곧 포트 패드 위치다.
-    const start = boxAnchorToward(a, override);
-    const end = override;
-    return {
-      path: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
-      start,
-      end,
-      label: { x: start.x + (end.x - start.x) * labelT, y: start.y + (end.y - start.y) * labelT }
-    };
-  }
   if (!config.bow) {
     const start = boxAnchorToward(a, bc);
     const end = boxAnchorToward(b, ac);

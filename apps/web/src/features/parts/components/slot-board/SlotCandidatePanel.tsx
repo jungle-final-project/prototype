@@ -100,7 +100,7 @@ export function SlotCandidatePanel({
       data-testid="slot-candidate-panel"
       role="dialog"
       aria-label={`${slot.label} 부품 목록`}
-      className="panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:static lg:z-auto lg:max-h-none lg:rounded-lg lg:border lg:shadow-none"
+      className="panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:static lg:z-auto lg:h-0 lg:max-h-none lg:min-h-full lg:rounded-lg lg:border lg:shadow-none"
     >
       <div className="flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3">
         <div className="min-w-0">
@@ -194,7 +194,8 @@ export function SlotCandidatePanel({
       ) : null}
 
       {/* 후보 목록만 스크롤 영역: 데스크톱은 카드 약 6개 분량 높이로 제한한다. 데이터는 20개 페이지 로드를 유지. */}
-      <div data-testid="slot-candidate-list" className="min-h-0 flex-1 overflow-y-auto p-4 lg:max-h-[608px]">
+      {/* lg: 패널이 h-0+min-h-full로 보드(구성 관계도) 높이를 따라가므로 목록도 그 안에서 스크롤된다. */}
+      <div data-testid="slot-candidate-list" className="min-h-0 flex-1 overflow-y-auto p-4">
         {isLoading ? (
           <div className="rounded-md border border-commerce-line p-4 text-sm text-slate-500">후보 목록을 불러오는 중입니다.</div>
         ) : null}

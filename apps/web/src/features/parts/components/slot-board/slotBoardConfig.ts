@@ -77,7 +77,7 @@ export const FALLBACK_EDGES: SlotEdgeConfig[] = [
   { from: 'MOTHERBOARD', to: 'RAM', label: '메모리 규격', implied: true },
   { from: 'GPU', to: 'MOTHERBOARD', label: 'PCIe x16', implied: true },
   // 도킹 부품 ↔ 보드/부품 관계 — 방사 배치라 대부분 짧은 직선이다.
-  // 파워(좌하) → 보드 좌측 엣지의 24핀 접점: 좌측 거터를 짧게 가로지른다.
+  // 파워(좌하)가 명판 바로 옆이라 메인보드 칸에 직결한다 — 보드 쪽 끝은 포트 패드로 그려진다.
   { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원' },
   // 쿨러가 소켓 바로 위라 수직 단선 — 실제 장착 방향 그대로.
   { from: 'COOLER', to: 'CPU', label: '쿨러 장착' },

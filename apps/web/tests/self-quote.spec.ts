@@ -436,7 +436,8 @@ test('renders the quote checklist with progress, next-slot guide, and total', as
 
   const checklist = page.getByTestId('quote-checklist');
   await expect(checklist.getByTestId('quote-checklist-progress')).toHaveText('2/8 완료');
-  await expect(checklist.getByTestId('quote-checklist-total')).toHaveText('500,000원');
+  // 합계는 하단 상태바(견적 합계)만 담당한다 — 체크리스트 안의 중복 총액 행은 제거됨.
+  await expect(checklist.getByTestId('quote-checklist-total')).toHaveCount(0);
 
   await expect(checklist.getByTestId('checklist-CPU')).toHaveAttribute('data-filled', 'true');
   await expect(checklist.getByTestId('checklist-CPU')).toContainText('체크 CPU');
@@ -447,6 +448,13 @@ test('renders the quote checklist with progress, next-slot guide, and total', as
   await expect(checklist.getByTestId('checklist-RAM')).toContainText('다음 선택');
   await expect(page.getByTestId('slot-RAM')).toHaveAttribute('data-next', 'true');
   await expect(page.getByTestId('quote-next-guide')).toContainText('다음: 3. RAM를 선택해 주세요');
+
+  // 담은 부품 견적 테이블 — 체크리스트 아래 별도 박스에 상품별 행(부품/수량/금액)으로 나온다.
+  const itemsTable = page.getByTestId('quote-items-table');
+  await expect(itemsTable).toContainText('담은 부품 2개');
+  await expect(itemsTable.getByTestId('quote-items-row-CPU')).toContainText('체크 CPU');
+  await expect(itemsTable.getByTestId('quote-items-row-CPU')).toContainText('300,000원');
+  await expect(itemsTable.getByTestId('quote-items-row-MOTHERBOARD')).toContainText('체크 보드');
 
   // 체크리스트 클릭 = 해당 후보 패널 열기 (가이드는 강제가 아니라서 아무 항목이나 열 수 있다).
   await checklist.getByTestId('checklist-PSU').click();
