@@ -1,9 +1,11 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
+import { CheckCircle2, Send } from 'lucide-react';
+import { AdminShell, DataTable, Panel, StateMessage } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getCachedAuthUser } from '../../../lib/api';
 import { deleteAdminSupportChatSession, deleteAdminSupportChatVisitReservation, getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, putAdminSupportChatVisitReservation, type SupportChatSocket } from '../../support/supportChatApi';
+import { KoreanStatusBadge } from '../adminDisplay';
 import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto, VisitSupportReservation } from '../../support/types';
 
 const DEFAULT_POLL_MS = 5000;
@@ -345,19 +347,21 @@ export function AdminSupportChatSessionsPage() {
           setSelectedSessionId(room.id);
           setDeleteError(null);
         }}
-        className={`rounded px-3 py-2 text-xs font-bold ${room.id === selectedSessionId ? 'bg-brand-blue text-white' : 'border border-slate-300 text-brand-navy'}`}
+        className={`h-8 min-w-14 rounded-md px-3 text-[11px] font-black transition ${
+          room.id === selectedSessionId ? 'bg-brand-blue text-white' : 'border border-slate-300 text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+        }`}
         aria-label={`${userLabel(room)} 상담방 선택`}
       >
         선택
       </button>
     ),
-    사용자: userLabel(room),
-    티켓: <Link to={`/admin/as-tickets/${room.asTicketId}`} className="font-bold text-brand-blue">{shortId(room.asTicketId)}</Link>,
-    상태: <StatusBadge status={room.ticketStatus ?? room.status} />,
+    사용자: <span className="block min-w-0 truncate font-black text-slate-900">{userLabel(room)}</span>,
+    티켓: <Link to={`/admin/as-tickets/${room.asTicketId}`} className="font-black text-brand-blue hover:underline">{shortId(room.asTicketId)}</Link>,
+    상태: <KoreanStatusBadge status={room.ticketStatus ?? room.status} />,
     안읽음: room.adminUnreadCount ?? 0,
-    예약: visitListLabel(room.visitReservation ?? null),
-    증상: room.symptom ?? '-',
-    최근메시지: room.lastMessagePreview ?? '-',
+    예약: <span className="font-black">{visitListLabel(room.visitReservation ?? null)}</span>,
+    증상: <span className="line-clamp-2 block max-w-[20ch] sm:max-w-[28ch] lg:max-w-[36ch]">{room.symptom ?? '-'}</span>,
+    최근메시지: <span className="line-clamp-2 block max-w-[26ch]">{room.lastMessagePreview ?? '-'}</span>,
     최근시각: formatDateTime(room.lastMessageAt ?? undefined)
   }));
   const exportRows = rooms.map((room) => ({
@@ -428,7 +432,16 @@ export function AdminSupportChatSessionsPage() {
     <AdminShell title="상담방 관리" exportRows={exportRows} exportFileName="admin-support-chat-sessions.csv">
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <Panel title="상담방 목록" subtitle="AS 티켓이 생성된 사용자 상담방을 확인하고 응답할 수 있습니다.">
-          <div className="mb-3 text-xs font-bold text-slate-600">목록 {socketStatusLabel(queueSocketStatus)}</div>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="inline-flex items-center gap-2 rounded-md bg-slate-100 px-2.5 py-1.5 text-slate-700">
+              <span className="font-black">목록</span>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${connectionClass(queueSocketStatus)}`}>{socketStatusLabel(queueSocketStatus)}</span>
+              <span className="text-slate-500">총 {rooms.length}건</span>
+            </div>
+            <div className="text-slate-500">
+              갱신 간격: <span className="font-black text-slate-700">{pollingLabel(listQuery.data)}</span>
+            </div>
+          </div>
           {listQuery.isLoading ? <StateMessage type="info" title="상담방 로딩 중" body="사용자 상담방 목록을 불러오고 있습니다." /> : null}
           {listQuery.isError ? <StateMessage type="warn" title="상담방 조회 실패" body="관리자 상담방 목록을 불러오지 못했습니다." /> : null}
           {!listQuery.isLoading && !listQuery.isError && roomRows.length === 0 ? (
@@ -447,35 +460,41 @@ export function AdminSupportChatSessionsPage() {
           {detailQuery.isError ? <StateMessage type="warn" title="대화 조회 실패" body="상담방 상세를 불러오지 못했습니다." /> : null}
           {detailQuery.data ? (
             <>
-              <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+              <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3 text-sm">
                 <div className="mb-2 flex items-start justify-between gap-3">
-                  <div className="font-bold text-slate-900">{selectedRoom?.symptom ?? 'AS 상담'}</div>
+                  <div>
+                    <div className="text-sm font-black text-slate-900">{selectedRoom?.symptom ?? 'AS 상담'}</div>
+                    <div className="mt-0.5 text-[11px] text-slate-500">상담방 ID: {selectedRoom?.id ?? '-'}</div>
+                  </div>
                   <button
                     type="button"
                     disabled={!canDeleteSession}
                     onClick={deleteSession}
-                    className="rounded border border-rose-300 px-3 py-2 text-xs font-black text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                    className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-rose-300 px-3 text-[11px] font-black text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-transparent disabled:text-slate-400"
                   >
+                    <CheckCircle2 size={14} />
                     {deleteSessionMutation.isPending ? '삭제 중' : '상담방 삭제'}
                   </button>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs text-slate-600">
-                  <span>티켓 {selectedRoom ? shortId(selectedRoom.asTicketId) : '-'}</span>
-                  <span>상태 {selectedRoom?.ticketStatus ?? '-'}</span>
-                  <span>방 {selectedRoom?.status ?? '-'}</span>
-                  <span>안읽음 {selectedRoom?.adminUnreadCount ?? 0}</span>
-                  <span>{socketStatusLabel(socketStatus)}</span>
+                <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                  <MetaItem label="티켓">{shortId(selectedRoom?.asTicketId ?? '-')}</MetaItem>
+                  <MetaItem label="상태">
+                    <span className="inline-flex flex-wrap gap-1">
+                      <KoreanStatusBadge status={selectedRoom?.status ?? 'UNKNOWN'} />
+                      <KoreanStatusBadge status={selectedRoom?.ticketStatus ?? 'UNKNOWN'} />
+                    </span>
+                  </MetaItem>
+                  <MetaItem label="안읽음">{selectedRoom?.adminUnreadCount ?? 0}</MetaItem>
+                  <MetaItem label="연결 상태">{socketStatusLabel(socketStatus)}</MetaItem>
+                  <MetaItem label="마지막 업데이트">{selectedRoom?.lastMessageAt ? formatDateTime(selectedRoom.lastMessageAt) : '-'}</MetaItem>
+                  <MetaItem label="예약 정보">{visitListLabel(selectedRoom?.visitReservation ?? null)}</MetaItem>
                 </div>
               </div>
               {selectedRoom?.status === 'ARCHIVED' ? (
-                <div className="mb-4">
-                  <StateMessage type="warn" title="상담방 삭제됨" body="이 상담방은 관리자에 의해 삭제되어 목록에서 제외되었습니다. 사용자는 새 AS 접수를 진행할 수 있습니다." />
-                </div>
+                <StateMessage type="warn" title="상담방 삭제됨" body="이 상담방은 관리자에 의해 삭제되어 목록에서 제외되었습니다. 사용자는 새 AS 접수를 진행할 수 있습니다." />
               ) : null}
               {deleteError ? (
-                <div className="mb-4">
-                  <StateMessage type="warn" title="상담방 삭제 실패" body={deleteError} />
-                </div>
+                <StateMessage type="warn" title="상담방 삭제 실패" body={deleteError} />
               ) : null}
               <AdminVisitReservationPanel
                 reservation={selectedRoom?.visitReservation ?? null}
@@ -498,7 +517,7 @@ export function AdminSupportChatSessionsPage() {
                 onSubmit={submitVisitReservation}
                 onCancel={cancelVisitReservation}
               />
-              <div className="relative h-[440px] overflow-hidden rounded border border-slate-200 bg-slate-50">
+              <div className="relative h-[340px] overflow-hidden rounded-md border border-slate-200 bg-slate-50 sm:h-[380px] lg:h-[440px]">
                 <div
                   ref={messagesRef}
                   data-testid="admin-support-chat-messages"
@@ -511,14 +530,18 @@ export function AdminSupportChatSessionsPage() {
                     }
                   }}
                 >
-                  <div className="space-y-3">
-                    {messages.map((item) => (
-                      <div key={item.id}>
-                        {newMarkerMessageId === item.id ? <NewMessageMarker /> : null}
-                        <AdminChatBubble message={item} />
-                      </div>
-                    ))}
-                  </div>
+                  {messages.length === 0 ? (
+                    <StateMessage type="info" title="메시지 없음" body="아직 메시지가 없습니다. 상담방이 활성화되면 채팅이 표시됩니다." />
+                  ) : (
+                    <div className="space-y-3">
+                      {messages.map((item) => (
+                        <div key={item.id}>
+                          {newMarkerMessageId === item.id ? <NewMessageMarker /> : null}
+                          <AdminChatBubble message={item} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {newMarkerMessageId ? (
                   <button
@@ -542,7 +565,7 @@ export function AdminSupportChatSessionsPage() {
                   <div className="space-y-2">
                     <div className="flex gap-2">
                       <input
-                        className="h-11 min-w-0 flex-1 rounded border border-slate-300 px-3 text-sm"
+                        className="h-11 min-w-0 flex-1 rounded-md border border-slate-300 px-3 text-sm focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
                         placeholder="관리자 답변을 입력하세요"
                         value={message}
                         maxLength={2000}
@@ -551,11 +574,21 @@ export function AdminSupportChatSessionsPage() {
                           setSendError(null);
                         }}
                       />
-                      <button disabled={!canSend} className="rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+                      <button
+                        type="submit"
+                        disabled={!canSend}
+                        className="inline-flex h-11 min-w-28 shrink-0 items-center justify-center gap-1 rounded-md bg-brand-blue px-4 text-sm font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                      >
+                        <Send size={14} />
                         {sendMutation.isPending ? '전송 중' : '답변 전송'}
                       </button>
                     </div>
-                    {sendError ? <p role="alert" className="text-xs font-bold text-rose-700">{sendError}</p> : null}
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className={`font-bold ${sendError ? 'text-rose-700' : 'text-slate-500'}`} role={sendError ? 'alert' : undefined}>
+                        {sendError ?? 'Enter 키로 즉시 전송합니다. 메시지 입력을 지우지 않으려면 전송 후 바로 다시 입력하세요.'}
+                      </span>
+                      <span className="text-slate-500">문자 수 {message.length} / 2000</span>
+                    </div>
                   </div>
                 )}
               </form>
@@ -572,14 +605,19 @@ function AdminChatBubble({ message }: { message: SupportChatMessage }) {
   const isSystem = message.role === 'SYSTEM';
   return (
     <div className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[82%] rounded px-3 py-2 text-sm leading-6 shadow-sm ${
+      <div className={`max-w-[82%] rounded-md border px-3 py-2 text-sm leading-6 shadow-sm ${
         isAdmin
           ? 'bg-brand-blue text-white'
           : isSystem
-            ? 'border border-slate-200 bg-white text-slate-600'
-            : 'border border-slate-200 bg-white text-slate-900'
+            ? 'border-slate-200 bg-white text-slate-600'
+            : 'border-slate-200 bg-white text-slate-900'
       }`}>
-        <div className="mb-1 text-[11px] font-bold opacity-75">{messageLabel(message)}</div>
+        <div className="mb-1 flex items-center justify-between gap-2 text-[11px] font-bold opacity-75">
+          <span>{messageLabel(message)}</span>
+          <time className="font-normal opacity-75" dateTime={message.createdAt ?? undefined}>
+            {formatDateTime(message.createdAt)}
+          </time>
+        </div>
         <p className="whitespace-pre-wrap break-words">{message.content}</p>
       </div>
     </div>
@@ -626,15 +664,13 @@ function AdminVisitReservationPanel({
   onCancel: () => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="mb-4 rounded border border-slate-200 bg-white p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
+    <form onSubmit={onSubmit} className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-black text-slate-900">방문 예약</div>
           <div className="mt-1 text-xs font-bold text-brand-blue">{adminVisitStatusLabel(reservation?.status)}</div>
         </div>
-        {reservation?.scheduledAt ? (
-          <div className="text-right text-xs font-bold text-slate-700">{formatVisitTime(reservation.scheduledAt)}</div>
-        ) : null}
+        {reservation?.scheduledAt ? <div className="text-right text-xs text-slate-700">{formatVisitTime(reservation.scheduledAt)}</div> : null}
       </div>
       <div className="grid gap-2">
         <label className="grid gap-1 text-xs font-bold text-slate-600">
@@ -644,7 +680,7 @@ function AdminVisitReservationPanel({
             value={scheduledAt}
             disabled={disabled}
             onChange={(event) => onScheduledAtChange(event.target.value)}
-            className="h-10 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 disabled:bg-slate-100"
+            className="h-10 rounded-md border border-slate-300 px-3 text-sm font-normal text-slate-900 focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:bg-slate-100"
           />
         </label>
         <label className="grid gap-1 text-xs font-bold text-slate-600">
@@ -653,14 +689,14 @@ function AdminVisitReservationPanel({
             value={technicianNote}
             disabled={disabled}
             onChange={(event) => onTechnicianNoteChange(event.target.value)}
-            className="h-10 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 disabled:bg-slate-100"
+            className="h-10 rounded-md border border-slate-300 px-3 text-sm font-normal text-slate-900 focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:bg-slate-100"
           />
         </label>
         <div className="flex gap-2">
           <button
             type="submit"
             disabled={disabled || !canSchedule}
-            className="h-10 flex-1 rounded bg-brand-blue px-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+            className="h-10 flex-1 rounded-md bg-brand-blue px-3 text-xs font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
             {schedulePending ? '저장 중' : '예약 확정'}
           </button>
@@ -668,7 +704,7 @@ function AdminVisitReservationPanel({
             type="button"
             disabled={disabled || !canCancel}
             onClick={onCancel}
-            className="h-10 rounded border border-rose-200 px-3 text-xs font-black text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+            className="h-10 rounded-md border border-rose-200 px-3 text-xs font-black text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
           >
             {cancelPending ? '취소 중' : '예약 취소'}
           </button>
@@ -721,12 +757,26 @@ function userLabel(room: SupportChatContact) {
   return room.user?.email ?? room.user?.name ?? room.user?.id ?? '-';
 }
 
+function MetaItem({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="rounded-md border border-slate-100 bg-slate-50 p-2">
+      <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-0.5 text-sm text-slate-800">{children}</div>
+    </div>
+  );
+}
+
 function shortId(id: string) {
   return id.length <= 12 ? id : `${id.slice(0, 8)}...${id.slice(-4)}`;
 }
 
 function formatDateTime(value?: string) {
   return value ? value.replace('T', ' ').slice(0, 19) : '-';
+}
+
+function pollingLabel(list: SupportChatSessionListDto | undefined) {
+  const polling = pollingInterval(list);
+  return `${polling}ms`;
 }
 
 function socketStatusLabel(status: SocketStatus) {
@@ -741,6 +791,21 @@ function socketStatusLabel(status: SocketStatus) {
     case 'polling':
     default:
       return '자동 새로고침';
+  }
+}
+
+function connectionClass(status: SocketStatus) {
+  switch (status) {
+    case 'connected':
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'connecting':
+    case 'reconnecting':
+      return 'bg-blue-50 text-blue-700 border-blue-200';
+    case 'disconnected':
+      return 'bg-rose-50 text-rose-700 border-rose-200';
+    case 'polling':
+    default:
+      return 'bg-slate-200 text-slate-700 border-slate-300';
   }
 }
 
