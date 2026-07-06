@@ -1494,7 +1494,7 @@ Owner: 4번
 | `user_id` | `BIGINT` | no | `users.id` | 예약 사용자 |
 | `preferred_date` | `DATE` | no | - | 희망 방문일 |
 | `time_slot` | `VARCHAR(30)` | no | - | `MORNING`, `AFTERNOON`, `EVENING` |
-| `scheduled_at` | `TIMESTAMPTZ` | yes | - | 정확한 방문 예약 시작 시각 (V99) |
+| `scheduled_at` | `TIMESTAMPTZ` | yes | - | 정확한 방문 예약 시작 시각 (V108) |
 | `status` | `VARCHAR(30)` | no | - | `REQUESTED`, `SCHEDULED`, `RESCHEDULE_REQUESTED`, `VISIT_IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
 | `address_snapshot` | `TEXT` | yes | - | 예약 당시 주소 |
 | `technician_note` | `TEXT` | yes | - | 기사 메모 |
@@ -2645,10 +2645,10 @@ V95__support_chat_rooms.sql
 V96__support_chat_rooms_split.sql
 V97__support_chat_rooms_backfill_repair.sql
 V98__quote_audit_p0_attribute_backfill.sql
-V99__visit_support_reservations_exact_time.sql
+V108__visit_support_reservations_exact_time.sql
 ```
 
-`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다. `V95`~`V97`은 사용자-관리자 support chat 전용 테이블 분리와 백필 보정 migration이고, `V99`는 방문 지원 예약의 정확한 시작 시각을 추가한다.
+`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다. `V95`~`V97`은 사용자-관리자 support chat 전용 테이블 분리와 백필 보정 migration이고, `V108`은 방문 지원 예약의 정확한 시작 시각을 추가한다.
 
 `V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR(PC Agent 통합 계열)과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다(다음 번호는 `V98`부터).
 

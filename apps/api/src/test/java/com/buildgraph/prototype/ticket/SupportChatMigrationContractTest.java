@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class SupportChatMigrationContractTest {
     private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V96__support_chat_rooms_split.sql");
     private static final Path BACKFILL_MIGRATION = Path.of("src/main/resources/db/migration/V97__support_chat_rooms_backfill_repair.sql");
-    private static final Path VISIT_RESERVATION_EXACT_TIME_MIGRATION = Path.of("src/main/resources/db/migration/V99__visit_support_reservations_exact_time.sql");
+    private static final Path VISIT_RESERVATION_EXACT_TIME_MIGRATION = Path.of("src/main/resources/db/migration/V108__visit_support_reservations_exact_time.sql");
 
     @Test
     void migrationCreatesDedicatedSupportChatTables() throws Exception {
