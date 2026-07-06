@@ -125,7 +125,14 @@ const emptyDraft = {
   itemCount: 0
 };
 
-function draftItem(partId: string, category: string, name: string, price: number, quantity = 1) {
+function draftItem(
+  partId: string,
+  category: string,
+  name: string,
+  price: number,
+  quantity = 1,
+  attributes: Record<string, unknown> = {}
+) {
   return {
     id: `draft-item-${partId}`,
     partId,
@@ -136,7 +143,7 @@ function draftItem(partId: string, category: string, name: string, price: number
     unitPriceAtAdd: price,
     currentPrice: price,
     lineTotal: price * quantity,
-    attributes: {}
+    attributes
   };
 }
 
@@ -1026,6 +1033,27 @@ test('updates RAM quantity with the panel stepper', async ({ page }) => {
 
   await expect.poll(() => patchRequests).toEqual([{ partId: 'part-ram-qty', quantity: 3 }]);
   await expect(page.getByTestId('slot-RAM').locator('[data-mini-slot-filled="true"]')).toHaveCount(3);
+});
+
+test('counts a dual-stick RAM kit as two mini slots', async ({ page }) => {
+  await loginAsUser(page);
+
+  // "32GB(16Gx2)" 킷: 상품 1개(quantity 1)지만 moduleCount=2라 스틱 2개를 차지한다.
+  const kit = draftItem('part-ram-kit', 'RAM', '32GB 2개들이 킷', 180000, 1, { moduleCount: 2 });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...emptyDraft, items: [kit], totalPrice: kit.lineTotal, itemCount: 1 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('slot-RAM').locator('[data-mini-slot-filled="true"]')).toHaveCount(2);
 });
 
 test('opens the candidate panel from the category deep link', async ({ page }) => {

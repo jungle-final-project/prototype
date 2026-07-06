@@ -173,7 +173,8 @@ public class BuildGraphService {
                         DbValueMapper.string(row, "name"),
                         DbValueMapper.string(row, "manufacturer"),
                         numberValue(row.get("current_price")),
-                        objectMap(row.get("attributes"))
+                        objectMap(row.get("attributes")),
+                        numberValue(row.get("quantity"))
                 ))
                 .toList();
     }
@@ -203,7 +204,11 @@ public class BuildGraphService {
         Map<String, Object> powerDetails = toolDetails(toolByName, "power");
         Map<String, Object> sizeDetails = toolDetails(toolByName, "size");
         String socketStatus = socketStatus(byCategory, compatibilityDetails, toolStatus(toolByName, "compatibility"));
-        String memoryStatus = booleanStatus(booleanValue(compatibilityDetails.get("memoryTypeMatched")), toolStatus(toolByName, "compatibility"));
+        // 메인보드-RAM 엣지는 DDR 규격과 슬롯 수용량을 함께 본다. 슬롯 초과는 물리적으로 장착 불가라 FAIL.
+        boolean ramSlotsExceeded = Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramSlotsMatched")));
+        Boolean memoryTypeMatched = booleanValue(compatibilityDetails.get("memoryTypeMatched"));
+        Boolean memoryEdgeOk = ramSlotsExceeded ? Boolean.FALSE : memoryTypeMatched;
+        String memoryStatus = booleanStatus(memoryEdgeOk, toolStatus(toolByName, "compatibility"));
         String coolerSocketStatus = booleanStatus(booleanValue(compatibilityDetails.get("coolerSocketMatched")), toolStatus(toolByName, "compatibility"));
         // 파워 판정은 ToolCheckService.power() 한 곳에서만 내리고 GPU-PSU 엣지도 그 status를 그대로 쓴다.
         // (엣지가 requiredRatedCapacity 기준 headroom으로 별도 재계산하면, 툴은 WARN인데 엣지만 FAIL이 되어
@@ -214,7 +219,7 @@ public class BuildGraphService {
 
         List<Map<String, Object>> edges = new ArrayList<>();
         addEdgeIfPossible(edges, byCategory, "CPU", "MOTHERBOARD", "edge-cpu-board-socket", "REQUIRES", socketStatus, socketLabel(socketStatus), socketSummary(byCategory, socketStatus));
-        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, "DDR 규격", memorySummary(byCategory, memoryStatus));
+        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, ramSlotsExceeded ? "메모리 슬롯" : "DDR 규격", memorySummary(byCategory, compatibilityDetails, memoryStatus));
         addEdgeIfPossible(edges, byCategory, "CPU", "COOLER", "edge-cpu-cooler-socket", "REQUIRES", coolerSocketStatus, "쿨러 소켓", coolerSummary(byCategory, coolerSocketStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "PSU", "edge-gpu-psu-power", "AFFECTS", powerStatus, powerLabel(powerDetails, powerStatus), powerSummary(toolByName, powerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "CASE", "edge-gpu-case-length", "REQUIRES", gpuLengthStatus, gpuLengthLabel(sizeDetails, gpuLengthStatus), gpuLengthSummary(toolByName, gpuLengthStatus));
@@ -433,7 +438,12 @@ public class BuildGraphService {
         return base + " 소켓이 일치합니다.";
     }
 
-    private static String memorySummary(Map<String, ToolBuildPart> byCategory, String status) {
+    private static String memorySummary(Map<String, ToolBuildPart> byCategory, Map<String, Object> compatibilityDetails, String status) {
+        if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramSlotsMatched")))) {
+            Object sticks = compatibilityDetails.get("ramSticksTotal");
+            Object slots = compatibilityDetails.get("memorySlots");
+            return "램 스틱 " + sticks + "개가 메인보드 메모리 슬롯 " + slots + "개를 초과합니다. 수량 또는 구성(단품/2개들이 킷)을 조정해 주세요.";
+        }
         String ramType = attr(byCategory.get("RAM"), "memoryType");
         String boardType = attr(byCategory.get("MOTHERBOARD"), "memoryType");
         String base = "RAM " + ramType + " / 메인보드 지원 " + boardType + "입니다.";
