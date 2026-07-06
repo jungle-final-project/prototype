@@ -4,7 +4,6 @@ import { partImageUrl, partShortSpec } from '../../partDisplay';
 import type { QuoteDraftItem } from '../../types';
 import {
   FALLBACK_EDGES,
-  SLOT_BOARD_BG,
   SLOT_CONFIGS,
   isMultiItemCategory,
   isSlotBoardPercentPosition,
@@ -19,48 +18,46 @@ import {
 type SlotBoardProps = {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  nextCategory?: PartCategory | null;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
   isRemovePending: boolean;
   graph?: BuildGraphResolveResponse;
 };
 
-export function SlotBoard({ items, selectedCategory, onSlotSelect, onRemoveItem, isRemovePending, graph }: SlotBoardProps) {
+export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect, onRemoveItem, isRemovePending, graph }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
   const slotPositions = useMemo(() => slotPositionsFromGraph(graph), [graph]);
   return (
     <div className="panel overflow-hidden">
-      {/* 보드 헤더: 제목 + 범례 */}
+      {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-commerce-line px-4 py-2.5">
-        <span className="text-xs font-black text-slate-700">메인보드 구성도 (의존성 그래프)</span>
+        <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
         <div className="flex items-center gap-3 text-[10px] font-bold text-slate-500">
           <span className="flex items-center gap-1.5">
-            <svg width="20" height="4" viewBox="0 0 20 4" aria-hidden="true"><line x1="0" y1="2" x2="20" y2="2" stroke="#0d9488" strokeWidth="2" /></svg>
-            연결됨
+            <svg width="20" height="4" viewBox="0 0 20 4" aria-hidden="true"><line x1="0" y1="2" x2="20" y2="2" stroke="#16a34a" strokeWidth="3" /></svg>
+            호환 가능
+          </span>
+          <span className="flex items-center gap-1.5">
+            <svg width="20" height="4" viewBox="0 0 20 4" aria-hidden="true"><line x1="0" y1="2" x2="20" y2="2" stroke="#d97706" strokeWidth="3" /></svg>
+            주의
+          </span>
+          <span className="flex items-center gap-1.5">
+            <svg width="20" height="4" viewBox="0 0 20 4" aria-hidden="true"><line x1="0" y1="2" x2="20" y2="2" stroke="#ef4444" strokeWidth="3" strokeDasharray="6 4" /></svg>
+            장착 불가
           </span>
           <span className="flex items-center gap-1.5">
             <svg width="20" height="4" viewBox="0 0 20 4" aria-hidden="true"><line x1="0" y1="2" x2="20" y2="2" stroke="#94a3b8" strokeWidth="2" strokeDasharray="4 3" /></svg>
-            비연결
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-3 w-3 rounded-full border border-amber-300 bg-amber-50 text-center text-[8px] font-black leading-3 text-amber-700">!</span>
-            간섭 주의
+            미장착
           </span>
         </div>
       </div>
-      {/* 보드 본체 */}
+      {/* 보드 본체 — 배경 평면도/하드웨어 장식 없이 카드와 연결선만 (정보형 UI) */}
       <div
         data-testid="slot-board"
         data-visual-mode="motherboard"
         className="relative flex flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:aspect-[16/8.4] lg:overflow-hidden lg:bg-[#f8fbff] lg:p-4"
-        style={{ ['--slot-board-bg' as string]: `url(${SLOT_BOARD_BG})` }}
       >
-        <div
-          data-testid="slot-board-motherboard-art"
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-2 hidden rounded-lg bg-[url('/slot-board/backgrounds/topology-board-bg.svg')] bg-contain bg-center bg-no-repeat opacity-[0.82] lg:block"
-        />
-        <BoardHardwareLabels />
         <SlotBoardEdges items={items} graph={graph} slotPositions={slotPositions} selectedCategory={selectedCategory} />
         {SLOT_CONFIGS.map((slot) => (
           <BoardSlot
@@ -70,6 +67,7 @@ export function SlotBoard({ items, selectedCategory, onSlotSelect, onRemoveItem,
             items={items.filter((item) => item.category === slot.category)}
             problemStatus={statusByCategory.get(slot.category)}
             isSelected={selectedCategory === slot.category}
+            isNext={nextCategory === slot.category}
             onSelect={() => onSlotSelect(slot.category)}
             onRemoveItem={onRemoveItem}
             isRemovePending={isRemovePending}
@@ -86,6 +84,7 @@ function BoardSlot({
   items,
   problemStatus,
   isSelected,
+  isNext,
   onSelect,
   onRemoveItem,
   isRemovePending
@@ -95,6 +94,7 @@ function BoardSlot({
   items: QuoteDraftItem[];
   problemStatus?: 'PASS' | 'WARN' | 'FAIL';
   isSelected: boolean;
+  isNext: boolean;
   onSelect: () => void;
   onRemoveItem: (partId: string) => void;
   isRemovePending: boolean;
@@ -118,8 +118,10 @@ function BoardSlot({
       : slotStatus === 'WARN'
         ? 'border-2 border-amber-400 ring-2 ring-amber-50'
         : filled
-          ? 'border border-slate-200 hover:border-slate-400 shadow-sm'
-          : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
+          ? 'border border-emerald-200 hover:border-emerald-400 shadow-sm'
+          : isNext
+            ? 'border-2 border-brand-blue bg-blue-50/40 hover:border-blue-600'
+            : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
   const visibleName = filled
     ? items.length > 1 ? `${primaryItem.name} 외 ${items.length - 1}개` : primaryItem.name
     : '';
@@ -132,9 +134,10 @@ function BoardSlot({
       data-status={slotStatus}
       data-flash={isFlashing ? 'true' : 'false'}
       style={layoutVars}
+      data-next={isNext ? 'true' : 'false'}
       className={`group relative z-20 rounded-lg bg-white/95 p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${borderClass} ${
         isFlashing ? 'slot-attach-flash' : ''
-      } ${!filled && !isSelected ? 'slot-empty-pulse' : ''}`}
+      } ${isNext && !isSelected ? 'slot-empty-pulse' : ''}`}
     >
       <button
         type="button"
@@ -155,7 +158,9 @@ function BoardSlot({
           ) : slotStatus === 'WARN' ? (
             <span className="rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-black text-amber-700">간섭 주의</span>
           ) : filled ? (
-            <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[9px] font-black text-emerald-700">정상</span>
+            <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[9px] font-black text-emerald-700">호환 가능</span>
+          ) : isNext ? (
+            <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[9px] font-black text-brand-blue">다음 선택</span>
           ) : null}
         </div>
         {/* 카드 본체 */}
@@ -209,24 +214,6 @@ function BoardSlot({
   );
 }
 
-function BoardHardwareLabels() {
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 hidden text-[11px] font-black text-slate-700 lg:block">
-      <div className="absolute left-[28%] top-[54%]">
-        <div className="h-2 w-64 rounded-full border border-slate-300 bg-white/70 shadow-sm" />
-        <div className="mt-1 text-center leading-4">
-          PCIe x16 슬롯
-          <div className="text-[10px] font-bold text-slate-500">(메인보드)</div>
-        </div>
-      </div>
-      <div className="absolute left-[31%] top-[74%] leading-4">
-        24핀 전원
-        <div className="text-[10px] font-bold text-slate-500">(메인보드)</div>
-      </div>
-    </div>
-  );
-}
-
 // 장착/교체로 슬롯 구성이 바뀌면 잠깐 flash 상태를 켠다. 애니메이션 자체는 CSS가 담당하고
 // prefers-reduced-motion에서는 CSS에서 꺼진다.
 function useAttachFlash(items: QuoteDraftItem[]) {
@@ -257,12 +244,13 @@ type ResolvedSlotEdge = {
   summary?: string;
 };
 
+// 호환 상태 색 체계: 정상 = 초록, 주의 = 노랑, 불가 = 빨강, 미장착 = 회색 (전 화면 공통 규칙)
 const EDGE_STROKES: Record<SlotEdgeStatus, { stroke: string; dash?: string }> = {
-  PASS: { stroke: '#0d9488' },
+  PASS: { stroke: '#16a34a' },
   WARN: { stroke: '#d97706' },
-  FAIL: { stroke: '#ef4444', dash: '7 5' },
+  FAIL: { stroke: '#ef4444', dash: '6 4' },
   PENDING: { stroke: '#94a3b8', dash: '4 4' },
-  BASE: { stroke: '#0d9488' }
+  BASE: { stroke: '#16a34a' }
 };
 
 const EDGE_LABEL_CLASSES: Record<SlotEdgeStatus, string> = {
@@ -316,7 +304,7 @@ function SlotBoardEdges({
                 d={path}
                 fill="none"
                 stroke={style.stroke}
-                strokeWidth={isHighlighted ? 3.5 : 2}
+                strokeWidth={isHighlighted ? 4.5 : 3}
                 strokeDasharray={style.dash}
                 strokeOpacity={isHighlighted ? 1 : 0.6}
                 strokeLinecap="round"

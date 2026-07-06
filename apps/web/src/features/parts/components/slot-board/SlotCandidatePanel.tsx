@@ -49,22 +49,9 @@ export function SlotCandidatePanel({
   });
 
   const pages = useMemo(() => data?.pages ?? [], [data]);
-  const visibleParts = useMemo(
-    () => pages.flatMap((page) => page.items).filter((part) => part.compatibility?.status !== 'FAIL'),
-    [pages]
-  );
-
-  // 마지막으로 받은 페이지가 전부 FAIL로 숨겨졌다면 다음 페이지를 이어서 불러온다.
-  useEffect(() => {
-    if (pages.length === 0 || isFetchingNextPage || !hasNextPage) {
-      return;
-    }
-    const lastPage = pages[pages.length - 1];
-    const lastVisible = lastPage.items.filter((part) => part.compatibility?.status !== 'FAIL');
-    if (lastVisible.length === 0) {
-      void fetchNextPage();
-    }
-  }, [pages, isFetchingNextPage, hasNextPage, fetchNextPage]);
+  // 멘토 피드백: 비호환 후보를 숨기지 않는다 — 전부 보여주되 FAIL은 회색 비활성 + 사유를 표시해
+  // 사용자가 "왜 안 되는지"를 알 수 있게 한다.
+  const visibleParts = useMemo(() => pages.flatMap((page) => page.items), [pages]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -112,7 +99,7 @@ export function SlotCandidatePanel({
       <div className="flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-base font-black text-commerce-ink">{slot.label} 부품 목록</h2>
-          <p className="mt-0.5 text-[11px] font-bold text-slate-500">안 맞는 후보는 숨김 · 현재 견적 기준 호환 후보</p>
+          <p className="mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 안 맞는 후보는 회색으로 표시하고 사유를 알려드려요</p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center rounded-md border border-commerce-line bg-white px-2 py-1">
@@ -212,6 +199,10 @@ export function SlotCandidatePanel({
         <div className="space-y-2">
           {visibleParts.map((part) => {
             const isSelected = selectedPartIds.has(part.id);
+            const isFail = part.compatibility?.status === 'FAIL';
+            const failReason = isFail
+              ? part.compatibility?.summary || part.compatibility?.statusLabel || '현재 견적과 호환되지 않습니다'
+              : null;
             const actionLabel = replaceTarget
               ? `${part.name}(으)로 교체`
               : isMulti || draftItems.length === 0
@@ -219,38 +210,54 @@ export function SlotCandidatePanel({
                 : `${part.name} 교체`;
             const actionText = replaceTarget ? '이걸로 교체' : isMulti || draftItems.length === 0 ? '담기' : '교체';
             return (
-              <article key={part.id} className="flex items-center gap-3 rounded-md border border-commerce-line bg-white p-2.5">
+              <article
+                key={part.id}
+                data-compat={part.compatibility?.status ?? 'NONE'}
+                className={`flex items-center gap-3 rounded-md border p-2.5 ${
+                  isFail ? 'border-slate-200 bg-slate-50 opacity-70' : 'border-commerce-line bg-white'
+                }`}
+              >
                 <img
                   src={partImageUrl(part)}
                   alt={`${part.name} 제품 사진`}
-                  className="h-12 w-12 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover"
+                  className={`h-12 w-12 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover ${isFail ? 'grayscale' : ''}`}
                 />
                 <div className="min-w-0 flex-1 text-xs">
-                  <div className="line-clamp-2 font-black leading-4 text-commerce-ink">{part.name}</div>
+                  <div className={`line-clamp-2 font-black leading-4 ${isFail ? 'text-slate-500' : 'text-commerce-ink'}`}>{part.name}</div>
                   <div className="mt-0.5 text-[11px] text-slate-500">
                     {part.manufacturer ?? '-'}
                     {part.externalOffer?.supplierName ? ` · ${part.externalOffer.supplierName}` : ''}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    <span className="font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
+                    <span className={`font-black ${isFail ? 'text-slate-500' : 'text-commerce-ink'}`}>{part.price.toLocaleString()}원</span>
                     {part.compatibility?.status === 'WARN' ? (
                       <span className="rounded border border-amber-100 bg-amber-50 px-1.5 py-0.5 text-[10px] font-black text-amber-700">간섭 주의</span>
+                    ) : null}
+                    {isFail ? (
+                      <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-black text-red-700">선택 불가</span>
                     ) : null}
                   </div>
                   {part.compatibility?.status === 'WARN' && part.compatibility.summary ? (
                     <div className="mt-0.5 line-clamp-1 text-[10px] text-slate-500">{part.compatibility.summary}</div>
                   ) : null}
+                  {failReason ? (
+                    <div className="mt-0.5 line-clamp-2 text-[10px] font-bold text-red-600">{failReason}</div>
+                  ) : null}
                 </div>
                 <button
                   type="button"
-                  aria-label={actionLabel}
-                  disabled={isMutating || isSelected}
+                  aria-label={isFail ? `${part.name} 선택 불가` : actionLabel}
+                  disabled={isMutating || isSelected || isFail}
                   onClick={() => replaceTarget ? onReplacePart(replaceTarget.partId, part) : onAddPart(part)}
-                  className={`shrink-0 rounded-md px-2.5 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                    isSelected ? 'border border-commerce-line bg-slate-50 text-slate-400' : 'bg-commerce-ink text-white hover:bg-slate-700'
+                  className={`shrink-0 rounded-md px-2.5 py-2 text-xs font-black transition disabled:cursor-not-allowed ${
+                    isFail
+                      ? 'border border-slate-200 bg-slate-100 text-slate-400'
+                      : isSelected
+                        ? 'border border-commerce-line bg-slate-50 text-slate-400 disabled:opacity-60'
+                        : 'bg-commerce-ink text-white hover:bg-slate-700 disabled:opacity-60'
                   }`}
                 >
-                  {isSelected ? '장착됨' : actionText}
+                  {isFail ? '선택 불가' : isSelected ? '장착됨' : actionText}
                 </button>
               </article>
             );
@@ -259,7 +266,7 @@ export function SlotCandidatePanel({
 
         {!isLoading && visibleParts.length === 0 && !hasNextPage ? (
           <div className="mt-2 rounded-md border border-dashed border-slate-300 p-4 text-center text-xs font-bold text-slate-500">
-            표시할 후보가 없습니다. 안 맞는 후보는 숨김 처리됩니다.
+            표시할 후보가 없습니다.
           </div>
         ) : null}
 
