@@ -191,7 +191,16 @@ function BoardSlot({
               // 데스크톱 실장 지점: 아트의 빈 소켓/슬롯이 보이도록 투명 — hover에만 윤곽을 드러낸다.
               ? 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue lg:border-transparent lg:bg-transparent lg:hover:border-brand-blue/60 lg:hover:bg-blue-50/20'
               : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
-  const surfaceClass = !filled && isBoardMount ? 'bg-white/95 lg:bg-transparent lg:backdrop-blur-0' : 'bg-white/95';
+  // 장착된 박스는 상태색으로 칠한다 — 정상=초록, 간섭 주의=주황, 장착 불가=빨강 (은은한 틴트라 상품 이미지·칩은 그대로 보인다).
+  const surfaceClass = filled
+    ? slotStatus === 'FAIL'
+      ? 'bg-red-50/95'
+      : slotStatus === 'WARN'
+        ? 'bg-amber-50/95'
+        : 'bg-emerald-50/95'
+    : isBoardMount
+      ? 'bg-white/95 lg:bg-transparent lg:backdrop-blur-0'
+      : 'bg-white/95';
   const visibleName = filled
     ? items.length > 1 ? `${primaryItem.name} 외 ${items.length - 1}개` : primaryItem.name
     : '';
@@ -208,7 +217,9 @@ function BoardSlot({
       title={filled ? visibleName : undefined}
       className={`group relative z-20 rounded-lg p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${surfaceClass} ${borderClass} ${
         isFlashing ? 'slot-attach-flash slot-plug-in' : ''
-      } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''}`}
+      } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''} ${
+        filled && !isSelected ? statusPulseClass(slotStatus) : ''
+      }`}
     >
       <button
         type="button"
@@ -544,6 +555,14 @@ function edgeGeometryOnLine(config: SlotEdgeConfig) {
       y: inv * inv * start.y + 2 * inv * labelT * control.y + labelT * labelT * end.y
     }
   };
+}
+
+// 장착된 슬롯의 상태색 히어로 펄스 — 파란 "다음 선택" 펄스처럼 상태색 링으로 숨쉬게 한다.
+function statusPulseClass(status: 'PASS' | 'WARN' | 'FAIL' | 'NONE') {
+  if (status === 'FAIL') return 'slot-fail-pulse';
+  if (status === 'WARN') return 'slot-warn-pulse';
+  if (status === 'PASS') return 'slot-pass-pulse';
+  return '';
 }
 
 function partStatusByCategory(graph?: BuildGraphResolveResponse) {

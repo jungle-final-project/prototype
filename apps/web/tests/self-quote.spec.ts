@@ -927,12 +927,14 @@ test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', as
 
   await page.goto('/self-quote');
 
-  // 문제 슬롯 강조: FAIL은 숨기지 않고 표시한다.
+  // 문제 슬롯 강조: FAIL은 숨기지 않고 표시한다. 장착된 박스는 상태색으로 칠해진다(빨강/주황).
   const gpuSlot = page.getByTestId('slot-GPU');
   await expect(gpuSlot).toHaveAttribute('data-status', 'FAIL');
+  await expect(gpuSlot).toHaveClass(/bg-red-50/);
   await expect(gpuSlot.getByText('안 맞음')).toBeVisible();
   const psuSlot = page.getByTestId('slot-PSU');
   await expect(psuSlot).toHaveAttribute('data-status', 'WARN');
+  await expect(psuSlot).toHaveClass(/bg-amber-50/);
   await expect(psuSlot.getByText('간섭 주의')).toBeVisible();
 
   // 문제 관계선 강조
@@ -1078,15 +1080,15 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
   await expect(panel.getByText('간섭 GPU 후보')).toBeVisible();
   await expect(panel.getByText('간섭 주의')).toBeVisible();
   await expect(panel.getByRole('button', { name: '간섭 GPU 후보 담기' })).toBeEnabled();
-  // FAIL 후보는 숨기지 않고 회색 비활성 + 선택 불가 사유를 함께 보여준다.
+  // FAIL 후보는 숨기지 않고 '장착 불가' 뱃지 + 사유를 보여주되, 담기 자체는 허용한다(담으면 보드에서 빨강).
   await expect(panel.getByText('실패 GPU 후보')).toBeVisible();
   const failCard = panel.locator('[data-compat="FAIL"]');
   await expect(failCard).toHaveCount(1);
-  // '선택 불가'는 뱃지와 비활성 버튼 양쪽에 붙는다 — 뱃지(first)와 버튼을 각각 확인.
-  await expect(failCard.getByText('선택 불가', { exact: true }).first()).toBeVisible();
+  await expect(failCard.getByText('장착 불가', { exact: true })).toBeVisible();
   await expect(failCard.getByText('파워 용량이 부족합니다.')).toBeVisible();
-  await expect(panel.getByRole('button', { name: '실패 GPU 후보 선택 불가' })).toBeDisabled();
-  await expect(panel.getByText('안 맞는 후보는 회색으로 표시하고 사유를 알려드려요')).toBeVisible();
+  // 담기 버튼은 활성 — 비호환도 담아서 왜 안 되는지 보드에서 확인하는 UX.
+  await expect(panel.getByRole('button', { name: /실패 GPU 후보 담기/ })).toBeEnabled();
+  await expect(panel.getByText('안 맞는 후보도 담아서 사유를 확인할 수 있어요')).toBeVisible();
 
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
