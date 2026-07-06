@@ -231,6 +231,24 @@
 - [x] 관리자 예약 실패 시 입력값 보존 및 오류 표시 test
 - [x] 관리자 queue patch로 목록 예약 상태/시각 갱신 test
 
+## 관리자 상담방 삭제 및 재접수 허용
+
+### Backend
+
+- [x] 관리자 상담방 삭제 API controller/broadcast test
+- [x] 상담방 삭제 시 `ARCHIVED` 전환과 SYSTEM 메시지 저장 test
+- [x] 삭제 시 `OPEN`/`RESOLVED` 티켓 `CANCELLED` 처리 test
+- [x] `CLOSED`/`CANCELLED` 티켓 삭제 시 티켓 상태 유지 test
+- [x] 삭제된 상담방이 사용자 active 상담 기준에서 제외되는 test
+- [x] 삭제된 상담방이 새 AS 접수를 막지 않는 test
+
+### Frontend
+
+- [x] 관리자 상세 패널 삭제 버튼/확인/DELETE 호출 test
+- [x] 삭제 성공 시 목록 제거와 읽기 전용 상세 표시 test
+- [x] 삭제 실패 시 선택 상태와 입력값 보존 및 오류 표시 test
+- [x] 삭제된 사용자 AS 접수 버튼 활성화 test
+
 ### Manual/E2E
 
 - [ ] 사용자/관리자 양쪽에서 REST 전송 성공 확인

@@ -2832,6 +2832,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: 관리자 상담방 삭제
+      description: 상담방을 ARCHIVED로 전환하고, 진행 중 티켓은 CANCELLED 처리해 사용자가 새 AS 접수를 할 수 있게 한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 삭제 후 읽기 전용 상담방 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportChatSessionDto"
+        "404":
+          description: 상담방 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/support/chat-sessions/{id}/messages:
     post:
       summary: 관리자 상담 메시지 전송

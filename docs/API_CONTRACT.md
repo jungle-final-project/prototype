@@ -537,6 +537,7 @@ Support Chat Rooms는 로그인 사용자와 관리자가 AS 티켓을 기준으
 | `GET` | `/api/admin/support/chat-sessions` | ADMIN | 4번 | - | `{ "items": [{ "id": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01", "asTicketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "ticketStatus": "OPEN", "adminUnreadCount": 1, "user": { "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com" } }], "pollingIntervalMs": 5000 }` | `support_chat_rooms`, `as_tickets`, `users` |
 | `POST` | `/api/admin/support/chat-sessions/ws-ticket` | ADMIN | 4번 | - | `{ "ticket": "opaque-token", "expiresAt": "2026-07-06T10:01:00Z", "expiresInSeconds": 60 }` | Redis `support-chat:ws-ticket:*` |
 | `GET` | `/api/admin/support/chat-sessions/{id}` | ADMIN | 4번 | `?markRead=false` optional | `SupportChatSessionResponse` | `support_chat_rooms`, `support_chat_messages`, `as_tickets`, `users` |
+| `DELETE` | `/api/admin/support/chat-sessions/{id}` | ADMIN | 4번 | - | `SupportChatSessionResponse`, `contact.status=ARCHIVED`, `canSendMessage=false` | `support_chat_rooms`, `support_chat_messages`, `as_tickets` |
 | `POST` | `/api/admin/support/chat-sessions/{id}/messages` | ADMIN | 4번 | `{ "content": "담당자가 확인 중입니다. 최근 재현 시각을 알려주세요." }` | `SupportChatSessionResponse` | `support_chat_messages`, `support_chat_rooms`, `as_tickets` |
 | `PUT` | `/api/admin/support/chat-sessions/{id}/visit-reservation` | ADMIN | 4번 | `{ "scheduledAt": "2026-07-10T14:30:00+09:00", "technicianNote": "방문 전 연락" }` | `SupportChatSessionResponse` | `visit_support_reservations`, `support_chat_messages`, `support_chat_rooms` |
 | `DELETE` | `/api/admin/support/chat-sessions/{id}/visit-reservation` | ADMIN | 4번 | - | `SupportChatSessionResponse` | `visit_support_reservations`, `support_chat_messages`, `support_chat_rooms` |
@@ -558,6 +559,8 @@ Support Chat Rooms 규칙:
 - `content`는 trim 후 1자 이상 2000자 이하만 허용한다.
 - `CLOSED`, `CANCELLED` 티켓 상담방에는 새 메시지를 보낼 수 없고 `409 CONFLICT_STATE`를 반환한다.
 - 사용자 메시지는 `adminUnreadCount`를 증가시키고, 관리자 메시지는 `userUnreadCount`를 증가시킨다. REST 상세 조회는 기본적으로 조회자 쪽 unread count를 0으로 초기화한다. 관리자 상세는 `markRead=false`로 읽음 처리 없이 조회할 수 있고, WebSocket push snapshot은 unread count를 초기화하지 않는다.
+- 관리자가 `DELETE /api/admin/support/chat-sessions/{id}`를 호출하면 해당 상담방만 `ARCHIVED`로 전환하고 `SYSTEM` 메시지를 남긴다. 연결 티켓은 `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`이면 `CANCELLED`로 바꾸며, 이미 `CLOSED`/`CANCELLED`이면 티켓 상태를 유지한다.
+- 관리자 명시 삭제로 `ARCHIVED`된 상담방은 진행 중 상담 기준에서 제외되며, 사용자는 `/support/new`에서 새 AS 티켓을 다시 접수할 수 있다.
 - `GET /api/admin/support/chat-sessions`는 `as_tickets.status`가 `CLOSED`, `CANCELLED`가 아닌 상담방만 최근순 최대 100개까지 반환한다.
 - 상세 조회의 `messages`는 최근 100개만 시간순으로 반환한다.
 - WebSocket은 실시간 갱신용이며 클라이언트는 연결 실패 시 REST polling(`pollingIntervalMs`)으로 fallback한다. 소켓이 연결된 상태에서도 낮은 빈도의 fallback polling을 유지한다.
