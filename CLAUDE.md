@@ -63,6 +63,7 @@ cd apps/api && ./gradlew test --tests "com.buildgraph.prototype.user.UserControl
 - SVG files are glyphs only. Product name, category, price, selected ring, status badge, and empty state must be rendered by React/CSS.
 - Do not use remote images or bitmap images inside the empty-slot glyph layer.
 - 호환 상태 색 체계(전 화면 공통): 정상 = 초록, 주의 = 노랑, 불가 = 빨강, 미검증 = 회색. 정상 연결선을 검정/회색으로 그리지 않는다.
+- 구성 관계도 보드 표면은 **짙은 그래파이트 트레이**(`.slot-board-tray`, #171d27 계열 + 도트 텍스처)다 — 흰 페이지에 묻히지 않게 대비를 준다. PCB 평면도는 어두운 기판(#232c3a)에 밝은 소켓/트레이스, 장착 슬롯은 흰 카드로 트레이 위에 떠오른다. 빈 실장 슬롯 라벨은 데스크톱에서 밝게 반전(lg:text-slate-100). 상태색(초록/노랑/빨강)은 트레이 위에서 그대로 유지.
 - 사용자 언어 우선: "호환 가능/간섭 주의/장착 불가/파워 부족"처럼 쓴다. "constraint/dependency/socket mismatch" 같은 원어 노출 금지.
 
 ## Slot policy

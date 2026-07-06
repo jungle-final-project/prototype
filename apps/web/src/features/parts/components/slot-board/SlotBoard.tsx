@@ -27,9 +27,9 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
   // 카테고리별 장착 플래시를 보드 수준에서 계산해 카드(꽂힘 모션)와 관계선(draw-in·포트 점등)이 함께 반응한다.
   const flashingCategories = useAttachFlashByCategory(items);
   return (
-    <div className="panel overflow-hidden">
+    <div className="panel slot-board-panel overflow-hidden">
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-commerce-line px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
         <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
         <div className="flex items-center gap-3 text-[10px] font-bold text-slate-500">
           <span className="flex items-center gap-1.5">
@@ -55,7 +55,7 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
       <div
         data-testid="slot-board"
         data-visual-mode="motherboard"
-        className="relative flex flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:aspect-[16/10] lg:overflow-hidden lg:bg-[#fbfdff] lg:p-0"
+        className="slot-board-tray relative flex flex-col gap-2 p-3 lg:block lg:aspect-[16/10] lg:overflow-hidden lg:p-0"
       >
         <BoardPlanArt />
         <SlotBoardEdges
@@ -84,7 +84,8 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
   );
 }
 
-// 추상 메인보드 평면도 (통일 에셋 스타일: 기판 #f4f7fb / 부품 #e2e8f0 / 선 #cbd5e1).
+// 추상 메인보드 평면도 — 그래파이트 트레이 위의 실제 PCB처럼 어두운 기판 + 밝은 트레이스/소켓.
+// 팔레트: 기판 #232c3a / 오목부 #1c2431 / 트레이스·테두리 #47566b / 하이라이트 #5b6b83.
 // 좌표는 SLOT_CONFIGS의 실장 지점과 같은 상수 계보(viewBox 160×100, % = x/1.6)다 —
 // 실장 지점을 옮기면 이 아트의 소켓/슬롯도 함께 옮겨야 한다.
 function BoardPlanArt() {
@@ -96,41 +97,41 @@ function BoardPlanArt() {
       className="pointer-events-none absolute inset-0 z-0 hidden h-full w-full lg:block"
     >
       {/* 기판 + 나사홀 — 상단(쿨러)·좌측(케이스/파워) 여백 회랑을 남기고 우측에 배치 */}
-      <rect x="56" y="20" width="98" height="77" rx="3" fill="#f4f7fb" stroke="#d3dce6" strokeWidth="0.7" />
+      <rect x="56" y="20" width="98" height="77" rx="3" fill="#232c3a" stroke="#3f4c60" strokeWidth="0.8" />
       {[[60, 24], [105, 24], [150, 24], [60, 93], [105, 93], [150, 93]].map(([x, y], index) => (
-        <circle key={index} cx={x} cy={y} r="1" fill="#ffffff" stroke="#cbd5e1" strokeWidth="0.4" />
+        <circle key={index} cx={x} cy={y} r="1" fill="#141a24" stroke="#54637a" strokeWidth="0.4" />
       ))}
       {/* 우측 IO 포트 블록 */}
       {[28, 37, 46].map((y) => (
-        <rect key={y} x="146.5" y={y} width="6.5" height="7" rx="1" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.5" />
+        <rect key={y} x="146.5" y={y} width="6.5" height="7" rx="1" fill="#2c3646" stroke="#4b5a70" strokeWidth="0.5" />
       ))}
       {/* CPU 소켓 (핫스팟: 78..104 × 30..56) */}
-      <rect x="78" y="30" width="26" height="26" rx="1.5" fill="#eef2f7" stroke="#cbd5e1" strokeWidth="0.8" />
-      <rect x="82.5" y="34.5" width="17" height="17" rx="1" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.6" />
+      <rect x="78" y="30" width="26" height="26" rx="1.5" fill="#2b3545" stroke="#54637a" strokeWidth="0.9" />
+      <rect x="82.5" y="34.5" width="17" height="17" rx="1" fill="#1c2431" stroke="#47566b" strokeWidth="0.6" />
       {[[79.5, 31.5], [102.5, 31.5], [79.5, 54.5], [102.5, 54.5]].map(([x, y], index) => (
-        <circle key={index} cx={x} cy={y} r="0.8" fill="#cbd5e1" />
+        <circle key={index} cx={x} cy={y} r="0.9" fill="#5b6b83" />
       ))}
       {/* DIMM 4슬롯 (핫스팟: 110..136 × 24..60) */}
       {[111.5, 118, 124.5, 131].map((x) => (
         <g key={x}>
-          <rect x={x} y="26" width="4.4" height="32" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
-          <line x1={x + 2.2} y1="28.5" x2={x + 2.2} y2="55.5" stroke="#e2e8f0" strokeWidth="1.4" />
-          <rect x={x + 0.6} y="24.6" width="3.2" height="1.6" rx="0.4" fill="#e2e8f0" />
-          <rect x={x + 0.6} y="57.8" width="3.2" height="1.6" rx="0.4" fill="#e2e8f0" />
+          <rect x={x} y="26" width="4.4" height="32" rx="0.8" fill="#1c2431" stroke="#4b5a70" strokeWidth="0.7" />
+          <line x1={x + 2.2} y1="28.5" x2={x + 2.2} y2="55.5" stroke="#3a4557" strokeWidth="1.4" />
+          <rect x={x + 0.6} y="24.6" width="3.2" height="1.6" rx="0.4" fill="#3a4557" />
+          <rect x={x + 0.6} y="57.8" width="3.2" height="1.6" rx="0.4" fill="#3a4557" />
         </g>
       ))}
       {/* PCIe x16 (핫스팟: 60..124 × 62..78) + 보조 x4 */}
-      <rect x="61" y="70" width="61" height="4.5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
-      <line x1="74" y1="70.6" x2="74" y2="73.9" stroke="#cbd5e1" strokeWidth="0.6" />
-      <rect x="61" y="78.5" width="30" height="3.2" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.6" />
+      <rect x="61" y="70" width="61" height="4.5" rx="0.8" fill="#1c2431" stroke="#4b5a70" strokeWidth="0.7" />
+      <line x1="74" y1="70.6" x2="74" y2="73.9" stroke="#5b6b83" strokeWidth="0.6" />
+      <rect x="61" y="78.5" width="30" height="3.2" rx="0.8" fill="#1c2431" stroke="#47566b" strokeWidth="0.6" />
       {/* M.2 (핫스팟: 128..152 × 80..93) */}
-      <rect x="129" y="84" width="20" height="5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
-      <circle cx="147.5" cy="86.5" r="1" fill="#ffffff" stroke="#cbd5e1" strokeWidth="0.5" />
+      <rect x="129" y="84" width="20" height="5" rx="0.8" fill="#1c2431" stroke="#4b5a70" strokeWidth="0.7" />
+      <circle cx="147.5" cy="86.5" r="1" fill="#141a24" stroke="#54637a" strokeWidth="0.5" />
       {/* 칩셋 방열판 */}
-      <rect x="130" y="66" width="13" height="11" rx="1.2" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.7" />
-      <rect x="132.5" y="68.5" width="8" height="6" rx="0.8" fill="none" stroke="#cbd5e1" strokeWidth="0.5" />
+      <rect x="130" y="66" width="13" height="11" rx="1.2" fill="#2c3646" stroke="#4b5a70" strokeWidth="0.7" />
+      <rect x="132.5" y="68.5" width="8" height="6" rx="0.8" fill="none" stroke="#54637a" strokeWidth="0.5" />
       {/* 메인보드 명판 (핫스팟: 58..92 × 84..95) */}
-      <rect x="60" y="85" width="32" height="9.5" rx="1.2" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" strokeDasharray="1.6 1.2" />
+      <rect x="60" y="85" width="32" height="9.5" rx="1.2" fill="#1c2431" stroke="#54637a" strokeWidth="0.7" strokeDasharray="1.6 1.2" />
     </svg>
   );
 }
@@ -229,8 +230,9 @@ function BoardSlot({
       <div className="pointer-events-none relative z-10 flex h-full flex-col gap-1 overflow-hidden">
         {/* 카드 헤더: 카테고리명 + 상태 배지 — 장착 시 에셋 위에 뜨는 칩 형태 */}
         <div className="flex items-start justify-between gap-1">
-          <span className={`flex items-center gap-1 text-[10px] font-black text-slate-600 ${filled ? 'rounded bg-white/85 px-1 py-0.5' : ''}`}>
-            {!filled ? <img src={slot.glyph} alt="" aria-hidden="true" className="h-4 w-auto max-w-12 shrink-0 opacity-35" /> : null}
+          {/* 빈 보드 실장 슬롯은 데스크톱에서 어두운 트레이 위에 놓이므로 라벨을 밝게 뒤집는다. */}
+          <span className={`flex items-center gap-1 text-[10px] font-black text-slate-600 ${filled ? 'rounded bg-white/85 px-1 py-0.5' : isBoardMount ? 'lg:text-slate-100' : ''}`}>
+            {!filled ? <img src={slot.glyph} alt="" aria-hidden="true" className={`h-4 w-auto max-w-12 shrink-0 opacity-35 ${isBoardMount ? 'lg:opacity-60' : ''}`} /> : null}
             {slot.label}
           </span>
           {slotStatus === 'FAIL' ? (
@@ -256,7 +258,7 @@ function BoardSlot({
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-start gap-1">
-            <span className="text-[11px] font-black text-brand-blue">+ 부품 선택</span>
+            <span className={`text-[11px] font-black text-brand-blue ${isBoardMount ? 'lg:text-sky-300' : ''}`}>+ 부품 선택</span>
             {slot.miniSlots ? <MiniSlotRow slot={slot} items={items} /> : null}
           </div>
         )}
