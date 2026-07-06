@@ -36,8 +36,9 @@ export const SLOT_CONFIGS: SlotConfig[] = [
   { category: 'GPU', label: 'GPU', glyph: '/slot-board/parts/gpu.svg', mount: 'board', layout: { x: 6.25, y: 54, w: 42.5, h: 16 } },
   { category: 'STORAGE', label: 'SSD', glyph: '/slot-board/parts/ssd.svg', miniSlots: 2, miniFillBy: 'items', mount: 'board', layout: { x: 51.25, y: 72, w: 15, h: 12 } },
   { category: 'MOTHERBOARD', label: '메인보드', glyph: '/slot-board/parts/motherboard.svg', mount: 'board', layout: { x: 3.75, y: 84, w: 22.5, h: 11 } },
-  { category: 'CASE', label: '케이스', glyph: '/slot-board/parts/case.svg', mount: 'dock', layout: { x: 70, y: 4, w: 27.5, h: 28 } },
-  { category: 'COOLER', label: '쿨러', glyph: '/slot-board/parts/cooler.svg', mount: 'dock', layout: { x: 70, y: 36, w: 27.5, h: 28 } },
+  // 도킹 순서: 케이스는 관계 상대(쿨러·파워·GPU)가 셋이라 가운데 — 세 선이 모두 짧아진다.
+  { category: 'COOLER', label: '쿨러', glyph: '/slot-board/parts/cooler.svg', mount: 'dock', layout: { x: 70, y: 4, w: 27.5, h: 28 } },
+  { category: 'CASE', label: '케이스', glyph: '/slot-board/parts/case.svg', mount: 'dock', layout: { x: 70, y: 36, w: 27.5, h: 28 } },
   { category: 'PSU', label: '파워', glyph: '/slot-board/parts/psu.svg', mount: 'dock', layout: { x: 70, y: 68, w: 27.5, h: 28 } }
 ];
 
@@ -73,13 +74,14 @@ export const FALLBACK_EDGES: SlotEdgeConfig[] = [
   { from: 'MOTHERBOARD', to: 'RAM', label: '메모리 규격', implied: true },
   { from: 'GPU', to: 'MOTHERBOARD', label: 'PCIe x16', implied: true },
   // 도킹 부품 ↔ 보드/부품 관계 — 물리적 의미가 있는 연결선으로 그린다.
-  { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원' },
-  { from: 'COOLER', to: 'CPU', label: '쿨러 장착' },
+  { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원', labelT: 0.35 },
+  // DIMM 위 상단 가장자리 회랑으로 아치 — 라벨은 쿨러 쪽 거터에.
+  { from: 'COOLER', to: 'CPU', label: '쿨러 장착', bow: 18, labelT: 0.18 },
   { from: 'COOLER', to: 'CASE', label: '높이 여유', bow: 4 },
-  { from: 'PSU', to: 'CASE', label: '파워 깊이', bow: 8 },
+  { from: 'PSU', to: 'CASE', label: '파워 깊이', bow: 4 },
   // M.2(SSD) 실장 지점을 피해서 칩셋 위 회랑으로 우회한다.
-  { from: 'GPU', to: 'PSU', label: '전력 여유', bow: -12 },
-  { from: 'GPU', to: 'CASE', label: '장착 길이', bow: -6, labelT: 0.4 }
+  { from: 'GPU', to: 'PSU', label: '전력 여유', bow: -10, labelT: 0.6 },
+  { from: 'GPU', to: 'CASE', label: '장착 길이', labelT: 0.6 }
 ];
 
 export function slotConfigFor(category: string): SlotConfig | undefined {

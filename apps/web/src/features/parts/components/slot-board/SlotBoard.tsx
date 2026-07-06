@@ -219,11 +219,21 @@ function BoardSlot({
         onClick={onSelect}
         className="absolute inset-0 z-0 h-full w-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       />
+      {/* 장착 시: 에셋이 박스를 가득 채우고 크롬(카테고리·뱃지·요약)은 위에 얇게 얹는다. */}
+      {filled ? (
+        <img
+          data-testid="slot-part-image"
+          src={slot.glyph}
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-[5] h-full w-full object-contain p-1"
+        />
+      ) : null}
       <div className="pointer-events-none relative z-10 flex h-full flex-col gap-1 overflow-hidden">
-        {/* 카드 헤더: 아이콘 + 카테고리명 + 상태 배지 */}
-        <div className="flex items-center justify-between gap-1">
-          <span className="flex items-center gap-1 text-[10px] font-black text-slate-600">
-            <img src={slot.glyph} alt="" aria-hidden="true" className={`h-4 w-4 shrink-0 ${filled ? 'opacity-70' : 'opacity-35'}`} />
+        {/* 카드 헤더: 카테고리명 + 상태 배지 — 장착 시 에셋 위에 뜨는 칩 형태 */}
+        <div className="flex items-start justify-between gap-1">
+          <span className={`flex items-center gap-1 text-[10px] font-black text-slate-600 ${filled ? 'rounded bg-white/85 px-1 py-0.5' : ''}`}>
+            {!filled ? <img src={slot.glyph} alt="" aria-hidden="true" className="h-4 w-4 shrink-0 opacity-35" /> : null}
             {slot.label}
           </span>
           {slotStatus === 'FAIL' ? (
@@ -236,41 +246,17 @@ function BoardSlot({
             <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[9px] font-black text-brand-blue">다음 선택</span>
           ) : null}
         </div>
-        {/* 카드 본체 — 상품명 전문 대신 이미지 중심 + 짧은 요약. 이름은 체크리스트와 hover 툴팁이 담당한다. */}
         {filled ? (
-          <>
-            {/* 카테고리 통일 에셋 — 개별 상품 사진(배경·각도 제각각)을 보드에 올리지 않는다. */}
-            <div className="flex min-h-[22px] flex-1 items-center justify-center overflow-hidden">
-              <img
-                data-testid="slot-part-image"
-                src={slot.glyph}
-                alt=""
-                aria-hidden="true"
-                className="h-full max-h-full max-w-full object-contain"
-              />
-            </div>
+          <div className="mt-auto flex items-end justify-between gap-1">
             {visibleSpec ? (
-              <div className="line-clamp-1 text-center text-[10px] font-bold leading-4 text-slate-500">
+              <span className="min-w-0 truncate rounded bg-white/85 px-1 py-0.5 text-[9px] font-bold text-slate-500">
                 {visibleSpec}
-              </div>
-            ) : null}
-            {slot.miniSlots ? (
-              <div className="flex items-end justify-start">
-                <MiniSlotRow slot={slot} items={items} />
-              </div>
-            ) : null}
-            {!isMultiItemCategory(slot.category) ? (
-              <button
-                type="button"
-                aria-label={`${primaryItem.name} 견적에서 제거`}
-                disabled={isRemovePending}
-                onClick={() => onRemoveItem(primaryItem.partId)}
-                className="pointer-events-auto absolute bottom-1 right-1 rounded border border-commerce-line bg-white px-1.5 py-0.5 text-[9px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
-              >
-                빼기
-              </button>
-            ) : null}
-          </>
+              </span>
+            ) : (
+              <span />
+            )}
+            {slot.miniSlots ? <MiniSlotRow slot={slot} items={items} /> : null}
+          </div>
         ) : (
           <div className="flex flex-1 items-center justify-start gap-1">
             <span className="text-[11px] font-black text-brand-blue">+ 부품 선택</span>
@@ -278,6 +264,17 @@ function BoardSlot({
           </div>
         )}
       </div>
+      {filled && !isMultiItemCategory(slot.category) ? (
+        <button
+          type="button"
+          aria-label={`${primaryItem.name} 견적에서 제거`}
+          disabled={isRemovePending}
+          onClick={() => onRemoveItem(primaryItem.partId)}
+          className="absolute right-1 top-6 z-20 rounded border border-commerce-line bg-white px-1.5 py-0.5 text-[9px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
+        >
+          빼기
+        </button>
+      ) : null}
     </div>
   );
 }
