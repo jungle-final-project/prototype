@@ -132,15 +132,46 @@ background:
 @keyframes slot-empty-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.22);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+    box-shadow: 0 0 0 9px rgba(37, 99, 235, 0);
   }
 }
 
 .slot-empty-pulse {
   animation: slot-empty-pulse 2.4s ease-in-out infinite;
+}
+
+/* "다음 선택" 반짝임: 은은한 광택 띠가 주기적으로 카드를 훑고 지나간다.
+   체크리스트 다음 행과 보드의 다음 실장 지점이 같은 주기로 반짝여 시선을 잇는다. */
+@keyframes slot-hint-shimmer {
+  0% {
+    transform: translateX(-140%) skewX(-18deg);
+  }
+  55%,
+  100% {
+    transform: translateX(240%) skewX(-18deg);
+  }
+}
+
+.slot-hint-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.slot-hint-shimmer::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(105deg, transparent, rgba(147, 197, 253, 0.55), transparent);
+  transform: translateX(-140%) skewX(-18deg);
+  animation: slot-hint-shimmer 2.4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 30;
 }
 
 @keyframes slot-panel-in {
@@ -166,6 +197,11 @@ background:
   .slot-empty-pulse,
   .slot-panel-in {
     animation: none;
+  }
+
+  .slot-hint-shimmer::after {
+    animation: none;
+    opacity: 0;
   }
 }
 

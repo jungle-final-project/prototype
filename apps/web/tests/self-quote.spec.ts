@@ -402,6 +402,12 @@ test('shows the AI start banner on an empty quote with manual and AI entry point
   await expect(banner).toBeVisible();
   await expect(banner).toContainText('AI에게 예산과 용도만 알려주세요');
 
+  // 견적이 다 비어 있으면 체크리스트 1번(CPU)과 보드의 CPU 실장 지점이 반짝이며 시작점을 알려준다.
+  await expect(page.getByTestId('checklist-CPU')).toHaveAttribute('data-next', 'true');
+  await expect(page.getByTestId('checklist-CPU')).toHaveClass(/slot-hint-shimmer/);
+  await expect(page.getByTestId('checklist-CPU')).toHaveClass(/slot-empty-pulse/);
+  await expect(page.getByTestId('slot-CPU')).toHaveClass(/slot-hint-shimmer/);
+
   // 직접 고르기 → CPU 후보 패널이 열린다.
   await page.getByTestId('quote-manual-start').click();
   await expect(page).toHaveURL('/self-quote?category=CPU');

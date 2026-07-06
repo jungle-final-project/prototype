@@ -458,7 +458,7 @@ function QuoteChecklist({
                     : filled
                       ? 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
                       : isNext
-                        ? 'slot-empty-pulse border-brand-blue bg-blue-50/50'
+                        ? 'slot-empty-pulse slot-hint-shimmer border-brand-blue bg-blue-50/50'
                         : 'border-dashed border-slate-300 bg-white hover:border-slate-400'
                 }`}
               >

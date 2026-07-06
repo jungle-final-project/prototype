@@ -207,7 +207,7 @@ function BoardSlot({
       title={filled ? visibleName : undefined}
       className={`group relative z-20 rounded-lg p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${surfaceClass} ${borderClass} ${
         isFlashing ? 'slot-attach-flash slot-plug-in' : ''
-      } ${isNext && !isSelected ? 'slot-empty-pulse' : ''}`}
+      } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''}`}
     >
       <button
         type="button"
