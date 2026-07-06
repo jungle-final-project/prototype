@@ -952,7 +952,8 @@ public class BuildGraphService {
     }
 
     private static int total(List<ToolBuildPart> parts) {
-        return parts.stream().mapToInt(part -> firstNumber(part.price(), 0)).sum();
+        // 수량 가중 — 그래프의 '총액' 노드가 UI 총액(lineTotal 합)과 같은 규칙으로 계산되게 한다.
+        return parts.stream().mapToInt(part -> firstNumber(part.price(), 0) * part.effectiveQuantity()).sum();
     }
 
     private static String normalizedMode(String value) {

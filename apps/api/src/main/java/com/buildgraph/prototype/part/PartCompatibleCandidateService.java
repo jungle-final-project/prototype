@@ -387,8 +387,9 @@ public class PartCompatibleCandidateService {
     }
 
     private static int total(List<ToolBuildPart> parts) {
+        // 수량 가중 — 드래프트 행 quantity를 반영해 UI 총액과 같은 규칙으로 계산한다.
         return parts.stream()
-                .mapToInt(part -> firstNumber(part.price(), 0))
+                .mapToInt(part -> firstNumber(part.price(), 0) * part.effectiveQuantity())
                 .sum();
     }
 

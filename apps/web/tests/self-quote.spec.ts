@@ -446,6 +446,90 @@ test('renders the quote checklist with progress, next-slot guide, and total', as
   await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
 });
 
+test('blocks purchase when a tool check fails without a matching edge', async ({ page }) => {
+  await loginAsUser(page);
+  // 감사 P1-3①: GPU가 없어 GPU-PSU 엣지가 안 생기는 견적에서 파워 용량 부족(power 툴 FAIL)이
+  // 화면 어디에도 안 뜨고 구매가 열려 있던 사각 — 툴 FAIL도 차단·표기에 반영돼야 한다.
+  const powerFailItems = [
+    draftItem('part-cpu-hot', 'CPU', '고전력 CPU', 500000),
+    draftItem('part-psu-small', 'PSU', '300W 파워', 40000)
+  ];
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...emptyDraft, items: powerFailItems, totalPrice: 540000, itemCount: 2 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'BUILD_OVERVIEW',
+        summary: '파워 용량을 확인했습니다.',
+        nodes: [
+          { id: 'part-CPU', type: 'PART', category: 'CPU', label: '고전력 CPU', status: 'PASS', detail: '' },
+          { id: 'part-PSU', type: 'PART', category: 'PSU', label: '300W 파워', status: 'PASS', detail: '' }
+        ],
+        edges: [],
+        focusNodeIds: [],
+        insights: [],
+        toolResults: [
+          { tool: 'power', status: 'FAIL', confidence: 'HIGH', summary: 'PSU 정격 출력이 예상 부하와 GPU 권장 파워에 못 미쳐 상위 용량이 필요합니다.' }
+        ]
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('quote-summary-bar').getByText('조건 미충족')).toBeVisible();
+  await expect(page.getByText('안 맞는 부품이 있어 구매할 수 없습니다', { exact: false })).toBeVisible();
+});
+
+test('does not block purchase for a tool fail about a category that is not mounted', async ({ page }) => {
+  await loginAsUser(page);
+  // PSU를 아직 안 담았는데 power 툴이 FAIL(파워 없음)인 경우는 '비호환'이 아니라 '미장착'이다 — 차단하지 않는다.
+  const cpuOnlyItems = [draftItem('part-cpu-only', 'CPU', '조립 시작 CPU', 300000)];
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...emptyDraft, items: cpuOnlyItems, totalPrice: 300000, itemCount: 1 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'BUILD_OVERVIEW',
+        summary: '파워 미장착 상태입니다.',
+        nodes: [{ id: 'part-CPU', type: 'PART', category: 'CPU', label: '조립 시작 CPU', status: 'PASS', detail: '' }],
+        edges: [],
+        focusNodeIds: [],
+        insights: [],
+        toolResults: [
+          { tool: 'power', status: 'FAIL', confidence: 'MEDIUM', summary: 'PSU가 없어 부하를 감당할 수 없습니다.' }
+        ]
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('quote-summary-bar')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar').getByText('조건 미충족')).toHaveCount(0);
+  await expect(page.getByText('안 맞는 부품이 있어 구매할 수 없습니다', { exact: false })).toHaveCount(0);
+});
+
 test('shows the completion guide when all eight slots are filled', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
