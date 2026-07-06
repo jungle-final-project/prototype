@@ -137,7 +137,8 @@ export type RecommendationModelVersion = {
   algorithm?: string;
   artifactPath?: string | null;
   status: string;
-  metrics?: Record<string, unknown>;
+  // 새 학습 워커는 holdout(일반화) 지표를 기록한다. mae는 구 모델의 in-sample 지표.
+  metrics?: { mae?: number; holdout?: { mae?: number; rmse?: number; spearman?: number | null; ndcgAt4Global?: number | null } } & Record<string, unknown>;
   featureSchema?: Record<string, unknown>;
   activatedAt?: string | null;
   createdAt?: string | null;

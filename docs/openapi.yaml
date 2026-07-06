@@ -1607,8 +1607,8 @@ paths:
                 additionalProperties: true
   /api/admin/manufacturer-posts/{id}/ai-asset-draft:
     post:
-      summary: 제조사 게시글 AI 후보 생성 및 INACTIVE 자산 초안화
-      description: AI가 공식 게시글 본문을 구조화해 신제품 여부, 검색어, 카테고리별 specAttributes 초안을 추출하고 네이버 검색 후보를 만든 뒤, 가능하면 INACTIVE 내부 자산 초안까지 연결한다. 추출 스펙은 후보 raw_payload를 거쳐 parts.attributes에 반영되며, ACTIVE 게시는 별도 관리자 검수로만 수행한다.
+      summary: 제조사 게시글 AI 구조화 및 후보 생성 (검수 대기)
+      description: AI가 공식 게시글 본문을 구조화해 신제품 여부, 검색어, 카테고리별 specAttributes 초안을 추출하고 네이버 검색 후보를 만들거나 기존 후보에 동기화한다. INACTIVE 내부 자산 초안 연결은 자동으로 수행하지 않으며, 관리자가 후보 검수 후 /api/admin/part-catalog-candidates/{id}/approve 로 별도 승인해야 한다(응답의 partId/partStatus는 항상 null).
       security:
         - bearerAuth: []
       parameters:

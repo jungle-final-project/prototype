@@ -124,7 +124,9 @@ class HomePartRecommendationServiceTest {
         List<Map<String, Object>> items = castList(response.get("items"));
         assertThat(items.get(0).get("scoreSource")).isEqualTo("FALLBACK");
         assertThat(items.get(0).get("modelVersion")).isNull();
-        assertThat(castMap(items.get(0).get("part")).get("id")).isEqualTo("ram-1");
+        // FALLBACK이면 순위도 Java deterministicScore가 결정해야 한다. 예전에는 baseline 점수(ram-1=99)가
+        // 후보 점수를 덮어쓴 채 복원되지 않아 FALLBACK 표시와 실제 순위가 어긋났다(감사 B4).
+        assertThat(castMap(items.get(0).get("part")).get("id")).isEqualTo("gpu-1");
         assertThat(castStringList(items.get(0).get("reasonTags"))).doesNotContain("userReaction");
     }
 

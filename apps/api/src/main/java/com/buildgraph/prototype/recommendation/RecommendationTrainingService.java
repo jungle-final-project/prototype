@@ -353,6 +353,13 @@ public class RecommendationTrainingService {
         if (artifactPath == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "artifactPath가 없는 모델은 활성화할 수 없습니다.");
         }
+        // in-sample(train-on-train) 지표만 있는 모델은 일반화 성능이 검증되지 않았다.
+        // 워커가 holdout 평가를 기록한 모델만 ACTIVE 승급을 허용한다(평가 없는 자동화 방지 게이트).
+        Map<String, Object> metrics = json(model.get("metrics"));
+        if (!(metrics.get("holdout") instanceof Map<?, ?>)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "holdout 평가 지표가 없는 모델은 활성화할 수 없습니다. 최신 학습 워커로 재훈련하세요.");
+        }
         Map<String, Object> reload = scoringClient.reload(artifactPath);
         Object loaded = reload.get("modelLoaded");
         if (!(loaded instanceof Boolean bool && bool)) {
@@ -528,10 +535,12 @@ public class RecommendationTrainingService {
                 .toList();
     }
 
+    // features_snapshot에는 '모델이 실제로 소비하는 피처'만 담는다. 이름·결측 기본값은
+    // 서빙(HomePartRecommendationService.features)·워커(tools/reranker_service.py FEATURES)와 일치해야 한다.
+    // as_* 지표는 서빙 시점에 계산할 수 없어(요청에 없음) 모델 피처로 넣으면 학습-서빙 스큐가 생기므로,
+    // 분석·향후 피처 엔지니어링용 컨텍스트로 eventSnapshot(asContext)에 보존한다.
     private Map<String, Object> featureSnapshot(Map<String, Object> row) {
         String category = firstText(text(row.get("category")), text(row.get("part_category")));
-        Map<String, Object> asFeatures = json(row.get("as_feature_payload"));
-        Map<String, Object> asRisks = json(row.get("as_risk_flags"));
         Map<String, Object> features = new LinkedHashMap<>();
         features.put("rank_position", integer(row.get("rank_position"), 0));
         features.put("part_price", integer(row.get("part_price"), 0));
@@ -545,25 +554,12 @@ public class RecommendationTrainingService {
         for (String partCategory : List.of("CPU", "GPU", "RAM", "MOTHERBOARD", "STORAGE", "PSU", "CASE", "COOLER")) {
             features.put("category_" + partCategory, partCategory.equals(category) ? 1 : 0);
         }
-        features.put("as_line_count", integer(asFeatures.get("lineCount"), 0));
-        features.put("as_unknown_kind_count", integer(asFeatures.get("unknownKindCount"), 0));
-        features.put("as_max_disk_usage", number(asFeatures.get("maxDiskUsage"), 0.0));
-        features.put("as_avg_memory_usage", number(asFeatures.get("avgMemoryUsage"), 0.0));
-        features.put("as_max_gpu_temp", number(asFeatures.get("maxGpuTemp"), 0.0));
-        features.put("as_gpu_metric_available", booleanValue(asFeatures.get("gpuMetricAvailable")) ? 1 : 0);
-        features.put("as_thermal_risk", booleanValue(asRisks.get("thermalRisk")) ? 1 : 0);
-        features.put("as_storage_pressure_risk", booleanValue(asRisks.get("storagePressureRisk")) ? 1 : 0);
-        features.put("as_memory_pressure_risk", booleanValue(asRisks.get("memoryPressureRisk")) ? 1 : 0);
-        for (String severity : List.of("LOW", "MEDIUM", "HIGH", "CRITICAL")) {
-            features.put("as_severity_" + severity, severity.equals(text(row.get("as_severity"))) ? 1 : 0);
-        }
-        for (String failureCategory : List.of("RECOMMENDATION_BUILD", "PART_SELECTION", "COMPATIBILITY", "PERFORMANCE", "USER_ENVIRONMENT", "AGENT_LOG_ONLY", "OTHER")) {
-            features.put("as_failure_" + failureCategory, failureCategory.equals(text(row.get("as_failure_category"))) ? 1 : 0);
-        }
         return features;
     }
 
     private Map<String, Object> eventSnapshot(Map<String, Object> row) {
+        Map<String, Object> asFeatures = json(row.get("as_feature_payload"));
+        Map<String, Object> asRisks = json(row.get("as_risk_flags"));
         return MockData.map(
                 "eventId", text(row.get("event_public_id")),
                 "eventType", text(row.get("event_type")),
@@ -574,6 +570,11 @@ public class RecommendationTrainingService {
                 "partName", text(row.get("part_name")),
                 "asFailureCategory", text(row.get("as_failure_category")),
                 "asSeverity", text(row.get("as_severity")),
+                // 모델 피처에서 제외된 AS 컨텍스트를 재현 가능하게 보존한다(분석/향후 서빙 가능 집계 피처 설계용).
+                "asContext", MockData.map(
+                        "features", asFeatures,
+                        "riskFlags", asRisks
+                ),
                 "createdAt", DbValueMapper.timestamp(row, "created_at")
         );
     }
