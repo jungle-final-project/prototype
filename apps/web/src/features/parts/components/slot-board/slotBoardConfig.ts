@@ -54,7 +54,8 @@ export const FALLBACK_EDGES: SlotEdgeConfig[] = [
   { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원' },
   { from: 'GPU', to: 'PSU', label: '전력 여유' },
   { from: 'GPU', to: 'CASE', label: '장착 길이' },
-  { from: 'COOLER', to: 'CASE', label: '높이 여유' }
+  { from: 'COOLER', to: 'CASE', label: '높이 여유' },
+  { from: 'PSU', to: 'CASE', label: '파워 깊이' }
 ];
 
 export function slotConfigFor(category: string): SlotConfig | undefined {

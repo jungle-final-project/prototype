@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class SupportFinalContractMigrationTest {
-    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V98__support_final_contracts.sql");
+    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V99__support_final_contracts.sql");
 
     @Test
     void migrationExtendsSupportDecisionConstraint() throws Exception {

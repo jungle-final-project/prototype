@@ -35,14 +35,20 @@ export function SlotCandidatePanel({
   const isMulti = isMultiItemCategory(slot.category);
   const selectedPartIds = new Set(draftItems.map((item) => item.partId));
 
+  // 평가 의미론: 교체 대상을 지정하면 그 행만 빼고(REPLACE+target), RAM/SSD처럼 여러 개 담는
+  // 카테고리는 담기 기준(ADD — 기존 구성 유지+후보 합산)으로 평가한다. 단일 슬롯은 서버 기본
+  // (REPLACE = 교체-전체)이 담기/교체 실행과 의미가 같아 파라미터를 생략한다.
+  const compatibilityMode = replaceTargetId ? undefined : isMulti ? 'ADD' as const : undefined;
   const { data, isLoading, isError, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
-    queryKey: ['parts', 'slot-candidates', slot.category, sort],
+    queryKey: ['parts', 'slot-candidates', slot.category, sort, compatibilityMode ?? 'REPLACE', replaceTargetId],
     queryFn: ({ pageParam }) => listParts({
       category: slot.category,
       page: pageParam,
       size: CANDIDATE_PAGE_SIZE,
       sort,
-      compatibilitySource: 'QUOTE_DRAFT_CURRENT'
+      compatibilitySource: 'QUOTE_DRAFT_CURRENT',
+      compatibilityMode,
+      replaceTargetPartId: replaceTargetId ?? undefined
     }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => (lastPage.page + 1) * lastPage.size < lastPage.total ? lastPage.page + 1 : undefined

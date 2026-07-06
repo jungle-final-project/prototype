@@ -204,26 +204,38 @@ public class BuildGraphService {
         Map<String, Object> powerDetails = toolDetails(toolByName, "power");
         Map<String, Object> sizeDetails = toolDetails(toolByName, "size");
         String socketStatus = socketStatus(byCategory, compatibilityDetails, toolStatus(toolByName, "compatibility"));
-        // 메인보드-RAM 엣지는 DDR 규격과 슬롯 수용량을 함께 본다. 슬롯 초과는 물리적으로 장착 불가라 FAIL.
+        // 메인보드-RAM 엣지는 DDR 규격, 폼팩터(SODIMM/RDIMM 차단), 슬롯 수용량을 함께 본다. 셋 다 물리적 장착 문제라 FAIL.
         boolean ramSlotsExceeded = Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramSlotsMatched")));
+        boolean ramFormFactorBad = Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramFormFactorMatched")));
         Boolean memoryTypeMatched = booleanValue(compatibilityDetails.get("memoryTypeMatched"));
-        Boolean memoryEdgeOk = ramSlotsExceeded ? Boolean.FALSE : memoryTypeMatched;
+        Boolean memoryEdgeOk = ramSlotsExceeded || ramFormFactorBad ? Boolean.FALSE : memoryTypeMatched;
         String memoryStatus = booleanStatus(memoryEdgeOk, toolStatus(toolByName, "compatibility"));
+        // 쿨러 엣지는 소켓 지원과 TDP 대응(냉각 용량)을 함께 본다 — 나쁜 쪽 상태가 엣지를 결정한다.
         String coolerSocketStatus = booleanStatus(booleanValue(compatibilityDetails.get("coolerSocketMatched")), toolStatus(toolByName, "compatibility"));
+        String coolerStatus = worseStatus(coolerSocketStatus, coolerTdpStatus(compatibilityDetails));
         // 파워 판정은 ToolCheckService.power() 한 곳에서만 내리고 GPU-PSU 엣지도 그 status를 그대로 쓴다.
         // (엣지가 requiredRatedCapacity 기준 headroom으로 별도 재계산하면, 툴은 WARN인데 엣지만 FAIL이 되어
         //  "권장 파워를 충족한 PSU인데 엣지선만 빨강"인 불일치가 생겼다.)
         String powerStatus = toolStatus(toolByName, "power");
-        String gpuLengthStatus = lengthStatus(sizeDetails, "gpuLengthMm", "maxGpuLengthMm", toolStatus(toolByName, "size"));
-        String coolerHeightStatus = lengthStatus(sizeDetails, "coolerHeightMm", "maxCpuCoolerHeightMm", toolStatus(toolByName, "size"));
+        // 치수 엣지의 fallback은 size 툴 전체 status가 아니라 WARN(근거 부족)이다 — 툴 status를 상속하면
+        // 무관한 검사(파워 깊이 등)의 FAIL이 쿨러/GPU 엣지에 '높이 간섭' 같은 엉뚱한 라벨로 실린다.
+        // (엣지는 addEdgeIfPossible로 양쪽 부품이 있을 때만 생기므로, 데이터 결측 = 근거 부족 WARN이 맞다.)
+        String gpuLengthStatus = lengthStatus(sizeDetails, "gpuLengthMm", "maxGpuLengthMm", "WARN");
+        // 수랭(AIO)은 높이 대신 라디에이터 크기 vs 케이스 지원 목록으로 판정한다.
+        String coolerCaseStatus = Boolean.TRUE.equals(booleanValue(sizeDetails.get("radiatorChecked")))
+                ? radiatorStatus(sizeDetails)
+                : lengthStatus(sizeDetails, "coolerHeightMm", "maxCpuCoolerHeightMm", "WARN");
+        String psuDepthStatus = lengthStatus(sizeDetails, "psuDepthMm", "maxPsuLengthMm", "WARN");
 
         List<Map<String, Object>> edges = new ArrayList<>();
         addEdgeIfPossible(edges, byCategory, "CPU", "MOTHERBOARD", "edge-cpu-board-socket", "REQUIRES", socketStatus, socketLabel(socketStatus), socketSummary(byCategory, socketStatus));
-        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, ramSlotsExceeded ? "메모리 슬롯" : "DDR 규격", memorySummary(byCategory, compatibilityDetails, memoryStatus));
-        addEdgeIfPossible(edges, byCategory, "CPU", "COOLER", "edge-cpu-cooler-socket", "REQUIRES", coolerSocketStatus, "쿨러 소켓", coolerSummary(byCategory, coolerSocketStatus));
+        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, ramFormFactorBad ? "램 폼팩터" : ramSlotsExceeded ? "메모리 슬롯" : "DDR 규격", memorySummary(byCategory, compatibilityDetails, memoryStatus));
+        addEdgeIfPossible(edges, byCategory, "CPU", "COOLER", "edge-cpu-cooler-socket", "REQUIRES", coolerStatus, coolerLabel(compatibilityDetails), coolerSummary(byCategory, compatibilityDetails, coolerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "PSU", "edge-gpu-psu-power", "AFFECTS", powerStatus, powerLabel(powerDetails, powerStatus), powerSummary(toolByName, powerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "CASE", "edge-gpu-case-length", "REQUIRES", gpuLengthStatus, gpuLengthLabel(sizeDetails, gpuLengthStatus), gpuLengthSummary(toolByName, gpuLengthStatus));
-        addEdgeIfPossible(edges, byCategory, "COOLER", "CASE", "edge-cooler-case-height", "REQUIRES", coolerHeightStatus, coolerHeightLabel(sizeDetails, coolerHeightStatus), coolerHeightSummary(toolByName, coolerHeightStatus));
+        addEdgeIfPossible(edges, byCategory, "COOLER", "CASE", "edge-cooler-case-height", "REQUIRES", coolerCaseStatus, coolerCaseLabel(sizeDetails, coolerCaseStatus), coolerCaseSummary(toolByName, coolerCaseStatus));
+        // 파워 깊이 vs 케이스 허용 길이(P0-3) — 엣지가 없으면 FAIL이 보드/구매 차단에 반영되지 않는다.
+        addEdgeIfPossible(edges, byCategory, "PSU", "CASE", "edge-psu-case-depth", "REQUIRES", psuDepthStatus, psuDepthLabel(sizeDetails, psuDepthStatus), psuDepthSummary(toolByName, psuDepthStatus));
         addEdgeIfPossible(edges, byCategory, "CPU", "GPU", "edge-cpu-gpu-performance", "AFFECTS", toolStatus(toolByName, "performance"), "작업 성능", toolSummary(toolByName, "performance", "CPU와 GPU 조합으로 작업 적합도를 확인합니다."));
         if (!parts.isEmpty()) {
             edges.add(edge("edge-budget-total-price", "constraint-budget", "constraint-total-price", "AFFECTS", toolStatus(toolByName, "price"), "예산", priceSummary(toolByName, budget, total)));
@@ -241,7 +253,7 @@ public class BuildGraphService {
         if (byCategory.containsKey("GPU") || byCategory.containsKey("PSU")) {
             nodes.add(constraintNode("constraint-power", "PSU", powerConstraintLabel(byCategory), toolStatus(toolByName, "power"), powerSummary(toolByName)));
         }
-        if (byCategory.containsKey("GPU") || byCategory.containsKey("CASE") || byCategory.containsKey("COOLER")) {
+        if (byCategory.containsKey("GPU") || byCategory.containsKey("CASE") || byCategory.containsKey("COOLER") || byCategory.containsKey("PSU")) {
             nodes.add(constraintNode("constraint-size", "CASE", partNameOrFallback(byCategory, "CASE", "장착 규격"), toolStatus(toolByName, "size"), toolSummary(toolByName, "size", "케이스와 부품 치수 제약을 확인합니다.")));
         }
         if (byCategory.containsKey("CPU") || byCategory.containsKey("MOTHERBOARD") || byCategory.containsKey("RAM") || byCategory.containsKey("COOLER")) {
@@ -479,6 +491,13 @@ public class BuildGraphService {
     }
 
     private static String memorySummary(Map<String, ToolBuildPart> byCategory, Map<String, Object> compatibilityDetails, String status) {
+        if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramFormFactorMatched")))) {
+            Object bad = compatibilityDetails.get("ramBadFormFactors");
+            String badText = bad instanceof List<?> list && !list.isEmpty()
+                    ? String.join(", ", list.stream().map(String::valueOf).toList())
+                    : "SODIMM/RDIMM";
+            return "노트북/서버용 램 폼팩터(" + badText + ")는 데스크탑 메인보드에 장착할 수 없습니다.";
+        }
         if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramSlotsMatched")))) {
             Object sticks = compatibilityDetails.get("ramSticksTotal");
             Object slots = compatibilityDetails.get("memorySlots");
@@ -493,13 +512,58 @@ public class BuildGraphService {
         return base + " DDR 규격이 맞습니다.";
     }
 
-    private static String coolerSummary(Map<String, ToolBuildPart> byCategory, String status) {
+    private static String coolerSummary(Map<String, ToolBuildPart> byCategory, Map<String, Object> compatibilityDetails, String status) {
         String cpuSocket = attr(byCategory.get("CPU"), "socket");
         String base = "CPU 소켓 " + cpuSocket + "을 쿨러 장착 지원 목록과 비교합니다.";
+        if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("coolerSocketMatched")))) {
+            return base + " CPU 소켓을 지원하지 않습니다.";
+        }
+        Integer coolerTdp = numberValue(compatibilityDetails.get("coolerTdpW"));
+        Integer cpuTdp = numberValue(compatibilityDetails.get("cpuTdpW"));
+        if (Boolean.TRUE.equals(booleanValue(compatibilityDetails.get("coolerTdpChecked"))) && coolerTdp != null && cpuTdp != null) {
+            String tdp = " 쿨러 TDP 대응 " + coolerTdp + "W / CPU TDP " + cpuTdp + "W";
+            if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("coolerTdpMatched")))) {
+                return base + tdp + "로 냉각 용량이 부족합니다.";
+            }
+            if ("WARN".equals(status)) {
+                return base + tdp + "로 여유가 20% 미만이라 고부하 시 빠듯합니다.";
+            }
+            return base + tdp + "로 냉각 여유가 있습니다.";
+        }
         if ("FAIL".equals(status)) {
             return base + " CPU 소켓을 지원하지 않습니다.";
         }
         return base + " 쿨러 소켓 지원 범위에 포함됩니다.";
+    }
+
+    /** CPU-쿨러 엣지의 TDP 대응 status — 미검사면 PASS를 돌려 소켓 status가 엣지를 결정하게 둔다. */
+    private static String coolerTdpStatus(Map<String, Object> compatibilityDetails) {
+        if (!Boolean.TRUE.equals(booleanValue(compatibilityDetails.get("coolerTdpChecked")))) {
+            return "PASS";
+        }
+        if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("coolerTdpMatched")))) {
+            return "FAIL";
+        }
+        Integer coolerTdp = numberValue(compatibilityDetails.get("coolerTdpW"));
+        Integer cpuTdp = numberValue(compatibilityDetails.get("cpuTdpW"));
+        if (coolerTdp != null && cpuTdp != null && coolerTdp < Math.round(cpuTdp * 1.2f)) {
+            return "WARN";
+        }
+        return "PASS";
+    }
+
+    private static String coolerLabel(Map<String, Object> compatibilityDetails) {
+        if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("coolerSocketMatched")))) {
+            return "쿨러 소켓";
+        }
+        if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("coolerTdpMatched")))) {
+            return "TDP 대응 부족";
+        }
+        Integer coolerTdp = numberValue(compatibilityDetails.get("coolerTdpW"));
+        if (Boolean.TRUE.equals(booleanValue(compatibilityDetails.get("coolerTdpChecked"))) && coolerTdp != null) {
+            return "TDP 대응 " + coolerTdp + "W";
+        }
+        return "쿨러 소켓";
     }
 
     private static String powerSummary(Map<String, Map<String, Object>> toolByName) {
@@ -552,6 +616,27 @@ public class BuildGraphService {
         return "GPU 길이가 케이스 허용 길이 안에 있는지 확인합니다.";
     }
 
+    /** COOLER-CASE 엣지 서머리 — 수랭(AIO)은 라디에이터 문구, 공랭은 기존 높이 문구. */
+    private static String coolerCaseSummary(Map<String, Map<String, Object>> toolByName, String status) {
+        Map<String, Object> details = objectMap(toolByName.getOrDefault("size", Map.of()).get("details"));
+        if (Boolean.TRUE.equals(booleanValue(details.get("radiatorChecked")))) {
+            Integer radiatorSize = numberValue(details.get("radiatorSizeMm"));
+            Object support = details.get("radiatorSupportMm");
+            String supportText = support instanceof List<?> list && !list.isEmpty()
+                    ? String.join("·", list.stream().map(String::valueOf).toList()) + "mm"
+                    : null;
+            String base = "라디에이터 " + radiatorSize + "mm / 케이스 지원 " + (supportText == null ? "미확인" : supportText) + "입니다.";
+            if ("FAIL".equals(status)) {
+                return base + " 이 케이스에는 해당 크기 라디에이터를 장착할 수 없습니다.";
+            }
+            if ("WARN".equals(status)) {
+                return base + " 케이스의 라디에이터 지원 정보가 없어 확인이 필요합니다.";
+            }
+            return base + " 장착 가능한 크기입니다.";
+        }
+        return coolerHeightSummary(toolByName, status);
+    }
+
     private static String coolerHeightSummary(Map<String, Map<String, Object>> toolByName, String status) {
         Map<String, Object> details = objectMap(toolByName.getOrDefault("size", Map.of()).get("details"));
         Integer coolerHeight = numberValue(details.get("coolerHeightMm"));
@@ -591,6 +676,58 @@ public class BuildGraphService {
         }
         Integer headroom = headroom(details, "gpuLengthMm", "maxGpuLengthMm");
         return headroom == null ? "장착 길이" : "장착 여유 " + headroom + "mm";
+    }
+
+    /** COOLER-CASE 엣지 라벨 — 수랭(AIO)은 라디에이터 크기, 공랭은 기존 높이 여유. */
+    private static String coolerCaseLabel(Map<String, Object> details, String status) {
+        if (Boolean.TRUE.equals(booleanValue(details.get("radiatorChecked")))) {
+            if ("FAIL".equals(status)) {
+                return "라디에이터 장착 불가";
+            }
+            if ("WARN".equals(status)) {
+                return "라디 지원 미확인";
+            }
+            Integer radiatorSize = numberValue(details.get("radiatorSizeMm"));
+            return radiatorSize == null ? "라디에이터" : "라디에이터 " + radiatorSize + "mm";
+        }
+        return coolerHeightLabel(details, status);
+    }
+
+    /** COOLER-CASE 엣지의 라디에이터 status — 케이스 지원 데이터 결측이면 WARN. */
+    private static String radiatorStatus(Map<String, Object> details) {
+        if (details.get("radiatorSupportMm") == null) {
+            return "WARN";
+        }
+        return Boolean.FALSE.equals(booleanValue(details.get("radiatorMatched"))) ? "FAIL" : "PASS";
+    }
+
+    private static String psuDepthLabel(Map<String, Object> details, String status) {
+        if ("FAIL".equals(status)) {
+            return "파워 깊이 초과";
+        }
+        if ("WARN".equals(status)) {
+            return "파워 깊이 주의";
+        }
+        Integer headroom = headroom(details, "psuDepthMm", "maxPsuLengthMm");
+        return headroom == null ? "파워 깊이" : "깊이 여유 " + headroom + "mm";
+    }
+
+    private static String psuDepthSummary(Map<String, Map<String, Object>> toolByName, String status) {
+        Map<String, Object> details = objectMap(toolByName.getOrDefault("size", Map.of()).get("details"));
+        Integer psuDepth = numberValue(details.get("psuDepthMm"));
+        Integer maxPsuLength = numberValue(details.get("maxPsuLengthMm"));
+        if (psuDepth != null && maxPsuLength != null) {
+            int headroom = maxPsuLength - psuDepth;
+            String base = "파워 깊이 " + psuDepth + "mm / 케이스 허용 " + maxPsuLength + "mm입니다.";
+            if ("FAIL".equals(status)) {
+                return base + " 파워 깊이가 케이스 허용 길이를 초과합니다.";
+            }
+            if ("WARN".equals(status)) {
+                return base + " 여유 " + Math.max(headroom, 0) + "mm로 장착은 가능하지만 간섭을 주의해야 합니다.";
+            }
+            return base + " 여유 " + headroom + "mm입니다.";
+        }
+        return "파워 깊이가 케이스 허용 길이 안에 있는지 확인합니다.";
     }
 
     private static String coolerHeightLabel(Map<String, Object> details, String status) {
