@@ -45,6 +45,16 @@ public class NaverShoppingOfferService {
     private static final String SOURCE = "NAVER_SHOPPING_SEARCH";
     private static final Pattern PSU_WATT_PATTERN = Pattern.compile("(?<!\\d)(\\d{3,4})\\s*(?:[Ww]|$|[^\\d])");
     private static final Pattern SPEED_PATTERN = Pattern.compile("(\\d{4})\\s*(?:MHZ|MT/S)?");
+    // RAM 킷 표기 — size-first "16GX2"/"(16GBX2)" (G 필수라 "1RX8" 미매치), count-first "(2X16GB)"/"2X16GB",
+    // 한국어 개수 "32GB, 2개"/"키트(32GB 2개)"/"1개". 패턴이 없으면 값을 넣지 않는다(무패턴=미기재).
+    private static final Pattern RAM_KIT_SIZE_FIRST = Pattern.compile("(?<![0-9A-Z])(\\d{1,3})\\s*G(?:B)?\\s*[X×]\\s*(\\d)(?![0-9])");
+    private static final Pattern RAM_KIT_COUNT_FIRST = Pattern.compile("(?<![0-9A-Z.])(\\d)\\s*[X×]\\s*(\\d{1,3})\\s*G(?:B)?");
+    // (?!월) — 'AS 3개월'/'6개월 무이자' 같은 기간 표기를 모듈 수로 오인하지 않는다.
+    private static final Pattern RAM_KIT_KOREAN_COUNT = Pattern.compile("(?<![0-9])(\\d{1,2})\\s*개(?:입|들이)?(?!월)");
+    // 용량 토큰 — 접미사(GB/TB)가 필수라 모델번호("MZ-VAP2T0CW", "SN8100")·핀수("262핀")에 걸리지 않는다.
+    private static final Pattern CAPACITY_GB_TOKEN = Pattern.compile("(?<![0-9])(\\d{1,4})GB(?![A-Z])");
+    private static final Pattern STORAGE_TB_TOKEN = Pattern.compile("(?<![0-9.])(\\d{1,2}(?:\\.\\d)?)\\s*TB(?![A-Z])");
+    private static final Pattern STORAGE_GB_TOKEN = Pattern.compile("(?<![0-9])(\\d{2,5})GB(?![A-Z])");
 
     private final String clientId;
     private final String clientSecret;
@@ -1201,14 +1211,26 @@ public class NaverShoppingOfferService {
             case "COOLER" -> applyCoolerAttributes(attributes, upperTitle);
             case "RAM" -> {
                 attributes.put("memoryType", "DDR5");
-                attributes.put("capacityGb", upperTitle.contains("64GB") ? 64 : 32);
-                attributes.put("moduleCount", upperTitle.contains("X2") || upperTitle.contains("2X") ? 2 : 2);
-                attributes.put("formFactor", "UDIMM");
+                // 제목에서 못 읽은 값은 넣지 않는다 — 소비처는 capacityGb 미존재 시 toolReady=false로
+                // 후보 풀에서 제외하고, moduleCount 미존재는 단품(1)으로 계산한다. 모르는 값을
+                // 32GB/킷2개로 위장하던 이진 규칙('? 2 : 2' 상수 대입 버그 포함)을 제거했다.
+                Integer ramModuleCount = parseRamModuleCount(upperTitle);
+                Integer ramCapacityGb = parseRamCapacityGb(upperTitle);
+                if (ramCapacityGb != null) {
+                    attributes.put("capacityGb", ramCapacityGb);
+                }
+                if (ramModuleCount != null) {
+                    attributes.put("moduleCount", ramModuleCount);
+                }
+                attributes.put("formFactor", parseRamFormFactor(upperTitle));
                 applyMemorySpeed(attributes, upperTitle);
             }
             case "STORAGE" -> {
                 attributes.put("interface", upperTitle.contains("PCIE 5") || upperTitle.contains("GEN5") || upperTitle.contains("G5") ? "PCIe 5.0 x4 NVMe" : "M.2 NVMe");
-                attributes.put("capacityGb", upperTitle.contains("4TB") ? 4000 : upperTitle.contains("1TB") ? 1000 : 2000);
+                Integer storageCapacityGb = parseStorageCapacityGb(upperTitle);
+                if (storageCapacityGb != null) {
+                    attributes.put("capacityGb", storageCapacityGb);
+                }
                 attributes.put("formFactor", "M.2 2280");
             }
             default -> {
@@ -1718,6 +1740,70 @@ public class NaverShoppingOfferService {
         }
     }
 
+    /** RAM 킷 모듈 수 — 킷 표기가 없거나 명시적 단품("1개")이면 null(미기재 = 단품 1로 계산됨). */
+    static Integer parseRamModuleCount(String upperTitle) {
+        Integer count = null;
+        Matcher sizeFirst = RAM_KIT_SIZE_FIRST.matcher(upperTitle);
+        Matcher countFirst = RAM_KIT_COUNT_FIRST.matcher(upperTitle);
+        if (sizeFirst.find()) {
+            count = Integer.parseInt(sizeFirst.group(2));
+        } else if (countFirst.find()) {
+            count = Integer.parseInt(countFirst.group(1));
+        } else {
+            // "32GB, 2개"/"키트(32GB 2개)" — GB 표기가 함께 있을 때만 개수로 인정한다(무관한 수량 오탐 방어).
+            Matcher korean = RAM_KIT_KOREAN_COUNT.matcher(upperTitle);
+            if (korean.find() && CAPACITY_GB_TOKEN.matcher(upperTitle).find()) {
+                count = Integer.parseInt(korean.group(1));
+            }
+        }
+        return count != null && count >= 2 && count <= 8 ? count : null;
+    }
+
+    /** RAM 킷 총용량(GB) — GB 토큰 최대값과 킷 곱셈(모듈 크기 × 개수) 중 큰 값. "32GB(16GBX2)"는 32. */
+    static Integer parseRamCapacityGb(String upperTitle) {
+        int max = 0;
+        Matcher matcher = CAPACITY_GB_TOKEN.matcher(upperTitle);
+        while (matcher.find()) {
+            max = Math.max(max, Integer.parseInt(matcher.group(1)));
+        }
+        // 킷 곱셈은 항상 비교한다 — 총량 토큰 없는 "2X16GB" 표기에서 GB 토큰(16)만 취하면
+        // 킷 총용량(32)이 절반으로 기재돼 moduleCount=2와 자기모순이 된다.
+        Matcher sizeFirst = RAM_KIT_SIZE_FIRST.matcher(upperTitle);
+        if (sizeFirst.find()) {
+            max = Math.max(max, Integer.parseInt(sizeFirst.group(1)) * Integer.parseInt(sizeFirst.group(2)));
+        }
+        Matcher countFirst = RAM_KIT_COUNT_FIRST.matcher(upperTitle);
+        if (countFirst.find()) {
+            max = Math.max(max, Integer.parseInt(countFirst.group(1)) * Integer.parseInt(countFirst.group(2)));
+        }
+        return max >= 4 && max <= 1024 ? max : null;
+    }
+
+    /** RAM 폼팩터 — 제목에 노트북/서버 표기가 있으면 그대로 기록해 데스크탑 검사(P0-2)가 차단하게 한다. */
+    static String parseRamFormFactor(String upperTitle) {
+        if (upperTitle.contains("SODIMM") || upperTitle.contains("SO-DIMM") || upperTitle.contains("노트북")) {
+            return "SODIMM";
+        }
+        if (upperTitle.contains("RDIMM") || upperTitle.contains("ECC REG") || upperTitle.contains("REGISTERED")) {
+            return "RDIMM";
+        }
+        return "UDIMM";
+    }
+
+    /** STORAGE 용량(GB) — TB는 십진 환산(8TB=8000, 기존 4TB=4000 관례), 무매치면 null(미기재). */
+    static Integer parseStorageCapacityGb(String upperTitle) {
+        int max = 0;
+        Matcher tb = STORAGE_TB_TOKEN.matcher(upperTitle);
+        while (tb.find()) {
+            max = Math.max(max, (int) Math.round(Double.parseDouble(tb.group(1)) * 1000));
+        }
+        Matcher gb = STORAGE_GB_TOKEN.matcher(upperTitle);
+        while (gb.find()) {
+            max = Math.max(max, Integer.parseInt(gb.group(1)));
+        }
+        return max >= 120 && max <= 16000 ? max : null;
+    }
+
     private static int inferredGpuLengthMm(String upperTitle) {
         if (upperTitle.contains("SFF") || upperTitle.contains("DUAL") || upperTitle.contains("2X")) {
             return upperTitle.contains("5090") ? 304 : upperTitle.contains("5080") ? 280 : 250;
@@ -1765,7 +1851,8 @@ public class NaverShoppingOfferService {
         return switch (category) {
             case "CPU" -> hasAll(attributes, "socket", "architecture", "coreCount", "threadCount", "tdpW");
             case "MOTHERBOARD" -> hasAll(attributes, "socket", "chipset", "memoryType", "formFactor", "widthMm", "depthMm");
-            case "RAM" -> hasAll(attributes, "memoryType", "capacityGb", "speedMhz", "moduleCount", "formFactor");
+            // moduleCount는 필수에서 제외 — 미존재 = 단품(1)이 소비처 계약이라 단품 RAM도 toolReady다.
+            case "RAM" -> hasAll(attributes, "memoryType", "capacityGb", "speedMhz", "formFactor");
             case "GPU" -> hasAll(attributes, "architecture", "wattage", "requiredSystemPowerW", "powerConnector", "vramGb", "memoryType", "lengthMm", "widthMm", "heightMm", "slotWidth");
             case "STORAGE" -> hasAll(attributes, "interface", "capacityGb", "formFactor", "readMbps", "writeMbps");
             case "PSU" -> hasAll(attributes, "capacityW", "wattage", "atxSpec", "efficiency", "gpuConnector", "widthMm", "heightMm", "depthMm");

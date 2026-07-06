@@ -77,6 +77,8 @@ export type PartSearchParams = {
   size?: number;
   sort?: 'category' | 'price_asc' | 'price_desc' | 'name' | 'compatibility';
   compatibilitySource?: 'QUOTE_DRAFT_CURRENT';
+  compatibilityMode?: 'ADD' | 'REPLACE';
+  replaceTargetPartId?: string;
 };
 
 export type CompatiblePartCandidateRequest = {

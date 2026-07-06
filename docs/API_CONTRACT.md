@@ -359,7 +359,7 @@ Google OAuth 정책:
 
 부품 검색 정렬은 `category`, `price_asc`, `price_desc`, `name`, `compatibility`를 허용한다. `compatibility`는 특정 `category`와 `compatibilitySource=QUOTE_DRAFT_CURRENT`가 함께 있을 때만 사용하며, 로그인 사용자의 현재 활성 견적초안 기준으로 `PASS -> WARN -> FAIL`, 가격 낮은순으로 정렬한다. `q`는 `parts.name`, `parts.manufacturer`, `parts.attributes`를 대상으로 검색한다.
 
-`GET /api/parts`에서 `compatibilitySource=QUOTE_DRAFT_CURRENT`와 특정 `category`를 함께 보내면 각 `PartDto`에 선택적 `compatibility` 객체를 포함한다. 전체 카테고리 조회에서는 호환성 컬럼을 붙이지 않는다.
+`GET /api/parts`에서 `compatibilitySource=QUOTE_DRAFT_CURRENT`와 특정 `category`를 함께 보내면 각 `PartDto`에 선택적 `compatibility` 객체를 포함한다. 전체 카테고리 조회에서는 호환성 컬럼을 붙이지 않는다. 평가 의미론은 `compatibilityMode`로 정한다 — 생략/`REPLACE`(기본)는 같은 카테고리를 후보로 교체한 상태로 평가(기존 동작)하고, `ADD`는 현재 구성을 유지한 채 후보를 더한 상태로 평가한다(RAM처럼 복수 장착 카테고리의 슬롯 합산이 담기 전에 반영됨). `REPLACE`에서 `replaceTargetPartId`를 지정하면 그 행만 제외하고 평가한다. 호환 평가가 켜진 요청(`compatibilitySource`+`category`)에서 `compatibilityMode=ADD`와 `replaceTargetPartId`를 동시 지정하면 `400`이고, 호환 평가 없이 온 모드 파라미터는 (다른 미지 파라미터처럼) 무시한다.
 
 `GET /api/parts`에서 `status`를 생략하면 쇼핑몰 기본 노출 기준인 `ACTIVE`만 반환한다. 구형 seed나 교체 후보 보관용 자산은 `status=INACTIVE` 또는 `status=DISCONTINUED`를 명시해 조회한다.
 
@@ -748,7 +748,7 @@ PC Agent 등록/인증 규칙:
 | `PartDto` | `price` | `number` | no | `850000` |
 | `PartDto` | `status` | `string` | no | `ACTIVE` |
 | `PartDto` | `attributes` | `object` | no | `{ "wattage": 200 }` |
-| `PartDto` | `compatibility` | `PartCompatibilityDto` | yes | `{ "status": "PASS", "statusLabel": "호환됨", "summary": "현재 조합 기준 호환 가능합니다.", "checkedTools": ["power"] }` |
+| `PartDto` | `compatibility` | `PartCompatibilityDto` | yes | `{ "status": "PASS", "statusLabel": "호환됨", "summary": "현재 조합 기준 호환 가능합니다.", "checkedTools": ["power", "size"] }` |
 | `PartDto` | `externalOffer` | `object` | yes | `{ "imageUrl": "https://...", "supplierName": "Naver Store", "offerUrl": "https://...", "lowPrice": 950000, "source": "NAVER_SHOPPING_SEARCH", "refreshedAt": "2026-06-29T10:25:00Z" }` |
 | `PartCompatibilityDto` | `status` | `string` | no | `PASS` |
 | `PartCompatibilityDto` | `statusLabel` | `string` | no | `호환됨` |

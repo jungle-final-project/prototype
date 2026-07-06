@@ -42,7 +42,11 @@ export function SelfQuotePage() {
     queryFn: getCurrentQuoteDraft,
     enabled: hasToken
   });
-  const invalidateQuoteDraft = () => queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+  const invalidateQuoteDraft = () => {
+    void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+    // 담기(ADD) 평가는 현재 구성에 직접 의존하므로 드래프트가 바뀌면 후보 목록도 재평가한다.
+    void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
+  };
   const addMutation = useMutation({
     mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => putQuoteDraftItem(partId, quantity),
     onSuccess: invalidateQuoteDraft

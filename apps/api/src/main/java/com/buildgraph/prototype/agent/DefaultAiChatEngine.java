@@ -1130,8 +1130,13 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 return false;
             }
         }
-        if (constraints.targetModuleCount() != null && !constraints.targetModuleCount().equals(attrNumber(part.attributes(), "moduleCount"))) {
-            return false;
+        if (constraints.targetModuleCount() != null) {
+            // moduleCount 미존재 = 단품(1) 계약 — 키가 없다고 '싱글' 질의에서 제외하지 않는다.
+            Integer moduleCount = attrNumber(part.attributes(), "moduleCount");
+            int effectiveModuleCount = moduleCount == null ? 1 : moduleCount.intValue();
+            if (!constraints.targetModuleCount().equals(effectiveModuleCount)) {
+                return false;
+            }
         }
         return true;
     }

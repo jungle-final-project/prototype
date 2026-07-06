@@ -46,7 +46,7 @@ public class PartCompatibleCandidateService {
                 .toList();
         List<CandidateEvaluation> evaluations = activeCandidates(category, Math.max(20, limit * 4)).stream()
                 .filter(candidate -> !selectedPartIds.contains(candidate.toolPart().publicId()))
-                .map(candidate -> evaluate(baseParts, candidate, category, checkedTools))
+                .map(candidate -> evaluate(baseParts, candidate, category, checkedTools, "REPLACE", null))
                 .sorted(Comparator
                         .comparingInt((CandidateEvaluation evaluation) -> statusRank(evaluation.status()))
                         .thenComparingInt(evaluation -> firstNumber(evaluation.partMap().get("price"), 0)))
@@ -69,12 +69,23 @@ public class PartCompatibleCandidateService {
             CurrentUserService.CurrentUser user,
             String source,
             String category,
+            String compatibilityMode,
+            String replaceTargetPartId,
             List<Map<String, Object>> rows
     ) {
         String normalizedSource = firstText(text(source), "QUOTE_DRAFT_CURRENT").toUpperCase(Locale.ROOT);
         String normalizedCategory = normalizeCategory(category);
         if (normalizedCategory == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 부품 카테고리입니다.");
+        }
+        // 담기/교체 의미론 — 생략 시 REPLACE(교체-전체)로 기존 소비자 동작을 그대로 유지한다.
+        String normalizedMode = firstText(text(compatibilityMode), "REPLACE").toUpperCase(Locale.ROOT);
+        if (!"ADD".equals(normalizedMode) && !"REPLACE".equals(normalizedMode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 compatibilityMode입니다.");
+        }
+        String normalizedTarget = text(replaceTargetPartId);
+        if ("ADD".equals(normalizedMode) && normalizedTarget != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "compatibilityMode=ADD에서는 replaceTargetPartId를 지정할 수 없습니다.");
         }
         List<ToolBuildPart> baseParts = switch (normalizedSource) {
             case "QUOTE_DRAFT_CURRENT" -> currentQuoteDraftParts(user);
@@ -83,7 +94,7 @@ public class PartCompatibleCandidateService {
         List<String> checkedTools = checkedTools(normalizedCategory);
         return rows.stream()
                 .map(row -> {
-                    CandidateEvaluation evaluation = evaluate(baseParts, new CandidatePart(toolPart(row), responsePart(row)), normalizedCategory, checkedTools);
+                    CandidateEvaluation evaluation = evaluate(baseParts, new CandidatePart(toolPart(row), responsePart(row)), normalizedCategory, checkedTools, normalizedMode, normalizedTarget);
                     Map<String, Object> part = new LinkedHashMap<>(evaluation.partMap());
                     part.put("compatibility", evaluation.partListCompatibility());
                     return part;
@@ -232,14 +243,36 @@ public class PartCompatibleCandidateService {
                 .toList();
     }
 
-    private CandidateEvaluation evaluate(List<ToolBuildPart> baseParts, CandidatePart candidate, String category, List<String> checkedTools) {
+    private CandidateEvaluation evaluate(List<ToolBuildPart> baseParts, CandidatePart candidate, String category, List<String> checkedTools, String mode, String replaceTargetPartId) {
         if (checkedTools.isEmpty()) {
             return new CandidateEvaluation(candidate.partMap(), "PASS", "ACTIVE 부품 후보입니다.", checkedTools);
         }
-        List<ToolBuildPart> nextParts = new ArrayList<>(baseParts.stream()
-                .filter(part -> !category.equals(part.category()))
-                .toList());
-        nextParts.add(candidate.toolPart());
+        List<ToolBuildPart> nextParts;
+        if ("ADD".equals(mode)) {
+            // 담기 평가: 기존 구성을 유지한 채 후보를 더한 상태로 검사한다 — RAM 만석에서 후보 킷이
+            // '호환됨'으로 보였다가 담는 순간 FAIL로 반전되는 오탐을 막는다. 이미 담긴 부품이 후보로
+            // 오면(GET 경로는 장착 부품을 제외하지 않음) 추가 없이 현재 구성 그대로 평가한다.
+            boolean alreadyInBuild = baseParts.stream()
+                    .anyMatch(part -> category.equals(part.category()) && candidate.toolPart().publicId() != null
+                            && candidate.toolPart().publicId().equals(part.publicId()));
+            nextParts = new ArrayList<>(baseParts);
+            if (!alreadyInBuild) {
+                nextParts.add(candidate.toolPart());
+            }
+        } else if (replaceTargetPartId != null) {
+            // 대상 교체 평가: 지정한 행만 빼고 후보를 더한다. 대상이 이미 사라진 드래프트 레이스에서는
+            // 표시용 평가라 400 대신 담기처럼 관대하게 평가한다.
+            nextParts = new ArrayList<>(baseParts.stream()
+                    .filter(part -> !replaceTargetPartId.equals(part.publicId()))
+                    .toList());
+            nextParts.add(candidate.toolPart());
+        } else {
+            // 기본(교체-전체): 같은 카테고리를 후보 1개로 바꾼 상태로 검사한다 — 기존 소비자 동작.
+            nextParts = new ArrayList<>(baseParts.stream()
+                    .filter(part -> !category.equals(part.category()))
+                    .toList());
+            nextParts.add(candidate.toolPart());
+        }
         List<Map<String, Object>> toolResults = toolCheckService.checkBuild(nextParts, total(nextParts));
         List<Map<String, Object>> relevantResults = toolResults.stream()
                 .filter(result -> checkedTools.contains(text(result.get("tool"))))
@@ -273,9 +306,12 @@ public class PartCompatibleCandidateService {
 
     private static List<String> checkedTools(String category) {
         return switch (category) {
-            case "CPU", "MOTHERBOARD", "RAM", "COOLER" -> List.of("compatibility");
+            case "CPU", "MOTHERBOARD", "RAM" -> List.of("compatibility");
+            // 쿨러는 소켓/TDP(compatibility)에 더해 수랭 라디에이터 장착(size)도 본다.
+            case "COOLER" -> List.of("compatibility", "size");
             case "GPU" -> List.of("power", "size", "performance");
-            case "PSU" -> List.of("power");
+            // 파워는 용량(power)에 더해 깊이 vs 케이스 허용 길이(size)도 본다.
+            case "PSU" -> List.of("power", "size");
             case "CASE" -> List.of("size");
             default -> List.of();
         };

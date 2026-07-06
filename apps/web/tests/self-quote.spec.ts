@@ -965,6 +965,45 @@ test('manages RAM items with remove and replace target selection in the panel', 
   await expect(page.getByTestId('slot-RAM')).toContainText('교체 램 후보');
 });
 
+test('sends ADD evaluation mode for multi-item categories and replace target for targeted replace', async ({ page }) => {
+  await loginAsUser(page);
+  const partRequests: Array<{ mode: string | null; target: string | null }> = [];
+  const ramItems = [draftItem('part-ram-a', 'RAM', '기존 램 A', 90000, 1)];
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...emptyDraft, items: ramItems, totalPrice: 90000, itemCount: 1 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    partRequests.push({
+      mode: url.searchParams.get('compatibilityMode'),
+      target: url.searchParams.get('replaceTargetPartId')
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [candidatePart('part-ram-new', 'RAM', '후보 램 킷')], page: 0, size: 20, total: 1 })
+    });
+  });
+
+  await page.goto('/self-quote?category=RAM');
+
+  // 복수 장착 카테고리(RAM)는 담기 기준(ADD)으로 평가를 요청한다.
+  await expect.poll(() => partRequests.length).toBeGreaterThan(0);
+  expect(partRequests[0]).toEqual({ mode: 'ADD', target: null });
+
+  // 교체 대상을 지정하면 그 행만 제외하는 REPLACE 평가로 다시 요청한다.
+  const panel = page.getByTestId('slot-candidate-panel');
+  await panel.getByRole('button', { name: '기존 램 A 교체 대상 선택' }).click();
+  await expect.poll(() => partRequests.some((request) => request.target === 'part-ram-a')).toBe(true);
+  const targeted = partRequests.find((request) => request.target === 'part-ram-a');
+  expect(targeted?.mode).toBeNull();
+});
+
 test('flashes the slot after attaching a part without breaking the flow', async ({ page }) => {
   await loginAsUser(page);
   let draft: unknown = emptyDraft;

@@ -814,6 +814,19 @@ paths:
           schema:
             type: string
             enum: [QUOTE_DRAFT_CURRENT]
+        - in: query
+          name: compatibilityMode
+          description: 호환 평가 시 후보의 담기/교체 의미론. REPLACE(기본)는 같은 카테고리를 후보로 교체한 상태로, ADD는 현재 구성을 유지한 채 후보를 더한 상태로 평가한다(RAM 등 복수 장착 카테고리의 슬롯 합산 반영). compatibilitySource+category 없이 오면 무시된다. 호환 평가가 켜진 요청에서 ADD와 replaceTargetPartId 동시 지정은 400.
+          schema:
+            type: string
+            enum: [ADD, REPLACE]
+            default: REPLACE
+        - in: query
+          name: replaceTargetPartId
+          description: REPLACE 모드에서 교체 대상 부품 id. 지정하면 해당 행만 제외하고 평가하며, 생략하면 카테고리 전체를 제외한다(기존 동작).
+          schema:
+            type: string
+            format: uuid
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:

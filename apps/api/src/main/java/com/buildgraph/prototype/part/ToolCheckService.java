@@ -75,7 +75,7 @@ public class ToolCheckService {
         };
     }
 
-    /** Evaluates socket, memory, cooler support, and RAM slot capacity compatibility. */
+    /** Evaluates socket, memory, cooler support, cooler TDP, RAM form factor, and RAM slot capacity compatibility. */
     private Map<String, Object> compatibility(Map<String, ToolBuildPart> byCategory, List<ToolBuildPart> parts) {
         ToolBuildPart cpu = byCategory.get("CPU");
         ToolBuildPart motherboard = byCategory.get("MOTHERBOARD");
@@ -84,6 +84,31 @@ public class ToolCheckService {
         boolean socketMatched = same(stringAttr(cpu, "socket"), stringAttr(motherboard, "socket"));
         boolean memoryMatched = same(firstText(stringAttr(ram, "memoryType"), "DDR5"), firstText(stringAttr(motherboard, "memoryType"), "DDR5"));
         boolean coolerMatched = socketSupported(cooler, stringAttr(cpu, "socket"));
+        // 쿨러 냉각 용량(TDP 대응) — 소켓이 맞아도 65W급 쿨러에 170W CPU면 조립은 돼도 냉각이 안 된다.
+        // 양쪽 tdpW가 모두 있을 때만 검사한다(ramSlotsChecked 관례) — 없는 데이터로 FAIL을 내지 않는다.
+        int cpuTdpW = intAttr(cpu, "tdpW", 0);
+        int coolerTdpW = intAttr(cooler, "tdpW", 0);
+        boolean coolerTdpChecked = cpu != null && cooler != null && cpuTdpW > 0 && coolerTdpW > 0;
+        boolean coolerTdpMatched = !coolerTdpChecked || coolerTdpW >= cpuTdpW;
+        boolean coolerTdpMarginLow = coolerTdpChecked && coolerTdpMatched && coolerTdpW < Math.round(cpuTdpW * 1.2f);
+        // RAM 폼팩터 — 노트북용 SODIMM·서버용 Registered(RDIMM)는 데스크탑 보드에 물리적으로 장착/부팅이 안 된다.
+        // byCategory는 카테고리당 1개로 접히므로 RAM 전체 행을 순회한다. 속성이 없는 행은 검사에서 제외한다.
+        List<String> ramBadFormFactors = new ArrayList<>();
+        boolean ramFormFactorChecked = false;
+        for (ToolBuildPart part : parts) {
+            if (!"RAM".equalsIgnoreCase(firstText(part.category(), ""))) {
+                continue;
+            }
+            String formFactor = stringAttr(part, "formFactor");
+            boolean registered = boolAttr(part, "registered");
+            if (formFactor != null || part.attributes().containsKey("registered")) {
+                ramFormFactorChecked = true;
+            }
+            if ((formFactor != null && !"UDIMM".equalsIgnoreCase(formFactor)) || registered) {
+                ramBadFormFactors.add(firstText(formFactor, "REGISTERED"));
+            }
+        }
+        boolean ramFormFactorMatched = ramBadFormFactors.isEmpty();
         // 총 스틱 수 = Σ(수량 × 상품당 모듈 수). "32GB(16Gx2)" 킷은 moduleCount=2로 스틱 2개다.
         // byCategory는 카테고리당 1개로 접히므로 RAM 여러 상품이 담긴 견적은 전체 목록으로 합산한다.
         int ramSticksTotal = parts.stream()
@@ -94,12 +119,21 @@ public class ToolCheckService {
         // 보드에 memorySlots 데이터가 없으면(신규 인테이크 유입 등) 검사를 생략한다 — 없는 데이터로 FAIL을 내지 않는다.
         boolean ramSlotsChecked = motherboard != null && memorySlots > 0 && ramSticksTotal > 0;
         boolean ramSlotsMatched = !ramSlotsChecked || ramSticksTotal <= memorySlots;
-        boolean pass = socketMatched && memoryMatched && coolerMatched && ramSlotsMatched;
+        boolean pass = socketMatched && memoryMatched && coolerMatched && coolerTdpMatched && ramFormFactorMatched && ramSlotsMatched;
         String summary = pass
-                ? "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다."
-                : !ramSlotsMatched
-                        ? "램 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
-                        : "소켓 또는 메모리 호환성 확인이 필요합니다.";
+                ? coolerTdpMarginLow
+                        ? "쿨러 TDP 여유가 20% 미만이라 고부하 시 냉각 여유가 빠듯합니다."
+                        : "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다."
+                : !coolerTdpMatched
+                        ? "쿨러 TDP 대응(" + coolerTdpW + "W)이 CPU TDP(" + cpuTdpW + "W)에 못 미쳐 냉각이 부족합니다."
+                        : !ramFormFactorMatched
+                                ? "데스크탑 보드에 장착할 수 없는 램 폼팩터(" + String.join(", ", ramBadFormFactors) + ")입니다."
+                                : !ramSlotsMatched
+                                        ? "램 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
+                                        : "소켓 또는 메모리 호환성 확인이 필요합니다.";
+        // status는 PASS/FAIL 2-상태를 유지한다 — TDP 마진 WARN을 툴 status로 올리면 compatibility를
+        // 구독하는 RAM/메인보드 후보 전체가 후보와 무관한 쿨러 마진으로 '간섭 주의'가 된다.
+        // 마진 경고는 details(coolerTdpMarginLow)와 summary로 내리고, CPU-쿨러 엣지가 WARN을 그린다.
         return tool("compatibility",
                 pass ? "PASS" : "FAIL",
                 socketMatched && memoryMatched ? "HIGH" : "MEDIUM",
@@ -108,6 +142,15 @@ public class ToolCheckService {
                         "socketMatched", socketMatched,
                         "memoryTypeMatched", memoryMatched,
                         "coolerSocketMatched", coolerMatched,
+                        "cpuTdpW", cpuTdpW > 0 ? cpuTdpW : null,
+                        "coolerTdpW", coolerTdpW > 0 ? coolerTdpW : null,
+                        "coolerTdpChecked", coolerTdpChecked,
+                        "coolerTdpMatched", coolerTdpMatched,
+                        "coolerTdpMarginLow", coolerTdpMarginLow,
+                        "coolerTdpHeadroomW", coolerTdpChecked ? coolerTdpW - cpuTdpW : null,
+                        "ramFormFactorChecked", ramFormFactorChecked,
+                        "ramFormFactorMatched", ramFormFactorMatched,
+                        "ramBadFormFactors", ramBadFormFactors.isEmpty() ? null : ramBadFormFactors,
                         "ramSticksTotal", ramSticksTotal,
                         "memorySlots", memorySlots > 0 ? memorySlots : null,
                         "ramSlotsChecked", ramSlotsChecked,
@@ -149,41 +192,79 @@ public class ToolCheckService {
                 ));
     }
 
-    /** Evaluates GPU length and CPU cooler height against case limits. */
+    /** Evaluates GPU length, CPU cooler height or AIO radiator fit, and PSU depth against case limits. */
     private Map<String, Object> size(Map<String, ToolBuildPart> byCategory) {
         ToolBuildPart gpu = byCategory.get("GPU");
         ToolBuildPart pcCase = byCategory.get("CASE");
         ToolBuildPart cooler = byCategory.get("COOLER");
+        ToolBuildPart psu = byCategory.get("PSU");
         int gpuLength = intAttr(gpu, "lengthMm", 0);
         int maxGpuLength = intAttr(pcCase, "maxGpuLengthMm", 0);
         int coolerHeight = intAttr(cooler, "heightMm", intAttr(cooler, "coolerHeightMm", 0));
-        int maxCoolerHeight = intAttr(pcCase, "maxCpuCoolerHeightMm", 190);
+        // 케이스에 허용 높이 데이터가 없으면 검사를 생략한다 — 임의 기본값(과거 190)으로 '근거 있는 통과'처럼 보이게 하지 않는다.
+        int maxCoolerHeight = intAttr(pcCase, "maxCpuCoolerHeightMm", 0);
+        // 수랭(AIO)은 heightMm가 라디에이터 두께(27~38mm)라 공랭용 높이 검사가 무의미하다.
+        // 대신 라디에이터 크기가 케이스 지원 목록(radiatorSupportMm 배열)에 포함되는지를 본다.
+        String coolerType = stringAttr(cooler, "coolerType");
+        boolean aioCooler = coolerType != null && coolerType.toUpperCase(Locale.ROOT).contains("LIQUID");
+        int radiatorSizeMm = intAttr(cooler, "radiatorSizeMm", 0);
+        List<Integer> radiatorSupportMm = intListAttr(pcCase, "radiatorSupportMm");
+        boolean radiatorChecked = aioCooler && radiatorSizeMm > 0 && pcCase != null;
+        boolean radiatorSupportKnown = !radiatorSupportMm.isEmpty();
+        boolean radiatorMatched = !radiatorChecked || !radiatorSupportKnown || radiatorSupportMm.contains(radiatorSizeMm);
+        int psuDepth = intAttr(psu, "depthMm", 0);
+        int maxPsuLength = intAttr(pcCase, "maxPsuLengthMm", 0);
         boolean gpuKnown = gpuLength > 0 && maxGpuLength > 0;
-        boolean coolerKnown = coolerHeight > 0 && maxCoolerHeight > 0;
+        boolean coolerKnown = !aioCooler && coolerHeight > 0 && maxCoolerHeight > 0;
+        boolean psuKnown = psuDepth > 0 && maxPsuLength > 0;
         boolean gpuExceeded = gpuKnown && gpuLength > maxGpuLength;
         boolean coolerExceeded = coolerKnown && coolerHeight > maxCoolerHeight;
-        boolean fail = gpuExceeded || coolerExceeded;
+        boolean psuExceeded = psuKnown && psuDepth > maxPsuLength;
+        boolean radiatorExceeded = radiatorChecked && radiatorSupportKnown && !radiatorMatched;
+        boolean fail = gpuExceeded || coolerExceeded || psuExceeded || radiatorExceeded;
         int gpuHeadroom = gpuKnown ? maxGpuLength - gpuLength : 0;
         int coolerHeadroom = coolerKnown ? maxCoolerHeight - coolerHeight : 0;
+        int psuHeadroom = psuKnown ? maxPsuLength - psuDepth : 0;
+        // '근거 부족' WARN은 해당 부품 쌍이 실제로 담겨 있을 때만 낸다 — GPU나 케이스를 아직 안 담은
+        // 견적이 WARN이 되면, size를 구독하는 쿨러/파워 후보 패널 전체가 무관한 사유로 '간섭 주의'가 된다.
         boolean warn = !fail && (
-                !gpuKnown
-                        || !coolerKnown
-                        || gpuHeadroom < 20
-                        || coolerHeadroom < 5
+                (gpu != null && pcCase != null && !gpuKnown)
+                        || (cooler != null && pcCase != null && !aioCooler && !coolerKnown)
+                        || (aioCooler && pcCase != null && (!radiatorChecked || !radiatorSupportKnown))
+                        || (psu != null && pcCase != null && !psuKnown)
+                        || (gpuKnown && gpuHeadroom < 20)
+                        // known 게이트 필수 — 수랭(AIO)은 coolerKnown=false라 headroom이 0으로 남는데,
+                        // 게이트 없이 0<5를 평가하면 라디에이터가 정확히 맞아도 영구 WARN이 된다.
+                        || (coolerKnown && coolerHeadroom < 5)
+                        || (psuKnown && psuHeadroom < 10)
         );
         return tool("size",
                 fail ? "FAIL" : warn ? "WARN" : "PASS",
                 fail ? "HIGH" : "MEDIUM",
-                fail ? "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
+                fail ? radiatorExceeded
+                        ? "케이스가 라디에이터 " + radiatorSizeMm + "mm 장착을 지원하지 않습니다."
+                        : psuExceeded
+                                ? "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다."
+                                : "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
                         : warn ? "케이스 장착 여유가 낮거나 일부 치수 근거가 부족해 추가 확인이 필요합니다."
-                        : "GPU 길이와 쿨러 높이가 케이스 제약 안에 있습니다.",
+                        : "GPU 길이, 쿨러 장착, 파워 깊이가 케이스 제약 안에 있습니다.",
+                // 결측(0)은 null로 내린다 — 0을 그대로 실으면 엣지가 'max-0' 여유로 초록을 그려
+                // "근거 없는 통과"처럼 보인다(190 기본값 제거와 같은 원칙).
                 MockData.map(
-                        "gpuLengthMm", gpuLength,
-                        "maxGpuLengthMm", maxGpuLength,
-                        "gpuHeadroomMm", gpuHeadroom,
-                        "coolerHeightMm", coolerHeight,
-                        "maxCpuCoolerHeightMm", maxCoolerHeight,
-                        "coolerHeadroomMm", coolerHeadroom
+                        "gpuLengthMm", gpuLength > 0 ? gpuLength : null,
+                        "maxGpuLengthMm", maxGpuLength > 0 ? maxGpuLength : null,
+                        "gpuHeadroomMm", gpuKnown ? gpuHeadroom : null,
+                        "coolerHeightMm", !aioCooler && coolerHeight > 0 ? coolerHeight : null,
+                        "maxCpuCoolerHeightMm", maxCoolerHeight > 0 ? maxCoolerHeight : null,
+                        "coolerHeadroomMm", coolerKnown ? coolerHeadroom : null,
+                        "coolerType", coolerType,
+                        "radiatorSizeMm", radiatorSizeMm > 0 ? radiatorSizeMm : null,
+                        "radiatorSupportMm", radiatorSupportKnown ? radiatorSupportMm : null,
+                        "radiatorChecked", radiatorChecked,
+                        "radiatorMatched", radiatorMatched,
+                        "psuDepthMm", psuDepth > 0 ? psuDepth : null,
+                        "maxPsuLengthMm", maxPsuLength > 0 ? maxPsuLength : null,
+                        "psuHeadroomMm", psuKnown ? psuHeadroom : null
                 ));
     }
 
@@ -809,6 +890,33 @@ public class ToolCheckService {
         }
         Object value = part.attributes().get(key);
         return value == null ? null : String.valueOf(value);
+    }
+
+    /** Reads a boolean attribute treating absent or non-true values as false. */
+    private static boolean boolAttr(ToolBuildPart part, String key) {
+        if (part == null) {
+            return false;
+        }
+        Object value = part.attributes().get(key);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        return "true".equalsIgnoreCase(text(value));
+    }
+
+    /** Reads an integer-array attribute (예: 케이스 radiatorSupportMm) — 배열이 아니면 빈 목록. */
+    private static List<Integer> intListAttr(ToolBuildPart part, String key) {
+        if (part == null) {
+            return List.of();
+        }
+        Object value = part.attributes().get(key);
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .map(ToolCheckService::numberValue)
+                    .filter(item -> item != null && item > 0)
+                    .toList();
+        }
+        return List.of();
     }
 
     /** Reads an integer attribute from a part. */

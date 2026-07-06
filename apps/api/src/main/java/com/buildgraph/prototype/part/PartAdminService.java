@@ -314,7 +314,8 @@ public class PartAdminService {
             case "CPU" -> List.of("socket", "coreCount", "threadCount", "tdpW");
             case "GPU" -> List.of("vramGb", "lengthMm", "wattage", "requiredSystemPowerW", "powerConnector");
             case "MOTHERBOARD" -> List.of("socket", "chipset", "memoryType", "formFactor");
-            case "RAM" -> List.of("memoryType", "capacityGb", "moduleCount", "speedMhz", "formFactor");
+            // moduleCount는 필수가 아니다 — 미존재 = 단품(1)이 소비처 계약(NaverShoppingOfferService.toolReadyFor와 동일).
+            case "RAM" -> List.of("memoryType", "capacityGb", "speedMhz", "formFactor");
             case "STORAGE" -> List.of("capacityGb", "interface", "generation", "formFactor");
             case "PSU" -> List.of("capacityW", "efficiency", "atxSpec", "gpuConnector");
             case "CASE" -> List.of("formFactor", "maxGpuLengthMm", "maxCpuCoolerHeightMm", "maxPsuLengthMm");
