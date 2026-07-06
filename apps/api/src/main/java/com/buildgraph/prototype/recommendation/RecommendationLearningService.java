@@ -117,9 +117,34 @@ public class RecommendationLearningService {
         String idempotencyKey = "AS_CONFIRMED_NEGATIVE:" + ticket.get("id");
         Map<String, Object> existing = findEventByIdempotency(longValue(ticket, "user_id"), idempotencyKey);
         if (!existing.isEmpty()) {
-            existing.put("label", label);
-            existing.put("trainingEventCreated", false);
-            return existing;
+            // 라벨 재확정(부품 정정 등)이 학습 이벤트에도 반영되도록 관련 링크를 갱신한다.
+            // 예전에는 기존 이벤트를 그대로 반환해, 관리자가 라벨을 고쳐도 잘못된 부품에
+            // -2.0 라벨이 영구 잔존했다(감사 B6).
+            Map<String, Object> correction = new LinkedHashMap<>(eventPayload(request));
+            correction.put("relabeledByAdminId", admin.id());
+            correction.put("asTicketLabelId", label.get("id"));
+            jdbcTemplate.update("""
+                    UPDATE recommendation_events
+                    SET part_id = ?,
+                        build_id = ?,
+                        recommendation_id = ?,
+                        category = ?,
+                        event_payload = coalesce(event_payload, '{}'::jsonb) || ?::jsonb
+                    WHERE user_id = ?
+                      AND idempotency_key = ?
+                    """,
+                    partId,
+                    buildId,
+                    recommendationId,
+                    normalizeCategory(text(request.get("category"))),
+                    toJson(correction),
+                    longValue(ticket, "user_id"),
+                    idempotencyKey
+            );
+            Map<String, Object> refreshed = findEventByIdempotency(longValue(ticket, "user_id"), idempotencyKey);
+            refreshed.put("label", label);
+            refreshed.put("trainingEventCreated", false);
+            return refreshed;
         }
         Map<String, Object> payload = new LinkedHashMap<>(eventPayload(request));
         payload.put("ticketId", ticketPublicId);
@@ -209,6 +234,7 @@ public class RecommendationLearningService {
         ));
         String severity = normalizeSeverity(firstText(text(request.get("severity")), "MEDIUM"));
         String note = text(request.get("note"));
+        Long logSummaryId = resolveLogSummaryId(text(request.get("logSummaryId")), longValue(ticket, "id"));
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO as_ticket_labels (
                   as_ticket_id,
@@ -225,7 +251,7 @@ public class RecommendationLearningService {
                 )
                 VALUES (
                   ?,
-                  (SELECT id FROM agent_log_summaries WHERE as_ticket_id = ? LIMIT 1),
+                  ?,
                   ?,
                   ?,
                   ?,
@@ -257,7 +283,7 @@ public class RecommendationLearningService {
                           updated_at
                 """,
                 longValue(ticket, "id"),
-                longValue(ticket, "id"),
+                logSummaryId,
                 failureCategory,
                 severity,
                 partId,
@@ -482,6 +508,34 @@ public class RecommendationLearningService {
             }
             throw error;
         }
+    }
+
+    // 티켓당 요약이 여러 개(재업로드/재요약)일 때 무순서 LIMIT 1 조인이 임의 요약과 연결되던
+    // 모호성을 제거한다(감사 B7). 명시 지정 시 티켓 소속을 검증하고, 미지정 시 최신 요약을 쓴다.
+    private Long resolveLogSummaryId(String logSummaryPublicId, Long ticketId) {
+        if (logSummaryPublicId != null) {
+            return jdbcTemplate.queryForList("""
+                            SELECT id
+                            FROM agent_log_summaries
+                            WHERE public_id = ?::uuid
+                              AND as_ticket_id = ?
+                            """, logSummaryPublicId, ticketId)
+                    .stream()
+                    .findFirst()
+                    .map(row -> ((Number) row.get("id")).longValue())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "logSummaryId가 이 티켓의 로그 요약이 아닙니다."));
+        }
+        return jdbcTemplate.queryForList("""
+                        SELECT id
+                        FROM agent_log_summaries
+                        WHERE as_ticket_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """, ticketId)
+                .stream()
+                .findFirst()
+                .map(row -> ((Number) row.get("id")).longValue())
+                .orElse(null);
     }
 
     private Map<String, Object> findEventByIdempotency(Long userId, String idempotencyKey) {

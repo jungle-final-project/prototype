@@ -64,7 +64,7 @@ MVP 기준 결정값:
 | `/builds/:buildId/change-part` route | 1번 | 2번 | 1번은 교체 flow와 route state, 2번은 parts 검색/필터와 category별 후보 DTO만 수정 가능 | 예, 1번과 2번 상호 review |
 | `/admin` route | 5번 | 2번, 3번, 4번 | 5번은 shell, guard, dashboard frame을 수정한다. 각 도메인 owner는 자기 admin summary card의 데이터 mapping만 수정 가능 | 도메인 card 변경 시 5번 |
 | AdminShell | 5번 | 2번, 3번, 4번 | 승인만 필요한 변경: nav item label/order, 각 owner의 admin route link 추가. 5번만 직접 수정 가능한 변경: guard, layout slot contract, admin 권한 분기, dashboard 공통 query | 예, 5번 |
-| Auth 화면 | 1번 | 5번 | 1번은 `/login`, `/signup`, `/auth/callback` 화면 state, form validation, Auth API 연결을 수정한다. token 저장 helper와 admin route guard 변경은 5번과 합의한다 | token/guard 변경 시 5번 |
+| Auth 화면 | 1번 | 5번 | 1번은 `/login`, `/signup`, `/auth/callback`(미구현 — Google OAuth 도입 시 활성화) 화면 state, form validation, Auth API 연결을 수정한다. token 저장 helper와 admin route guard 변경은 5번과 합의한다 | token/guard 변경 시 5번 |
 | Auth API/User | 1번 | 5번 | 1번은 auth endpoint, users, JWT, refresh, OAuth 구현을 수정한다. 5번은 공통 API client, `RequireAdmin`, admin guard, security allowlist를 검토한다 | auth/token/security 변경 시 5번 |
 | `components/**` | 5번 | 모든 화면 owner | 승인만 필요한 변경: 기존 prop을 깨지 않는 style variant, 접근성 label, 빈 상태 문구. 5번만 직접 수정 가능한 변경: prop rename/remove, layout primitive, table/form control contract, global theme token | 예, 5번 |
 | `apps/web/src/lib/api.ts` | 5번 | 모든 API owner | 승인만 필요한 변경: owner별 endpoint wrapper 추가, typed DTO import 추가. 5번만 직접 수정 가능한 변경: auth header, refresh retry, base URL, error normalization, pagination 공통 처리 | error/auth/pagination 변경 시 5번 |
@@ -77,11 +77,11 @@ MVP 기준 결정값:
 
 | 항목 | 내용 |
 |---|---|
-| 담당 화면 route | `/`, `/requirements/new`, `/builds/:buildId`, `/builds/:buildId/change-part`, `/my/quotes`, `/login`, `/signup`, `/auth/callback` |
+| 담당 화면 route | `/`, `/requirements/new`, `/builds/latest`, `/builds/:buildId`, `/builds/:buildId/change-part`, `/my/quotes`, `/login`, `/signup`, `/admin/build-graph-layouts`, `/auth/callback`(미구현 — Google OAuth 도입 시 활성화) |
 | frontend files | `features/quote/**`, `features/auth/pages/**` |
 | backend packages | `build`, `requirement`, `user`, `auth` |
 | DB tables | `requirements`, `builds`, `build_items`, `users`, `user_auth_providers`, `refresh_tokens` |
-| API endpoints | `POST /api/requirements/parse`, `POST /api/builds/recommend`, `POST /api/builds/from-chat`, `POST /api/build-graphs/resolve`, `GET /api/builds/{id}`, `GET /api/builds/history`, `POST /api/builds/{id}/change-part`, `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange` |
+| API endpoints | `POST /api/requirements/parse`, `POST /api/builds/recommend`, `POST /api/builds/from-chat`, `POST /api/build-graphs/resolve`, `GET /api/builds/{id}`, `GET /api/builds/history`, `POST /api/builds/{id}/change-part`, `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`, 그리고 미구현 예정 계약(Google OAuth 도입 시 활성화, 현재 controller 없음) `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange` |
 | 협업자 | Auth 공통/token/guard/security는 5번, Tool/RAG 근거는 3번, parts 데이터는 2번, 관리자 관계도 배치 API는 5번 admin shell/security/migration과 협업 |
 
 Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/src/lib/api.ts`, `RequireAdmin`, admin guard, security allowlist, migration 순서 관점에서 협업한다.
@@ -95,13 +95,15 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | 담당 화면 route | `/self-quote`, `/admin/parts`, `/admin/price-jobs`, `/my/quotes`의 가격 알림 영역 |
 | frontend files | `features/parts/**`, `features/admin/pages/AdminPartsPage.tsx`, `features/admin/pages/AdminPriceJobsPage.tsx` |
 | backend packages | `part`, `price`, `tool`, `quote` |
-| DB tables | `parts`, `price_snapshots`, `part_external_offers`, `part_catalog_refresh_jobs`, `part_catalog_candidates`, `manufacturer_sources`, `manufacturer_posts`, `quote_drafts`, `quote_draft_items`, `price_alerts`, `price_jobs`, `compatibility_rules`, `benchmark_summaries` |
-| API endpoints | `GET /api/parts`, `GET /api/parts/{id}`, `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/price-alerts`, `POST /api/price-alerts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `GET/POST /api/admin/parts`, `GET /api/admin/parts/quality-report`, `GET/PATCH/DELETE /api/admin/parts/{id}`, `POST /api/admin/parts/{id}/restore`, `POST /api/admin/parts/{id}/manual-price`, `PATCH /api/admin/parts/{id}/external-offer`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, `POST /api/admin/parts/danawa-price-snapshots/refresh`, `POST /api/admin/parts/danawa-price-trends/refresh`, source/post/candidate CRUD under `/api/admin/manufacturer-*`, `POST /api/admin/manufacturer-sources/{id}/scan`, `POST /api/admin/manufacturer-sources/scan`, `POST /api/admin/manufacturer-posts/{id}/ai-asset-draft`, `POST /api/admin/part-catalog-candidates/{id}/approve|reject|refresh-offers`, `GET/POST /api/admin/part-alias-rules`, `GET /api/admin/part-alias-review-items`, `GET /api/admin/part-alias-review-items/summary`, `POST /api/admin/part-alias-review-items/{id}/resolve|ignore`, 5개 Tool API |
+| DB tables | `parts`, `price_snapshots`, `part_external_offers`, `part_catalog_refresh_jobs`, `part_catalog_candidates`, `manufacturer_sources`, `manufacturer_posts`, `quote_drafts`, `quote_draft_items`, `price_alerts`, `price_jobs`, `pipeline_job_runs`, `compatibility_rules`, `benchmark_summaries` |
+| API endpoints | `GET /api/parts`, `GET /api/parts/{id}`, `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/price-alerts`, `POST /api/price-alerts`, `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `GET /api/admin/pipeline-job-runs`, `GET/POST /api/admin/parts`, `GET /api/admin/parts/quality-report`, `GET/PATCH/DELETE /api/admin/parts/{id}`, `POST /api/admin/parts/{id}/restore`, `POST /api/admin/parts/{id}/manual-price`, `PATCH /api/admin/parts/{id}/external-offer`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, `POST /api/admin/parts/danawa-price-snapshots/refresh`, `POST /api/admin/parts/danawa-price-trends/refresh`, source/post/candidate CRUD under `/api/admin/manufacturer-*`, `POST /api/admin/manufacturer-sources/{id}/scan`, `POST /api/admin/manufacturer-sources/scan`, `POST /api/admin/manufacturer-posts/{id}/ai-asset-draft`, `POST /api/admin/part-catalog-candidates/{id}/approve|reject|refresh-offers`, `GET/POST /api/admin/part-alias-rules`, `GET /api/admin/part-alias-review-items`, `GET /api/admin/part-alias-review-items/summary`, `POST /api/admin/part-alias-review-items/{id}/resolve|ignore`, 5개 Tool API |
 | 협업자 | `price_jobs`, catalog refresh, external offer refresh, manufacturer release intake infra 실행 환경은 5번, build 연동은 1번, Agent Tool 이력과 AI 분류 고도화는 3번 |
 
 `part_catalog_candidates.source_product_key` 생성과 유지보수는 2번 Parts/Price 서버 책임이다. 관리자 UI와 후보 수정 API는 상품명, 검색어, 가격, 공급처, URL 같은 보정 필드만 다루고 내부 dedupe key를 입력받지 않는다.
 
 `price_jobs`의 주 owner는 2번이고 협업자는 5번이다.
+
+`pipeline_job_runs`(스케줄 파이프라인 잡 실행 이력, V91)의 주 owner는 2번이고 협업자는 5번·3번이다. 공통 기록기 `PipelineJobRunRecorder`는 `common` 패키지라 5번이 검토하고, 추천 shadow 보존 잡 기록은 3번 도메인과 걸친다. 조회 API `GET /api/admin/pipeline-job-runs`는 `/admin/price-jobs` 화면의 자동 실행 이력 패널이 소비한다.
 
 ### 3번: Agent/RAG/Tool Evidence
 
@@ -111,7 +113,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | frontend files | `features/support/**` 중 AS AI Chat 화면/API, `features/admin/agent/**`, `features/admin/evidence/**` |
 | backend packages | `agent`, `rag`, `recommendation` |
 | DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages`, `llm_generations`, `recommendation_events`, `recommendation_model_versions`, `recommendation_shadow_scores`, `recommendation_training_datasets`, `recommendation_training_dataset_items`, `recommendation_training_jobs`, `as_ticket_labels` 협업 |
-| API endpoints | `POST /api/ai/build-chat`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events`, `POST /api/admin/recommendation-feedback/as-tickets/{id}`, `POST /api/admin/recommendation-feedback/home-parts`, `GET /api/admin/recommendation-models`, `GET /api/admin/recommendation-models/summary`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
+| API endpoints | `POST /api/ai/build-chat`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events`, `POST /api/admin/recommendation-feedback/as-tickets/{id}`, `POST /api/admin/recommendation-feedback/home-parts`, `GET /api/admin/recommendation-models`, `GET /api/admin/recommendation-models/summary`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `POST /api/admin/rag-embeddings/backfill`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
 | 협업자 | 추천 결과 UI는 1번, Tool 판정 로직은 2번, AS 원인 후보는 4번 |
 
 XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 추천부품은 `GET /api/recommendations/home-parts`에서 보이는 랭킹으로 사용한다. 3번은 추천 이벤트 수집, 홈 추천부품 관리자 라벨, 모델 버전/점수 기록, 학습 dataset/job 운영 API, Python worker/scorer, Docker scorer 운영 설정을 담당한다. 관리자 라벨은 학습 이벤트만 남기며 `parts.status`나 사용자 노출 여부를 직접 바꾸지 않는다. Tool `FAIL` 후보를 되살리거나 기존 견적 추천 순서를 바꾸지 않는다. AS feedback은 4번의 `as_tickets`와 `agent_log_summaries`를 읽어 `as_ticket_labels`를 저장하고, 조건이 맞을 때만 관리자 확정 negative 이벤트를 남긴다. 티켓 상태와 후보 JSON은 수정하지 않는다.
@@ -157,24 +159,26 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 
 | Route | 주 owner | 협업자 | 연결 API |
 |---|---|---|---|
-| `/` | 1번 | 2번 | `POST /api/ai/build-chat`, `POST /api/build-graphs/resolve`, `POST /api/parts/compatible-candidates`, `PUT /api/quote-drafts/current/apply-ai-build` |
+| `/` | 1번 | 2번 | `POST /api/ai/build-chat`, `POST /api/build-graphs/resolve`, `POST /api/parts/compatible-candidates`, `PUT /api/quote-drafts/current/apply-ai-build`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events` |
 | `/requirements/new` | 1번 | 3번 | `POST /api/requirements/parse`, `POST /api/builds/recommend` |
+| `/builds/latest` | 1번 | 3번 | 프론트 세션 보관 AI 추천 조합 표시, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat` |
 | `/builds/:buildId` | 1번 | 2번, 3번 | `GET /api/builds/{id}`, `GET /api/rag/evidence/{id}` |
 | `/builds/:buildId/change-part` | 1번 | 2번 | `POST /api/builds/{id}/change-part`, `GET /api/parts` |
 | `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts` |
-| `/self-quote` | 2번 | 1번, 5번 | `GET /api/parts`, `POST /api/parts/compatible-candidates`, `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, 5개 Tool API |
+| `/self-quote` | 2번 | 1번, 5번 | `GET /api/parts`(후보 패널은 `compatibilitySource=QUOTE_DRAFT_CURRENT`), `POST /api/parts/compatible-candidates`(슬롯보드 개편 후 이 route에서 미사용 — 홈/빌드 상세 그래프 전용), `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat`, `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, 5개 Tool API |
 | `/checkout` | 2번 | 1번, 5번 | `GET /api/quote-drafts/current` |
 | `/checkout/complete` | 2번 | 1번, 5번 | 프론트 `sessionStorage` 데모 상태 |
-| `/parts/:partId` | 2번 | 5번 | `GET /api/parts/{id}`, `PUT /api/quote-drafts/current/items/{partId}` |
-| `/login` | 1번 | 5번 | `POST /api/auth/login`, `GET /api/auth/google/start` |
+| `/parts/:partId` | 2번 | 5번 | `GET /api/parts/{id}`, `PUT /api/quote-drafts/current/items/{partId}`, `POST /api/recommendation-events` |
+| `/login` | 1번 | 5번 | `POST /api/auth/login`, `GET /api/auth/google/start`(미구현 — Google OAuth 도입 시) |
 | `/signup` | 1번 | 5번 | `POST /api/users` |
-| `/auth/callback` | 1번 | 5번 | `POST /api/auth/exchange` |
+| `/auth/callback`(미구현 — Google OAuth 도입 시 활성화, 현재 App.tsx에 route 없음) | 1번 | 5번 | `POST /api/auth/exchange`(미구현) |
 | `/support/new` | 4번 | 5번 | `POST /api/agent-logs/upload`, `POST /api/as-tickets` |
 | `/support/ai-chat` | 3번 | 4번, 5번 | `GET /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/as-chat` |
 | `/support/:ticketId` | 4번 | - | `GET /api/as-tickets/{id}` |
 | `/admin` | 5번 | 2번, 3번, 4번 | `GET /api/admin/dashboard`, `GET /api/admin/audit-logs/recent` |
 | `/admin/parts` | 2번 | 5번, 3번 | `GET/POST /api/admin/parts`, `GET /api/admin/parts/quality-report`, `GET/PATCH/DELETE /api/admin/parts/{id}`, `POST /api/admin/parts/{id}/restore`, `POST /api/admin/parts/{id}/manual-price`, `PATCH /api/admin/parts/{id}/external-offer`, `GET /api/parts/{id}/price-history`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, `POST /api/admin/parts/danawa-price-snapshots/refresh`, `POST /api/admin/parts/danawa-price-trends/refresh`, source/post/candidate CRUD under `/api/admin/manufacturer-*`, `POST /api/admin/manufacturer-sources/{id}/scan`, `POST /api/admin/manufacturer-sources/scan`, `POST /api/admin/manufacturer-posts/{id}/ai-asset-draft`, `POST /api/admin/part-catalog-candidates/{id}/approve|reject|refresh-offers`, `GET/POST /api/admin/part-alias-rules`, `GET /api/admin/part-alias-review-items`, `GET /api/admin/part-alias-review-items/summary`, `POST /api/admin/part-alias-review-items/{id}/resolve|ignore` |
-| `/admin/price-jobs` | 2번 | 5번 | `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run` |
+| `/admin/price-jobs` | 2번 | 5번 | `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `GET /api/admin/pipeline-job-runs` |
+| `/admin/build-graph-layouts` | 1번 | 5번 | `GET/PUT/DELETE /api/admin/build-graph-layouts/default` |
 | `/admin/load-tests` | 5번 | 2번, 3번, 4번 | k6 smoke/load report, `GET /api/health` smoke |
 | `/admin/agent-sessions` | 3번 | 5번 | `GET /api/admin/agent-sessions` |
 | `/admin/agent-sessions/:id` | 3번 | 5번 | `GET /api/admin/agent-sessions/{id}` |
@@ -196,16 +200,18 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `POST /api/auth/refresh` | 1번 | 5번 |
 | `POST /api/auth/logout` | 1번 | 5번 |
 | `GET /api/auth/me` | 1번 | 5번 |
-| `GET /api/auth/google/start` | 1번 | 5번 |
-| `GET /api/auth/google/callback` | 1번 | 5번 |
-| `POST /api/auth/exchange` | 1번 | 5번 |
+| `GET /api/auth/google/start`(미구현 — Google OAuth 도입 시 활성화) | 1번 | 5번 |
+| `GET /api/auth/google/callback`(미구현 — Google OAuth 도입 시 활성화) | 1번 | 5번 |
+| `POST /api/auth/exchange`(미구현 — Google OAuth 도입 시 활성화) | 1번 | 5번 |
 | `POST /api/requirements/parse` | 1번 | - |
 | `POST /api/builds/recommend` | 1번 | 2번, 3번 |
+| `POST /api/builds/from-chat` | 1번 | 3번 |
 | `POST /api/ai/build-chat` | 3번 | 1번, 2번 |
 | `POST /api/build-graphs/resolve` | 1번 | 2번, 3번 |
 | `GET /api/builds/{id}` | 1번 | 2번, 3번 |
 | `GET /api/builds/history` | 1번 | - |
 | `POST /api/builds/{id}/change-part` | 1번 | 2번 |
+| `GET/PUT/DELETE /api/admin/build-graph-layouts/default` | 1번 | 5번 |
 | `GET /api/parts` | 2번 | - |
 | `POST /api/parts/compatible-candidates` | 2번 | 1번 |
 | `GET /api/parts/{id}` | 2번 | - |
@@ -219,6 +225,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `POST /api/price-alerts` | 2번 | 1번 |
 | `GET /api/admin/price-jobs` | 2번 | 5번 |
 | `POST /api/admin/price-jobs/run` | 2번 | 5번 |
+| `GET /api/admin/pipeline-job-runs` | 2번 | 3번, 5번 |
 | `GET /api/admin/parts` | 2번 | 5번 |
 | `POST /api/admin/parts` | 2번 | 5번 |
 | `GET /api/admin/parts/{id}` | 2번 | 5번 |
@@ -230,6 +237,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `POST /api/admin/parts/catalog/refresh` | 2번 | 5번 |
 | `POST /api/admin/parts/external-offers/refresh` | 2번 | 5번 |
 | `POST /api/admin/parts/danawa-price-snapshots/refresh` | 2번 | 5번 |
+| `POST /api/admin/parts/danawa-price-trends/refresh` | 2번 | 5번 |
 | `GET /api/admin/manufacturer-sources` | 2번 | 5번 |
 | `POST /api/admin/manufacturer-sources` | 2번 | 5번 |
 | `GET/PATCH/DELETE /api/admin/manufacturer-sources/{id}` | 2번 | 5번 |
@@ -259,6 +267,9 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `POST /api/tools/size/check` | 2번 | 3번 |
 | `POST /api/tools/performance/check` | 2번 | 3번 |
 | `POST /api/tools/price/check` | 2번 | 3번 |
+| `GET /api/recommendations/home-parts` | 3번 | 1번 |
+| `POST /api/recommendation-events` | 3번 | 1번, 2번 |
+| `/api/admin/recommendation-*` 전체 (models·feedback·training) | 3번 | 5번 |
 | `GET /api/ai/as-chat` | 3번 | 4번, 5번 |
 | `POST /api/ai/as-chat` | 3번 | 4번, 5번 |
 | `POST /api/ai/as-chat/stream` | 3번 | 4번, 5번 |
@@ -273,6 +284,11 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `GET /api/admin/tool-invocations/{id}` | 3번 | 5번 |
 | `GET /api/admin/rag-evidence` | 3번 | 5번 |
 | `GET /api/admin/rag-evidence/{id}` | 3번 | 5번 |
+| `POST /api/admin/rag-embeddings/backfill` | 3번 | 5번 |
+| `POST /api/agent/devices/register` | 4번 | 5번 |
+| `POST /api/agent/consents` | 4번 | 5번 |
+| `POST /api/agent/heartbeat` | 4번 | 5번 |
+| `POST /api/agent/log-uploads` | 4번 | 5번 |
 | `POST /api/agent-logs/upload` | 4번 | - |
 | `GET /api/agent-logs/{id}` | 4번 | - |
 | `POST /api/as-tickets` | 4번 | 3번 |

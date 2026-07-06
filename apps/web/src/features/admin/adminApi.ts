@@ -924,6 +924,22 @@ export function runPriceJob() {
   return api<PriceJob>('/api/admin/price-jobs/run', { method: 'POST' });
 }
 
+export type PipelineJobRun = {
+  id: string;
+  jobName: string;
+  triggerType: string;
+  status: string;
+  resultSummary?: Record<string, unknown> | null;
+  errorSummary?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+};
+
+export function listPipelineJobRuns(limit = 30) {
+  return api<{ items: PipelineJobRun[]; total: number }>(`/api/admin/pipeline-job-runs?limit=${limit}`);
+}
+
 export function listManufacturerSources(includeDeleted = false) {
   const suffix = includeDeleted ? '?includeDeleted=true' : '';
   return api<ManufacturerSourcesResponse>(`/api/admin/manufacturer-sources${suffix}`);

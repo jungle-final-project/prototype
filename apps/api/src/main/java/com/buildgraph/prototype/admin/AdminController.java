@@ -2,6 +2,7 @@ package com.buildgraph.prototype.admin;
 
 import com.buildgraph.prototype.agent.AgentQueryService;
 import com.buildgraph.prototype.build.BuildGraphLayoutService;
+import com.buildgraph.prototype.common.PipelineJobRunRecorder;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
@@ -32,6 +33,7 @@ public class AdminController {
     private final PriceQueryService priceQueryService;
     private final BuildGraphLayoutService buildGraphLayoutService;
     private final CurrentUserService currentUserService;
+    private final PipelineJobRunRecorder pipelineJobRunRecorder;
 
     public AdminController(
             AdminQueryService adminQueryService,
@@ -41,7 +43,8 @@ public class AdminController {
             TicketQueryService ticketQueryService,
             PriceQueryService priceQueryService,
             BuildGraphLayoutService buildGraphLayoutService,
-            CurrentUserService currentUserService
+            CurrentUserService currentUserService,
+            PipelineJobRunRecorder pipelineJobRunRecorder
     ) {
         this.adminQueryService = adminQueryService;
         this.agentQueryService = agentQueryService;
@@ -51,6 +54,16 @@ public class AdminController {
         this.priceQueryService = priceQueryService;
         this.buildGraphLayoutService = buildGraphLayoutService;
         this.currentUserService = currentUserService;
+        this.pipelineJobRunRecorder = pipelineJobRunRecorder;
+    }
+
+    @GetMapping("/pipeline-job-runs")
+    Map<String, Object> pipelineJobRuns(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @org.springframework.web.bind.annotation.RequestParam(value = "limit", required = false) Integer limit
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return pipelineJobRunRecorder.listRecent(limit);
     }
 
     @GetMapping("/dashboard")

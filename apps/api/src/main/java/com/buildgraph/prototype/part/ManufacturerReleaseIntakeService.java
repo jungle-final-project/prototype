@@ -322,12 +322,18 @@ public class ManufacturerReleaseIntakeService {
 
     public Map<String, Object> scanAll(Integer limitPerSource, Boolean createCandidates) {
         int safeLimit = boundedInt(limitPerSource, 20, 1, 100);
+        // poll_interval_minutes를 존중한다(감사 A9 — 등록 시 검증만 하고 어디서도 참조하지 않던 죽은 설정).
+        // 아직 주기가 지나지 않은 소스는 이번 스캔에서 제외해 소스별 폴링 주기를 실제로 적용한다.
         List<Map<String, Object>> sources = jdbcTemplate.queryForList("""
                 SELECT public_id::text AS public_id
                 FROM manufacturer_sources
                 WHERE enabled = true
                   AND status <> 'PAUSED'
                   AND deleted_at IS NULL
+                  AND (
+                    last_checked_at IS NULL
+                    OR last_checked_at <= now() - make_interval(mins => coalesce(poll_interval_minutes, 1440))
+                  )
                 ORDER BY coalesce(last_checked_at, '1970-01-01'::timestamptz), manufacturer
                 """);
         int scanned = 0;
@@ -345,13 +351,49 @@ public class ManufacturerReleaseIntakeService {
                 failed += 1;
             }
         }
+        // 후보 생성이 일시 실패(네이버 키 미설정/장애)했던 게시물을 스캔과 독립적으로 재시도한다.
+        // 예전에는 게시물이 피드에서 밀려나면 후보가 영원히 생성되지 않았다(감사 A5).
+        Map<String, Object> backfill = !Boolean.FALSE.equals(createCandidates)
+                ? backfillMissingCandidates(safeLimit)
+                : MockData.map("attempted", 0, "created", 0);
         return MockData.map(
                 "scannedSources", scanned,
                 "newPosts", newPosts,
                 "createdCandidates", candidates,
                 "failedSources", failed,
+                "candidateBackfill", backfill,
                 "results", results
         );
+    }
+
+    // PRODUCT_CANDIDATE인데 후보 연결이 없는 게시물(감지 카테고리·제품명이 있어 검색 가능한 것만)에
+    // 후보 생성을 재시도한다. 관리자/AI 확정 게시물도 후보가 없으면 대상이다(IGNORED는 상태로 제외됨).
+    private Map<String, Object> backfillMissingCandidates(int limit) {
+        List<Map<String, Object>> posts = jdbcTemplate.queryForList("""
+                SELECT public_id::text AS public_id
+                FROM manufacturer_posts
+                WHERE classification_status = 'PRODUCT_CANDIDATE'
+                  AND created_catalog_candidate_id IS NULL
+                  AND detected_category IS NOT NULL
+                  AND detected_product_name IS NOT NULL
+                  AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT ?
+                """, Math.min(Math.max(limit, 1), 50));
+        int attempted = 0;
+        int created = 0;
+        for (Map<String, Object> post : posts) {
+            attempted += 1;
+            try {
+                Map<String, Object> result = createCandidateForPost(stringValue(post.get("public_id")), null);
+                if (Boolean.TRUE.equals(result.get("created"))) {
+                    created += 1;
+                }
+            } catch (RuntimeException ignored) {
+                // 개별 게시물 실패가 backfill 전체를 멈추지 않는다. 다음 스캔 주기에 다시 시도된다.
+            }
+        }
+        return MockData.map("attempted", attempted, "created", created);
     }
 
     public Map<String, Object> scanSource(String sourceId, Integer limit, Boolean createCandidates) {
@@ -359,7 +401,28 @@ public class ManufacturerReleaseIntakeService {
         boolean shouldCreateCandidates = !Boolean.FALSE.equals(createCandidates);
         Map<String, Object> source = sourceByPublicId(sourceId);
         try {
-            FetchResult fetch = fetch(stringValue(source.get("source_url")));
+            FetchResult fetch = fetch(
+                    stringValue(source.get("source_url")),
+                    stringValue(source.get("last_etag")),
+                    stringValue(source.get("last_modified"))
+            );
+            if (fetch.notModified()) {
+                // 조건부 GET 304: 본문 다운로드 없이 변경 없음 확정. 성공으로 기록해 실패 카운트를 리셋한다.
+                updateSourceScanSuccess(sourceId, fetch, stringValue(source.get("last_content_hash")));
+                return MockData.map(
+                        "sourceId", sourceId,
+                        "manufacturer", source.get("manufacturer"),
+                        "failed", false,
+                        "unchanged", true,
+                        "parsedPosts", 0,
+                        "newPosts", 0,
+                        "updatedPosts", 0,
+                        "ignoredPosts", 0,
+                        "productPosts", 0,
+                        "createdCandidates", 0,
+                        "posts", List.of()
+                );
+            }
             String contentHash = sha256(fetch.body());
             boolean unchanged = contentHash.equals(stringValue(source.get("last_content_hash")));
             List<PostDraft> drafts = unchanged ? List.of() : extractPosts(source, fetch.body(), safeLimit);
@@ -427,7 +490,7 @@ public class ManufacturerReleaseIntakeService {
             );
         } catch (RuntimeException exception) {
             String errorSummary = exception.getMessage();
-            updateSourceScanFailure(sourceId, errorSummary);
+            updateSourceScanFailure(sourceId, source, errorSummary, isBlockedResponse(exception));
             return MockData.map(
                     "sourceId", sourceId,
                     "manufacturer", source.get("manufacturer"),
@@ -1396,10 +1459,27 @@ public class ManufacturerReleaseIntakeService {
     }
 
     private FetchResult fetch(String url) {
+        return fetch(url, null, null);
+    }
+
+    // 저장해 둔 ETag/Last-Modified를 조건부 GET으로 전송한다(감사 A9 — 저장만 하고 활용하지 않던
+    // 죽은 설정). 304면 본문 다운로드·파싱 없이 '변경 없음'으로 처리해 대역폭과 차단 리스크를 줄인다.
+    private FetchResult fetch(String url, String etag, String lastModified) {
         ResponseEntity<String> response = restClient.get()
                 .uri(url)
+                .headers(headers -> {
+                    if (StringUtils.hasText(etag)) {
+                        headers.set("If-None-Match", etag);
+                    }
+                    if (StringUtils.hasText(lastModified)) {
+                        headers.set("If-Modified-Since", lastModified);
+                    }
+                })
                 .retrieve()
                 .toEntity(String.class);
+        if (response.getStatusCode().value() == 304) {
+            return new FetchResult(null, etag, lastModified, true);
+        }
         String body = response.getBody();
         if (!StringUtils.hasText(body)) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "제조사 source 응답 본문이 비어 있습니다.");
@@ -1483,7 +1563,10 @@ public class ManufacturerReleaseIntakeService {
                        enabled,
                        poll_interval_minutes,
                        last_checked_at,
+                       last_etag,
+                       last_modified,
                        last_content_hash,
+                       consecutive_failures,
                        parser_config,
                        status,
                        error_summary,
@@ -1587,6 +1670,7 @@ public class ManufacturerReleaseIntakeService {
                     last_etag = ?,
                     last_modified = ?,
                     last_content_hash = ?,
+                    consecutive_failures = 0,
                     status = 'ACTIVE',
                     error_summary = NULL,
                     updated_at = now()
@@ -1594,15 +1678,33 @@ public class ManufacturerReleaseIntakeService {
                 """, fetch.etag(), fetch.lastModified(), contentHash, sourceId);
     }
 
-    private void updateSourceScanFailure(String sourceId, String errorSummary) {
+    // 연속 차단 시 자동 PAUSED 임계값. 차단(403/429)당한 사이트를 계속 두드리는 대신
+    // 예의 있게 철수하고 관리자 화면(status=PAUSED)에 노출한다. 수동 재개 가능.
+    private static final int AUTO_PAUSE_AFTER_BLOCKED_FAILURES = 3;
+
+    private void updateSourceScanFailure(String sourceId, Map<String, Object> source, String errorSummary, boolean blocked) {
+        int failures = intValue(source.get("consecutive_failures"), 0) + 1;
+        boolean autoPause = blocked && failures >= AUTO_PAUSE_AFTER_BLOCKED_FAILURES;
+        String summary = autoPause
+                ? limited(errorSummary, 1800) + " — 연속 " + failures + "회 차단으로 자동 중지(PAUSED)되었습니다. 원인 확인 후 수동으로 재개하세요."
+                : limited(errorSummary, 2000);
         jdbcTemplate.update("""
                 UPDATE manufacturer_sources
                 SET last_checked_at = now(),
-                    status = 'ERROR',
+                    consecutive_failures = ?,
+                    status = ?,
                     error_summary = ?,
                     updated_at = now()
                 WHERE public_id = ?::uuid
-                """, limited(errorSummary, 2000), sourceId);
+                """, failures, autoPause ? "PAUSED" : "ERROR", summary, sourceId);
+    }
+
+    private static boolean isBlockedResponse(RuntimeException exception) {
+        if (exception instanceof org.springframework.web.client.RestClientResponseException response) {
+            int status = response.getStatusCode().value();
+            return status == 403 || status == 429;
+        }
+        return false;
     }
 
     private static void addScore(List<CategoryScore> scores, String category, String text, String... keywords) {
@@ -2015,7 +2117,10 @@ public class ManufacturerReleaseIntakeService {
         );
     }
 
-    private record FetchResult(String body, String etag, String lastModified) {
+    private record FetchResult(String body, String etag, String lastModified, boolean notModified) {
+        private FetchResult(String body, String etag, String lastModified) {
+            this(body, etag, lastModified, false);
+        }
     }
 
     private record PostDraft(String url, String title, OffsetDateTime publishedAt, String excerpt, String contentHash) {

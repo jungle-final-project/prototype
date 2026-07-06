@@ -21,21 +21,27 @@ public class RecommendationShadowRetentionScheduler {
 
     private final JdbcTemplate jdbcTemplate;
     private final int retentionDays;
+    private final com.buildgraph.prototype.common.PipelineJobRunRecorder jobRunRecorder;
 
     public RecommendationShadowRetentionScheduler(
             JdbcTemplate jdbcTemplate,
-            @Value("${recommendation.shadow.retention-days:30}") int retentionDays
+            @Value("${recommendation.shadow.retention-days:30}") int retentionDays,
+            com.buildgraph.prototype.common.PipelineJobRunRecorder jobRunRecorder
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.retentionDays = Math.max(retentionDays, 1);
+        this.jobRunRecorder = jobRunRecorder;
     }
 
     @Scheduled(cron = "${recommendation.shadow.retention-cron:0 40 3 * * *}", zone = "${recommendation.shadow.retention-zone:Asia/Seoul}")
     public void purgeExpiredShadowScores() {
-        int deleted = jdbcTemplate.update(
-                "DELETE FROM recommendation_shadow_scores WHERE created_at < now() - make_interval(days => ?)",
-                retentionDays
-        );
-        LOGGER.info("Recommendation shadow score retention finished: deleted={}, retentionDays={}", deleted, retentionDays);
+        jobRunRecorder.run("SHADOW_SCORE_RETENTION", () -> {
+            int deleted = jdbcTemplate.update(
+                    "DELETE FROM recommendation_shadow_scores WHERE created_at < now() - make_interval(days => ?)",
+                    retentionDays
+            );
+            LOGGER.info("Recommendation shadow score retention finished: deleted={}, retentionDays={}", deleted, retentionDays);
+            return java.util.Map.of("deleted", deleted, "retentionDays", retentionDays);
+        });
     }
 }

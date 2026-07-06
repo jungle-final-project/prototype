@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: BuildGraph AI MVP API
   version: 0.2.0
-  description: BuildGraph 3주 MVP 공통 API 계약. 상세 기준은 docs/API_CONTRACT.md를 따른다.
+  description: BuildGraph 3주 MVP 공통 API 계약. 상세 기준은 docs/API_CONTRACT.md를 따른다. 데모 동결(DEMO_FREEZE_MUTATIONS=true) 스위치가 켜진 서버에서는 가격/다나와/추이/제조사 스캔 스케줄러 4종이 일괄 중지되어 SKIPPED_FROZEN으로 이력에 남고, POST /api/admin/price-jobs/run은 409 CONFLICT_STATE를 반환한다. 읽기 API에는 영향이 없다.
 servers:
   - url: http://localhost:8080
 security:
@@ -117,6 +117,7 @@ paths:
   /api/auth/google/start:
     get:
       summary: Google OAuth 시작
+      description: 미구현 — Google OAuth 도입 시 활성화 예정 계약(담당 1번). 현재 백엔드에 controller가 없어 호출 시 404를 반환한다.
       security: []
       responses:
         "302":
@@ -124,6 +125,7 @@ paths:
   /api/auth/google/callback:
     get:
       summary: Google OAuth callback
+      description: 미구현 — Google OAuth 도입 시 활성화 예정 계약(담당 1번). 현재 백엔드에 controller가 없어 호출 시 404를 반환한다.
       security: []
       responses:
         "302":
@@ -131,6 +133,7 @@ paths:
   /api/auth/exchange:
     post:
       summary: OAuth one-time code 교환
+      description: 미구현 — Google OAuth 도입 시 활성화 예정 계약(담당 1번). 현재 백엔드에 controller가 없어 호출 시 404를 반환한다.
       security: []
       requestBody:
         required: true
@@ -308,6 +311,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationEventDto"
+        "400":
+          description: 지원하지 않는 sourceSurface(허용값은 BUILD_CHAT, HOME_RECOMMENDED_PARTS) 또는 미지원 eventType
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: 관리자 전용 이벤트 타입(AS_CONFIRMED_NEGATIVE, ADMIN_*)은 관리자 API를 사용해야 함
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/recommendations/home-parts:
     get:
       summary: 홈 추천 부품 랭킹
@@ -333,7 +348,7 @@ paths:
   /api/admin/recommendation-feedback/as-tickets/{id}:
     post:
       summary: AS 티켓 기반 추천 negative label 확정
-      description: 관리자가 AS 원인이 추천 조합/부품 선택과 관련 있다고 확정한 경우에만 학습 라벨과 선택적 AS_CONFIRMED_NEGATIVE 이벤트를 남긴다. as_tickets 상태와 cause_candidates, upgrade_candidates는 수정하지 않는다. 연결 부품/견적/recommendationId가 없거나 useForRecommendationTraining=false면 라벨만 저장하고 이벤트는 만들지 않는다.
+      description: 관리자가 AS 원인이 추천 조합/부품 선택과 관련 있다고 확정한 경우에만 학습 라벨과 선택적 AS_CONFIRMED_NEGATIVE 이벤트를 남긴다. as_tickets 상태와 cause_candidates, upgrade_candidates는 수정하지 않는다. 연결 부품/견적/recommendationId가 없거나 useForRecommendationTraining=false면 라벨만 저장하고 이벤트는 만들지 않는다. 같은 티켓 재확정 시 새 이벤트를 만들지 않고 기존 AS_CONFIRMED_NEGATIVE 이벤트의 part/build/recommendation 링크를 갱신하며 trainingEventCreated=false를 반환한다.
       security:
         - bearerAuth: []
       parameters:
@@ -356,6 +371,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdminAsRecommendationFeedbackResponse"
+        "400":
+          description: logSummaryId가 해당 티켓 소속 로그 요약이 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/recommendation-feedback/home-parts:
     post:
       summary: 홈 추천부품 관리자 라벨 저장
@@ -589,7 +610,7 @@ paths:
   /api/admin/recommendation-models/{id}/activate:
     post:
       summary: 추천 모델 활성화
-      description: scorer reload 성공 후 선택 모델을 ACTIVE로, 기존 ACTIVE 모델을 RETIRED로 변경한다.
+      description: 학습 워커가 holdout 평가 지표(metrics.holdout)를 기록한 SHADOW 모델만 scorer reload 성공 시 ACTIVE로 전환하고, 기존 ACTIVE 모델은 자동으로 RETIRED 처리한다. 활성화 즉시 홈 서빙이 동기 XGBoost 스코어링으로 전환된다.
       security:
         - bearerAuth: []
       parameters:
@@ -601,6 +622,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationModelVersionDto"
+        "400":
+          description: artifactPath가 없는 모델
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: SHADOW 모델이 아니거나, holdout 평가 지표가 기록되지 않은 모델(최신 학습 워커로 재훈련 필요)이거나, scorer reload에 실패한 경우
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/recommendation-models/{id}/retire:
     post:
       summary: 추천 모델 은퇴
@@ -951,6 +984,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/pipeline-job-runs:
+    get:
+      summary: 스케줄 파이프라인 잡 실행 이력 조회
+      description: 매일 도는 수집 잡(네이버 가격/다나와 스냅샷·추이/제조사 릴리스 스캔/추천 섀도우 보존 정리)의 자동 실행 결과를 최신순으로 반환한다. status는 SUCCEEDED/FAILED/SKIPPED_FROZEN(데모 동결)/SKIPPED_LOCKED(다른 인스턴스가 advisory lock을 잡고 같은 잡을 실행 중이라 건너뜀).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 30
+            maximum: 100
+      responses:
+        "200":
+          description: 실행 이력 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineJobRunListResponse"
   /api/admin/price-jobs:
     get:
       summary: 관리자 가격 수집 작업 목록
@@ -969,7 +1023,7 @@ paths:
   /api/admin/price-jobs/run:
     post:
       summary: 가격 수집 작업 실행
-      description: active QUEUED/RUNNING job이 없으면 QUEUED job을 만들고 RabbitMQ worker에 price.refresh 메시지를 발행한다.
+      description: active QUEUED/RUNNING job이 없으면 QUEUED job을 만들고 RabbitMQ worker에 price.refresh 메시지를 발행한다. worker는 전 카테고리 네이버 가격을 순회 갱신하며(refreshDailyOffers), 다나와 스냅샷은 part.danawa-refresh.enabled가 켜진 경우에만 함께 수집한다.
       security:
         - bearerAuth: []
       responses:
@@ -980,7 +1034,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PriceJobDto"
         "409":
-          description: 이미 QUEUED 또는 RUNNING 가격 Job이 있음
+          description: 이미 QUEUED 또는 RUNNING 가격 Job이 있거나, 데모 동결(DEMO_FREEZE_MUTATIONS=true)이 켜져 있는 경우
           content:
             application/json:
               schema:
@@ -1457,7 +1511,8 @@ paths:
                 $ref: "#/components/schemas/ManufacturerSourceScanResponse"
   /api/admin/manufacturer-sources/scan:
     post:
-      summary: 활성 제조사 source 전체 scan
+      summary: 폴링 주기가 도래한 활성 제조사 source 일괄 scan
+      description: enabled=true인 source 중 PAUSED가 아니고 poll_interval_minutes 주기가 last_checked_at 이후 지난 source만 scan한다. 말미에 후보 연결이 없는 기존 PRODUCT_CANDIDATE 게시글의 후보 생성을 backfill로 재시도한다(candidateBackfill).
       security:
         - bearerAuth: []
       parameters:
@@ -1546,6 +1601,7 @@ paths:
                 $ref: "#/components/schemas/ManufacturerPostDto"
     patch:
       summary: 제조사 공식 게시글 분류 수정
+      description: 관리자 수정은 classification_source='ADMIN'으로 기록되어 분류가 확정(review lock)된다. 확정된 게시글은 이후 재스캔의 룰 기반 분류가 덮어쓰지 않으며 scan이 후보를 재생성하지도 않는다(IGNORED 처리한 오탐의 부활 방지).
       security:
         - bearerAuth: []
       parameters:
@@ -2081,6 +2137,135 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentLogUploadDto"
+  /api/agent/devices/register:
+    post:
+      summary: PC Agent 데모 디바이스 등록
+      description: activation token으로 agent 디바이스를 등록하고 이후 /api/agent/* 호출에 쓸 agent token을 발급한다. agent.demo-activation-token(AGENT_DEMO_ACTIVATION_TOKEN)이 비어 있으면(프로덕션 기본) 데모 등록 경로 자체가 비활성화되어 401을 반환한다.
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [activationToken, userEmail]
+              properties:
+                activationToken:
+                  type: string
+                userEmail:
+                  type: string
+                deviceFingerprintHash:
+                  type: string
+                hostnameHash:
+                  type: string
+                  nullable: true
+                registrationIdempotencyKey:
+                  type: string
+                osVersion:
+                  type: string
+                agentVersion:
+                  type: string
+                policyVersion:
+                  type: string
+      responses:
+        "201":
+          description: 등록된 디바이스와 발급된 agent token (deviceId, status, agentToken, tokenType)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: userEmail 누락
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: activation token 불일치 또는 데모 등록 비활성(agent.demo-activation-token 미설정)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: userEmail에 해당하는 사용자 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/consents:
+    post:
+      summary: PC Agent 업로드 동의 저장
+      description: agent token으로 SERVER_UPLOAD 등 동의(accepted=true) 또는 철회(accepted=false)를 기록한다. 서버 업로드 동의가 없으면 /api/agent/log-uploads가 400으로 거부된다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                consentType:
+                  type: string
+                  default: SERVER_UPLOAD
+                policyVersion:
+                  type: string
+                accepted:
+                  type: boolean
+                  default: true
+      responses:
+        "200":
+          description: 저장된 동의 (id, consentType, policyVersion, accepted, acceptedAt, revokedAt)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/agent/heartbeat:
+    post:
+      summary: PC Agent heartbeat
+      description: agent token으로 디바이스 last_seen_at과 agent/policy 버전을 갱신하고 heartbeat 이력을 남긴다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentVersion:
+                  type: string
+                policyVersion:
+                  type: string
+                  nullable: true
+                serviceStatus:
+                  type: string
+                  default: RUNNING
+                trayStatus:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: 기록된 heartbeat (id, deviceId, status, receivedAt, pendingCommands)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
   /api/agent/log-uploads:
     post:
       summary: PC Agent gzip JSONL 로그 업로드와 AS 티켓 생성
@@ -3079,7 +3264,9 @@ components:
           $ref: "#/components/schemas/RecommendationEventType"
         sourceSurface:
           type: string
-          example: BUILD_CHAT
+          enum: [BUILD_CHAT, HOME_RECOMMENDED_PARTS]
+          default: BUILD_CHAT
+          description: 생략 시 BUILD_CHAT. 화이트리스트 외 값(예를 들어 ADMIN_AS_FEEDBACK)은 400 VALIDATION_ERROR로 거부한다.
         recommendationId:
           type: string
           nullable: true
@@ -3134,6 +3321,11 @@ components:
         useForRecommendationTraining:
           type: boolean
           default: true
+        logSummaryId:
+          type: string
+          format: uuid
+          nullable: true
+          description: 라벨에 연결할 agent_log_summaries public_id. 해당 티켓 소속 요약이 아니면 400, 생략하면 티켓의 최신 요약을 자동 연결한다.
         note:
           type: string
           nullable: true
@@ -3177,11 +3369,14 @@ components:
           nullable: true
     AdminAsRecommendationFeedbackResponse:
       type: object
+      description: 학습 이벤트가 생성/갱신된 경우 RecommendationEventDto 필드가 최상위에 병합되어 label, trainingEventCreated와 함께 반환된다(event 래퍼 없음). 학습 링크가 없거나 useForRecommendationTraining=false면 라벨 필드가 최상위에 오고 event=null, trainingEventCreated=false다.
+      additionalProperties: true
       properties:
         label:
           $ref: "#/components/schemas/AsTrainingLabelDto"
         event:
           nullable: true
+          description: 라벨만 저장된 경우에만 null로 존재한다.
           allOf:
             - $ref: "#/components/schemas/RecommendationEventDto"
         trainingEventCreated:
@@ -4538,6 +4733,45 @@ components:
         createdAt:
           type: string
           format: date-time
+    PipelineJobRunDto:
+      type: object
+      required: [id, jobName, triggerType, status, startedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobName:
+          type: string
+        triggerType:
+          type: string
+          description: 현재는 SCHEDULED만 기록된다.
+        status:
+          type: string
+          enum: [SUCCEEDED, FAILED, SKIPPED_FROZEN, SKIPPED_LOCKED]
+        resultSummary:
+          type: object
+          additionalProperties: true
+          nullable: true
+        errorSummary:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+    PipelineJobRunListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PipelineJobRunDto"
+        total:
+          type: integer
     ExternalOfferRefreshResponse:
       type: object
       required: [configured, limit, attempted, updated, skipped, failed]
@@ -4559,6 +4793,9 @@ components:
           type: integer
         failed:
           type: integer
+        errors:
+          type: integer
+          description: 네이버 API 오류(429/5xx/타임아웃/파싱 실패) 횟수 — 상품 미매칭(skipped)과 구분되는 외부 장애 카운트. 연속 오류가 누적되면 갱신을 조기 중단한다.
         message:
           type: string
     DanawaPriceSnapshotRefreshResponse:
@@ -4753,12 +4990,13 @@ components:
           type: string
         failed:
           type: boolean
-          description: 외부 제조사 source fetch 또는 parsing 실패 여부. true면 source는 ERROR 상태로 기록되고 다른 source scan은 계속 진행된다.
+          description: 외부 제조사 source fetch 또는 parsing 실패 여부. true면 source는 ERROR 상태로 기록되고 다른 source scan은 계속 진행되나, 차단성 응답(403/429)이 연속 3회 누적되면 ERROR 대신 PAUSED로 자동 중지되어 수동 재개 전까지 scan 대상에서 제외된다. 성공 scan은 실패 카운트를 리셋한다.
         errorSummary:
           type: string
           nullable: true
         unchanged:
           type: boolean
+          description: 조건부 GET(If-None-Match/If-Modified-Since) 304 응답이거나 본문 해시가 이전과 동일하면 true — 본문 파싱 없이 성공으로 기록된다.
         parsedPosts:
           type: integer
         newPosts:
@@ -4787,6 +5025,14 @@ components:
           type: integer
         failedSources:
           type: integer
+        candidateBackfill:
+          type: object
+          description: 후보 생성이 일시 실패해 피드에서 밀려나도 후보가 없는 PRODUCT_CANDIDATE 게시글에 대한 후보 생성 재시도 결과. createCandidates=false면 attempted/created 모두 0.
+          properties:
+            attempted:
+              type: integer
+            created:
+              type: integer
         results:
           type: array
           items:
