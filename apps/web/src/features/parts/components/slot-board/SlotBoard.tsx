@@ -51,7 +51,7 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
         </div>
       </div>
       {/* 보드 본체 — 실장도: 추상 메인보드 평면도의 실장 지점(소켓/DIMM/PCIe/M.2)에 부품이 꽂히고,
-          보드에 안 꽂히는 부품(파워/쿨러/케이스)은 우측 도킹 베이에 놓인다 */}
+          보드에 안 꽂히는 부품은 케이스 좌상·파워 좌하·쿨러 상단(소켓 위)에 도킹된다 */}
       <div
         data-testid="slot-board"
         data-visual-mode="motherboard"
@@ -95,23 +95,23 @@ function BoardPlanArt() {
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 z-0 hidden h-full w-full lg:block"
     >
-      {/* 기판 + 나사홀 — 상단(쿨러)·우측(케이스/파워) 여백 회랑을 남기고 배치 */}
-      <rect x="4" y="20" width="98" height="77" rx="3" fill="#f4f7fb" stroke="#d3dce6" strokeWidth="0.7" />
-      {[[8, 24], [53, 24], [98, 24], [8, 93], [53, 93], [98, 93]].map(([x, y], index) => (
+      {/* 기판 + 나사홀 — 상단(쿨러)·좌측(케이스/파워) 여백 회랑을 남기고 우측에 배치 */}
+      <rect x="56" y="20" width="98" height="77" rx="3" fill="#f4f7fb" stroke="#d3dce6" strokeWidth="0.7" />
+      {[[60, 24], [105, 24], [150, 24], [60, 93], [105, 93], [150, 93]].map(([x, y], index) => (
         <circle key={index} cx={x} cy={y} r="1" fill="#ffffff" stroke="#cbd5e1" strokeWidth="0.4" />
       ))}
-      {/* 좌측 IO 포트 블록 */}
+      {/* 우측 IO 포트 블록 */}
       {[28, 37, 46].map((y) => (
-        <rect key={y} x="6" y={y} width="6.5" height="7" rx="1" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.5" />
+        <rect key={y} x="146.5" y={y} width="6.5" height="7" rx="1" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.5" />
       ))}
-      {/* CPU 소켓 (핫스팟: 26..52 × 30..56) */}
-      <rect x="26" y="30" width="26" height="26" rx="1.5" fill="#eef2f7" stroke="#cbd5e1" strokeWidth="0.8" />
-      <rect x="30.5" y="34.5" width="17" height="17" rx="1" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.6" />
-      {[[27.5, 31.5], [50.5, 31.5], [27.5, 54.5], [50.5, 54.5]].map(([x, y], index) => (
+      {/* CPU 소켓 (핫스팟: 78..104 × 30..56) */}
+      <rect x="78" y="30" width="26" height="26" rx="1.5" fill="#eef2f7" stroke="#cbd5e1" strokeWidth="0.8" />
+      <rect x="82.5" y="34.5" width="17" height="17" rx="1" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.6" />
+      {[[79.5, 31.5], [102.5, 31.5], [79.5, 54.5], [102.5, 54.5]].map(([x, y], index) => (
         <circle key={index} cx={x} cy={y} r="0.8" fill="#cbd5e1" />
       ))}
-      {/* DIMM 4슬롯 (핫스팟: 58..84 × 24..60) */}
-      {[59.5, 66, 72.5, 79].map((x) => (
+      {/* DIMM 4슬롯 (핫스팟: 110..136 × 24..60) */}
+      {[111.5, 118, 124.5, 131].map((x) => (
         <g key={x}>
           <rect x={x} y="26" width="4.4" height="32" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
           <line x1={x + 2.2} y1="28.5" x2={x + 2.2} y2="55.5" stroke="#e2e8f0" strokeWidth="1.4" />
@@ -119,21 +119,21 @@ function BoardPlanArt() {
           <rect x={x + 0.6} y="57.8" width="3.2" height="1.6" rx="0.4" fill="#e2e8f0" />
         </g>
       ))}
-      {/* PCIe x16 (핫스팟: 8..72 × 62..78) + 보조 x4 */}
-      <rect x="9" y="70" width="61" height="4.5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
-      <line x1="22" y1="70.6" x2="22" y2="73.9" stroke="#cbd5e1" strokeWidth="0.6" />
-      <rect x="9" y="78.5" width="30" height="3.2" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.6" />
-      {/* M.2 (핫스팟: 76..100 × 80..93) */}
-      <rect x="77" y="84" width="20" height="5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
-      <circle cx="95.5" cy="86.5" r="1" fill="#ffffff" stroke="#cbd5e1" strokeWidth="0.5" />
-      {/* 24핀 전원 커넥터 — 파워 연결선의 고정 접점 */}
-      <rect x="95" y="30" width="6" height="18" rx="1" fill="#eef2f7" stroke="#cbd5e1" strokeWidth="0.7" />
-      <line x1="98" y1="31.5" x2="98" y2="46.5" stroke="#cbd5e1" strokeWidth="0.5" />
+      {/* PCIe x16 (핫스팟: 60..124 × 62..78) + 보조 x4 */}
+      <rect x="61" y="70" width="61" height="4.5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
+      <line x1="74" y1="70.6" x2="74" y2="73.9" stroke="#cbd5e1" strokeWidth="0.6" />
+      <rect x="61" y="78.5" width="30" height="3.2" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.6" />
+      {/* M.2 (핫스팟: 128..152 × 80..93) */}
+      <rect x="129" y="84" width="20" height="5" rx="0.8" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" />
+      <circle cx="147.5" cy="86.5" r="1" fill="#ffffff" stroke="#cbd5e1" strokeWidth="0.5" />
+      {/* 24핀 전원 커넥터 — 파워 연결선의 고정 접점 (파워가 좌하 도킹이라 보드 좌측 엣지에 둔다) */}
+      <rect x="57" y="30" width="6" height="18" rx="1" fill="#eef2f7" stroke="#cbd5e1" strokeWidth="0.7" />
+      <line x1="60" y1="31.5" x2="60" y2="46.5" stroke="#cbd5e1" strokeWidth="0.5" />
       {/* 칩셋 방열판 */}
-      <rect x="78" y="66" width="13" height="11" rx="1.2" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.7" />
-      <rect x="80.5" y="68.5" width="8" height="6" rx="0.8" fill="none" stroke="#cbd5e1" strokeWidth="0.5" />
-      {/* 메인보드 명판 (핫스팟: 7..41 × 84..95) */}
-      <rect x="8" y="85" width="32" height="9.5" rx="1.2" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" strokeDasharray="1.6 1.2" />
+      <rect x="130" y="66" width="13" height="11" rx="1.2" fill="#e8edf4" stroke="#cbd5e1" strokeWidth="0.7" />
+      <rect x="132.5" y="68.5" width="8" height="6" rx="0.8" fill="none" stroke="#cbd5e1" strokeWidth="0.5" />
+      {/* 메인보드 명판 (핫스팟: 58..92 × 84..95) */}
+      <rect x="60" y="85" width="32" height="9.5" rx="1.2" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="0.7" strokeDasharray="1.6 1.2" />
     </svg>
   );
 }
@@ -167,9 +167,9 @@ function BoardSlot({
   const slotStatus = filled ? problemStatus ?? 'PASS' : 'NONE';
   // 보드 위 실장 지점은 비어 있을 때 카드 대신 평면도의 소켓/슬롯 그림이 빈 상태를 말한다(데스크톱).
   const isBoardMount = slot.mount === 'board';
-  // "메인보드에 꽂힌다"는 느낌: 장착 순간 카드가 보드 바깥에서 허브 방향으로 밀려 들어온다.
-  const outwardX = layout.x + layout.w / 2 - 50;
-  const outwardY = layout.y + layout.h / 2 - 50;
+  // "메인보드에 꽂힌다"는 느낌: 장착 순간 카드가 보드 바깥에서 기판 중심 방향으로 밀려 들어온다.
+  const outwardX = layout.x + layout.w / 2 - BOARD_CENTER.x;
+  const outwardY = layout.y + layout.h / 2 - BOARD_CENTER.y;
   const outwardLength = Math.hypot(outwardX, outwardY) || 1;
   const layoutVars: CSSProperties = {
     ['--sx' as string]: `${layout.x}%`,
@@ -459,10 +459,11 @@ function SlotBoardEdges({
 type Box = { x: number; y: number; w: number; h: number };
 type Point = { x: number; y: number };
 
-const BOARD_CENTER: Point = { x: 50, y: 50 };
+// 보드 기판 사각형(아트 56..154 × 20..97)의 실제 중심 — 실장 상태 점·bow 바깥 방향·꽂힘 모션의 기준.
+const BOARD_CENTER: Point = { x: 65.6, y: 58.5 };
 // 물리적 의미가 있는 고정 접점 — 파워 24핀 커넥터(평면도 아트의 커넥터 위치와 동일 상수 계보).
 const EDGE_POINT_OVERRIDES: Record<string, Point> = {
-  'PSU-MOTHERBOARD': { x: 61.25, y: 39 }
+  'PSU-MOTHERBOARD': { x: 37.5, y: 39 }
 };
 
 function boxCenter(box: Box): Point {
@@ -486,6 +487,17 @@ function boxAnchorToward(box: Box, target: Point): Point {
 // 실장도 지오메트리: 도킹 부품의 연결선은 직선 또는 곡선(bow), 실장 관계(implied)는 선을 그리지
 // 않고 실장 지점 옆의 상태 표시 좌표만 계산한다. 라벨은 실제 선 위의 t 지점에 둔다.
 function edgeGeometry(config: SlotEdgeConfig) {
+  const geometry = edgeGeometryOnLine(config);
+  if (!geometry.path || (!config.labelDx && !config.labelDy)) {
+    return geometry;
+  }
+  return {
+    ...geometry,
+    label: { x: geometry.label.x + (config.labelDx ?? 0), y: geometry.label.y + (config.labelDy ?? 0) }
+  };
+}
+
+function edgeGeometryOnLine(config: SlotEdgeConfig) {
   const fromSlot = slotConfigFor(config.from);
   const toSlot = slotConfigFor(config.to);
   const a: Box = fromSlot ? fromSlot.layout : { x: 0, y: 0, w: 0, h: 0 };

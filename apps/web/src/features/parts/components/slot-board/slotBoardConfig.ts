@@ -29,17 +29,17 @@ export const SLOT_BOARD_ART_VIEWBOX = '0 0 160 100';
 
 // 실장도 기본 좌표(%): 보드 위 부품(CPU 소켓·DIMM·PCIe·M.2)은 평면도의 실장 지점에,
 // 보드 밖 부품은 관계 상대 곁에 방사형으로 — 쿨러는 실제 물리 그대로 CPU 소켓 바로 위(상단),
-// 케이스는 우상, 파워는 24핀·GPU와 가까운 우하. 보드를 살짝 축소해 상단·우측 여백 회랑을
-// 만들었으므로 관계선이 다른 부품 뒤를 지나지 않는다.
+// 케이스는 좌상, 파워는 좌하. 보드를 우측으로 밀어 좌측에 도킹 열과 거터를 만들었으므로
+// 관계선이 전부 좌측 거터·상단 회랑으로만 다니고, RAM이 있는 보드 우측에는 선이 없다.
 export const SLOT_CONFIGS: SlotConfig[] = [
-  { category: 'CPU', label: 'CPU', glyph: '/slot-board/parts/cpu.svg', mount: 'board', layout: { x: 16.25, y: 30, w: 16.25, h: 26 } },
-  { category: 'RAM', label: 'RAM', glyph: '/slot-board/parts/ram.svg', miniSlots: 4, miniFillBy: 'quantity', mount: 'board', layout: { x: 36.25, y: 24, w: 16.25, h: 36 } },
-  { category: 'GPU', label: 'GPU', glyph: '/slot-board/parts/gpu.svg', mount: 'board', layout: { x: 5, y: 62, w: 40, h: 16 } },
-  { category: 'STORAGE', label: 'SSD', glyph: '/slot-board/parts/ssd.svg', miniSlots: 2, miniFillBy: 'items', mount: 'board', layout: { x: 47.5, y: 80, w: 15, h: 13 } },
-  { category: 'MOTHERBOARD', label: '메인보드', glyph: '/slot-board/parts/motherboard.svg', mount: 'board', layout: { x: 4.5, y: 84, w: 21, h: 11 } },
-  { category: 'COOLER', label: '쿨러', glyph: '/slot-board/parts/cooler.svg', mount: 'dock', layout: { x: 11.25, y: 2, w: 25, h: 16 } },
-  { category: 'CASE', label: '케이스', glyph: '/slot-board/parts/case.svg', mount: 'dock', layout: { x: 67.5, y: 2, w: 30, h: 28 } },
-  { category: 'PSU', label: '파워', glyph: '/slot-board/parts/psu.svg', mount: 'dock', layout: { x: 67.5, y: 66, w: 30, h: 30 } }
+  { category: 'CPU', label: 'CPU', glyph: '/slot-board/parts/cpu.svg', mount: 'board', layout: { x: 48.75, y: 30, w: 16.25, h: 26 } },
+  { category: 'RAM', label: 'RAM', glyph: '/slot-board/parts/ram.svg', miniSlots: 4, miniFillBy: 'quantity', mount: 'board', layout: { x: 68.75, y: 24, w: 16.25, h: 36 } },
+  { category: 'GPU', label: 'GPU', glyph: '/slot-board/parts/gpu.svg', mount: 'board', layout: { x: 37.5, y: 62, w: 40, h: 16 } },
+  { category: 'STORAGE', label: 'SSD', glyph: '/slot-board/parts/ssd.svg', miniSlots: 2, miniFillBy: 'items', mount: 'board', layout: { x: 80, y: 80, w: 15, h: 13 } },
+  { category: 'MOTHERBOARD', label: '메인보드', glyph: '/slot-board/parts/motherboard.svg', mount: 'board', layout: { x: 36.25, y: 84, w: 21, h: 11 } },
+  { category: 'COOLER', label: '쿨러', glyph: '/slot-board/parts/cooler.svg', mount: 'dock', layout: { x: 45, y: 2, w: 25, h: 16 } },
+  { category: 'CASE', label: '케이스', glyph: '/slot-board/parts/case.svg', mount: 'dock', layout: { x: 1.25, y: 2, w: 30, h: 28 } },
+  { category: 'PSU', label: '파워', glyph: '/slot-board/parts/psu.svg', mount: 'dock', layout: { x: 1.25, y: 66, w: 30, h: 30 } }
 ];
 
 export const SLOT_COUNT = SLOT_CONFIGS.length;
@@ -61,6 +61,9 @@ export type SlotEdgeConfig = {
   bow?: number;
   /** 라벨 위치(0=from 쪽 … 1=to 쪽, 기본 0.5) — 이웃 라벨과 겹칠 때만 조정한다. */
   labelT?: number;
+  /** 라벨을 선에서 떼어 놓는 오프셋(%) — 선이 라벨 알약보다 짧아 양끝 카드를 침범할 때만 쓴다. */
+  labelDx?: number;
+  labelDy?: number;
   /**
    * 실장 자체가 관계를 표현하는 경우(CPU가 소켓에, RAM이 DIMM에 꽂혀 있음) 선을 그리지 않고
    * 상태 점/문제 라벨만 해당 실장 지점 옆에 표시한다.
@@ -74,17 +77,18 @@ export const FALLBACK_EDGES: SlotEdgeConfig[] = [
   { from: 'MOTHERBOARD', to: 'RAM', label: '메모리 규격', implied: true },
   { from: 'GPU', to: 'MOTHERBOARD', label: 'PCIe x16', implied: true },
   // 도킹 부품 ↔ 보드/부품 관계 — 방사 배치라 대부분 짧은 직선이다.
+  // 파워(좌하) → 보드 좌측 엣지의 24핀 접점: 좌측 거터를 짧게 가로지른다.
   { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원' },
   // 쿨러가 소켓 바로 위라 수직 단선 — 실제 장착 방향 그대로.
   { from: 'COOLER', to: 'CPU', label: '쿨러 장착' },
-  // 상단 여백을 지나는 수평선.
+  // 상단 회랑의 짧은 수평선 (쿨러 좌측 ↔ 케이스 우측).
   { from: 'COOLER', to: 'CASE', label: '높이 여유' },
-  // 우측 여백 세로선 (가운데 빈 구간 통과).
-  { from: 'PSU', to: 'CASE', label: '파워 깊이', labelT: 0.35 },
-  // DIMM 아래·칩셋 위 회랑으로 살짝 올려 지나간다.
-  { from: 'GPU', to: 'PSU', label: '전력 여유', bow: -6, labelT: 0.55 },
-  // 보드 우측 거터로 크게 돌아 올라간다.
-  { from: 'GPU', to: 'CASE', label: '장착 길이', bow: 16, labelT: 0.55 }
+  // 좌측 도킹 열을 잇는 세로선 (보드 밖).
+  { from: 'PSU', to: 'CASE', label: '파워 깊이' },
+  // 파워 우상단 ↔ GPU 좌측 — 좌측 거터의 짧은 사선. 선이 짧아 라벨은 아래 빈 거터로 내린다.
+  { from: 'GPU', to: 'PSU', label: '전력 여유', labelDx: 2, labelDy: 5 },
+  // 좌측 거터로 크게 돌아 올라간다 — 24핀 선과 교차하지 않도록 바깥으로 휜다.
+  { from: 'GPU', to: 'CASE', label: '장착 길이', bow: 20 }
 ];
 
 export function slotConfigFor(category: string): SlotConfig | undefined {

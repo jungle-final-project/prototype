@@ -588,9 +588,9 @@ test('keeps fixed placement coordinates even when the graph response carries sav
 
   // 실장도는 평면도 아트(소켓/DIMM/PCIe)와 실장 지점이 픽셀 정합해야 하므로 배치가 고정이다 —
   // 그래프 응답에 저장 좌표가 있어도 무시한다(구 관리자 드래그 배치는 실장도에서 미사용).
-  await expect(page.getByTestId('slot-GPU')).toHaveAttribute('style', /--sx:\s*5%;\s*--sy:\s*62%/);
-  await expect(page.getByTestId('slot-PSU')).toHaveAttribute('style', /--sx:\s*67\.5%;\s*--sy:\s*66%/);
-  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('style', /--sx:\s*16\.25%;\s*--sy:\s*30%/);
+  await expect(page.getByTestId('slot-GPU')).toHaveAttribute('style', /--sx:\s*37\.5%;\s*--sy:\s*62%/);
+  await expect(page.getByTestId('slot-PSU')).toHaveAttribute('style', /--sx:\s*1\.25%;\s*--sy:\s*66%/);
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('style', /--sx:\s*48\.75%;\s*--sy:\s*30%/);
 });
 
 test('shows graph edge labels on the fallback topology relationships', async ({ page }) => {
