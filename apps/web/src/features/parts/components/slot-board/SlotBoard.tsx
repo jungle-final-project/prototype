@@ -101,17 +101,22 @@ function BoardSlot({
 }) {
   const filled = items.length > 0;
   const primaryItem = items[0];
-  const lineTotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
   // 문제 상태는 장착된 슬롯에만 표시한다. 숨기지 않고 강조한다.
   const slotStatus = filled ? problemStatus ?? 'PASS' : 'NONE';
   // 메인보드는 방사형의 중앙 허브 — 모든 스포크가 모이는 기준점이라 시각적으로 구분한다.
   const isHub = slot.category === 'MOTHERBOARD';
   const isFlashing = useAttachFlash(items);
+  // "메인보드에 꽂힌다"는 느낌: 장착 순간 카드가 보드 바깥에서 허브 방향으로 밀려 들어온다.
+  const outwardX = layout.x + layout.w / 2 - 50;
+  const outwardY = layout.y + layout.h / 2 - 50;
+  const outwardLength = Math.hypot(outwardX, outwardY) || 1;
   const layoutVars: CSSProperties = {
     ['--sx' as string]: `${layout.x}%`,
     ['--sy' as string]: `${layout.y}%`,
     ['--sw' as string]: `${layout.w}%`,
-    ['--sh' as string]: `${layout.h}%`
+    ['--sh' as string]: `${layout.h}%`,
+    ['--plug-dx' as string]: `${(outwardX / outwardLength) * 26}px`,
+    ['--plug-dy' as string]: `${(outwardY / outwardLength) * 26}px`
   };
   const borderClass = isSelected
     ? 'border-2 border-brand-blue ring-2 ring-blue-100 shadow-lg'
@@ -139,8 +144,9 @@ function BoardSlot({
       data-flash={isFlashing ? 'true' : 'false'}
       style={layoutVars}
       data-next={isNext ? 'true' : 'false'}
+      title={filled ? visibleName : undefined}
       className={`group relative z-20 rounded-lg bg-white/95 p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${borderClass} ${
-        isFlashing ? 'slot-attach-flash' : ''
+        isFlashing ? 'slot-attach-flash slot-plug-in' : ''
       } ${isNext && !isSelected ? 'slot-empty-pulse' : ''}`}
     >
       <button
@@ -167,45 +173,39 @@ function BoardSlot({
             <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[9px] font-black text-brand-blue">다음 선택</span>
           ) : null}
         </div>
-        {/* 카드 본체 */}
+        {/* 카드 본체 — 상품명 전문 대신 이미지 중심 + 짧은 요약. 이름은 체크리스트와 hover 툴팁이 담당한다. */}
         {filled ? (
           <>
-            <div className="flex min-h-0 flex-1 gap-2 overflow-hidden">
+            <div className="flex min-h-[22px] flex-1 items-center justify-center overflow-hidden">
               <img
                 data-testid="slot-part-image"
                 src={partImageUrl(primaryItem)}
                 alt=""
                 aria-hidden="true"
-                className="hidden h-12 w-14 shrink-0 rounded border border-slate-200 bg-slate-50 object-contain lg:block"
+                className="h-full max-h-full max-w-full rounded bg-white object-contain"
               />
-              <div className="min-w-0 flex-1">
-                <div className="line-clamp-2 text-[11px] font-black leading-[1.32] text-commerce-ink">
-                  {visibleName}
-                </div>
-                {visibleSpec ? (
-                  <div className="mt-0.5 line-clamp-1 text-[10px] font-bold leading-4 text-slate-500">
-                    {visibleSpec}
-                  </div>
-                ) : null}
-              </div>
             </div>
-            <div className="mt-auto flex items-end justify-between gap-1">
-              <span className="text-[11px] font-black text-brand-blue">{lineTotal.toLocaleString()}원</span>
-              <div className="flex items-center gap-1">
-                {slot.miniSlots ? <MiniSlotRow slot={slot} items={items} /> : null}
-                {!isMultiItemCategory(slot.category) ? (
-                  <button
-                    type="button"
-                    aria-label={`${primaryItem.name} 견적에서 제거`}
-                    disabled={isRemovePending}
-                    onClick={() => onRemoveItem(primaryItem.partId)}
-                    className="pointer-events-auto rounded border border-commerce-line bg-white px-1.5 py-0.5 text-[9px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
-                  >
-                    빼기
-                  </button>
-                ) : null}
+            {visibleSpec ? (
+              <div className="line-clamp-1 text-center text-[10px] font-bold leading-4 text-slate-500">
+                {visibleSpec}
               </div>
-            </div>
+            ) : null}
+            {slot.miniSlots ? (
+              <div className="flex items-end justify-start">
+                <MiniSlotRow slot={slot} items={items} />
+              </div>
+            ) : null}
+            {!isMultiItemCategory(slot.category) ? (
+              <button
+                type="button"
+                aria-label={`${primaryItem.name} 견적에서 제거`}
+                disabled={isRemovePending}
+                onClick={() => onRemoveItem(primaryItem.partId)}
+                className="pointer-events-auto absolute bottom-1 right-1 rounded border border-commerce-line bg-white px-1.5 py-0.5 text-[9px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
+              >
+                빼기
+              </button>
+            ) : null}
           </>
         ) : (
           <div className="flex flex-1 items-center justify-start gap-1">
@@ -302,6 +302,10 @@ function SlotBoardEdges({
           const { path, start, end } = edgeGeometry(edge.config, slotPositions);
           const style = EDGE_STROKES[edge.status];
           const isHighlighted = selectedCategory === edge.config.from || selectedCategory === edge.config.to;
+          const isSpoke = edge.config.from === 'MOTHERBOARD' || edge.config.to === 'MOTHERBOARD';
+          // 스포크의 허브 쪽 끝은 "꽂히는 포트" 패드로 그린다 — 메인보드에 장착된다는 시각 언어.
+          const hubAnchor = isSpoke ? (edge.config.to === 'MOTHERBOARD' ? end : start) : null;
+          const partAnchor = isSpoke ? (edge.config.to === 'MOTHERBOARD' ? start : end) : null;
           return (
             <g key={`${edge.config.from}-${edge.config.to}`}>
               <path
@@ -315,8 +319,27 @@ function SlotBoardEdges({
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
               />
-              <circle cx={start.x} cy={start.y} r={0.7} fill={style.stroke} fillOpacity={isHighlighted ? 1 : 0.6} />
-              <circle cx={end.x} cy={end.y} r={0.7} fill={style.stroke} fillOpacity={isHighlighted ? 1 : 0.6} />
+              {hubAnchor && partAnchor ? (
+                <>
+                  <rect
+                    x={hubAnchor.x - 1.1}
+                    y={hubAnchor.y - 0.9}
+                    width={2.2}
+                    height={1.8}
+                    rx={0.4}
+                    fill="#ffffff"
+                    stroke={style.stroke}
+                    strokeOpacity={isHighlighted ? 1 : 0.7}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <circle cx={partAnchor.x} cy={partAnchor.y} r={0.7} fill={style.stroke} fillOpacity={isHighlighted ? 1 : 0.6} />
+                </>
+              ) : (
+                <>
+                  <circle cx={start.x} cy={start.y} r={0.7} fill={style.stroke} fillOpacity={isHighlighted ? 1 : 0.6} />
+                  <circle cx={end.x} cy={end.y} r={0.7} fill={style.stroke} fillOpacity={isHighlighted ? 1 : 0.6} />
+                </>
+              )}
             </g>
           );
         })}
@@ -324,16 +347,23 @@ function SlotBoardEdges({
       {edges.map((edge) => {
         const { label } = edgeGeometry(edge.config, slotPositions);
         const isHighlighted = selectedCategory === edge.config.from || selectedCategory === edge.config.to;
+        // 정상/미장착 선은 라벨 대신 상태 점만 — "PCIe x16" 같은 전문용어를 평상시에 노출하지 않는다.
+        // 문제가 있을 때만(WARN/FAIL) 서버가 내려준 사용자 언어 사유를 그대로 보여준다.
+        const hasProblem = edge.status === 'WARN' || edge.status === 'FAIL';
         return (
           <span
             key={`label-${edge.config.from}-${edge.config.to}`}
             data-testid={`slot-edge-${edge.config.from}-${edge.config.to}`}
             data-status={edge.status}
-            title={edge.summary}
-            style={{ left: `${label.x}%`, top: `${label.y}%`, opacity: isHighlighted ? 1 : 0.8 }}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] font-black shadow-sm ${EDGE_LABEL_CLASSES[edge.status]}`}
+            title={edge.summary ?? edge.label}
+            style={{ left: `${label.x}%`, top: `${label.y}%`, opacity: isHighlighted ? 1 : 0.85 }}
+            className={
+              hasProblem
+                ? `absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] font-black shadow-sm ${EDGE_LABEL_CLASSES[edge.status]}`
+                : `absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border shadow-sm ${EDGE_LABEL_CLASSES[edge.status]}`
+            }
           >
-            {edge.label}
+            {hasProblem ? edge.label : null}
           </span>
         );
       })}
