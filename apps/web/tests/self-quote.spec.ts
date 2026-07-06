@@ -1685,6 +1685,115 @@ test('opens GPU candidate panel from home category link', async ({ page }) => {
   await expect(panel.getByText('홈테스트몰')).toBeVisible();
 });
 
+test('compares recent AI recommendation builds side by side and applies one', async ({ page }) => {
+  // R1 견적 비교: 챗봇이 sessionStorage에 남긴 최근 추천 배치(3안)를 나란히 보여주고,
+  // 현재 견적 대비 diff(동일/교체됨/추가됨)를 표시하며, 기존 일괄 적용 API로 안을 적용한다.
+  const compareBuild = (tier: string, tierLabel: string, gpuPartId: string, gpuName: string, cpuPartId: string, cpuName: string, totalPrice: number) => ({
+    id: `ai-${tier}`,
+    tier,
+    label: tierLabel.replace('형', ''),
+    title: `${tierLabel} 추천 조합`,
+    summary: `${tierLabel} 데모 조합`,
+    totalPrice,
+    badges: [],
+    budgetWon: 2000000,
+    budgetLabel: '200만원',
+    tierLabel,
+    appliedPartCategories: ['GPU', 'CPU'],
+    items: [
+      { partId: gpuPartId, category: 'GPU', name: gpuName, manufacturer: 'NVIDIA', quantity: 1, price: Math.round(totalPrice * 0.6), note: '' },
+      { partId: cpuPartId, category: 'CPU', name: cpuName, manufacturer: 'AMD', quantity: 1, price: Math.round(totalPrice * 0.4), note: '' }
+    ]
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-test', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+  });
+  await page.addInitScript((builds) => {
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-test', JSON.stringify({
+      messages: [
+        { id: 'msg-user', role: 'user', text: '게이밍 200만원', createdAt: '2026-07-06T09:00:00.000Z' },
+        { id: 'msg-assistant', role: 'assistant', text: '추천 조합 3개를 구성했습니다.', createdAt: '2026-07-06T09:00:05.000Z', builds }
+      ],
+      latestBuilds: builds,
+      savedBuildIds: {},
+      updatedAt: '2026-07-06T09:00:05.000Z'
+    }));
+  }, [
+    compareBuild('budget', '가성비형', 'part-gpu-budget', '가성비 GPU', 'part-cpu-budget', '가성비 CPU', 1500000),
+    compareBuild('balanced', '균형형', 'part-gpu-current', '현재 장착 GPU', 'part-cpu-balanced', '균형 CPU', 1900000),
+    compareBuild('performance', '고성능형', 'part-gpu-perf', '고성능 GPU', 'part-cpu-perf', '고성능 CPU', 2400000)
+  ]);
+
+  const applyRequests: Array<{ buildId: string; itemCount: number }> = [];
+  let compareDraftItems = [draftItem('part-gpu-current', 'GPU', '현재 장착 GPU', 1140000)];
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'PUT' && url.pathname.endsWith('/apply-ai-build')) {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { buildId: string; items: Array<{ partId: string; category: string; quantity: number }> };
+      applyRequests.push({ buildId: body.buildId, itemCount: body.items.length });
+      compareDraftItems = body.items.map((item, index) =>
+        draftItem(item.partId, item.category, item.partId === 'part-gpu-budget' ? '가성비 GPU' : item.partId === 'part-cpu-budget' ? '가성비 CPU' : `적용 부품 ${index}`, 750000)
+      );
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...emptyDraft,
+        items: compareDraftItems,
+        totalPrice: compareDraftItems.reduce((sum, item) => sum + item.lineTotal, 0),
+        itemCount: compareDraftItems.reduce((sum, item) => sum + item.quantity, 0)
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  // 트리거 → 패널 열기
+  await page.getByTestId('quote-compare-open').click();
+  const panel = page.getByTestId('quote-compare-panel');
+  await expect(panel).toBeVisible();
+
+  // 3안이 티어 순서로 나란히, 총액 표시
+  await expect(panel.getByTestId('quote-compare-column-budget')).toHaveAttribute('data-tier', 'budget');
+  await expect(panel.getByTestId('quote-compare-total-budget')).toHaveText('1,500,000원');
+  await expect(panel.getByTestId('quote-compare-total-performance')).toHaveText('2,400,000원');
+
+  // diff: 균형안의 GPU는 현재 장착과 동일(same), 가성비안의 GPU는 교체됨(changed), CPU는 드래프트에 없어 추가됨(added)
+  await expect(panel.getByTestId('quote-compare-column-balanced').locator('[data-diff="same"]')).toHaveCount(1);
+  await expect(panel.getByTestId('quote-compare-column-budget').locator('[data-diff="changed"]')).toHaveCount(1);
+  await expect(panel.getByTestId('quote-compare-column-budget').locator('[data-diff="added"]')).toHaveCount(1);
+
+  // 가성비안 적용 → 기존 일괄 적용 API 호출 + 해당 컬럼이 '현재 적용됨'으로 전환
+  await panel.getByTestId('quote-compare-apply-budget').click();
+  await expect.poll(() => applyRequests).toEqual([{ buildId: 'ai-budget', itemCount: 2 }]);
+  await expect(panel.getByTestId('quote-compare-column-budget')).toHaveAttribute('data-current', 'true');
+  await expect(panel.getByTestId('quote-compare-apply-budget')).toBeDisabled();
+  // 적용 후 선택 빌드 패널도 나타난다(챗봇 선택과 같은 경로).
+  await expect(page.getByTestId('ai-selected-build-panel')).toBeVisible();
+});
+
+test('hides the compare entry when there is no recent AI recommendation batch', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('quote-start-banner')).toBeVisible();
+  await expect(page.getByTestId('quote-compare-open')).toHaveCount(0);
+});
+
 test('shows selected AI build separately from the slot board and marks duplicate parts', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
