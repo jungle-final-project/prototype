@@ -177,6 +177,9 @@ recommendation:
     min-new-events: ${RECOMMENDATION_AUTO_RETRAIN_MIN_NEW_EVENTS:100}
     min-new-positives: ${RECOMMENDATION_AUTO_RETRAIN_MIN_NEW_POSITIVES:10}
     min-interval-days: ${RECOMMENDATION_AUTO_RETRAIN_MIN_INTERVAL_DAYS:7}
+    # 워커 RECOMMENDATION_TRAINING_MIN_ROWS(기본 50)와 일치시킨다 — 미달이면 job을 만들지 않아
+    # SKIPPED_LOW_DATASET 무한 재생성 루프를 막는다.
+    min-rows: ${RECOMMENDATION_AUTO_RETRAIN_MIN_ROWS:50}
 
 part:
   price-refresh:

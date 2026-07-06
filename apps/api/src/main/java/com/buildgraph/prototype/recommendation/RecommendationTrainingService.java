@@ -294,7 +294,7 @@ public class RecommendationTrainingService {
      * (조건 미충족은 정상 결과이지 실패가 아님). 승급은 하지 않는다(원칙 2).
      */
     @Transactional
-    public Map<String, Object> runAutoRetrain(int minNewEvents, int minNewPositives, int minIntervalDays) {
+    public Map<String, Object> runAutoRetrain(int minNewEvents, int minNewPositives, int minIntervalDays, int minRows) {
         long untrainedEvents = countUntrainedEligible(false);
         long untrainedPositives = countUntrainedEligible(true);
         Integer daysSinceLastSuccess = daysSinceLastSuccessfulTraining();
@@ -320,10 +320,14 @@ public class RecommendationTrainingService {
         refreshDatasetCounts(datasetId);
 
         long included = includedCount(datasetId);
-        if (included <= 0) {
+        // 워커의 min_rows 미달이면 job을 만들지 않는다. job을 만들면 워커가 SKIPPED_LOW_DATASET로 마감하는데,
+        // 그 상태는 미학습/실패 게이트가 인식하지 못해 같은 데이터로 매주 무한 재생성된다(설계 §3a #4).
+        // 방금 만든 DRAFT dataset은 아카이브해 누적을 막는다.
+        if (included < minRows) {
+            archivePreviousAutoDatasets();
             return MockData.map(
                     "skipped", true,
-                    "reason", "오염 가드 적용 후 포함된 학습 데이터가 없습니다.",
+                    "reason", "오염 가드 적용 후 포함 " + included + "건 < 최소 " + minRows + "건",
                     "concentrationExcluded", concentrationExcluded,
                     "highWeightExcluded", highWeightExcluded
             );
@@ -464,27 +468,31 @@ public class RecommendationTrainingService {
      * 초과분을 최신순으로 제외. 제외 행 수 반환.
      */
     private int applyHighWeightGuard(Long datasetId) {
+        // 최신순은 dataset item의 created_at(단일 트랜잭션이라 전부 동일)이 아니라 원 이벤트(e.created_at)
+        // 기준으로 매긴다 — 방금 위조된 최신 고가중 버스트를 제거하는 게 B5 방어의 목적이다.
+        // 남길 개수 keep = floor(0.25 * non_high)로 두면 제외 후 고가중/전체 ≤ 20%가 보장된다
+        // (keep/(non_high+keep) ≤ 0.25*non_high/(1.25*non_high) = 0.20).
         return jdbcTemplate.update("""
                 UPDATE recommendation_training_dataset_items t
                 SET included = false,
                     excluded_reason = 'AUTO_HIGH_WEIGHT_CAP',
                     updated_at = now()
                 FROM (
-                  SELECT id,
-                         row_number() OVER (ORDER BY created_at DESC, id DESC) AS rn,
+                  SELECT i.id,
+                         row_number() OVER (ORDER BY e.created_at DESC, e.id DESC) AS rn,
                          count(*) OVER () AS high_count,
                          (SELECT count(*)
                           FROM recommendation_training_dataset_items a
                           WHERE a.dataset_id = ?
                             AND a.included = true) AS total
-                  FROM recommendation_training_dataset_items
-                  WHERE dataset_id = ?
-                    AND included = true
-                    AND label_score_snapshot >= 3.0
+                  FROM recommendation_training_dataset_items i
+                  JOIN recommendation_events e ON e.id = i.event_id
+                  WHERE i.dataset_id = ?
+                    AND i.included = true
+                    AND i.label_score_snapshot >= 3.0
                 ) ranked
                 WHERE t.id = ranked.id
-                  AND ranked.high_count > 0.20 * ranked.total
-                  AND ranked.rn <= ranked.high_count - floor(0.20 * ranked.total)
+                  AND ranked.rn <= ranked.high_count - floor(0.25 * (ranked.total - ranked.high_count))
                 """, datasetId, datasetId);
     }
 
@@ -529,18 +537,20 @@ public class RecommendationTrainingService {
     }
 
     private int consecutiveAutoRetrainFailures() {
+        // SKIPPED_LOW_DATASET도 '진행 방해'로 취급한다: min_rows pre-check로 보통은 job이 안 만들어지지만,
+        // 워커 min_rows가 Java 설정보다 크면 job이 SKIPPED로 끝날 수 있어 백오프 대상에 포함한다.
         List<String> recent = jdbcTemplate.queryForList("""
                 SELECT j.status
                 FROM recommendation_training_jobs j
                 JOIN recommendation_training_datasets d ON d.id = j.dataset_id
                 WHERE d.filters->>'trigger' = 'AUTO_RETRAIN'
-                  AND j.status IN ('SUCCEEDED', 'FAILED')
+                  AND j.status IN ('SUCCEEDED', 'FAILED', 'SKIPPED_LOW_DATASET')
                 ORDER BY j.created_at DESC, j.id DESC
                 LIMIT 5
                 """, String.class);
         int failures = 0;
         for (String status : recent) {
-            if ("FAILED".equals(status)) {
+            if ("FAILED".equals(status) || "SKIPPED_LOW_DATASET".equals(status)) {
                 failures += 1;
             } else {
                 break;

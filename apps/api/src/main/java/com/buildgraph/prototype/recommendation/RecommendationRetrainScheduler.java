@@ -29,6 +29,7 @@ public class RecommendationRetrainScheduler {
     private final int minNewEvents;
     private final int minNewPositives;
     private final int minIntervalDays;
+    private final int minRows;
 
     public RecommendationRetrainScheduler(
             RecommendationTrainingService trainingService,
@@ -36,7 +37,9 @@ public class RecommendationRetrainScheduler {
             PipelineJobRunRecorder jobRunRecorder,
             @Value("${recommendation.auto-retrain.min-new-events:100}") int minNewEvents,
             @Value("${recommendation.auto-retrain.min-new-positives:10}") int minNewPositives,
-            @Value("${recommendation.auto-retrain.min-interval-days:7}") int minIntervalDays
+            @Value("${recommendation.auto-retrain.min-interval-days:7}") int minIntervalDays,
+            // 워커의 RECOMMENDATION_TRAINING_MIN_ROWS와 일치시켜야 doomed job 생성을 막는다.
+            @Value("${recommendation.auto-retrain.min-rows:50}") int minRows
     ) {
         this.trainingService = trainingService;
         this.demoFreezeGuard = demoFreezeGuard;
@@ -44,6 +47,7 @@ public class RecommendationRetrainScheduler {
         this.minNewEvents = minNewEvents;
         this.minNewPositives = minNewPositives;
         this.minIntervalDays = minIntervalDays;
+        this.minRows = minRows;
     }
 
     @Scheduled(
@@ -57,7 +61,7 @@ public class RecommendationRetrainScheduler {
             return;
         }
         jobRunRecorder.run(JOB_NAME, () -> {
-            Map<String, Object> result = trainingService.runAutoRetrain(minNewEvents, minNewPositives, minIntervalDays);
+            Map<String, Object> result = trainingService.runAutoRetrain(minNewEvents, minNewPositives, minIntervalDays, minRows);
             LOGGER.info("Auto retrain finished: {}", result);
             return result;
         });
