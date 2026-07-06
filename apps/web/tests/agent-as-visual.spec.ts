@@ -122,6 +122,14 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
       })
     });
   });
+  await page.route('**/api/support/chat-sessions/current**', async (route) => {
+    recordApiCall(apiCalls, route.request());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ contact: null, messages: [], supportNewPath: '/support/new' })
+    });
+  });
   await page.route(/\/api\/as-tickets\/[^/]+$/, async (route) => {
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());
