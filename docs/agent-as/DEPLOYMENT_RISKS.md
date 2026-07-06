@@ -68,6 +68,7 @@ Use this format and keep facts separate from assumptions.
 - Impact: Existing PC Agent config examples and old QA scripts may fail at register with `401` until they first call the backend activation token issuing API or seed a valid token.
 - Current decision: Keep this stricter behavior because it matches service deployment security.
 - Next action: Update QA runbook and A/C handoff after A decides the user-facing activation token delivery path.
+- Update (2026-07-06): PC Agent 기본 설정과 `agent-config.example.json`에서 demo 토큰을 제거했다. 토큰 미보유 시 자동 등록을 건너뛰고 발급 안내(`POST /api/admin/agent-activation-tokens`, `POST /api/users/me/agent-activation-token`)를 로그로 남기므로 401 반복 시도는 발생하지 않는다. 토큰 주입 경로는 활성화 파일(`buildgraph-agent-activation.json`) 또는 실행 파일명(`BuildGraphAgent-<token>.exe`)이며, 절차는 [E2E_HAPPY_PATH.md](E2E_HAPPY_PATH.md)의 "활성화 파일로 원클릭 시연"을 따른다.
 
 ### RISK-20260702-B05: Full runtime QA is blocked by local database credentials
 

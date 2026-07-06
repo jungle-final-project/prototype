@@ -853,10 +853,26 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(config.api_base_url, "http://localhost:8080")
             self.assertEqual(config.web_base_url, "http://localhost:5173")
             self.assertEqual(config.environment, "local")
-            self.assertEqual(config.activation_token, "demo-agent-activation-token")
+            self.assertIsNone(config.activation_token)
             self.assertEqual(config.log_dir, Path(directory) / "logs")
             self.assertIsNone(config.agent_token)
             restrict.assert_called_once_with(path)
+
+    def test_auto_register_skips_and_logs_guide_without_activation_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-config.json"
+            with patch("buildgraph_agent.restrict_file_to_current_user"):
+                agent.ensure_default_config(path)
+
+            with patch("buildgraph_agent.app_data_dir", return_value=Path(directory)), \
+                patch("buildgraph_agent.urllib.request.urlopen") as urlopen:
+                registered = agent.auto_register_agent(path)
+
+            self.assertFalse(registered)
+            urlopen.assert_not_called()
+            notice = (Path(directory) / "agent-error.log").read_text(encoding="utf-8")
+            self.assertIn("POST /api/admin/agent-activation-tokens", notice)
+            self.assertIn("POST /api/users/me/agent-activation-token", notice)
 
     def test_save_agent_token_restricts_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

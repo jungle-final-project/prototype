@@ -40,7 +40,8 @@ Agent 등록
    - `POST /api/agent/devices/register`
    - `Authorization` header를 보내지 않는다.
    - 먼저 activation token을 발급받는다: 관리자 `POST /api/admin/agent-activation-tokens`(ADMIN JWT) 또는 사용자 자가 발급 `POST /api/users/me/agent-activation-token`(USER JWT).
-   - request body에 발급받은 `activationToken` 원문과 `deviceFingerprintHash`, `registrationIdempotencyKey`, `osVersion`, `agentVersion`, `policyVersion`을 포함한다. *(구 `demo-agent-activation-token` 고정 토큰 경로는 제거됨 — DB 발급 토큰만 유효)*
+   - request body에 발급받은 `activationToken` 원문과 `deviceFingerprintHash`, `registrationIdempotencyKey`, `osVersion`, `agentVersion`, `policyVersion`을 포함한다. *(구 `demo-agent-activation-token` 고정 토큰 경로는 제거됨 — DB 발급 토큰만 유효. Agent 기본 설정에도 더 이상 데모 토큰이 들어가지 않는다.)*
+   - PC Agent 앱으로 시연할 때는 아래 "활성화 파일로 원클릭 시연" 절차로 발급 토큰을 주입한다.
    - response의 `agentToken`은 Agent가 최초 1회 저장하고, 서버 DB에는 hash만 저장한다.
 2. 사용자 동의 저장
    - `POST /api/agent/consents`
@@ -84,6 +85,25 @@ Agent 등록
    - `GET /api/as-tickets/{ticketId}`
    - `Authorization: Bearer <userJwt>`
    - `analysisStatus`, `reviewStatus`, `supportDecision`이 노출되는지 확인한다.
+
+### 활성화 파일로 원클릭 시연
+
+Agent 기본 설정(`ensure_default_config`)에는 activation token이 비어 있다. 토큰 없이 실행하면 등록을 건너뛰고 발급 안내를 `%LOCALAPPDATA%\BuildGraphAgent\agent-error.log`에 남긴다. 원클릭 시연은 다음 순서로 준비한다.
+
+1. 위 1번의 발급 API(관리자 `POST /api/admin/agent-activation-tokens` 또는 사용자 `POST /api/users/me/agent-activation-token`)로 activation token을 발급받는다.
+2. 발급 토큰 원문을 `buildgraph-agent-activation.json` 파일로 저장한다. Agent 실행 폴더, `Downloads`, `%LOCALAPPDATA%\BuildGraphAgent` 중 한 곳에 두면 시작 시 자동 인식한다.
+
+```json
+{
+  "apiBaseUrl": "http://localhost:8080",
+  "webBaseUrl": "http://localhost:5173",
+  "environment": "local",
+  "activationToken": "<발급받은 activation token 원문>"
+}
+```
+
+3. Agent를 실행하면 시작 흐름이 활성화 파일을 import(`activationToken` 갱신, 기존 `agentToken` 초기화)한 뒤 자동 등록과 `SERVER_UPLOAD` 동의 저장까지 진행한다.
+4. 패키징 배포 시에는 실행 파일 이름을 `BuildGraphAgent-<token>.exe`(토큰은 20자 이상 영숫자/`-`/`_`)로 만들면 활성화 파일 없이도 토큰이 주입된다.
 
 ### gzip multipart 업로드 예시
 

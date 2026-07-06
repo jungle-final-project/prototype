@@ -76,6 +76,12 @@ AS_DRAFT_PATH = "/api/agent/as-drafts"
 AS_RAG_PREVIEW_PATH = "/api/agent/log-uploads/as-rag-preview"
 REGISTERED_STATUS = "REGISTERED"
 UNREGISTERED_STATUS = "UNREGISTERED"
+ACTIVATION_TOKEN_GUIDE = (
+    "activation token이 없어 기기 등록을 진행할 수 없습니다. "
+    "관리자 POST /api/admin/agent-activation-tokens 또는 "
+    "사용자 POST /api/users/me/agent-activation-token 으로 토큰을 발급받아 "
+    f"{ACTIVATION_CONFIG_FILE} 파일로 저장한 뒤 Agent를 다시 실행하세요."
+)
 APP_NAME = "BuildGraphAgent"
 APP_ASSET_DIR = "assets"
 AGENT_ICON_PNG = "specup-agent.png"
@@ -407,7 +413,7 @@ class AgentRuntime:
 @dataclass(frozen=True)
 class AgentConfig:
     api_base_url: str
-    activation_token: str
+    activation_token: str | None
     device_fingerprint_hash: str
     os_version: str
     agent_version: str
@@ -422,7 +428,7 @@ class AgentConfig:
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
         return cls(
             api_base_url=required_config_text(data, "apiBaseUrl").rstrip("/"),
-            activation_token=required_config_text(data, "activationToken"),
+            activation_token=optional_config_text(data, "activationToken"),
             device_fingerprint_hash=required_config_text(data, "deviceFingerprintHash"),
             os_version=required_config_text(data, "osVersion"),
             agent_version=required_config_text(data, "agentVersion"),
@@ -596,7 +602,7 @@ def ensure_default_config(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "apiBaseUrl": "http://localhost:8080",
-        "activationToken": "demo-agent-activation-token",
+        "activationToken": None,
         "deviceFingerprintHash": device_fingerprint_hash(),
         "osVersion": platform.platform(),
         "agentVersion": DEFAULT_AGENT_VERSION,
@@ -716,6 +722,10 @@ def print_doctor(config_path: Path) -> None:
         print("agentToken: present")
     else:
         print("agentToken: missing; run register first or wait for Goal 10 token storage.")
+    if config.activation_token:
+        print("activationToken: present")
+    else:
+        print(f"activationToken: missing; {ACTIVATION_TOKEN_GUIDE}")
 
 
 def register_endpoint(api_base_url: str) -> str:
@@ -743,6 +753,8 @@ def register_request_body(config: AgentConfig) -> dict[str, str]:
 
 
 def call_register(config: AgentConfig, timeout_seconds: int = 15) -> str:
+    if not config.activation_token:
+        raise RegisterError(ACTIVATION_TOKEN_GUIDE)
     request_body = json.dumps(register_request_body(config)).encode("utf-8")
     request = urllib.request.Request(
         register_endpoint(config.api_base_url),
@@ -832,9 +844,19 @@ def register_agent(config_path: Path) -> None:
     print("serverUploadConsent: accepted")
 
 
+def append_agent_notice(message: str) -> None:
+    notice_log = app_data_dir() / "agent-error.log"
+    notice_log.parent.mkdir(parents=True, exist_ok=True)
+    with notice_log.open("a", encoding="utf-8") as file:
+        file.write(f"{datetime.now(KST).isoformat()} {message}\n")
+
+
 def auto_register_agent(config_path: Path) -> bool:
     config = load_config(config_path)
     if config.agent_token:
+        return False
+    if not config.activation_token:
+        append_agent_notice(ACTIVATION_TOKEN_GUIDE)
         return False
     agent_token = call_register(config)
     save_agent_token(config_path, agent_token)

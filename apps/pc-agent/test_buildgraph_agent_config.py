@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,7 +38,7 @@ class AgentConfigTest(unittest.TestCase):
     def valid_config(self, **overrides: object) -> dict:
         data = {
             "apiBaseUrl": "http://localhost:8080",
-            "activationToken": "demo-agent-activation-token",
+            "activationToken": "issued-activation-token",
             "deviceFingerprintHash": "fingerprint-hash",
             "osVersion": "Windows 11",
             "agentVersion": "0.1.0",
@@ -53,7 +53,7 @@ class AgentConfigTest(unittest.TestCase):
         config = load_config(path)
 
         self.assertEqual(config.api_base_url, "http://localhost:8080")
-        self.assertEqual(config.activation_token, "demo-agent-activation-token")
+        self.assertEqual(config.activation_token, "issued-activation-token")
         self.assertEqual(config.device_fingerprint_hash, "fingerprint-hash")
         self.assertEqual(config.os_version, "Windows 11")
         self.assertEqual(config.agent_version, "0.1.0")
@@ -68,15 +68,31 @@ class AgentConfigTest(unittest.TestCase):
 
         config = load_config(path)
 
-        self.assertEqual(config.activation_token, "demo-agent-activation-token")
+        self.assertEqual(config.activation_token, "issued-activation-token")
 
     def test_missing_required_config_field_fails_with_clear_message(self) -> None:
+        data = self.valid_config()
+        del data["apiBaseUrl"]
+        path = self.write_config(data)
+
+        with self.assertRaisesRegex(ConfigError, "Missing required config field: apiBaseUrl"):
+            load_config(path)
+
+    def test_missing_activation_token_loads_as_none(self) -> None:
         data = self.valid_config()
         del data["activationToken"]
         path = self.write_config(data)
 
-        with self.assertRaisesRegex(ConfigError, "Missing required config field: activationToken"):
-            load_config(path)
+        config = load_config(path)
+
+        self.assertIsNone(config.activation_token)
+
+    def test_null_activation_token_loads_as_none(self) -> None:
+        path = self.write_config(self.valid_config(activationToken=None))
+
+        config = load_config(path)
+
+        self.assertIsNone(config.activation_token)
 
     def test_status_without_agent_token_is_unregistered(self) -> None:
         path = self.write_config(self.valid_config())
@@ -134,7 +150,7 @@ class AgentConfigTest(unittest.TestCase):
         self.assertEqual(
             request_body,
             {
-                "activationToken": "demo-agent-activation-token",
+                "activationToken": "issued-activation-token",
                 "deviceFingerprintHash": "fingerprint-hash",
                 "registrationIdempotencyKey": expected_registration_key,
                 "osVersion": "Windows 11",
@@ -160,6 +176,20 @@ class AgentConfigTest(unittest.TestCase):
 
         self.assertEqual(status_exit_code, 0)
         self.assertEqual(status_output.getvalue().strip(), "REGISTERED")
+
+    def test_register_without_activation_token_prints_issuance_guide(self) -> None:
+        path = self.write_config(self.valid_config(activationToken=None))
+        stderr = io.StringIO()
+
+        with patch("buildgraph_agent.urllib.request.urlopen") as urlopen:
+            with redirect_stderr(stderr):
+                exit_code = main(["register", "--config", str(path)])
+
+        self.assertEqual(exit_code, 3)
+        urlopen.assert_not_called()
+        message = stderr.getvalue()
+        self.assertIn("POST /api/admin/agent-activation-tokens", message)
+        self.assertIn("POST /api/users/me/agent-activation-token", message)
 
     def test_import_activation_config_preserves_local_fingerprint_and_updates_token(self) -> None:
         path = self.write_config(self.valid_config(activationToken="old-token", deviceFingerprintHash="local-fingerprint"))

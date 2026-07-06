@@ -1,6 +1,6 @@
 {
   "apiBaseUrl": "http://localhost:8080",
-  "activationToken": "demo-agent-activation-token",
+  "activationToken": null,
   "deviceFingerprintHash": "replace-with-stable-device-fingerprint-hash",
   "osVersion": "Windows 11",
   "agentVersion": "0.1.0",
