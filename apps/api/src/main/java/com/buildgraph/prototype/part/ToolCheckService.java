@@ -194,12 +194,13 @@ public class ToolCheckService {
                 ));
     }
 
-    /** Evaluates GPU length, CPU cooler height or AIO radiator fit, and PSU depth against case limits. */
+    /** Evaluates GPU length, CPU cooler height or AIO radiator fit, PSU depth, and board form factor against case limits. */
     private Map<String, Object> size(Map<String, ToolBuildPart> byCategory) {
         ToolBuildPart gpu = byCategory.get("GPU");
         ToolBuildPart pcCase = byCategory.get("CASE");
         ToolBuildPart cooler = byCategory.get("COOLER");
         ToolBuildPart psu = byCategory.get("PSU");
+        ToolBuildPart motherboard = byCategory.get("MOTHERBOARD");
         int gpuLength = intAttr(gpu, "lengthMm", 0);
         int maxGpuLength = intAttr(pcCase, "maxGpuLengthMm", 0);
         int coolerHeight = intAttr(cooler, "heightMm", intAttr(cooler, "coolerHeightMm", 0));
@@ -216,6 +217,14 @@ public class ToolCheckService {
         boolean radiatorMatched = !radiatorChecked || !radiatorSupportKnown || radiatorSupportMm.contains(radiatorSizeMm);
         int psuDepth = intAttr(psu, "depthMm", 0);
         int maxPsuLength = intAttr(pcCase, "maxPsuLengthMm", 0);
+        // 보드 폼팩터 vs 케이스 지원 규격(P1-1) — 케이스 값은 'EATX_ATX_MATX_ITX' 같은 지원 목록 문자열이라
+        // 토큰 최대 랭크로 해석한다(작은 보드는 큰 케이스에 항상 장착 가능한 표준 홀 규격 위계).
+        String boardFormFactor = stringAttr(motherboard, "formFactor");
+        int boardFormFactorRank = formFactorRank(boardFormFactor);
+        int caseMaxFormFactorRank = caseMaxFormFactorRank(stringAttr(pcCase, "formFactor"));
+        boolean boardFormFactorChecked = motherboard != null && pcCase != null
+                && boardFormFactorRank >= 0 && caseMaxFormFactorRank >= 0;
+        boolean boardFormFactorMatched = !boardFormFactorChecked || boardFormFactorRank <= caseMaxFormFactorRank;
         boolean gpuKnown = gpuLength > 0 && maxGpuLength > 0;
         boolean coolerKnown = !aioCooler && coolerHeight > 0 && maxCoolerHeight > 0;
         boolean psuKnown = psuDepth > 0 && maxPsuLength > 0;
@@ -223,7 +232,8 @@ public class ToolCheckService {
         boolean coolerExceeded = coolerKnown && coolerHeight > maxCoolerHeight;
         boolean psuExceeded = psuKnown && psuDepth > maxPsuLength;
         boolean radiatorExceeded = radiatorChecked && radiatorSupportKnown && !radiatorMatched;
-        boolean fail = gpuExceeded || coolerExceeded || psuExceeded || radiatorExceeded;
+        boolean boardFormFactorExceeded = boardFormFactorChecked && !boardFormFactorMatched;
+        boolean fail = gpuExceeded || coolerExceeded || psuExceeded || radiatorExceeded || boardFormFactorExceeded;
         int gpuHeadroom = gpuKnown ? maxGpuLength - gpuLength : 0;
         int coolerHeadroom = coolerKnown ? maxCoolerHeight - coolerHeight : 0;
         int psuHeadroom = psuKnown ? maxPsuLength - psuDepth : 0;
@@ -234,6 +244,7 @@ public class ToolCheckService {
                         || (cooler != null && pcCase != null && !aioCooler && !coolerKnown)
                         || (aioCooler && pcCase != null && (!radiatorChecked || !radiatorSupportKnown))
                         || (psu != null && pcCase != null && !psuKnown)
+                        || (motherboard != null && pcCase != null && !boardFormFactorChecked)
                         || (gpuKnown && gpuHeadroom < 20)
                         // known 게이트 필수 — 수랭(AIO)은 coolerKnown=false라 headroom이 0으로 남는데,
                         // 게이트 없이 0<5를 평가하면 라디에이터가 정확히 맞아도 영구 WARN이 된다.
@@ -245,11 +256,13 @@ public class ToolCheckService {
                 fail ? "HIGH" : "MEDIUM",
                 fail ? radiatorExceeded
                         ? "케이스가 라디에이터 " + radiatorSizeMm + "mm 장착을 지원하지 않습니다."
-                        : psuExceeded
-                                ? "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다."
-                                : "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
+                        : boardFormFactorExceeded
+                                ? "케이스가 " + formFactorLabel(boardFormFactorRank) + " 규격 메인보드 장착을 지원하지 않습니다(최대 " + formFactorLabel(caseMaxFormFactorRank) + ")."
+                                : psuExceeded
+                                        ? "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다."
+                                        : "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
                         : warn ? "케이스 장착 여유가 낮거나 일부 치수 근거가 부족해 추가 확인이 필요합니다."
-                        : "GPU 길이, 쿨러 장착, 파워 깊이가 케이스 제약 안에 있습니다.",
+                        : "GPU 길이, 쿨러 장착, 파워 깊이, 보드 규격이 케이스 제약 안에 있습니다.",
                 // 결측(0)은 null로 내린다 — 0을 그대로 실으면 엣지가 'max-0' 여유로 초록을 그려
                 // "근거 없는 통과"처럼 보인다(190 기본값 제거와 같은 원칙).
                 MockData.map(
@@ -266,8 +279,52 @@ public class ToolCheckService {
                         "radiatorMatched", radiatorMatched,
                         "psuDepthMm", psuDepth > 0 ? psuDepth : null,
                         "maxPsuLengthMm", maxPsuLength > 0 ? maxPsuLength : null,
-                        "psuHeadroomMm", psuKnown ? psuHeadroom : null
+                        "psuHeadroomMm", psuKnown ? psuHeadroom : null,
+                        "boardFormFactor", boardFormFactorRank >= 0 ? formFactorLabel(boardFormFactorRank) : null,
+                        "caseMaxFormFactor", caseMaxFormFactorRank >= 0 ? formFactorLabel(caseMaxFormFactorRank) : null,
+                        "boardFormFactorChecked", boardFormFactorChecked,
+                        "boardFormFactorMatched", boardFormFactorMatched
                 ));
+    }
+
+    /**
+     * 폼팩터 문자열 → 크기 랭크. 표기 변형('M-ATX'/'Micro-ATX'/'MATX', 'Mini-ITX'/'MINI_ITX'/'ITX')을
+     * 흡수하고, 모르는 값은 -1(검사 생략)로 처리해 근거 없는 판정을 막는다.
+     */
+    private static int formFactorRank(String value) {
+        if (value == null || value.isBlank()) {
+            return -1;
+        }
+        String normalized = value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z]", "");
+        return switch (normalized) {
+            case "ITX", "MINIITX" -> 0;
+            case "MATX", "MICROATX" -> 1;
+            case "ATX" -> 2;
+            case "EATX", "EXTENDEDATX" -> 3;
+            default -> -1;
+        };
+    }
+
+    /** 케이스 지원 문자열('EATX_ATX_MATX_ITX' 등)을 토큰으로 쪼개 지원 가능한 최대 랭크를 구한다. */
+    private static int caseMaxFormFactorRank(String support) {
+        if (support == null || support.isBlank()) {
+            return -1;
+        }
+        int max = -1;
+        for (String token : support.split("[_/,\\s]+")) {
+            max = Math.max(max, formFactorRank(token));
+        }
+        return max;
+    }
+
+    private static String formFactorLabel(int rank) {
+        return switch (rank) {
+            case 0 -> "Mini-ITX";
+            case 1 -> "M-ATX";
+            case 2 -> "ATX";
+            case 3 -> "E-ATX";
+            default -> "알 수 없음";
+        };
     }
 
     /** Evaluates coarse workload fit without promising exact FPS. */

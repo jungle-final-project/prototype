@@ -306,7 +306,10 @@ public class PartCompatibleCandidateService {
 
     private static List<String> checkedTools(String category) {
         return switch (category) {
-            case "CPU", "MOTHERBOARD", "RAM" -> List.of("compatibility");
+            case "CPU", "RAM" -> List.of("compatibility");
+            // 메인보드는 소켓/DDR(compatibility)에 더해 폼팩터 vs 케이스 지원 규격(size)도 본다 —
+            // ITX 전용 케이스가 담긴 견적에서 ATX 보드 후보가 회색(장착 불가)으로 보여야 한다.
+            case "MOTHERBOARD" -> List.of("compatibility", "size");
             // 쿨러는 소켓/TDP(compatibility)에 더해 수랭 라디에이터 장착(size)도 본다.
             case "COOLER" -> List.of("compatibility", "size");
             case "GPU" -> List.of("power", "size", "performance");

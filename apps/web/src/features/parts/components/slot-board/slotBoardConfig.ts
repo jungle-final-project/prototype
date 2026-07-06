@@ -76,6 +76,8 @@ export const FALLBACK_EDGES: SlotEdgeConfig[] = [
   { from: 'CPU', to: 'MOTHERBOARD', label: '소켓 호환', implied: true },
   { from: 'MOTHERBOARD', to: 'RAM', label: '메모리 규격', implied: true },
   { from: 'GPU', to: 'MOTHERBOARD', label: 'PCIe x16', implied: true },
+  // 보드는 케이스 안에 실장된다 — 규격(폼팩터) 판정은 케이스 도킹 카드에 상태 점/사유로 표시한다(P1-1).
+  { from: 'MOTHERBOARD', to: 'CASE', label: '보드 규격', implied: true },
   // 도킹 부품 ↔ 보드/부품 관계 — 방사 배치라 대부분 짧은 직선이다.
   // 파워(좌하)가 명판 바로 옆이라 메인보드 칸에 직결한다 — 보드 쪽 끝은 포트 패드로 그려진다.
   { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원' },

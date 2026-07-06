@@ -1294,16 +1294,20 @@ public class NaverShoppingOfferService {
             attributes.put("chipset", "B850");
         }
         attributes.put("memoryType", "DDR5");
-        if (upperTitle.contains("ITX")) {
-            attributes.put("formFactor", "MINI_ITX");
+        // 폼팩터는 'ITX' 문구뿐 아니라 칩셋 접미 토큰(B850M, B860M-A, X870-I, Z890I)도 본다 —
+        // 한국 리스팅 다수가 'M-ATX' 문구 없이 접미로만 규격을 표기해 기본값 ATX 오염이 생겼다(P1-1).
+        // 값 표기는 V109 백필과 같은 표준 어휘(ATX/M-ATX/Mini-ITX/E-ATX)를 쓴다.
+        if (upperTitle.contains("ITX") || BOARD_ITX_SUFFIX.matcher(upperTitle).find()) {
+            attributes.put("formFactor", "Mini-ITX");
             attributes.put("widthMm", 170);
             attributes.put("depthMm", 170);
-        } else if (upperTitle.contains("M-ATX") || upperTitle.contains("MATX") || upperTitle.contains("M ATX")) {
-            attributes.put("formFactor", "MATX");
+        } else if (upperTitle.contains("M-ATX") || upperTitle.contains("MATX") || upperTitle.contains("M ATX")
+                || BOARD_MATX_SUFFIX.matcher(upperTitle).find()) {
+            attributes.put("formFactor", "M-ATX");
             attributes.put("widthMm", 244);
             attributes.put("depthMm", 244);
         } else if (upperTitle.contains("E-ATX") || upperTitle.contains("EATX")) {
-            attributes.put("formFactor", "EATX");
+            attributes.put("formFactor", "E-ATX");
             attributes.put("widthMm", 305);
             attributes.put("depthMm", 330);
         } else {
@@ -1312,6 +1316,10 @@ public class NaverShoppingOfferService {
             attributes.put("depthMm", 244);
         }
     }
+
+    // 칩셋 토큰 + 접미(B850M / X870-I / Z890I) — 뒤에 영숫자가 더 오면(WIFI 등) 접미가 아니다.
+    private static final Pattern BOARD_ITX_SUFFIX = Pattern.compile("[BXZH][0-9]{3}-?I(?![0-9A-Z])");
+    private static final Pattern BOARD_MATX_SUFFIX = Pattern.compile("[BXZH][0-9]{3}M(?![0-9A-Z])");
 
     private static void applyPsuAttributes(Map<String, Object> attributes, String upperTitle) {
         Matcher matcher = PSU_WATT_PATTERN.matcher(upperTitle);
