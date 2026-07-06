@@ -137,6 +137,51 @@ class BuildGraphServiceTest {
     }
 
     @Test
+    void ramSlotOverflowFailsMemoryEdgeAndPartNodes() {
+        // 2개들이 킷 초과 시나리오: 스틱 4개 > 보드 2슬롯. 엣지가 FAIL이면 걸린 부품 노드(카드 뱃지)도 FAIL이어야 한다.
+        stubPart("slot-board", part("slot-board", 501L, "MOTHERBOARD", "2슬롯 ITX 보드", 250000, MockData.map("socket", "AM5", "memoryType", "DDR5", "memorySlots", 2)));
+        stubPart("slot-ram", part("slot-ram", 502L, "RAM", "32GB 2개들이 킷", 180000, MockData.map("memoryType", "DDR5", "moduleCount", 2)));
+        when(toolCheckService.checkBuild(anyList(), eq(430_000))).thenReturn(List.of(
+                tool("compatibility", "FAIL", "램 스틱 수(4개)가 메인보드 메모리 슬롯(2개)을 초과합니다.",
+                        MockData.map(
+                                "socketMatched", true,
+                                "memoryTypeMatched", true,
+                                "coolerSocketMatched", true,
+                                "ramSticksTotal", 4,
+                                "memorySlots", 2,
+                                "ramSlotsChecked", true,
+                                "ramSlotsMatched", false))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "view", "FULL",
+                "budgetWon", 430_000,
+                "items", List.of(
+                        requestItem("slot-board", "MOTHERBOARD"),
+                        requestItem("slot-ram", "RAM")
+                )
+        ));
+
+        List<Map<String, Object>> edges = castList(graph.get("edges"));
+        assertThat(edges).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-board-ram-memory");
+            assertThat(edge.get("status")).isEqualTo("FAIL");
+            assertThat(edge.get("label")).isEqualTo("메모리 슬롯");
+            assertThat((String) edge.get("summary")).contains("램 스틱 4개").contains("메모리 슬롯 2개");
+        });
+        List<Map<String, Object>> nodes = castList(graph.get("nodes"));
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-RAM");
+            assertThat(node.get("status")).isEqualTo("FAIL");
+        });
+        assertThat(nodes).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-MOTHERBOARD");
+            assertThat(node.get("status")).isEqualTo("FAIL");
+        });
+    }
+
+    @Test
     void aiBuildGraphPowerEdgeFollowsToolStatusEvenWhenPsuBelowRequiredRatedCapacity() {
         // 사용자 시나리오: RTX 5090(GPU 권장 1000W) + 1000W PSU. 툴은 권장 파워를 충족했으므로 WARN을 준다.
         // 예전에는 엣지가 psuRatedCapacity - requiredRatedCapacity(=1000-1020=-20) headroom으로 별도 재계산해

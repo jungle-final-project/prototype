@@ -229,6 +229,8 @@ public class BuildGraphService {
             edges.add(edge("edge-budget-total-price", "constraint-budget", "constraint-total-price", "AFFECTS", toolStatus(toolByName, "price"), "예산", priceSummary(toolByName, budget, total)));
         }
 
+        applyWorstEdgeStatusToPartNodes(nodes, edges);
+
         List<Map<String, Object>> insights = insights(toolByName, byCategory, budget, total);
         List<String> focusNodeIds = focusNodeIds(edges, focus, insights);
         String summary = summary(mode, focus, toolByName, byCategory, parts);
@@ -262,6 +264,44 @@ public class BuildGraphService {
                 "detail", nodeDetail(part),
                 "price", firstNumber(part.price(), 0)
         );
+    }
+
+    // PART 노드 status는 그 부품이 걸린 엣지들의 최악 status를 따른다(엣지·노드 단일 소스).
+    // 예: 램 슬롯 초과면 MOTHERBOARD-RAM 엣지가 FAIL이고 RAM/메인보드 카드 뱃지도 FAIL로 표시된다.
+    private static void applyWorstEdgeStatusToPartNodes(List<Map<String, Object>> nodes, List<Map<String, Object>> edges) {
+        Map<String, String> worstByNodeId = new LinkedHashMap<>();
+        for (Map<String, Object> edge : edges) {
+            String status = text(edge.get("status"));
+            if (status == null) {
+                continue;
+            }
+            for (String endpointKey : List.of("source", "target")) {
+                String nodeId = text(edge.get(endpointKey));
+                if (nodeId != null && nodeId.startsWith("part-")) {
+                    worstByNodeId.merge(nodeId, status, BuildGraphService::worseStatus);
+                }
+            }
+        }
+        for (Map<String, Object> node : nodes) {
+            if ("PART".equals(node.get("type"))) {
+                String worst = worstByNodeId.get(text(node.get("id")));
+                if (worst != null) {
+                    node.put("status", worst);
+                }
+            }
+        }
+    }
+
+    private static String worseStatus(String left, String right) {
+        return statusRank(right) > statusRank(left) ? right : left;
+    }
+
+    private static int statusRank(String status) {
+        return switch (firstText(status, "PASS")) {
+            case "FAIL" -> 2;
+            case "WARN" -> 1;
+            default -> 0;
+        };
     }
 
     private static Map<String, Object> constraintNode(String id, String category, String label, String status, String detail) {
