@@ -17,6 +17,7 @@ import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
+import com.buildgraph.prototype.ticket.AdminSupportChatQueueWebSocketHandler;
 import com.buildgraph.prototype.ticket.SupportChatWebSocketHandler;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -65,6 +66,9 @@ class AdminControllerTest {
 
     @MockitoBean
     private SupportChatWebSocketHandler supportChatWebSocketHandler;
+
+    @MockitoBean
+    private AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
 
     @MockitoBean
     private PriceQueryService priceQueryService;
@@ -369,5 +373,6 @@ class AdminControllerTest {
 
         verify(ticketQueryService).update("ticket-public-id", Map.of("status", "CLOSED"), ADMIN);
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
     }
 }

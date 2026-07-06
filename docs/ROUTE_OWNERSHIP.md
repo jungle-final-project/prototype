@@ -140,8 +140,8 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | 담당 화면 route | `/support/new`, `/support/:ticketId`, `/admin/as-tickets`, `/admin/as-tickets/:ticketId`, `/admin/support-chat-sessions` |
 | frontend files | `features/support/**` 중 AS 접수/티켓/사용자-관리자 상담방 전역 위젯, `features/admin/as-tickets/**` |
 | backend packages | `agent`, `log`, `ticket` |
-| DB tables | `agent_log_uploads`, `agent_log_bundles`, `agent_upload_jobs`, `agent_log_summaries`, `as_tickets`, `as_ticket_labels`, `support_chat_rooms`, `support_chat_messages` |
-| API endpoints | `POST /api/agent/devices/register`, `POST /api/agent/consents`, `POST /api/agent/heartbeat`, `POST /api/agent/log-uploads`, `POST /api/agent-logs/upload`, `GET /api/agent-logs/{id}`, `POST /api/as-tickets`, `GET /api/as-tickets/{id}`, `GET /api/support/chat-sessions/current`, `GET /api/support/chat-sessions/{id}`, `POST /api/support/chat-sessions/{id}/messages`, `GET /api/admin/support/chat-sessions`, `GET /api/admin/support/chat-sessions/{id}`, `POST /api/admin/support/chat-sessions/{id}/messages`, `GET /api/admin/as-tickets`, `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}`, `WS /ws/support-chat` |
+| DB tables | `agent_log_uploads`, `agent_log_bundles`, `agent_upload_jobs`, `agent_log_summaries`, `as_tickets`, `as_ticket_labels`, `visit_support_reservations`, `support_chat_rooms`, `support_chat_messages` |
+| API endpoints | `POST /api/agent/devices/register`, `POST /api/agent/consents`, `POST /api/agent/heartbeat`, `POST /api/agent/log-uploads`, `POST /api/agent-logs/upload`, `GET /api/agent-logs/{id}`, `POST /api/as-tickets`, `GET /api/as-tickets/{id}`, `GET /api/support/chat-sessions/current`, `GET /api/support/chat-sessions/{id}`, `POST /api/support/chat-sessions/{id}/messages`, `PUT /api/support/chat-sessions/{id}/visit-reservation`, `GET /api/admin/support/chat-sessions`, `GET /api/admin/support/chat-sessions/{id}`, `POST /api/admin/support/chat-sessions/{id}/messages`, `PUT /api/admin/support/chat-sessions/{id}/visit-reservation`, `DELETE /api/admin/support/chat-sessions/{id}/visit-reservation`, `GET /api/admin/as-tickets`, `GET /api/admin/as-tickets/{id}`, `PATCH /api/admin/as-tickets/{id}`, `WS /ws/support-chat` |
 | 협업자 | Auth/guard는 5번, AS 원인 후보 Agent와 추천 학습 bridge는 3번. 상담방은 `support_chat_*` 전용 테이블로 3번 AS AI Chat(`as_chat_*`)과 완전히 분리 |
 
 ### 5번: AdminShell/Auth Common/Infra
@@ -277,9 +277,12 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `GET /api/support/chat-sessions/current` | 4번 | 3번, 5번 |
 | `GET /api/support/chat-sessions/{id}` | 4번 | 3번, 5번 |
 | `POST /api/support/chat-sessions/{id}/messages` | 4번 | 3번, 5번 |
+| `PUT /api/support/chat-sessions/{id}/visit-reservation` | 4번 | 5번 |
 | `GET /api/admin/support/chat-sessions` | 4번 | 3번, 5번 |
 | `GET /api/admin/support/chat-sessions/{id}` | 4번 | 3번, 5번 |
 | `POST /api/admin/support/chat-sessions/{id}/messages` | 4번 | 3번, 5번 |
+| `PUT /api/admin/support/chat-sessions/{id}/visit-reservation` | 4번 | 5번 |
+| `DELETE /api/admin/support/chat-sessions/{id}/visit-reservation` | 4번 | 5번 |
 | `WS /ws/support-chat` | 4번 | 5번 |
 | `POST /api/ai/agent-sessions` | 3번 | - |
 | `POST /api/ai/agent-sessions/{id}/run` | 3번 | - |

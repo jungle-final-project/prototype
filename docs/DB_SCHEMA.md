@@ -1494,6 +1494,7 @@ Owner: 4번
 | `user_id` | `BIGINT` | no | `users.id` | 예약 사용자 |
 | `preferred_date` | `DATE` | no | - | 희망 방문일 |
 | `time_slot` | `VARCHAR(30)` | no | - | `MORNING`, `AFTERNOON`, `EVENING` |
+| `scheduled_at` | `TIMESTAMPTZ` | yes | - | 정확한 방문 예약 시작 시각 (V108) |
 | `status` | `VARCHAR(30)` | no | - | `REQUESTED`, `SCHEDULED`, `RESCHEDULE_REQUESTED`, `VISIT_IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
 | `address_snapshot` | `TEXT` | yes | - | 예약 당시 주소 |
 | `technician_note` | `TEXT` | yes | - | 기사 메모 |
@@ -1507,6 +1508,14 @@ Index:
 - index: `visit_support_reservations.user_id`
 - index: `visit_support_reservations.status`
 - index: `(preferred_date, time_slot)`
+- index: `visit_support_reservations.scheduled_at`
+
+Rules:
+
+- 사용자와 관리자는 상담방 안에서 방문 지원 예약 시각을 조율한다. 사용자는 요청/변경 요청만 가능하고, 관리자가 최종 확정한다.
+- `scheduled_at`이 정확한 시작 시각이며, `preferred_date`와 `time_slot`은 호환용으로 계속 채운다.
+- 한 AS 티켓에는 active 예약 1건만 유지한다. active 상태는 `REQUESTED`, `RESCHEDULE_REQUESTED`, `SCHEDULED`, `VISIT_IN_PROGRESS`다.
+- 티켓이 `CLOSED` 또는 `CANCELLED`이면 예약 생성/변경/취소를 차단한다.
 
 ### agent_idempotency_records
 
@@ -1806,6 +1815,7 @@ MVP 기준 결정값:
 - `POST /api/as-tickets`는 active 상담방과 최초 `SYSTEM` 메시지를 `ON CONFLICT DO NOTHING`으로 멱등하게 생성한다.
 - `V97__support_chat_rooms_backfill_repair.sql`은 기존 non-deleted AS 티켓 중 상담방이 누락된 데이터를 보정하고, 잘못 `ARCHIVED`된 최신 room을 active room 부재 시에만 `ACTIVE`로 복구한다.
 - 티켓 종료만으로 `support_chat_rooms.status`를 `ARCHIVED`로 바꾸지 않는다. 종료 티켓의 상담 기록은 읽기 가능해야 하며 전송 지점에서만 차단한다.
+- 관리자 명시 삭제(`DELETE /api/admin/support/chat-sessions/{id}`)만 `support_chat_rooms.status='ARCHIVED'`로 전환한다. 이때 연결 티켓은 `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`이면 `CANCELLED`로 바꾸고, `CLOSED`/`CANCELLED`이면 유지한다.
 - `GET /api/support/chat-sessions/current`는 티켓이 없는 사용자에게 row를 만들지 않고 `supportNewPath=/support/new`를 반환한다.
 - `GET /api/support/chat-sessions/current?asTicketId=...`는 로그인 사용자 소유 티켓이면 active 상담방을 보장한다.
 - 관리자 목록은 `as_tickets.status NOT IN ('CLOSED','CANCELLED')`인 상담방만 노출한다.
@@ -2634,9 +2644,11 @@ V94__motherboard_memory_slots.sql
 V95__support_chat_rooms.sql
 V96__support_chat_rooms_split.sql
 V97__support_chat_rooms_backfill_repair.sql
+V98__quote_audit_p0_attribute_backfill.sql
+V108__visit_support_reservations_exact_time.sql
 ```
 
-`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다. `V95`~`V97`은 사용자-관리자 support chat 전용 테이블 분리와 백필 보정 migration이다.
+`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다. `V95`~`V97`은 사용자-관리자 support chat 전용 테이블 분리와 백필 보정 migration이고, `V108`은 방문 지원 예약의 정확한 시작 시각을 추가한다.
 
 `V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR(PC Agent 통합 계열)과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다(다음 번호는 `V98`부터).
 

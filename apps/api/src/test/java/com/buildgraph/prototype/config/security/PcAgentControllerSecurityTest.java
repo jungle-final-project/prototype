@@ -25,9 +25,10 @@ import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.common.PipelineJobRunRecorder;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
-import com.buildgraph.prototype.ticket.TicketController;
+import com.buildgraph.prototype.ticket.AdminSupportChatQueueWebSocketHandler;
 import com.buildgraph.prototype.ticket.AsTicketDraftService;
 import com.buildgraph.prototype.ticket.SupportChatWebSocketHandler;
+import com.buildgraph.prototype.ticket.TicketController;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -78,6 +79,9 @@ class PcAgentControllerSecurityTest {
 
     @MockitoBean
     private SupportChatWebSocketHandler supportChatWebSocketHandler;
+
+    @MockitoBean
+    private AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
 
     @MockitoBean
     private CurrentUserService currentUserService;

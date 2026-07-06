@@ -5,8 +5,8 @@ import { LifeBuoy, MessageCircle, Send, X } from 'lucide-react';
 import { AUTH_CHANGED_EVENT, getCachedAuthUser, getToken } from '../../lib/api';
 import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT } from '../../lib/events';
 import { getCurrentUser } from '../auth/authApi';
-import { getCurrentSupportChat, getSupportChatSession, openSupportChatSocket, postSupportChatMessage, type SupportChatSocket } from './supportChatApi';
-import type { SupportChatMessage, SupportChatSessionDto } from './types';
+import { getCurrentSupportChat, getSupportChatSession, openSupportChatSocket, postSupportChatMessage, putSupportChatVisitReservation, type SupportChatSocket } from './supportChatApi';
+import type { SupportChatMessage, SupportChatSessionDto, VisitSupportReservation } from './types';
 
 const DEFAULT_POLL_MS = 5000;
 const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
@@ -24,6 +24,9 @@ export function SupportChatWidget() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
+  const [visitScheduledAt, setVisitScheduledAt] = useState('');
+  const [visitAddress, setVisitAddress] = useState('');
+  const [visitError, setVisitError] = useState<string | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>('polling');
   const [authToken, setAuthToken] = useState(() => getToken());
   const [newMarkerMessageId, setNewMarkerMessageId] = useState<string | null>(null);
@@ -88,12 +91,34 @@ export function SupportChatWidget() {
     }
   });
 
+  const visitReservationMutation = useMutation({
+    mutationFn: () => putSupportChatVisitReservation(sessionId as string, {
+      scheduledAt: toSeoulOffsetDateTime(visitScheduledAt),
+      addressSnapshot: visitAddress.trim()
+    }),
+    onSuccess: (detail) => {
+      setVisitError(null);
+      updateChatCache(detail);
+    },
+    onError: (error) => {
+      setVisitError(errorMessage(error));
+    }
+  });
+
   const activeChat = detailQuery.data ?? currentQuery.data;
   const contact = activeChat?.contact ?? null;
   const messages = activeChat?.messages ?? [];
   const messageCount = messages.length;
   const unreadCount = currentQuery.data?.contact?.userUnreadCount ?? 0;
   const canSend = Boolean(contact?.canSendMessage && message.trim() && !sendMutation.isPending);
+  const canRequestVisit = Boolean(contact?.canSendMessage && visitScheduledAt && !visitReservationMutation.isPending);
+
+  useEffect(() => {
+    const reservation = contact?.visitReservation;
+    setVisitScheduledAt(toDatetimeLocalValue(reservation?.scheduledAt));
+    setVisitAddress(reservation?.addressSnapshot ?? '');
+    setVisitError(null);
+  }, [contact?.id, contact?.visitReservation?.id, contact?.visitReservation?.scheduledAt, contact?.visitReservation?.addressSnapshot]);
 
   const openChat = useCallback((announce = true) => {
     setOpen(true);
@@ -267,6 +292,13 @@ export function SupportChatWidget() {
     sendMutation.mutate(outgoing);
   }
 
+  function submitVisitReservation(event: FormEvent) {
+    event.preventDefault();
+    if (!canRequestVisit || !sessionId) return;
+    setVisitError(null);
+    visitReservationMutation.mutate();
+  }
+
   if (hidden || !hasToken || !canUseUserChat) {
     return null;
   }
@@ -320,6 +352,24 @@ export function SupportChatWidget() {
               <span>{socketStatusLabel(socketStatus)}</span>
             </div>
           </div>
+          <VisitReservationPanel
+            reservation={contact.visitReservation ?? null}
+            scheduledAt={visitScheduledAt}
+            address={visitAddress}
+            error={visitError}
+            disabled={!contact.canSendMessage}
+            pending={visitReservationMutation.isPending}
+            canSubmit={canRequestVisit}
+            onScheduledAtChange={(value) => {
+              setVisitScheduledAt(value);
+              setVisitError(null);
+            }}
+            onAddressChange={(value) => {
+              setVisitAddress(value);
+              setVisitError(null);
+            }}
+            onSubmit={submitVisitReservation}
+          />
           <div className="relative flex-1 overflow-hidden bg-slate-50">
             <div
               ref={messagesRef}
@@ -422,6 +472,74 @@ export function SupportChatWidget() {
   );
 }
 
+function VisitReservationPanel({
+  reservation,
+  scheduledAt,
+  address,
+  error,
+  disabled,
+  pending,
+  canSubmit,
+  onScheduledAtChange,
+  onAddressChange,
+  onSubmit
+}: {
+  reservation: VisitSupportReservation | null;
+  scheduledAt: string;
+  address: string;
+  error: string | null;
+  disabled: boolean;
+  pending: boolean;
+  canSubmit: boolean;
+  onScheduledAtChange: (value: string) => void;
+  onAddressChange: (value: string) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  const actionLabel = reservation ? '변경 요청' : '예약 요청';
+  return (
+    <form onSubmit={onSubmit} className="border-b border-slate-200 bg-white px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-black text-slate-900">방문 예약</div>
+          <div className="mt-1 text-[11px] font-bold text-emerald-700">{visitStatusLabel(reservation?.status)}</div>
+        </div>
+        {reservation?.scheduledAt ? (
+          <div className="text-right text-xs font-bold text-slate-700">{formatVisitTime(reservation.scheduledAt)}</div>
+        ) : null}
+      </div>
+      <div className="grid gap-2">
+        <label className="grid gap-1 text-[11px] font-bold text-slate-600">
+          방문 예약 시각
+          <input
+            type="datetime-local"
+            value={scheduledAt}
+            disabled={disabled}
+            onChange={(event) => onScheduledAtChange(event.target.value)}
+            className="h-10 rounded-md border border-slate-300 px-3 text-sm font-normal text-slate-900 disabled:bg-slate-100"
+          />
+        </label>
+        <label className="grid gap-1 text-[11px] font-bold text-slate-600">
+          방문 주소
+          <input
+            value={address}
+            disabled={disabled}
+            onChange={(event) => onAddressChange(event.target.value)}
+            className="h-10 rounded-md border border-slate-300 px-3 text-sm font-normal text-slate-900 disabled:bg-slate-100"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={disabled || !canSubmit}
+          className="h-10 rounded-md bg-emerald-700 px-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+        >
+          {pending ? '요청 중' : actionLabel}
+        </button>
+        {error ? <p role="alert" className="text-xs font-bold text-rose-700">{error}</p> : null}
+      </div>
+    </form>
+  );
+}
+
 function SupportChatBubble({ message }: { message: SupportChatMessage }) {
   const isUser = message.role === 'USER';
   const isSystem = message.role === 'SYSTEM';
@@ -507,6 +625,59 @@ function socketStatusLabel(status: SocketStatus) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error && error.message ? error.message : '메시지를 전송하지 못했습니다.';
+}
+
+function visitStatusLabel(status?: string | null) {
+  switch (status) {
+    case 'REQUESTED':
+    case 'RESCHEDULE_REQUESTED':
+      return '관리자 확인 대기';
+    case 'SCHEDULED':
+      return '예약 확정';
+    case 'CANCELLED':
+      return '예약 취소됨';
+    case 'VISIT_IN_PROGRESS':
+      return '방문 진행 중';
+    case 'COMPLETED':
+      return '방문 완료';
+    default:
+      return '예약 없음';
+  }
+}
+
+function toSeoulOffsetDateTime(value: string) {
+  const normalized = value.length === 16 ? `${value}:00` : value;
+  return `${normalized}+09:00`;
+}
+
+function toDatetimeLocalValue(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 16);
+  }
+  return seoulDateTimeText(date).replace(' ', 'T');
+}
+
+function formatVisitTime(value?: string | null) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.replace('T', ' ').slice(0, 16);
+  }
+  return seoulDateTimeText(date);
+}
+
+function seoulDateTimeText(date: Date) {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(date);
 }
 
 function pollingInterval(detail?: SupportChatSessionDto) {

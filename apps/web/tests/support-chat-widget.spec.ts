@@ -34,6 +34,80 @@ test('global support chat can send a message when a ticket chat session exists',
   await expect(page.getByText('지금 상담 가능할까요?')).toBeVisible();
 });
 
+test('global support chat lets users request a visit reservation', async ({ page }) => {
+  let reservationPayload: unknown = null;
+  await mockLoggedInUser(page);
+  await mockActiveChat(page, () => null, () => {});
+  await page.route('**/api/support/chat-sessions/00000000-0000-4000-8000-000000009001/visit-reservation', async (route) => {
+    if (route.request().method() === 'PUT') {
+      reservationPayload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(activeChatDetail({
+          visitReservation: {
+            id: '00000000-0000-4000-8000-000000008001',
+            status: 'REQUESTED',
+            scheduledAt: '2099-07-10T14:30:00+09:00',
+            addressSnapshot: '서울시 강남구'
+          }
+        }))
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/support/00000000-0000-4000-8000-000000006001');
+  await page.getByRole('button', { name: '상담방 열기' }).click();
+  await expect(page.getByText('방문 예약', { exact: true })).toBeVisible();
+  await page.getByLabel('방문 예약 시각').fill('2099-07-10T14:30');
+  await page.getByLabel('방문 주소').fill('서울시 강남구');
+  await page.getByRole('button', { name: '예약 요청' }).click();
+
+  await expect.poll(() => reservationPayload).toEqual({
+    scheduledAt: '2099-07-10T14:30:00+09:00',
+    addressSnapshot: '서울시 강남구'
+  });
+  await expect(page.getByText('관리자 확인 대기')).toBeVisible();
+  await expect(page.locator('section').filter({ hasText: '방문 예약' }).getByText('2099-07-10 14:30', { exact: true })).toBeVisible();
+});
+
+test('global support chat shows confirmed visit reservation without user cancel action', async ({ page }) => {
+  await mockLoggedInUser(page);
+  await mockActiveChat(page, () => null, () => {}, undefined, {
+    id: '00000000-0000-4000-8000-000000008001',
+    status: 'SCHEDULED',
+    scheduledAt: '2099-07-10T14:30:00+09:00',
+    technicianNote: '방문 전 연락'
+  });
+
+  await page.goto('/support/00000000-0000-4000-8000-000000006001');
+  await page.getByRole('button', { name: '상담방 열기' }).click();
+
+  await expect(page.getByText('예약 확정')).toBeVisible();
+  await expect(page.getByText('2099-07-10 14:30')).toBeVisible();
+  await expect(page.getByRole('button', { name: '예약 취소' })).toHaveCount(0);
+});
+
+test('global support chat updates visit reservation from websocket detail push', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockLoggedInUser(page);
+  await mockActiveChat(page, () => null, () => {});
+
+  await page.goto('/support/00000000-0000-4000-8000-000000006001');
+  await page.getByRole('button', { name: '상담방 열기' }).click();
+  await pushUserReservationUpdate(page, {
+    id: '00000000-0000-4000-8000-000000008001',
+    status: 'SCHEDULED',
+    scheduledAt: '2099-07-10T14:30:00+09:00',
+    technicianNote: '방문 전 연락'
+  });
+
+  await expect(page.getByText('예약 확정')).toBeVisible();
+  await expect(page.locator('section').filter({ hasText: '방문 예약' }).getByText('2099-07-10 14:30', { exact: true })).toBeVisible();
+});
+
 test('global support chat keeps input and shows an error when REST send fails', async ({ page }) => {
   await mockLoggedInUser(page);
   await mockActiveChatWithFailedPost(page);
@@ -331,6 +405,81 @@ test('support intake blocks creating a new ticket when an active support chat ex
   await expect.poll(() => createTicketCalls).toBe(0);
 });
 
+test('support intake allows a new ticket when deleted chat is absent from current session', async ({ page }) => {
+  let uploadCalls = 0;
+  let createTicketPayload: unknown = null;
+  await mockLoggedInUser(page);
+  await mockEmptyChat(page);
+  await page.route('**/api/agent-logs/upload', async (route) => {
+    uploadCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: '00000000-0000-4000-8000-000000005001',
+        status: 'UPLOADED',
+        fileName: 'recent.jsonl',
+        rangeMinutes: 30,
+        deleteAfter: '2026-08-05T00:00:00Z'
+      })
+    });
+  });
+  await page.route('**/api/as-tickets', async (route) => {
+    if (route.request().method() === 'POST') {
+      createTicketPayload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: '00000000-0000-4000-8000-000000006099',
+          status: 'OPEN',
+          symptom: '새 접수\n\n삭제 이후 다시 접수합니다.',
+          logUploadId: '00000000-0000-4000-8000-000000005001',
+          supportChatRoomId: '00000000-0000-4000-8000-000000009099',
+          causeCandidates: [],
+          upgradeCandidates: []
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/api/as-tickets/00000000-0000-4000-8000-000000006099', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: '00000000-0000-4000-8000-000000006099',
+        status: 'OPEN',
+        symptom: '새 접수\n\n삭제 이후 다시 접수합니다.',
+        supportChatRoomId: '00000000-0000-4000-8000-000000009099',
+        causeCandidates: [],
+        upgradeCandidates: []
+      })
+    });
+  });
+
+  await page.goto('/support/new');
+
+  await expect(page.getByText('진행 중인 AS 상담이 있습니다.')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'AS 접수하기' })).toBeEnabled();
+  await page.getByLabel('증상 제목').fill('새 접수');
+  await page.getByLabel('증상 상세').fill('삭제 이후 다시 접수합니다.');
+  await selectAgentLogFile(page);
+  await page.getByLabel('선택한 구간의 로그 업로드와 30일 보관 후 삭제 정책에 동의합니다.').check();
+  await page.getByRole('button', { name: 'AS 접수하기' }).click();
+
+  await expect.poll(() => uploadCalls).toBe(1);
+  await expect.poll(() => createTicketPayload).toEqual(expect.objectContaining({
+    logUploadId: '00000000-0000-4000-8000-000000005001'
+  }));
+  const payload = createTicketPayload as { symptom?: string };
+  expect(payload.symptom).toContain('새 접수\n\n삭제 이후 다시 접수합니다.');
+  expect(payload.symptom).toContain('[증상 유형]');
+  expect(payload.symptom).toContain('[문제 발생 전후 로그]');
+  expect(payload.symptom).toContain('[지원 신청]');
+});
+
 test('support intake shows the existing chat CTA when stale submit receives a conflict', async ({ page }) => {
   let createTicketCalls = 0;
   await mockLoggedInUser(page);
@@ -533,30 +682,10 @@ async function mockActiveChat(
   page: Page,
   postPayload: () => unknown,
   setPostPayload: (payload: unknown) => void,
-  issueTicket: () => string = () => 'user-ws-ticket-1'
+  issueTicket: () => string = () => 'user-ws-ticket-1',
+  visitReservation?: Record<string, unknown>
 ) {
-  const initial = {
-    contact: {
-      id: '00000000-0000-4000-8000-000000009001',
-      asTicketId: '00000000-0000-4000-8000-000000006001',
-      status: 'ACTIVE',
-      ticketStatus: 'OPEN',
-      title: 'AS 상담방',
-      symptom: 'GPU 온도 상승',
-      userUnreadCount: 0,
-      adminUnreadCount: 0,
-      canSendMessage: true
-    },
-    messages: [
-      {
-        id: '00000000-0000-4000-8000-000000009101',
-        role: 'SYSTEM',
-        content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
-        createdAt: '2026-07-06T10:00:00Z'
-      }
-    ],
-    pollingIntervalMs: 5000
-  };
+  const initial = activeChatDetail({ visitReservation });
   await page.route('**/api/as-tickets/00000000-0000-4000-8000-000000006001', async (route) => {
     await route.fulfill({
       status: 200,
@@ -620,6 +749,32 @@ async function mockActiveChat(
     }
     await route.fallback();
   });
+}
+
+function activeChatDetail(options: { visitReservation?: Record<string, unknown> } = {}) {
+  return {
+    contact: {
+      id: '00000000-0000-4000-8000-000000009001',
+      asTicketId: '00000000-0000-4000-8000-000000006001',
+      status: 'ACTIVE',
+      ticketStatus: 'OPEN',
+      title: 'AS 상담방',
+      symptom: 'GPU 온도 상승',
+      userUnreadCount: 0,
+      adminUnreadCount: 0,
+      canSendMessage: true,
+      visitReservation: options.visitReservation ?? null
+    },
+    messages: [
+      {
+        id: '00000000-0000-4000-8000-000000009101',
+        role: 'SYSTEM',
+        content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
+        createdAt: '2026-07-06T10:00:00Z'
+      }
+    ],
+    pollingIntervalMs: 5000
+  };
 }
 
 async function mockLongActiveChat(page: Page) {
@@ -710,6 +865,48 @@ async function pushUserChatMessage(page: Page, content: string) {
       })
     }));
   }, content);
+}
+
+async function pushUserReservationUpdate(page: Page, visitReservation: Record<string, unknown>) {
+  await page.evaluate((reservation) => {
+    const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
+    const socket = sockets[sockets.length - 1];
+    socket?.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({
+        type: 'CHAT_UPDATED',
+        detail: {
+          contact: {
+            id: '00000000-0000-4000-8000-000000009001',
+            asTicketId: '00000000-0000-4000-8000-000000006001',
+            status: 'ACTIVE',
+            ticketStatus: 'OPEN',
+            title: 'AS 상담방',
+            symptom: 'GPU 온도 상승',
+            userUnreadCount: 1,
+            adminUnreadCount: 0,
+            canSendMessage: true,
+            visitReservation: reservation,
+            lastMessageAt: '2026-07-06T10:40:00Z'
+          },
+          messages: [
+            {
+              id: '00000000-0000-4000-8000-000000009101',
+              role: 'SYSTEM',
+              content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
+              createdAt: '2026-07-06T10:00:00Z'
+            },
+            {
+              id: '00000000-0000-4000-8000-000000009301',
+              role: 'SYSTEM',
+              content: '방문 지원 예약이 확정되었습니다: 2099-07-10 14:30',
+              createdAt: '2026-07-06T10:40:00Z'
+            }
+          ],
+          pollingIntervalMs: 5000
+        }
+      })
+    }));
+  }, visitReservation);
 }
 
 async function selectAgentLogFile(page: Page) {

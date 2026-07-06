@@ -95,6 +95,25 @@ class SupportChatWebSocketTicketServiceTest {
     }
 
     @Test
+    void adminQueueTicketIsIssuedWithModeAndQueueScope() {
+        redisAvailable();
+
+        Map<String, Object> response = service.issueAdminQueueTicket(ADMIN);
+
+        assertThat(response.get("ticket")).isInstanceOf(String.class);
+        verify(operations).set(
+                eq("support-chat:ws-ticket:" + response.get("ticket")),
+                org.mockito.ArgumentMatchers.contains("\"mode\":\"admin-queue\""),
+                eq(Duration.ofSeconds(60))
+        );
+        verify(operations).set(
+                eq("support-chat:ws-ticket:" + response.get("ticket")),
+                org.mockito.ArgumentMatchers.contains("\"sessionId\":\"admin-support-chat-queue\""),
+                eq(Duration.ofSeconds(60))
+        );
+    }
+
+    @Test
     void inaccessibleRoomDoesNotIssueTicket() {
         redisAvailable();
         when(supportChatService.userCanAccess(ROOM_ID, USER)).thenReturn(false);

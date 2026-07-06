@@ -24,6 +24,9 @@ public class VisitSupportReservationEntity extends PublicIdEntity {
     @Column(name = "time_slot", nullable = false)
     private VisitTimeSlot timeSlot;
 
+    @Column(name = "scheduled_at")
+    private Instant scheduledAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private VisitReservationStatus status;

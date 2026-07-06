@@ -2482,6 +2482,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/support/chat-sessions/{id}/visit-reservation:
+    put:
+      summary: 사용자 방문 지원 예약 요청
+      description: 사용자는 방문 지원 예약을 요청하거나 변경 요청할 수 있다. 최종 확정은 관리자가 수행한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupportChatVisitReservationRequest"
+      responses:
+        "200":
+          description: 예약 요청 후 갱신된 상담방 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportChatSessionDto"
+        "400":
+          description: 예약 시각 누락, 형식 오류, 과거 시각
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: 로그인 사용자 소유 상담방이 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: 종료된 AS 티켓 상담방
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/support/chat-sessions/{id}/ws-ticket:
     post:
       summary: 사용자 상담방 WebSocket ticket 발급
@@ -2748,6 +2787,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SupportChatSessionList"
+  /api/admin/support/chat-sessions/ws-ticket:
+    post:
+      summary: 관리자 상담방 목록 WebSocket ticket 발급
+      description: /ws/admin/support-chat-queue 인증용 60초 TTL, 1회 사용 ticket을 발급한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: WebSocket 인증 ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportChatWebSocketTicketResponse"
+        "503":
+          description: Redis ticket 저장소 장애
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/support/chat-sessions/{id}:
     get:
       summary: 관리자 상담방 상세
@@ -2764,6 +2822,26 @@ paths:
       responses:
         "200":
           description: 상담방 상세와 메시지 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportChatSessionDto"
+        "404":
+          description: 상담방 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: 관리자 상담방 삭제
+      description: 상담방을 ARCHIVED로 전환하고, 진행 중 티켓은 CANCELLED 처리해 사용자가 새 AS 접수를 할 수 있게 한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 삭제 후 읽기 전용 상담방 상세
           content:
             application/json:
               schema:
@@ -2796,6 +2874,69 @@ paths:
                 $ref: "#/components/schemas/SupportChatSessionDto"
         "400":
           description: 메시지 내용 누락 또는 2000자 초과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: 종료된 AS 티켓 상담방
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/support/chat-sessions/{id}/visit-reservation:
+    put:
+      summary: 관리자 방문 지원 예약 확정 또는 변경
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminSupportChatVisitReservationRequest"
+      responses:
+        "200":
+          description: 예약 확정 후 갱신된 상담방 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportChatSessionDto"
+        "400":
+          description: 예약 시각 누락, 형식 오류, 과거 시각
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: 상담방 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: 종료된 AS 티켓 상담방
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: 관리자 방문 지원 예약 취소
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 예약 취소 후 갱신된 상담방 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportChatSessionDto"
+        "404":
+          description: 상담방 또는 active 예약 없음
           content:
             application/json:
               schema:
@@ -6317,6 +6458,28 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
+    SupportChatVisitReservationRequest:
+      type: object
+      required: [scheduledAt]
+      properties:
+        scheduledAt:
+          type: string
+          format: date-time
+          example: "2026-07-10T14:30:00+09:00"
+        addressSnapshot:
+          type: string
+          nullable: true
+    AdminSupportChatVisitReservationRequest:
+      type: object
+      required: [scheduledAt]
+      properties:
+        scheduledAt:
+          type: string
+          format: date-time
+          example: "2026-07-10T14:30:00+09:00"
+        technicianNote:
+          type: string
+          nullable: true
     SupportChatWebSocketTicketResponse:
       type: object
       required: [ticket, expiresAt, expiresInSeconds]
@@ -6400,6 +6563,38 @@ components:
           $ref: "#/components/schemas/SupportChatUserDto"
         canSendMessage:
           type: boolean
+        visitReservation:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/VisitSupportReservationDto"
+    VisitSupportReservationDto:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [REQUESTED, SCHEDULED, RESCHEDULE_REQUESTED, VISIT_IN_PROGRESS, COMPLETED, CANCELLED]
+        scheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+        addressSnapshot:
+          type: string
+          nullable: true
+        technicianNote:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
     SupportChatUserDto:
       type: object
       required: [id]
