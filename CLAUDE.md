@@ -39,9 +39,8 @@ cd apps/api && ./gradlew test --tests "com.buildgraph.prototype.user.UserControl
 # Self Quote SlotBoard Rules
 
 ## Scope
-- `/self-quote` is being migrated to a slot-board-only estimate relationship board.
-- Implement P0~P5, but work phase-by-phase: P0, P1, P2, P3, P4, P5.
-- Do not jump ahead without completing tests for the current phase.
+- `/self-quote` is an **information-first estimate builder**: checklist(품목 지도) + slot board(보조 그래프) + candidate panel.
+- 2026-07-06 멘토 피드백 기반 리디자인(docs/self-quote-redesign.md) 이후의 규칙이다. 구 P0~P5 마이그레이션은 완료됨.
 
 ## Hard constraints
 - Do not change backend APIs.
@@ -55,21 +54,13 @@ cd apps/api && ./gradlew test --tests "com.buildgraph.prototype.user.UserControl
 
 ## Design direction
 - Final UX is not a physical PC assembly simulator.
-- Final UX is an abstract motherboard topology / estimate relationship board.
-- Use local SVG assets for slot glyphs:
-  - `/slot-board/backgrounds/topology-board-bg.svg`
-  - `/slot-board/parts/cpu.svg`
-  - `/slot-board/parts/motherboard.svg`
-  - `/slot-board/parts/ram.svg`
-  - `/slot-board/parts/gpu.svg`
-  - `/slot-board/parts/ssd.svg`
-  - `/slot-board/parts/storage.svg`
-  - `/slot-board/parts/psu.svg`
-  - `/slot-board/parts/case.svg`
-  - `/slot-board/parts/cooler.svg`
+- **Information first, graphics assist**: 견적 체크리스트(순서·상태·가격·총액)와 후보 카드가 주인공이고, 보드/연결선은 호환성 이해 도구다. 장식용 배경 평면도·하드웨어 라벨(PCIe/24핀 등)은 쓰지 않는다.
+- 장착된 슬롯 카드는 실제 상품 이미지 중심으로, 빈 슬롯은 local SVG glyph(`/slot-board/parts/*.svg`)로 표시한다.
 - Do not draw complex CPU/RAM/GPU/SSD/PSU/case/cooler shapes with CSS.
 - SVG files are glyphs only. Product name, category, price, selected ring, status badge, and empty state must be rendered by React/CSS.
-- Do not use remote images or bitmap images inside the SlotBoard glyph layer.
+- Do not use remote images or bitmap images inside the empty-slot glyph layer.
+- 호환 상태 색 체계(전 화면 공통): 정상 = 초록, 주의 = 노랑, 불가 = 빨강, 미검증 = 회색. 정상 연결선을 검정/회색으로 그리지 않는다.
+- 사용자 언어 우선: "호환 가능/간섭 주의/장착 불가/파워 부족"처럼 쓴다. "constraint/dependency/socket mismatch" 같은 원어 노출 금지.
 
 ## Slot policy
 - 8 logical slots: CPU, motherboard, RAM, GPU, SSD, PSU, case, cooler.
@@ -82,9 +73,14 @@ cd apps/api && ./gradlew test --tests "com.buildgraph.prototype.user.UserControl
 - Reuse existing `GET /api/parts`.
 - Include `compatibilitySource=QUOTE_DRAFT_CURRENT`.
 - Load candidates in 20 item pages.
-- Show PASS/WARN only.
-- Hide FAIL candidates and show only `안 맞는 후보는 숨김`.
+- **Show ALL candidates**: PASS/WARN은 선택 가능, FAIL은 숨기지 말고 회색 비활성 + 선택 불가 사유를 함께 표시한다(사용자가 "왜 안 되는지" 알 수 있어야 함).
 - WARN candidates are selectable and keep `간섭 주의`.
+- 버튼 문구: 빈 슬롯 = `담기`, 채워진 단일 슬롯 = `교체`, 교체 대상 지정 시 = `이걸로 교체`.
+
+## Onboarding / guidance
+- 견적이 비어 있으면 AI 시작 CTA(챗봇 열기)와 "직접 고르기" 진입을 함께 노출한다 — 숨은 AI 버튼에 의존하지 않는다.
+- 권장 선택 순서는 CPU → 메인보드 → RAM → GPU → SSD → 파워 → 케이스 → 쿨러이며, 다음 채울 슬롯을 안내·강조한다(강제 아님 — 아무 슬롯이나 클릭 가능).
+- 진행 상태(N/8)와 총액은 항상 보인다.
 
 ## Graph validation
 - P1+ may reuse `POST /api/build-graphs/resolve`.

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
+import { openAiAssistant } from '../../../lib/events';
 import {
   AI_SELECTED_BUILD_CHANGED_EVENT,
   PART_CATEGORY_LABELS,
@@ -154,6 +155,8 @@ export function SelfQuotePage() {
   const hasCompatibilityFail = quoteHasCompatibilityFail(graphQuery.data, draftItems);
 
   const filledCount = SLOT_CONFIGS.filter((slot) => draftItems.some((item) => item.category === slot.category)).length;
+  // 순차 가이드: 권장 순서에서 아직 비어 있는 첫 카테고리를 "다음 선택"으로 안내한다(강제 아님).
+  const nextCategory = RECOMMENDED_SLOT_ORDER.find((category) => !draftItems.some((item) => item.category === category)) ?? null;
   const warnCount = graphQuery.data
     ? graphQuery.data.nodes.filter((node) => node.type === 'PART' && node.status === 'WARN').length
     : 0;
@@ -182,6 +185,62 @@ export function SelfQuotePage() {
           graphLoading={graphQuery.isLoading}
         />
 
+        {/* 시작 안내: 빈 견적이면 AI/직접 시작을 명시하고, 진행 중이면 다음 선택을 안내한다 */}
+        {draftItems.length === 0 ? (
+          <section
+            data-testid="quote-start-banner"
+            className="panel flex flex-col gap-3 border-blue-100 bg-blue-50/60 p-4 md:flex-row md:items-center md:justify-between"
+          >
+            <div className="min-w-0">
+              <div className="text-sm font-black text-commerce-ink">뭘 골라야 할지 모르겠다면, AI에게 예산과 용도만 알려주세요</div>
+              <div className="mt-1 text-xs text-slate-500">
+                예: &quot;게이밍 200만원&quot; — AI가 완성된 조합을 추천하고, 선택하면 이 화면에 그대로 채워집니다
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                data-testid="quote-ai-start"
+                onClick={() => openAiAssistant()}
+                className="rounded-md bg-brand-blue px-4 py-2.5 text-xs font-black text-white transition hover:bg-blue-700"
+              >
+                AI로 시작하기
+              </button>
+              <button
+                type="button"
+                data-testid="quote-manual-start"
+                onClick={() => selectSlot('CPU')}
+                className="rounded-md border border-commerce-line bg-white px-4 py-2.5 text-xs font-black text-slate-700 transition hover:border-commerce-ink"
+              >
+                직접 고르기 (CPU부터)
+              </button>
+            </div>
+          </section>
+        ) : nextCategory ? (
+          <div
+            data-testid="quote-next-guide"
+            className="flex flex-wrap items-center gap-2 rounded-md border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs font-black text-brand-blue"
+          >
+            <span>
+              다음: {RECOMMENDED_SLOT_ORDER.indexOf(nextCategory) + 1}. {PART_CATEGORY_LABELS[nextCategory]}를 선택해 주세요
+            </span>
+            <button
+              type="button"
+              onClick={() => selectSlot(nextCategory)}
+              className="rounded border border-brand-blue/30 bg-white px-2 py-1 text-[11px] font-black text-brand-blue hover:bg-blue-50"
+            >
+              바로 열기
+            </button>
+          </div>
+        ) : (
+          <div
+            data-testid="quote-complete-guide"
+            className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700"
+          >
+            8개 품목이 모두 채워졌어요 — 호환 상태를 확인하고 저장하거나 구매하세요
+          </div>
+        )}
+
         {aiBuild ? (
           <AiSelectedBuildPanel
             build={aiBuild}
@@ -194,11 +253,19 @@ export function SelfQuotePage() {
           />
         ) : null}
 
-        {/* 본문: 보드 + 우측 상세 패널 (우측 컬럼은 항상 유지) */}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
+        {/* 본문: 체크리스트(품목 지도) + 보드(보조 그래프) + 우측 상세 패널 */}
+        <div className="grid gap-4 lg:grid-cols-[230px_minmax(0,1fr)_380px] lg:items-start">
+          <QuoteChecklist
+            draftItems={draftItems}
+            selectedCategory={selectedCategory}
+            nextCategory={nextCategory}
+            totalPrice={selectedTotal}
+            onSelect={selectSlot}
+          />
           <SlotBoard
             items={draftItems}
             selectedCategory={selectedCategory}
+            nextCategory={nextCategory}
             onSlotSelect={selectSlot}
             onRemoveItem={removeItem}
             isRemovePending={deleteMutation.isPending}
@@ -236,6 +303,97 @@ export function SelfQuotePage() {
         />
       </div>
     </Screen>
+  );
+}
+
+// 멘토 피드백: "무엇을 사야 하는지, 어디까지 했는지"의 품목 지도. 권장 선택 순서이며 강제가 아니다.
+const RECOMMENDED_SLOT_ORDER: PartCategory[] = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
+
+function QuoteChecklist({
+  draftItems,
+  selectedCategory,
+  nextCategory,
+  totalPrice,
+  onSelect
+}: {
+  draftItems: QuoteDraftItem[];
+  selectedCategory: PartCategory | null;
+  nextCategory: PartCategory | null;
+  totalPrice: number;
+  onSelect: (category: PartCategory) => void;
+}) {
+  const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
+
+  return (
+    <aside data-testid="quote-checklist" className="panel h-fit p-4 lg:sticky lg:top-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-black text-commerce-ink">견적 체크리스트</h2>
+        <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
+          {filledCount}/{RECOMMENDED_SLOT_ORDER.length} 완료
+        </span>
+      </div>
+      <ol className="space-y-1.5">
+        {RECOMMENDED_SLOT_ORDER.map((category, index) => {
+          const items = draftItems.filter((item) => item.category === category);
+          const filled = items.length > 0;
+          const isNext = category === nextCategory;
+          const isSelected = category === selectedCategory;
+          const lineTotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
+          const label = PART_CATEGORY_LABELS[category] ?? category;
+          return (
+            <li key={category}>
+              <button
+                type="button"
+                aria-label={`${label} 후보 목록 열기`}
+                data-testid={`checklist-${category}`}
+                data-filled={filled ? 'true' : 'false'}
+                data-next={isNext ? 'true' : 'false'}
+                onClick={() => onSelect(category)}
+                className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
+                  isSelected
+                    ? 'border-brand-blue bg-white ring-2 ring-blue-100'
+                    : filled
+                      ? 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
+                      : isNext
+                        ? 'slot-empty-pulse border-brand-blue bg-blue-50/50'
+                        : 'border-dashed border-slate-300 bg-white hover:border-slate-400'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-black text-slate-700">
+                    {index + 1}. {label}
+                  </span>
+                  {filled ? (
+                    <span className="shrink-0 text-[10px] font-black text-emerald-700">✓ 완료</span>
+                  ) : isNext ? (
+                    <span className="shrink-0 text-[10px] font-black text-brand-blue">다음 선택</span>
+                  ) : (
+                    <span className="shrink-0 text-[10px] font-bold text-slate-400">비어 있음</span>
+                  )}
+                </div>
+                {filled ? (
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate text-[11px] text-slate-500">
+                      {items[0].name}
+                      {items.length > 1 ? ` 외 ${items.length - 1}개` : ''}
+                    </span>
+                    <span className="shrink-0 text-[11px] font-black text-commerce-ink">{lineTotal.toLocaleString()}원</span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-[11px] text-slate-400">+ 부품 선택</div>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="mt-3 flex items-center justify-between border-t border-commerce-line pt-3">
+        <span className="text-xs font-bold text-slate-500">총액</span>
+        <span data-testid="quote-checklist-total" className="text-base font-black text-commerce-sale">
+          {totalPrice.toLocaleString()}원
+        </span>
+      </div>
+    </aside>
   );
 }
 
