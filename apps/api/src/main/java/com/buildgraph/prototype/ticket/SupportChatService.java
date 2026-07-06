@@ -5,6 +5,7 @@ import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -61,6 +62,20 @@ public class SupportChatService {
                 .map(row -> contactMap(roomRow(row)))
                 .toList();
         return MockData.map("items", items, "pollingIntervalMs", POLLING_INTERVAL_MS);
+    }
+
+    public Optional<Map<String, Object>> adminQueueContactSnapshot(String roomId) {
+        requireUuid(roomId);
+        return jdbcTemplate.queryForList(roomSelect() + """
+                        WHERE r.public_id = ?::uuid
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                          AND r.status = 'ACTIVE'
+                          AND t.status NOT IN ('CLOSED', 'CANCELLED')
+                        """, roomId)
+                .stream()
+                .findFirst()
+                .map(row -> contactMap(roomRow(row)));
     }
 
     public Map<String, Object> adminDetail(String roomId, CurrentUserService.CurrentUser admin) {

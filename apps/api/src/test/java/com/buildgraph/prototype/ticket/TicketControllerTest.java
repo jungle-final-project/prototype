@@ -3,6 +3,7 @@ package com.buildgraph.prototype.ticket;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -36,6 +37,9 @@ class TicketControllerTest {
     @MockitoBean
     private CurrentUserService currentUserService;
 
+    @MockitoBean
+    private AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
+
     @Test
     void userCanReadFinalAgentAsTicketStatus() throws Exception {
         when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
@@ -63,5 +67,32 @@ class TicketControllerTest {
 
         verify(currentUserService).requireUser(USER_TOKEN);
         verify(ticketQueryService).ticket("ticket-public-id", USER);
+    }
+
+    @Test
+    void creatingTicketBroadcastsSupportChatQueueWhenRoomExists() throws Exception {
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
+        when(ticketQueryService.create(java.util.Map.of("symptom", "GPU 온도 상승"), USER)).thenReturn(MockData.map(
+                "id", "ticket-public-id",
+                "status", "OPEN",
+                "symptom", "GPU 온도 상승",
+                "supportChatRoomId", "00000000-0000-4000-8000-000000009001",
+                "causeCandidates", List.of(),
+                "upgradeCandidates", List.of()
+        ));
+
+        mockMvc.perform(post("/api/as-tickets")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "symptom": "GPU 온도 상승"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.supportChatRoomId").value("00000000-0000-4000-8000-000000009001"));
+
+        verify(ticketQueryService).create(java.util.Map.of("symptom", "GPU 온도 상승"), USER);
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
     }
 }

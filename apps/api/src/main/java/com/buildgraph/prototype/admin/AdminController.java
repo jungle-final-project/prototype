@@ -6,6 +6,7 @@ import com.buildgraph.prototype.common.PipelineJobRunRecorder;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
+import com.buildgraph.prototype.ticket.AdminSupportChatQueueWebSocketHandler;
 import com.buildgraph.prototype.ticket.SupportChatWebSocketHandler;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -32,6 +33,7 @@ public class AdminController {
     private final RagEmbeddingService ragEmbeddingService;
     private final TicketQueryService ticketQueryService;
     private final SupportChatWebSocketHandler supportChatWebSocketHandler;
+    private final AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
     private final PriceQueryService priceQueryService;
     private final BuildGraphLayoutService buildGraphLayoutService;
     private final CurrentUserService currentUserService;
@@ -44,6 +46,7 @@ public class AdminController {
             RagEmbeddingService ragEmbeddingService,
             TicketQueryService ticketQueryService,
             SupportChatWebSocketHandler supportChatWebSocketHandler,
+            AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler,
             PriceQueryService priceQueryService,
             BuildGraphLayoutService buildGraphLayoutService,
             CurrentUserService currentUserService,
@@ -55,6 +58,7 @@ public class AdminController {
         this.ragEmbeddingService = ragEmbeddingService;
         this.ticketQueryService = ticketQueryService;
         this.supportChatWebSocketHandler = supportChatWebSocketHandler;
+        this.adminSupportChatQueueWebSocketHandler = adminSupportChatQueueWebSocketHandler;
         this.priceQueryService = priceQueryService;
         this.buildGraphLayoutService = buildGraphLayoutService;
         this.currentUserService = currentUserService;
@@ -172,6 +176,7 @@ public class AdminController {
         String supportChatRoomId = stringOrNull(ticket.get("supportChatRoomId"));
         if (supportChatRoomId != null) {
             supportChatWebSocketHandler.broadcastRoomUpdate(supportChatRoomId);
+            adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(supportChatRoomId);
         }
         return ticket;
     }

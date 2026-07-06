@@ -17,10 +17,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class TicketController {
     private final TicketQueryService ticketQueryService;
     private final CurrentUserService currentUserService;
+    private final AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
 
-    public TicketController(TicketQueryService ticketQueryService, CurrentUserService currentUserService) {
+    public TicketController(
+            TicketQueryService ticketQueryService,
+            CurrentUserService currentUserService,
+            AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler
+    ) {
         this.ticketQueryService = ticketQueryService;
         this.currentUserService = currentUserService;
+        this.adminSupportChatQueueWebSocketHandler = adminSupportChatQueueWebSocketHandler;
     }
 
     @PostMapping("/as-tickets")
@@ -30,7 +36,12 @@ public class TicketController {
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
-        return ticketQueryService.create(request, user);
+        Map<String, Object> ticket = ticketQueryService.create(request, user);
+        String supportChatRoomId = stringOrNull(ticket.get("supportChatRoomId"));
+        if (supportChatRoomId != null) {
+            adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(supportChatRoomId);
+        }
+        return ticket;
     }
 
     @GetMapping("/as-tickets/{id}")
@@ -40,5 +51,13 @@ public class TicketController {
     ) {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
         return ticketQueryService.ticket(id, user);
+    }
+
+    private static String stringOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isBlank() ? null : text;
     }
 }

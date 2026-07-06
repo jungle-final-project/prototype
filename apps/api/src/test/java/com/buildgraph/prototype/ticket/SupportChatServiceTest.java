@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -114,6 +115,28 @@ class SupportChatServiceTest {
                 .containsEntry("status", "ARCHIVED")
                 .containsEntry("ticketStatus", "CLOSED")
                 .containsEntry("canSendMessage", false);
+    }
+
+    @Test
+    void adminQueueContactSnapshotReturnsContactWhenRoomBelongsInAdminList() {
+        mockAdminRoom("ACTIVE", "OPEN", 0, 4);
+
+        Optional<Map<String, Object>> contact = service.adminQueueContactSnapshot(ROOM_ID);
+
+        assertThat(contact).isPresent();
+        assertThat(contact.orElseThrow())
+                .containsEntry("id", ROOM_ID)
+                .containsEntry("adminUnreadCount", 4)
+                .containsEntry("canSendMessage", true);
+    }
+
+    @Test
+    void adminQueueContactSnapshotIsEmptyWhenRoomIsNotInAdminList() {
+        when(jdbcTemplate.queryForList(anyString(), eq(ROOM_ID))).thenReturn(List.of());
+
+        Optional<Map<String, Object>> contact = service.adminQueueContactSnapshot(ROOM_ID);
+
+        assertThat(contact).isEmpty();
     }
 
     private void assertBadRequest(Map<String, Object> request) {

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getCachedAuthUser } from '../../../lib/api';
-import { getAdminSupportChatSession, getAdminSupportChatSessions, openSupportChatSocket, postAdminSupportChatMessage, type SupportChatSocket } from '../../support/supportChatApi';
+import { getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, type SupportChatSocket } from '../../support/supportChatApi';
 import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto } from '../../support/types';
 
 const DEFAULT_POLL_MS = 5000;
@@ -12,7 +12,8 @@ type SocketStatus = 'polling' | 'connecting' | 'reconnecting' | 'connected' | 'd
 
 export function AdminSupportChatSessionsPage() {
   const queryClient = useQueryClient();
-  const socketRef = useRef<SupportChatSocket | null>(null);
+  const detailSocketRef = useRef<SupportChatSocket | null>(null);
+  const queueSocketRef = useRef<SupportChatSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const wasAtBottomRef = useRef(true);
   const forceScrollToBottomRef = useRef(false);
@@ -23,6 +24,7 @@ export function AdminSupportChatSessionsPage() {
   const [message, setMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>('polling');
+  const [queueSocketStatus, setQueueSocketStatus] = useState<SocketStatus>('polling');
   const [newMarkerMessageId, setNewMarkerMessageId] = useState<string | null>(null);
 
   const listQuery = useQuery({
@@ -51,9 +53,12 @@ export function AdminSupportChatSessionsPage() {
   useEffect(() => {
     const handleAuthChanged = () => {
       setAuthScope(authScopeKey(getCachedAuthUser()));
-      socketRef.current?.close();
-      socketRef.current = null;
+      detailSocketRef.current?.close();
+      detailSocketRef.current = null;
+      queueSocketRef.current?.close();
+      queueSocketRef.current = null;
       setSocketStatus('polling');
+      setQueueSocketStatus('polling');
       setSelectedSessionId(null);
       setSelectedSessionMarkRead(false);
       setMessage('');
@@ -67,8 +72,101 @@ export function AdminSupportChatSessionsPage() {
   }, [queryClient]);
 
   useEffect(() => {
-    socketRef.current?.close();
-    socketRef.current = null;
+    queueSocketRef.current?.close();
+    queueSocketRef.current = null;
+    setQueueSocketStatus('polling');
+    if (authScope === 'anonymous') {
+      return undefined;
+    }
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let reconnectAttempt = 0;
+    let activeConnectionId = 0;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      if (reconnectTimer !== null) return;
+      setQueueSocketStatus('reconnecting');
+      const delay = SOCKET_RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, SOCKET_RECONNECT_DELAYS_MS.length - 1)];
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
+    const connect = async () => {
+      if (disposed) return;
+      const connectionId = ++activeConnectionId;
+      setQueueSocketStatus(reconnectAttempt > 0 ? 'reconnecting' : 'connecting');
+      try {
+        const socket = await openAdminSupportChatQueueSocket({
+          onOpen: () => {
+            if (disposed || activeConnectionId !== connectionId) return;
+            reconnectAttempt = 0;
+            setQueueSocketStatus('connected');
+          },
+          onClose: () => {
+            if (disposed || activeConnectionId !== connectionId) return;
+            queueSocketRef.current = null;
+            scheduleReconnect();
+          },
+          onError: () => {
+            if (disposed || activeConnectionId !== connectionId) return;
+            setQueueSocketStatus('disconnected');
+            scheduleReconnect();
+          },
+          onSocketError: (error) => {
+            if (error.message) {
+              setSendError(error.message);
+            }
+          },
+          onUpdated: (contact) => {
+            queryClient.setQueryData<SupportChatSessionListDto | undefined>(
+              ['admin-support-chat-sessions', authScope],
+              (existing) => patchAdminList(existing, contact)
+            );
+          },
+          onRemoved: (id) => {
+            queryClient.setQueryData<SupportChatSessionListDto | undefined>(
+              ['admin-support-chat-sessions', authScope],
+              (existing) => removeAdminListItem(existing, id)
+            );
+          }
+        });
+        if (disposed || activeConnectionId !== connectionId) {
+          socket?.close();
+          return;
+        }
+        queueSocketRef.current = socket;
+        if (!socket) {
+          setQueueSocketStatus('polling');
+        }
+      } catch (error) {
+        if (disposed || activeConnectionId !== connectionId) return;
+        setQueueSocketStatus('disconnected');
+        scheduleReconnect();
+      }
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      clearReconnectTimer();
+      queueSocketRef.current?.close();
+      queueSocketRef.current = null;
+      setQueueSocketStatus('polling');
+    };
+  }, [authScope, queryClient]);
+
+  useEffect(() => {
+    detailSocketRef.current?.close();
+    detailSocketRef.current = null;
     setSocketStatus('polling');
     if (!selectedSessionId) {
       return undefined;
@@ -110,7 +208,7 @@ export function AdminSupportChatSessionsPage() {
           },
           onClose: () => {
             if (disposed || activeConnectionId !== connectionId) return;
-            socketRef.current = null;
+            detailSocketRef.current = null;
             scheduleReconnect();
           },
           onError: () => {
@@ -132,7 +230,7 @@ export function AdminSupportChatSessionsPage() {
           socket?.close();
           return;
         }
-        socketRef.current = socket;
+        detailSocketRef.current = socket;
         if (!socket) {
           setSocketStatus('polling');
         }
@@ -147,8 +245,8 @@ export function AdminSupportChatSessionsPage() {
     return () => {
       disposed = true;
       clearReconnectTimer();
-      socketRef.current?.close();
-      socketRef.current = null;
+      detailSocketRef.current?.close();
+      detailSocketRef.current = null;
       setSocketStatus('polling');
     };
   }, [authScope, selectedSessionId, queryClient]);
@@ -237,6 +335,7 @@ export function AdminSupportChatSessionsPage() {
     <AdminShell title="상담방 관리" exportRows={exportRows} exportFileName="admin-support-chat-sessions.csv">
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <Panel title="상담방 목록" subtitle="AS 티켓이 생성된 사용자 상담방을 확인하고 응답할 수 있습니다.">
+          <div className="mb-3 text-xs font-bold text-slate-600">목록 {socketStatusLabel(queueSocketStatus)}</div>
           {listQuery.isLoading ? <StateMessage type="info" title="상담방 로딩 중" body="사용자 상담방 목록을 불러오고 있습니다." /> : null}
           {listQuery.isError ? <StateMessage type="warn" title="상담방 조회 실패" body="관리자 상담방 목록을 불러오지 못했습니다." /> : null}
           {!listQuery.isLoading && !listQuery.isError && roomRows.length === 0 ? (
@@ -383,6 +482,14 @@ function patchAdminList(existing: SupportChatSessionListDto | undefined, contact
   return {
     ...existing,
     items: items.sort((left, right) => timestamp(right.lastMessageAt) - timestamp(left.lastMessageAt))
+  };
+}
+
+function removeAdminListItem(existing: SupportChatSessionListDto | undefined, id: string) {
+  if (!existing) return existing;
+  return {
+    ...existing,
+    items: existing.items.filter((item) => item.id !== id)
   };
 }
 

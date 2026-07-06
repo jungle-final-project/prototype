@@ -17,17 +17,20 @@ public class SupportChatController {
     private final SupportChatService supportChatService;
     private final CurrentUserService currentUserService;
     private final SupportChatWebSocketHandler supportChatWebSocketHandler;
+    private final AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
     private final SupportChatWebSocketTicketService supportChatWebSocketTicketService;
 
     public SupportChatController(
             SupportChatService supportChatService,
             CurrentUserService currentUserService,
             SupportChatWebSocketHandler supportChatWebSocketHandler,
+            AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler,
             SupportChatWebSocketTicketService supportChatWebSocketTicketService
     ) {
         this.supportChatService = supportChatService;
         this.currentUserService = currentUserService;
         this.supportChatWebSocketHandler = supportChatWebSocketHandler;
+        this.adminSupportChatQueueWebSocketHandler = adminSupportChatQueueWebSocketHandler;
         this.supportChatWebSocketTicketService = supportChatWebSocketTicketService;
     }
 
@@ -58,6 +61,7 @@ public class SupportChatController {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
         Map<String, Object> detail = supportChatService.postUserMessage(id, request == null ? Map.of() : request, user);
         supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(id);
         return detail;
     }
 

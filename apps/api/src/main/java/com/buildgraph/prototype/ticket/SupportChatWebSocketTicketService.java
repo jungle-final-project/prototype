@@ -25,6 +25,8 @@ public class SupportChatWebSocketTicketService {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
     private static final String KEY_PREFIX = "support-chat:ws-ticket:";
+    static final String ADMIN_QUEUE_MODE = "admin-queue";
+    static final String ADMIN_QUEUE_SESSION_ID = "admin-support-chat-queue";
 
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final SupportChatService supportChatService;
@@ -64,6 +66,10 @@ public class SupportChatWebSocketTicketService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "상담방을 찾을 수 없습니다.");
         }
         return issue("admin", roomId, admin);
+    }
+
+    public Map<String, Object> issueAdminQueueTicket(CurrentUserService.CurrentUser admin) {
+        return issue(ADMIN_QUEUE_MODE, ADMIN_QUEUE_SESSION_ID, admin);
     }
 
     public Optional<AuthenticatedTicket> consume(String ticket) {

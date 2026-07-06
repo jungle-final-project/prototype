@@ -52,6 +52,9 @@ class SupportChatControllerTest {
     private SupportChatWebSocketHandler supportChatWebSocketHandler;
 
     @MockitoBean
+    private AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
+
+    @MockitoBean
     private SupportChatWebSocketTicketService supportChatWebSocketTicketService;
 
     @Test
@@ -96,6 +99,7 @@ class SupportChatControllerTest {
 
         verify(supportChatService).postUserMessage("chat-session-id", Map.of("content", "지금 상담 가능할까요?"), USER);
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("chat-session-id");
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("chat-session-id");
     }
 
     @Test
@@ -119,6 +123,7 @@ class SupportChatControllerTest {
         verify(currentUserService).requireAdmin(ADMIN_TOKEN);
         verify(supportChatService).postAdminMessage("chat-session-id", Map.of("content", "확인 후 답변드리겠습니다."), ADMIN);
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("chat-session-id");
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("chat-session-id");
     }
 
     @Test
@@ -173,6 +178,26 @@ class SupportChatControllerTest {
 
         verify(currentUserService).requireAdmin(ADMIN_TOKEN);
         verify(supportChatWebSocketTicketService).issueAdminTicket("chat-session-id", ADMIN);
+    }
+
+    @Test
+    void adminCanIssueSupportChatQueueWebSocketTicket() throws Exception {
+        when(currentUserService.requireAdmin(ADMIN_TOKEN)).thenReturn(ADMIN);
+        when(supportChatWebSocketTicketService.issueAdminQueueTicket(ADMIN)).thenReturn(Map.of(
+                "ticket", "admin-queue-ws-ticket",
+                "expiresAt", "2026-07-06T10:01:00Z",
+                "expiresInSeconds", 60L
+        ));
+
+        mockMvc.perform(post("/api/admin/support/chat-sessions/ws-ticket")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ticket").value("admin-queue-ws-ticket"))
+                .andExpect(jsonPath("$.expiresAt").value("2026-07-06T10:01:00Z"))
+                .andExpect(jsonPath("$.expiresInSeconds").value(60));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(supportChatWebSocketTicketService).issueAdminQueueTicket(ADMIN);
     }
 
     private static Map<String, Object> chatDetail(String sessionId, String content) {

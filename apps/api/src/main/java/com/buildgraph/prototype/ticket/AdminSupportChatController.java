@@ -16,17 +16,20 @@ public class AdminSupportChatController {
     private final SupportChatService supportChatService;
     private final CurrentUserService currentUserService;
     private final SupportChatWebSocketHandler supportChatWebSocketHandler;
+    private final AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler;
     private final SupportChatWebSocketTicketService supportChatWebSocketTicketService;
 
     public AdminSupportChatController(
             SupportChatService supportChatService,
             CurrentUserService currentUserService,
             SupportChatWebSocketHandler supportChatWebSocketHandler,
+            AdminSupportChatQueueWebSocketHandler adminSupportChatQueueWebSocketHandler,
             SupportChatWebSocketTicketService supportChatWebSocketTicketService
     ) {
         this.supportChatService = supportChatService;
         this.currentUserService = currentUserService;
         this.supportChatWebSocketHandler = supportChatWebSocketHandler;
+        this.adminSupportChatQueueWebSocketHandler = adminSupportChatQueueWebSocketHandler;
         this.supportChatWebSocketTicketService = supportChatWebSocketTicketService;
     }
 
@@ -55,6 +58,7 @@ public class AdminSupportChatController {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
         Map<String, Object> detail = supportChatService.postAdminMessage(id, request == null ? Map.of() : request, admin);
         supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(id);
         return detail;
     }
 
@@ -65,5 +69,13 @@ public class AdminSupportChatController {
     ) {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
         return supportChatWebSocketTicketService.issueAdminTicket(id, admin);
+    }
+
+    @PostMapping("/ws-ticket")
+    Map<String, Object> issueQueueWebSocketTicket(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return supportChatWebSocketTicketService.issueAdminQueueTicket(admin);
     }
 }

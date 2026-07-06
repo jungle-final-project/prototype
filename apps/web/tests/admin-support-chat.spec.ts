@@ -77,11 +77,19 @@ test('admin support chat updates the room list from websocket push', async ({ pa
 
   await page.goto('/admin/support-chat-sessions');
   await expect(page.getByRole('cell', { name: '게임 실행 후 온도가 95도까지 올라갑니다.' })).toBeVisible();
-  await expect(page.getByText('재연결 중')).toBeVisible();
+  await expect(page.getByText('재연결 중', { exact: true })).toBeVisible();
 
   await page.evaluate(() => {
     const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
-    const socket = sockets[sockets.length - 1];
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    let index = -1;
+    for (let i = urls.length - 1; i >= 0; i -= 1) {
+      if (urls[i].includes('/ws/support-chat')) {
+        index = i;
+        break;
+      }
+    }
+    const socket = sockets[index];
     socket?.dispatchEvent(new MessageEvent('message', {
       data: JSON.stringify({
         type: 'CHAT_UPDATED',
@@ -116,6 +124,59 @@ test('admin support chat updates the room list from websocket push', async ({ pa
   await expect(page.getByRole('row', { name: /user-a@example.com/ })).toContainText('5');
 });
 
+test('admin support chat updates the room list from the queue websocket patch', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect(page.getByRole('cell', { name: 'user-c@example.com', exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    return urls.some((url) => url.includes('/ws/admin/support-chat-queue'));
+  })).toBe(true);
+
+  await pushAdminQueueUpdated(page, {
+    id: '00000000-0000-4000-8000-000000009003',
+    asTicketId: '00000000-0000-4000-8000-000000006003',
+    status: 'ACTIVE',
+    ticketStatus: 'OPEN',
+    title: 'AS 상담방',
+    symptom: '새 상담방 증상',
+    lastMessagePreview: '새 상담방에서 메시지가 도착했습니다.',
+    lastMessageAt: '2026-07-06T10:10:00Z',
+    userUnreadCount: 0,
+    adminUnreadCount: 7,
+    canSendMessage: true,
+    user: {
+      id: '00000000-0000-4000-8000-000000001006',
+      email: 'user-c@example.com',
+      name: 'User C'
+    }
+  });
+
+  await expect(page.getByRole('cell', { name: 'user-c@example.com', exact: true })).toBeVisible();
+  await expect(page.getByRole('row', { name: /user-c@example.com/ })).toContainText('7');
+  await expect(page.getByRole('cell', { name: '새 상담방에서 메시지가 도착했습니다.' })).toBeVisible();
+});
+
+test('admin support chat removes rooms from the list when the queue websocket sends a removal patch', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect(page.getByRole('cell', { name: 'user-b@example.com', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    return urls.some((url) => url.includes('/ws/admin/support-chat-queue'));
+  })).toBe(true);
+
+  await pushAdminQueueRemoved(page, '00000000-0000-4000-8000-000000009002');
+
+  await expect(page.getByRole('cell', { name: 'user-b@example.com', exact: true })).toHaveCount(0);
+});
+
 test('admin support chat uses websocket tickets without leaking access tokens in the websocket url', async ({ page }) => {
   await mockOpenSupportWebSocket(page);
   await mockAdmin(page);
@@ -125,12 +186,62 @@ test('admin support chat uses websocket tickets without leaking access tokens in
 
   await expect.poll(() => page.evaluate(() => {
     const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
-    return urls[urls.length - 1] ?? '';
+    return urls.find((url) => url.includes('/ws/support-chat')) ?? '';
   })).not.toContain('token=');
   await expect.poll(() => page.evaluate(() => {
     const sends = (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends ?? [];
-    return sends[0] ?? '';
-  })).toBe(JSON.stringify({ type: 'AUTH', ticket: 'admin-ws-ticket-1' }));
+    return sends.includes(JSON.stringify({ type: 'AUTH', ticket: 'admin-ws-ticket-1' }));
+  })).toBe(true);
+});
+
+test('admin support chat uses a dedicated queue websocket without leaking access tokens', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    return urls.find((url) => url.includes('/ws/admin/support-chat-queue')) ?? '';
+  })).not.toContain('token=');
+  await expect.poll(() => page.evaluate(() => {
+    const sends = (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends ?? [];
+    return sends.includes(JSON.stringify({ type: 'AUTH', ticket: 'admin-queue-ws-ticket-1' }));
+  })).toBe(true);
+});
+
+test('admin support chat reconnects the queue websocket with a fresh ticket', async ({ page }) => {
+  let queueTicketCalls = 0;
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {}, undefined, () => {
+    queueTicketCalls += 1;
+    return `admin-queue-ws-ticket-${queueTicketCalls}`;
+  });
+
+  await page.goto('/admin/support-chat-sessions');
+
+  await expect.poll(() => queueTicketCalls > 0).toBe(true);
+  const beforeReconnect = queueTicketCalls;
+  await page.evaluate(() => {
+    const sockets = (window as unknown as { __supportChatSockets?: EventTarget[]; __supportChatSocketUrls?: string[] }).__supportChatSockets ?? [];
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    let index = -1;
+    for (let i = urls.length - 1; i >= 0; i -= 1) {
+      if (urls[i].includes('/ws/admin/support-chat-queue')) {
+        index = i;
+        break;
+      }
+    }
+    (sockets[index] as unknown as { close?: () => void })?.close?.();
+  });
+
+  await expect.poll(() => queueTicketCalls).toBeGreaterThan(beforeReconnect);
+  await expect.poll(() => page.evaluate(() => {
+    const sends = (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends ?? [];
+    return sends.includes(JSON.stringify({ type: 'AUTH', ticket: 'admin-queue-ws-ticket-2' }));
+  })).toBe(true);
 });
 
 test('admin auto-selected support chat detail is loaded without mark-read side effect', async ({ page }) => {
@@ -243,7 +354,8 @@ async function mockOpenSupportWebSocket(page: Page) {
 async function mockAdminSupportChats(
   page: Page,
   setPostedMessage: (payload: unknown) => void,
-  onDetailRequest?: (url: string) => void
+  onDetailRequest?: (url: string) => void,
+  issueQueueTicket: () => string = () => 'admin-queue-ws-ticket-1'
 ) {
   const roomA = {
     id: '00000000-0000-4000-8000-000000009001',
@@ -326,6 +438,21 @@ async function mockAdminSupportChats(
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ items: [roomA, roomB], pollingIntervalMs: 5000 })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/api/admin/support/chat-sessions/ws-ticket', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticket: issueQueueTicket(),
+          expiresAt: '2026-07-06T10:01:00Z',
+          expiresInSeconds: 60
+        })
       });
       return;
     }
@@ -439,6 +566,21 @@ async function mockAdminLongSupportChat(page: Page) {
     }
     await route.fallback();
   });
+  await page.route('**/api/admin/support/chat-sessions/ws-ticket', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticket: 'admin-queue-ws-ticket-1',
+          expiresAt: '2026-07-06T10:01:00Z',
+          expiresInSeconds: 60
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
   await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001**', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detail) });
@@ -510,4 +652,44 @@ async function pushAdminChatMessage(page: Page, content: string) {
       })
     }));
   }, content);
+}
+
+async function pushAdminQueueUpdated(page: Page, contact: Record<string, unknown>) {
+  await page.evaluate((nextContact) => {
+    const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    let index = -1;
+    for (let i = urls.length - 1; i >= 0; i -= 1) {
+      if (urls[i].includes('/ws/admin/support-chat-queue')) {
+        index = i;
+        break;
+      }
+    }
+    sockets[index]?.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({
+        type: 'SUPPORT_CHAT_QUEUE_UPDATED',
+        contact: nextContact
+      })
+    }));
+  }, contact);
+}
+
+async function pushAdminQueueRemoved(page: Page, id: string) {
+  await page.evaluate((removedId) => {
+    const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    let index = -1;
+    for (let i = urls.length - 1; i >= 0; i -= 1) {
+      if (urls[i].includes('/ws/admin/support-chat-queue')) {
+        index = i;
+        break;
+      }
+    }
+    sockets[index]?.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({
+        type: 'SUPPORT_CHAT_QUEUE_REMOVED',
+        id: removedId
+      })
+    }));
+  }, id);
 }
