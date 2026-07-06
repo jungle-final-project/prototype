@@ -140,7 +140,7 @@
 ## P2: 운영 안정성
 
 - [x] 기존 AS AI Chat/support chat migration 백필 누락을 점검한다.
-  - 현재 구현: `V95__support_chat_rooms_backfill_repair.sql`로 누락 room, 잘못 archived된 최신 room, 누락 SYSTEM 메시지, last message metadata를 보정한다.
+  - 현재 구현: `V97__support_chat_rooms_backfill_repair.sql`로 누락 room, 잘못 archived된 최신 room, 누락 SYSTEM 메시지, last message metadata를 보정한다.
 - [x] REST CORS와 WS allowed origin 기본값을 일치시킨다.
   - 현재 구현: `buildgraph.cors.allowed-origins` 공통 property를 REST CORS와 WS config가 함께 사용한다.
 - [x] WS query string token 사용을 대체할 인증 방식을 별도 설계한다.
@@ -175,7 +175,7 @@
 - [x] 인증 전 WS payload가 error frame 후 close되는 test
 - [x] 인증 성공 후 최초 `CHAT_UPDATED`와 기존 broadcast가 동작하는 test
 - [x] REST CORS와 WS config가 같은 allowed origins 기본값을 사용하는 test
-- [x] V95 migration contract test
+- [x] support chat migration contract test
 
 ### Frontend
 

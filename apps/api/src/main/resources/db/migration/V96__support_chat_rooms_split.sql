@@ -1,7 +1,7 @@
 -- P0: 사용자-관리자 상담방(support chat)을 AS AI Chat(as_chat_*)에서 완전히 분리한다.
--- V93은 as_chat_* 테이블에 상담용 컬럼/role/백필을 얹었으나, 그 방식은 3번(AS AI Chat) owner
+-- V95는 as_chat_* 테이블에 상담용 컬럼/role/백필을 얹었으나, 그 방식은 3번(AS AI Chat) owner
 -- 테이블과 4번(상담방) owner 데이터가 같은 테이블/제약/role enum을 공유하게 만들었다.
--- 이 마이그레이션은 (1) 상담방 전용 테이블을 신설하고, (2) V93이 as_chat_*에 남긴 흔적을
+-- 이 마이그레이션은 (1) 상담방 전용 테이블을 신설하고, (2) V95가 as_chat_*에 남긴 흔적을
 -- support_chat_*로 이전한 뒤, (3) as_chat_*를 AS AI Chat 전용 상태로 원복한다.
 
 -- 1) 상담방 전용 테이블
@@ -46,9 +46,9 @@ CREATE INDEX idx_support_chat_messages_room_id ON support_chat_messages(room_id)
 CREATE INDEX idx_support_chat_messages_sender_user_id ON support_chat_messages(sender_user_id);
 CREATE INDEX idx_support_chat_messages_created_at ON support_chat_messages(created_at);
 
--- 2) V93이 as_chat_*에 만든 상담방 흔적을 support_chat_*로 이전한다.
---    V93은 title='AS 상담방'인 세션을 상담방으로 백필했으므로 그 기준으로 식별한다.
---    상담용 컬럼(last_message_*, unread_*)이 V93에서 as_chat_sessions에 추가된 상태를 전제로 이전한다.
+-- 2) V95가 as_chat_*에 만든 상담방 흔적을 support_chat_*로 이전한다.
+--    V95는 title='AS 상담방'인 세션을 상담방으로 백필했으므로 그 기준으로 식별한다.
+--    상담용 컬럼(last_message_*, unread_*)이 V95에서 as_chat_sessions에 추가된 상태를 전제로 이전한다.
 INSERT INTO support_chat_rooms (
   user_id,
   as_ticket_id,
@@ -100,7 +100,7 @@ WHERE s.title = 'AS 상담방'
   AND m.role IN ('USER', 'ADMIN', 'SYSTEM');
 
 -- 3) as_chat_*를 AS AI Chat 전용으로 원복한다.
---    3-1) V93이 백필한 상담방 세션(과 그 SYSTEM 메시지)을 as_chat_*에서 제거한다.
+--    3-1) V95가 백필한 상담방 세션(과 그 SYSTEM 메시지)을 as_chat_*에서 제거한다.
 DELETE FROM as_chat_messages m
 USING as_chat_sessions s
 WHERE m.chat_session_id = s.id
@@ -117,7 +117,7 @@ ALTER TABLE as_chat_messages
   ADD CONSTRAINT chk_as_chat_messages_role
   CHECK (role IN ('USER', 'ASSISTANT'));
 
---    3-3) V93이 as_chat_*에 얹은 상담 전용 컬럼/인덱스를 제거한다(AS AI Chat은 사용하지 않는다).
+--    3-3) V95가 as_chat_*에 얹은 상담 전용 컬럼/인덱스를 제거한다(AS AI Chat은 사용하지 않는다).
 DROP INDEX IF EXISTS idx_as_chat_sessions_last_message_at;
 DROP INDEX IF EXISTS idx_as_chat_messages_sender_user_id;
 

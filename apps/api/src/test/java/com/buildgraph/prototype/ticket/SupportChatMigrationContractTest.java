@@ -7,8 +7,8 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class SupportChatMigrationContractTest {
-    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V94__support_chat_rooms_split.sql");
-    private static final Path BACKFILL_MIGRATION = Path.of("src/main/resources/db/migration/V95__support_chat_rooms_backfill_repair.sql");
+    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V96__support_chat_rooms_split.sql");
+    private static final Path BACKFILL_MIGRATION = Path.of("src/main/resources/db/migration/V97__support_chat_rooms_backfill_repair.sql");
 
     @Test
     void migrationCreatesDedicatedSupportChatTables() throws Exception {

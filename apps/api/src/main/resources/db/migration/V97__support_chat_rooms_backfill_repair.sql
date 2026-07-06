@@ -1,4 +1,4 @@
--- P2: V93/V94 전환 중 누락될 수 있는 support chat room 백필을 idempotent하게 보정한다.
+-- P2: V95/V96 전환 중 누락될 수 있는 support chat room 백필을 idempotent하게 보정한다.
 -- 티켓 종료만으로 room을 archive하지 않는 정책은 유지하고, 읽기 가능한 상담 기록을 보존한다.
 
 WITH latest_archived_room AS (
