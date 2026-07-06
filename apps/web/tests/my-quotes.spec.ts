@@ -235,15 +235,25 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(firstBuild).toContainText('QHD 균형 저장 견적');
   await expect(firstBuild.getByRole('link', { name: '견적 상세' })).toHaveAttribute('href', '/builds/build-qhd-balanced');
   await expect(firstBuild.getByRole('button', { name: '부품 변경' })).toBeVisible();
-  // 저장 견적 성능 비교 매트릭스 — 견적을 열로 세우고 카테고리(종합/CPU/GPU)를 행으로 좌우 비교.
+  // 저장 견적 비교 — 비교할 견적을 고르면 전 카테고리 부품 + 성능을 좌우로 나열.
   const perfMatrix = page.getByTestId('saved-builds-comparison');
-  await expect(perfMatrix).toContainText('저장 견적 성능 한눈에 비교');
-  await expect(perfMatrix).toContainText('종합');
-  await expect(perfMatrix).toContainText('CPU');
-  await expect(perfMatrix).toContainText('GPU');
-  await expect(perfMatrix).toContainText('상위급');
-  // 견적 이름이 열 헤더로 노출된다.
+  await expect(perfMatrix).toContainText('견적 골라 부품·성능 비교');
+  // 기본으로 앞 2개 견적이 선택되어 열로 노출된다.
   await expect(perfMatrix).toContainText('QHD 균형 저장 견적');
+  await expect(perfMatrix).toContainText('작업용 저장 견적');
+  // 구성 부품 섹션 — 카테고리별 실제 부품이 나열된다.
+  await expect(perfMatrix).toContainText('구성 부품');
+  await expect(perfMatrix).toContainText('메인보드');
+  await expect(perfMatrix).toContainText('AMD Ryzen 7 9700X');
+  await expect(perfMatrix).toContainText('GeForce RTX 5070');
+  await expect(perfMatrix).toContainText('GeForce RTX 5080');
+  // 성능 참고 섹션 — 벤치마크 등급.
+  await expect(perfMatrix).toContainText('종합');
+  await expect(perfMatrix).toContainText('상위급');
+  // 견적 선택 해제 시 해당 열(부품)이 사라진다.
+  await perfMatrix.getByTestId('compare-toggle-build-workstation').click();
+  await expect(perfMatrix).not.toContainText('GeForce RTX 5080');
+  await expect(perfMatrix).toContainText('GeForce RTX 5070');
   await firstBuild.getByRole('button', { name: '목표가 등록' }).click();
 
   await expect(page.getByLabel('저장 견적 부품')).toHaveValue('part-cpu-9700x');
