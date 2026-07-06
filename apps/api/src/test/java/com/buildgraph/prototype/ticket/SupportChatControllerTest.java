@@ -207,6 +207,26 @@ class SupportChatControllerTest {
     }
 
     @Test
+    void adminCanDeleteSupportChatSessionAndBroadcastRemoval() throws Exception {
+        when(currentUserService.requireAdmin(ADMIN_TOKEN)).thenReturn(ADMIN);
+        when(supportChatService.deleteAdminSession("chat-session-id", ADMIN))
+                .thenReturn(deletedChatDetail("chat-session-id"));
+
+        mockMvc.perform(delete("/api/admin/support/chat-sessions/chat-session-id")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contact.id").value("chat-session-id"))
+                .andExpect(jsonPath("$.contact.status").value("ARCHIVED"))
+                .andExpect(jsonPath("$.contact.ticketStatus").value("CANCELLED"))
+                .andExpect(jsonPath("$.contact.canSendMessage").value(false));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(supportChatService).deleteAdminSession("chat-session-id", ADMIN);
+        verify(supportChatWebSocketHandler).broadcastRoomUpdate("chat-session-id");
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("chat-session-id");
+    }
+
+    @Test
     void adminCanLoadChatDetailWithoutMarkingUnread() throws Exception {
         when(currentUserService.requireAdmin(ADMIN_TOKEN)).thenReturn(ADMIN);
         when(supportChatService.adminDetail("chat-session-id", ADMIN, false))
@@ -315,6 +335,26 @@ class SupportChatControllerTest {
                         )
                 ),
                 "messages", List.of(),
+                "pollingIntervalMs", 5000
+        );
+    }
+
+    private static Map<String, Object> deletedChatDetail(String sessionId) {
+        return MockData.map(
+                "contact", MockData.map(
+                        "id", sessionId,
+                        "asTicketId", "ticket-public-id",
+                        "status", "ARCHIVED",
+                        "ticketStatus", "CANCELLED",
+                        "title", "AS 상담방",
+                        "canSendMessage", false
+                ),
+                "messages", List.of(MockData.map(
+                        "id", "delete-system-message-id",
+                        "role", "SYSTEM",
+                        "content", SupportChatService.SYSTEM_DELETE_MESSAGE,
+                        "createdAt", "2026-07-06T10:00:00Z"
+                )),
                 "pollingIntervalMs", 5000
         );
     }

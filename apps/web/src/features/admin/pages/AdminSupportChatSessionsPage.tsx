@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getCachedAuthUser } from '../../../lib/api';
-import { deleteAdminSupportChatVisitReservation, getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, putAdminSupportChatVisitReservation, type SupportChatSocket } from '../../support/supportChatApi';
+import { deleteAdminSupportChatSession, deleteAdminSupportChatVisitReservation, getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, putAdminSupportChatVisitReservation, type SupportChatSocket } from '../../support/supportChatApi';
 import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto, VisitSupportReservation } from '../../support/types';
 
 const DEFAULT_POLL_MS = 5000;
@@ -23,6 +23,7 @@ export function AdminSupportChatSessionsPage() {
   const [selectedSessionMarkRead, setSelectedSessionMarkRead] = useState(false);
   const [message, setMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [visitScheduledAt, setVisitScheduledAt] = useState('');
   const [visitTechnicianNote, setVisitTechnicianNote] = useState('');
   const [visitError, setVisitError] = useState<string | null>(null);
@@ -66,6 +67,7 @@ export function AdminSupportChatSessionsPage() {
       setSelectedSessionMarkRead(false);
       setMessage('');
       setSendError(null);
+      setDeleteError(null);
       setVisitScheduledAt('');
       setVisitTechnicianNote('');
       setVisitError(null);
@@ -298,11 +300,34 @@ export function AdminSupportChatSessionsPage() {
     }
   });
 
+  const deleteSessionMutation = useMutation({
+    mutationFn: () => deleteAdminSupportChatSession(selectedSessionId as string),
+    onSuccess: (detail) => {
+      setDeleteError(null);
+      setSendError(null);
+      const contact = detail.contact;
+      if (contact?.id) {
+        queryClient.setQueriesData<SupportChatSessionDto | undefined>(
+          { queryKey: ['admin-support-chat-session', authScope, contact.id] },
+          () => detail
+        );
+        queryClient.setQueryData<SupportChatSessionListDto | undefined>(
+          ['admin-support-chat-sessions', authScope],
+          (existing) => removeAdminListItem(existing, contact.id)
+        );
+      }
+    },
+    onError: (error) => {
+      setDeleteError(errorMessage(error));
+    }
+  });
+
   const selectedRoom = detailQuery.data?.contact ?? rooms.find((room) => room.id === selectedSessionId) ?? null;
   const messages = detailQuery.data?.messages ?? [];
   const canSend = Boolean(selectedSessionId && selectedRoom?.canSendMessage && message.trim() && !sendMutation.isPending);
   const canScheduleVisit = Boolean(selectedSessionId && selectedRoom?.canSendMessage && visitScheduledAt && !scheduleVisitMutation.isPending);
   const canCancelVisit = Boolean(selectedSessionId && selectedRoom?.canSendMessage && selectedRoom?.visitReservation && selectedRoom.visitReservation.status !== 'CANCELLED' && !cancelVisitMutation.isPending);
+  const canDeleteSession = Boolean(selectedSessionId && selectedRoom?.status === 'ACTIVE' && !deleteSessionMutation.isPending);
 
   useEffect(() => {
     const reservation = selectedRoom?.visitReservation;
@@ -318,6 +343,7 @@ export function AdminSupportChatSessionsPage() {
         onClick={() => {
           setSelectedSessionMarkRead(true);
           setSelectedSessionId(room.id);
+          setDeleteError(null);
         }}
         className={`rounded px-3 py-2 text-xs font-bold ${room.id === selectedSessionId ? 'bg-brand-blue text-white' : 'border border-slate-300 text-brand-navy'}`}
         aria-label={`${userLabel(room)} 상담방 선택`}
@@ -363,6 +389,15 @@ export function AdminSupportChatSessionsPage() {
     if (!canCancelVisit) return;
     setVisitError(null);
     cancelVisitMutation.mutate();
+  }
+
+  function deleteSession() {
+    if (!canDeleteSession) return;
+    if (!window.confirm('상담방을 삭제하면 기존 티켓이 취소되고 사용자는 새 AS를 접수할 수 있습니다. 계속할까요?')) {
+      return;
+    }
+    setDeleteError(null);
+    deleteSessionMutation.mutate();
   }
 
   useEffect(() => {
@@ -413,14 +448,35 @@ export function AdminSupportChatSessionsPage() {
           {detailQuery.data ? (
             <>
               <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3 text-sm">
-                <div className="mb-2 font-bold text-slate-900">{selectedRoom?.symptom ?? 'AS 상담'}</div>
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="font-bold text-slate-900">{selectedRoom?.symptom ?? 'AS 상담'}</div>
+                  <button
+                    type="button"
+                    disabled={!canDeleteSession}
+                    onClick={deleteSession}
+                    className="rounded border border-rose-300 px-3 py-2 text-xs font-black text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                  >
+                    {deleteSessionMutation.isPending ? '삭제 중' : '상담방 삭제'}
+                  </button>
+                </div>
                 <div className="flex flex-wrap gap-2 text-xs text-slate-600">
                   <span>티켓 {selectedRoom ? shortId(selectedRoom.asTicketId) : '-'}</span>
                   <span>상태 {selectedRoom?.ticketStatus ?? '-'}</span>
+                  <span>방 {selectedRoom?.status ?? '-'}</span>
                   <span>안읽음 {selectedRoom?.adminUnreadCount ?? 0}</span>
                   <span>{socketStatusLabel(socketStatus)}</span>
                 </div>
               </div>
+              {selectedRoom?.status === 'ARCHIVED' ? (
+                <div className="mb-4">
+                  <StateMessage type="warn" title="상담방 삭제됨" body="이 상담방은 관리자에 의해 삭제되어 목록에서 제외되었습니다. 사용자는 새 AS 접수를 진행할 수 있습니다." />
+                </div>
+              ) : null}
+              {deleteError ? (
+                <div className="mb-4">
+                  <StateMessage type="warn" title="상담방 삭제 실패" body={deleteError} />
+                </div>
+              ) : null}
               <AdminVisitReservationPanel
                 reservation={selectedRoom?.visitReservation ?? null}
                 scheduledAt={visitScheduledAt}

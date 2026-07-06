@@ -405,6 +405,77 @@ test('support intake blocks creating a new ticket when an active support chat ex
   await expect.poll(() => createTicketCalls).toBe(0);
 });
 
+test('support intake allows a new ticket when deleted chat is absent from current session', async ({ page }) => {
+  let uploadCalls = 0;
+  let createTicketPayload: unknown = null;
+  await mockLoggedInUser(page);
+  await mockEmptyChat(page);
+  await page.route('**/api/agent-logs/upload', async (route) => {
+    uploadCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: '00000000-0000-4000-8000-000000005001',
+        status: 'UPLOADED',
+        fileName: 'recent.jsonl',
+        rangeMinutes: 30,
+        deleteAfter: '2026-08-05T00:00:00Z'
+      })
+    });
+  });
+  await page.route('**/api/as-tickets', async (route) => {
+    if (route.request().method() === 'POST') {
+      createTicketPayload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: '00000000-0000-4000-8000-000000006099',
+          status: 'OPEN',
+          symptom: '새 접수\n\n삭제 이후 다시 접수합니다.',
+          logUploadId: '00000000-0000-4000-8000-000000005001',
+          supportChatRoomId: '00000000-0000-4000-8000-000000009099',
+          causeCandidates: [],
+          upgradeCandidates: []
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/api/as-tickets/00000000-0000-4000-8000-000000006099', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: '00000000-0000-4000-8000-000000006099',
+        status: 'OPEN',
+        symptom: '새 접수\n\n삭제 이후 다시 접수합니다.',
+        supportChatRoomId: '00000000-0000-4000-8000-000000009099',
+        causeCandidates: [],
+        upgradeCandidates: []
+      })
+    });
+  });
+
+  await page.goto('/support/new');
+
+  await expect(page.getByText('진행 중인 AS 상담이 있습니다.')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'AS 접수하기' })).toBeEnabled();
+  await page.getByLabel('증상 제목').fill('새 접수');
+  await page.getByLabel('증상 상세').fill('삭제 이후 다시 접수합니다.');
+  await selectAgentLogFile(page);
+  await page.getByLabel('최근 30분 로그 업로드와 30일 보관 후 삭제 정책에 동의합니다.').check();
+  await page.getByRole('button', { name: 'AS 접수하기' }).click();
+
+  await expect.poll(() => uploadCalls).toBe(1);
+  await expect.poll(() => createTicketPayload).toEqual({
+    symptom: '새 접수\n\n삭제 이후 다시 접수합니다.',
+    logUploadId: '00000000-0000-4000-8000-000000005001'
+  });
+});
+
 test('support intake shows the existing chat CTA when stale submit receives a conflict', async ({ page }) => {
   let createTicketCalls = 0;
   await mockLoggedInUser(page);

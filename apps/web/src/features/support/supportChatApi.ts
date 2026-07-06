@@ -46,6 +46,12 @@ export function postAdminSupportChatMessage(sessionId: string, content: string) 
   });
 }
 
+export function deleteAdminSupportChatSession(sessionId: string) {
+  return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}`, {
+    method: 'DELETE'
+  });
+}
+
 export function putAdminSupportChatVisitReservation(sessionId: string, payload: { scheduledAt: string; technicianNote?: string }) {
   return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}/visit-reservation`, {
     method: 'PUT',

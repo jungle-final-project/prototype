@@ -177,6 +177,63 @@ test('admin support chat removes rooms from the list when the queue websocket se
   await expect(page.getByRole('cell', { name: 'user-b@example.com', exact: true })).toHaveCount(0);
 });
 
+test('admin support chat can delete a room and keep the archived detail read-only', async ({ page }) => {
+  let deleteCalls = 0;
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      deleteCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(deletedAdminChatDetail())
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect(page.getByRole('button', { name: '상담방 삭제' })).toBeVisible();
+  await page.getByRole('button', { name: '상담방 삭제' }).click();
+
+  await expect.poll(() => deleteCalls).toBe(1);
+  await expect(page.getByRole('cell', { name: 'user-a@example.com', exact: true })).toHaveCount(0);
+  await expect(page.getByText('상담방 삭제됨')).toBeVisible();
+  await expect(page.getByText('관리자가 상담방을 삭제했습니다. 새 AS 접수가 가능합니다.')).toBeVisible();
+  await expect(page.getByPlaceholder('관리자 답변을 입력하세요')).toHaveCount(0);
+});
+
+test('admin support chat keeps selection and input when room delete fails', async ({ page }) => {
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'UPSTREAM_ERROR',
+          message: '상담방 삭제에 실패했습니다.'
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await page.goto('/admin/support-chat-sessions');
+  await page.getByPlaceholder('관리자 답변을 입력하세요').fill('삭제 전 작성 중인 답변');
+  await page.getByRole('button', { name: '상담방 삭제' }).click();
+
+  await expect(page.getByRole('cell', { name: 'user-a@example.com', exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder('관리자 답변을 입력하세요')).toHaveValue('삭제 전 작성 중인 답변');
+  await expect(page.getByText('상담방 삭제에 실패했습니다.')).toBeVisible();
+});
+
 test('admin support chat can schedule and cancel a visit reservation', async ({ page }) => {
   let schedulePayload: unknown = null;
   let cancelCalls = 0;
@@ -335,24 +392,22 @@ test('admin support chat reconnects the queue websocket with a fresh ticket', as
 
   await expect.poll(() => queueTicketCalls > 0).toBe(true);
   const beforeReconnect = queueTicketCalls;
+  const expectedTicket = `admin-queue-ws-ticket-${beforeReconnect + 1}`;
   await page.evaluate(() => {
     const sockets = (window as unknown as { __supportChatSockets?: EventTarget[]; __supportChatSocketUrls?: string[] }).__supportChatSockets ?? [];
     const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
-    let index = -1;
-    for (let i = urls.length - 1; i >= 0; i -= 1) {
+    for (let i = 0; i < urls.length; i += 1) {
       if (urls[i].includes('/ws/admin/support-chat-queue')) {
-        index = i;
-        break;
+        (sockets[i] as unknown as { close?: () => void })?.close?.();
       }
     }
-    (sockets[index] as unknown as { close?: () => void })?.close?.();
   });
 
   await expect.poll(() => queueTicketCalls).toBeGreaterThan(beforeReconnect);
   await expect.poll(() => page.evaluate(() => {
     const sends = (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends ?? [];
-    return sends.includes(JSON.stringify({ type: 'AUTH', ticket: 'admin-queue-ws-ticket-2' }));
-  })).toBe(true);
+    return sends;
+  })).toContain(JSON.stringify({ type: 'AUTH', ticket: expectedTicket }));
 });
 
 test('admin auto-selected support chat detail is loaded without mark-read side effect', async ({ page }) => {
@@ -841,6 +896,44 @@ function adminChatDetailWithReservation(status: string) {
         role: 'SYSTEM',
         content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
         createdAt: '2026-07-06T10:00:00Z'
+      }
+    ],
+    pollingIntervalMs: 5000
+  };
+}
+
+function deletedAdminChatDetail() {
+  return {
+    contact: {
+      id: '00000000-0000-4000-8000-000000009001',
+      asTicketId: '00000000-0000-4000-8000-000000006001',
+      status: 'ARCHIVED',
+      ticketStatus: 'CANCELLED',
+      title: 'AS 상담방',
+      symptom: 'GPU 온도 상승',
+      lastMessagePreview: '관리자가 상담방을 삭제했습니다. 새 AS 접수가 가능합니다.',
+      lastMessageAt: '2026-07-06T10:11:00Z',
+      userUnreadCount: 1,
+      adminUnreadCount: 2,
+      canSendMessage: false,
+      user: {
+        id: '00000000-0000-4000-8000-000000001004',
+        email: 'user-a@example.com',
+        name: 'User A'
+      }
+    },
+    messages: [
+      {
+        id: '00000000-0000-4000-8000-000000009101',
+        role: 'SYSTEM',
+        content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
+        createdAt: '2026-07-06T10:00:00Z'
+      },
+      {
+        id: '00000000-0000-4000-8000-000000009199',
+        role: 'SYSTEM',
+        content: '관리자가 상담방을 삭제했습니다. 새 AS 접수가 가능합니다.',
+        createdAt: '2026-07-06T10:11:00Z'
       }
     ],
     pollingIntervalMs: 5000

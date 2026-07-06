@@ -149,6 +149,7 @@ class TicketQueryServiceSupportChatTest {
         Map<String, Object> result = service.create(Map.of("symptom", "닫힌 상담 이후 새 증상입니다."), USER);
 
         assertThat(result).containsEntry("id", "new-ticket-public-id");
+        verify(jdbcTemplate).queryForList(contains("r.status = 'ACTIVE'"), eq(USER.internalId()));
         verify(jdbcTemplate).queryForList(contains("t.status NOT IN ('CLOSED', 'CANCELLED')"), eq(USER.internalId()));
         verify(jdbcTemplate).queryForMap(contains("INSERT INTO as_tickets"), eq(USER.internalId()), eq(null), eq("닫힌 상담 이후 새 증상입니다."));
     }

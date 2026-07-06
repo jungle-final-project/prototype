@@ -22,6 +22,7 @@ public class SupportChatService {
     private static final int MESSAGE_PAGE_LIMIT = 100;
     private static final Set<String> TERMINAL_TICKET_STATUSES = Set.of("CLOSED", "CANCELLED");
     static final String SYSTEM_OPEN_MESSAGE = "상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.";
+    static final String SYSTEM_DELETE_MESSAGE = "관리자가 상담방을 삭제했습니다. 새 AS 접수가 가능합니다.";
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -125,6 +126,36 @@ public class SupportChatService {
                 WHERE id = ?
                 """, admin.internalId(), room.ticketInternalId());
         return adminDetail(roomId, admin);
+    }
+
+    @Transactional
+    public Map<String, Object> deleteAdminSession(String roomId, CurrentUserService.CurrentUser admin) {
+        RoomRow room = roomForAdminForUpdate(roomId);
+        if ("ARCHIVED".equals(room.status())) {
+            return response(room, messages(room.internalId()));
+        }
+        insertMessage(room.internalId(), "SYSTEM", SYSTEM_DELETE_MESSAGE, null);
+        jdbcTemplate.update("""
+                UPDATE support_chat_rooms
+                SET status = ?,
+                    last_message_preview = ?,
+                    last_message_at = now(),
+                    user_unread_count = user_unread_count + 1,
+                    updated_at = now()
+                WHERE id = ?
+                """, "ARCHIVED", SYSTEM_DELETE_MESSAGE, room.internalId());
+        String nextTicketStatus = room.ticketStatus();
+        if (!TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())) {
+            nextTicketStatus = "CANCELLED";
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET status = ?,
+                        updated_at = now()
+                    WHERE id = ?
+                      AND status IN ('OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED')
+                    """, nextTicketStatus, room.ticketInternalId());
+        }
+        return response(archivedRoom(room, nextTicketStatus), messages(room.internalId()));
     }
 
     boolean userCanAccess(String roomId, CurrentUserService.CurrentUser user) {
@@ -241,6 +272,20 @@ public class SupportChatService {
                         WHERE r.public_id = ?::uuid
                           AND r.deleted_at IS NULL
                           AND t.deleted_at IS NULL
+                        """, roomId)
+                .stream()
+                .findFirst()
+                .map(row -> roomRow(row))
+                .orElseThrow(() -> notFound("상담방을 찾을 수 없습니다."));
+    }
+
+    private RoomRow roomForAdminForUpdate(String roomId) {
+        requireUuid(roomId);
+        return jdbcTemplate.queryForList(roomSelect() + """
+                        WHERE r.public_id = ?::uuid
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                        FOR UPDATE OF r, t
                         """, roomId)
                 .stream()
                 .findFirst()
@@ -433,6 +478,27 @@ public class SupportChatService {
                 DbValueMapper.string(row, "user_email"),
                 DbValueMapper.string(row, "user_name"),
                 DbValueMapper.string(row, "assigned_admin_id")
+        );
+    }
+
+    private RoomRow archivedRoom(RoomRow room, String ticketStatus) {
+        return new RoomRow(
+                room.internalId(),
+                room.publicId(),
+                room.ticketInternalId(),
+                room.ticketPublicId(),
+                ticketStatus,
+                room.ticketSymptom(),
+                "ARCHIVED",
+                room.title(),
+                SYSTEM_DELETE_MESSAGE,
+                MockData.now(),
+                room.userUnreadCount() + 1,
+                room.adminUnreadCount(),
+                room.userPublicId(),
+                room.userEmail(),
+                room.userName(),
+                room.assignedAdminId()
         );
     }
 

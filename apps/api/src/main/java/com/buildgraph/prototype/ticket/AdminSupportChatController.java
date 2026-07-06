@@ -67,6 +67,18 @@ public class AdminSupportChatController {
         return detail;
     }
 
+    @DeleteMapping("/{id}")
+    Map<String, Object> deleteSession(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        Map<String, Object> detail = supportChatService.deleteAdminSession(id, admin);
+        supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(id);
+        return detail;
+    }
+
     @PutMapping("/{id}/visit-reservation")
     Map<String, Object> putVisitReservation(
             @PathVariable String id,

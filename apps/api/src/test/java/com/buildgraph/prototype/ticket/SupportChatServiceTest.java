@@ -118,6 +118,17 @@ class SupportChatServiceTest {
     }
 
     @Test
+    void currentIgnoresArchivedRoomsSoSupportNewCanProceed() {
+        when(jdbcTemplate.queryForList(contains("r.status = 'ACTIVE'"), eq(USER.internalId())))
+                .thenReturn(List.of());
+
+        Map<String, Object> detail = service.current(USER, null);
+
+        assertThat(detail).containsEntry("contact", null);
+        assertThat((List<Map<String, Object>>) detail.get("messages")).isEmpty();
+    }
+
+    @Test
     void detailIncludesLatestVisitReservation() {
         mockRoom("ACTIVE", "OPEN", 0, 0);
         mockMessages();
@@ -157,6 +168,87 @@ class SupportChatServiceTest {
         assertThat(contact).isEmpty();
     }
 
+    @Test
+    void deleteAdminSessionArchivesActiveRoomCancelsTicketAndWritesSystemMessage() {
+        mockAdminRoomForUpdate("ACTIVE", "OPEN", 0, 4);
+        mockMessages();
+
+        Map<String, Object> detail = service.deleteAdminSession(ROOM_ID, ADMIN);
+
+        Map<String, Object> contact = (Map<String, Object>) detail.get("contact");
+        assertThat(contact)
+                .containsEntry("status", "ARCHIVED")
+                .containsEntry("ticketStatus", "CANCELLED")
+                .containsEntry("canSendMessage", false);
+        verify(jdbcTemplate).update(
+                contains("INSERT INTO support_chat_messages"),
+                eq(7001L),
+                eq("SYSTEM"),
+                eq(SupportChatService.SYSTEM_DELETE_MESSAGE),
+                eq(null)
+        );
+        verify(jdbcTemplate).update(
+                contains("UPDATE support_chat_rooms"),
+                eq("ARCHIVED"),
+                eq(SupportChatService.SYSTEM_DELETE_MESSAGE),
+                eq(7001L)
+        );
+        verify(jdbcTemplate).update(
+                contains("UPDATE as_tickets"),
+                eq("CANCELLED"),
+                eq(6001L)
+        );
+    }
+
+    @Test
+    void deleteAdminSessionCancelsResolvedTicketByExplicitDeleteException() {
+        mockAdminRoomForUpdate("ACTIVE", "RESOLVED", 0, 4);
+        mockMessages();
+
+        Map<String, Object> detail = service.deleteAdminSession(ROOM_ID, ADMIN);
+
+        Map<String, Object> contact = (Map<String, Object>) detail.get("contact");
+        assertThat(contact)
+                .containsEntry("status", "ARCHIVED")
+                .containsEntry("ticketStatus", "CANCELLED");
+        verify(jdbcTemplate).update(
+                contains("UPDATE as_tickets"),
+                eq("CANCELLED"),
+                eq(6001L)
+        );
+    }
+
+    @Test
+    void deleteAdminSessionKeepsTerminalTicketStatusAndArchivesRoom() {
+        mockAdminRoomForUpdate("ACTIVE", "CLOSED", 0, 4);
+        mockMessages();
+
+        Map<String, Object> detail = service.deleteAdminSession(ROOM_ID, ADMIN);
+
+        Map<String, Object> contact = (Map<String, Object>) detail.get("contact");
+        assertThat(contact)
+                .containsEntry("status", "ARCHIVED")
+                .containsEntry("ticketStatus", "CLOSED")
+                .containsEntry("canSendMessage", false);
+        verify(jdbcTemplate, never()).update(contains("UPDATE as_tickets"), any(), any());
+    }
+
+    @Test
+    void deleteAdminSessionIsIdempotentWhenRoomAlreadyArchived() {
+        mockAdminRoomForUpdate("ARCHIVED", "CANCELLED", 1, 4);
+        mockMessages();
+
+        Map<String, Object> detail = service.deleteAdminSession(ROOM_ID, ADMIN);
+
+        Map<String, Object> contact = (Map<String, Object>) detail.get("contact");
+        assertThat(contact)
+                .containsEntry("status", "ARCHIVED")
+                .containsEntry("ticketStatus", "CANCELLED");
+        verify(jdbcTemplate, never()).update(contains("INSERT INTO support_chat_messages"), any(), any(), any(), any());
+        verify(jdbcTemplate, never()).update(contains("UPDATE support_chat_rooms"), any(), any(), any());
+        verify(jdbcTemplate, never()).update(contains("UPDATE as_tickets"), any(), any());
+    }
+
     private void assertBadRequest(Map<String, Object> request) {
         assertThatThrownBy(() -> service.postUserMessage(ROOM_ID, request, USER))
                 .isInstanceOf(ResponseStatusException.class)
@@ -174,6 +266,11 @@ class SupportChatServiceTest {
 
     private void mockAdminRoom(String roomStatus, String ticketStatus, int userUnreadCount, int adminUnreadCount) {
         when(jdbcTemplate.queryForList(anyString(), eq(ROOM_ID)))
+                .thenReturn(List.of(roomRow(roomStatus, ticketStatus, userUnreadCount, adminUnreadCount)));
+    }
+
+    private void mockAdminRoomForUpdate(String roomStatus, String ticketStatus, int userUnreadCount, int adminUnreadCount) {
+        when(jdbcTemplate.queryForList(contains("FOR UPDATE OF r, t"), eq(ROOM_ID)))
                 .thenReturn(List.of(roomRow(roomStatus, ticketStatus, userUnreadCount, adminUnreadCount)));
     }
 
