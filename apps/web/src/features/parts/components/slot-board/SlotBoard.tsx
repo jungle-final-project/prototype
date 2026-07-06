@@ -28,6 +28,8 @@ type SlotBoardProps = {
 export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect, onRemoveItem, isRemovePending, graph }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
   const slotPositions = useMemo(() => slotPositionsFromGraph(graph), [graph]);
+  // 카테고리별 장착 플래시를 보드 수준에서 계산해 카드(꽂힘 모션)와 관계선(draw-in·포트 점등)이 함께 반응한다.
+  const flashingCategories = useAttachFlashByCategory(items);
   return (
     <div className="panel overflow-hidden">
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
@@ -58,7 +60,13 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
         data-visual-mode="motherboard"
         className="relative flex flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:aspect-[16/10] lg:overflow-hidden lg:bg-[#f8fbff] lg:p-4"
       >
-        <SlotBoardEdges items={items} graph={graph} slotPositions={slotPositions} selectedCategory={selectedCategory} />
+        <SlotBoardEdges
+          items={items}
+          graph={graph}
+          slotPositions={slotPositions}
+          selectedCategory={selectedCategory}
+          flashingCategories={flashingCategories}
+        />
         {SLOT_CONFIGS.map((slot) => (
           <BoardSlot
             key={slot.category}
@@ -68,6 +76,7 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
             problemStatus={statusByCategory.get(slot.category)}
             isSelected={selectedCategory === slot.category}
             isNext={nextCategory === slot.category}
+            isFlashing={flashingCategories.has(slot.category)}
             onSelect={() => onSlotSelect(slot.category)}
             onRemoveItem={onRemoveItem}
             isRemovePending={isRemovePending}
@@ -85,6 +94,7 @@ function BoardSlot({
   problemStatus,
   isSelected,
   isNext,
+  isFlashing,
   onSelect,
   onRemoveItem,
   isRemovePending
@@ -95,6 +105,7 @@ function BoardSlot({
   problemStatus?: 'PASS' | 'WARN' | 'FAIL';
   isSelected: boolean;
   isNext: boolean;
+  isFlashing: boolean;
   onSelect: () => void;
   onRemoveItem: (partId: string) => void;
   isRemovePending: boolean;
@@ -105,7 +116,6 @@ function BoardSlot({
   const slotStatus = filled ? problemStatus ?? 'PASS' : 'NONE';
   // 메인보드는 방사형의 중앙 허브 — 모든 스포크가 모이는 기준점이라 시각적으로 구분한다.
   const isHub = slot.category === 'MOTHERBOARD';
-  const isFlashing = useAttachFlash(items);
   // "메인보드에 꽂힌다"는 느낌: 장착 순간 카드가 보드 바깥에서 허브 방향으로 밀려 들어온다.
   const outwardX = layout.x + layout.w / 2 - 50;
   const outwardY = layout.y + layout.h / 2 - 50;
@@ -218,25 +228,40 @@ function BoardSlot({
   );
 }
 
-// 장착/교체로 슬롯 구성이 바뀌면 잠깐 flash 상태를 켠다. 애니메이션 자체는 CSS가 담당하고
-// prefers-reduced-motion에서는 CSS에서 꺼진다.
-function useAttachFlash(items: QuoteDraftItem[]) {
-  const signature = items.map((item) => `${item.partId}:${item.quantity}`).join('|');
-  const previousSignature = useRef<string | null>(null);
-  const [isFlashing, setIsFlashing] = useState(false);
+// 장착/교체로 어떤 카테고리의 구성이 바뀌면 그 카테고리를 잠깐 flash 상태로 켠다.
+// 카드 꽂힘 모션과 관계선 draw-in·포트 점등이 같은 신호를 공유한다.
+// 애니메이션 자체는 CSS가 담당하고 prefers-reduced-motion에서는 CSS에서 꺼진다.
+function useAttachFlashByCategory(items: QuoteDraftItem[]) {
+  const signatures = new Map<string, string>();
+  for (const item of items) {
+    signatures.set(item.category, `${signatures.get(item.category) ?? ''}${item.partId}:${item.quantity}|`);
+  }
+  const signatureText = [...signatures.entries()].map(([category, value]) => `${category}=${value}`).sort().join(';');
+  const previousRef = useRef<Map<string, string> | null>(null);
+  const [flashing, setFlashing] = useState<Set<PartCategory>>(new Set());
 
   useEffect(() => {
-    const previous = previousSignature.current;
-    previousSignature.current = signature;
-    if (previous === null || previous === signature || signature === '') {
+    const previous = previousRef.current;
+    previousRef.current = signatures;
+    if (previous === null) {
       return;
     }
-    setIsFlashing(true);
-    const timer = window.setTimeout(() => setIsFlashing(false), 900);
+    const changed = new Set<PartCategory>();
+    for (const [category, signature] of signatures) {
+      if (previous.get(category) !== signature) {
+        changed.add(category as PartCategory);
+      }
+    }
+    if (changed.size === 0) {
+      return;
+    }
+    setFlashing(changed);
+    const timer = window.setTimeout(() => setFlashing(new Set()), 900);
     return () => window.clearTimeout(timer);
-  }, [signature]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signatureText]);
 
-  return isFlashing;
+  return flashing;
 }
 
 type SlotEdgeStatus = 'PASS' | 'WARN' | 'FAIL' | 'PENDING' | 'BASE';
@@ -271,12 +296,14 @@ function SlotBoardEdges({
   items,
   graph,
   slotPositions,
-  selectedCategory
+  selectedCategory,
+  flashingCategories
 }: {
   items: QuoteDraftItem[];
   graph?: BuildGraphResolveResponse;
   slotPositions: Partial<Record<PartCategory, SlotBoardPosition>>;
   selectedCategory: PartCategory | null;
+  flashingCategories: Set<PartCategory>;
 }) {
   const filledCategories = new Set(items.map((item) => item.category));
   const edges: ResolvedSlotEdge[] = FALLBACK_EDGES.map((config) => {
@@ -295,14 +322,48 @@ function SlotBoardEdges({
     return { config, status: 'BASE', label: config.label };
   });
 
+  // 추상 기판: 허브 카드보다 살짝 큰 PCB 판을 카드 뒤에 깔고, 스포크는 이 기판 가장자리의
+  // 포트 패드에 꽂힌다. 컨테이너 비율(16/10)에서 시각적으로 같은 두께가 되도록 x/y 패딩을 달리 준다.
+  const hubSlot = slotConfigFor('MOTHERBOARD');
+  const hubBox = hubSlot ? slotLayoutWithPosition(hubSlot, slotPositions.MOTHERBOARD) : null;
+  const substrate = hubBox
+    ? { x: hubBox.x - HUB_SUBSTRATE_PAD_X, y: hubBox.y - HUB_SUBSTRATE_PAD_Y, w: hubBox.w + HUB_SUBSTRATE_PAD_X * 2, h: hubBox.h + HUB_SUBSTRATE_PAD_Y * 2 }
+    : null;
+
   return (
     <div data-testid="slot-board-edges" aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 hidden lg:block">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+        {substrate ? (
+          <g data-testid="slot-board-hub-substrate">
+            <rect
+              x={substrate.x}
+              y={substrate.y}
+              width={substrate.w}
+              height={substrate.h}
+              rx={1.6}
+              fill="#eef2f7"
+              stroke="#cbd5e1"
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+            {/* 기판 모서리 나사홀 — 추상 표현 최소치 */}
+            {[
+              { x: substrate.x + 1.4, y: substrate.y + 2 },
+              { x: substrate.x + substrate.w - 1.4, y: substrate.y + 2 },
+              { x: substrate.x + 1.4, y: substrate.y + substrate.h - 2 },
+              { x: substrate.x + substrate.w - 1.4, y: substrate.y + substrate.h - 2 }
+            ].map((hole, index) => (
+              <circle key={index} cx={hole.x} cy={hole.y} r={0.5} fill="#ffffff" stroke="#cbd5e1" vectorEffect="non-scaling-stroke" />
+            ))}
+          </g>
+        ) : null}
         {edges.map((edge) => {
           const { path, start, end } = edgeGeometry(edge.config, slotPositions);
           const style = EDGE_STROKES[edge.status];
           const isHighlighted = selectedCategory === edge.config.from || selectedCategory === edge.config.to;
           const isSpoke = edge.config.from === 'MOTHERBOARD' || edge.config.to === 'MOTHERBOARD';
+          // 장착 순간 관련 관계선이 부품→포트 방향으로 그려지고(draw-in) 포트가 점등된다.
+          const isDrawing = flashingCategories.has(edge.config.from) || flashingCategories.has(edge.config.to);
           // 스포크의 허브 쪽 끝은 "꽂히는 포트" 패드로 그린다 — 메인보드에 장착된다는 시각 언어.
           const hubAnchor = isSpoke ? (edge.config.to === 'MOTHERBOARD' ? end : start) : null;
           const partAnchor = isSpoke ? (edge.config.to === 'MOTHERBOARD' ? start : end) : null;
@@ -313,11 +374,13 @@ function SlotBoardEdges({
                 fill="none"
                 stroke={style.stroke}
                 strokeWidth={isHighlighted ? 4.5 : 3}
-                strokeDasharray={style.dash}
+                pathLength={isDrawing ? 1 : undefined}
+                strokeDasharray={isDrawing ? '1' : style.dash}
                 strokeOpacity={isHighlighted ? 1 : 0.6}
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
+                className={isDrawing ? 'slot-edge-draw' : undefined}
               />
               {hubAnchor && partAnchor ? (
                 <>
@@ -331,6 +394,7 @@ function SlotBoardEdges({
                     stroke={style.stroke}
                     strokeOpacity={isHighlighted ? 1 : 0.7}
                     vectorEffect="non-scaling-stroke"
+                    className={isDrawing ? 'slot-port-pulse' : undefined}
                   />
                   <circle cx={partAnchor.x} cy={partAnchor.y} r={0.7} fill={style.stroke} fillOpacity={isHighlighted ? 1 : 0.6} />
                 </>
@@ -375,6 +439,19 @@ type Box = { x: number; y: number; w: number; h: number };
 type Point = { x: number; y: number };
 
 const BOARD_CENTER: Point = { x: 50, y: 50 };
+// 추상 기판이 허브 카드보다 넓게 깔리는 패딩(%). 16/10 컨테이너에서 시각적으로 균일하도록 y를 크게 잡는다.
+const HUB_SUBSTRATE_PAD_X = 2.4;
+const HUB_SUBSTRATE_PAD_Y = 3.8;
+
+// 스포크 앵커 계산용 — 허브(메인보드)는 기판 크기로 팽창시켜 포트 패드가 기판 가장자리에 앉게 한다.
+function inflateHubBox(box: Box): Box {
+  return {
+    x: box.x - HUB_SUBSTRATE_PAD_X,
+    y: box.y - HUB_SUBSTRATE_PAD_Y,
+    w: box.w + HUB_SUBSTRATE_PAD_X * 2,
+    h: box.h + HUB_SUBSTRATE_PAD_Y * 2
+  };
+}
 
 function boxCenter(box: Box): Point {
   return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
@@ -399,8 +476,14 @@ function boxAnchorToward(box: Box, target: Point): Point {
 function edgeGeometry(config: SlotEdgeConfig, slotPositions: Partial<Record<PartCategory, SlotBoardPosition>>) {
   const fromSlot = slotConfigFor(config.from);
   const toSlot = slotConfigFor(config.to);
-  const a: Box = fromSlot ? slotLayoutWithPosition(fromSlot, slotPositions[config.from]) : { x: 0, y: 0, w: 0, h: 0 };
-  const b: Box = toSlot ? slotLayoutWithPosition(toSlot, slotPositions[config.to]) : { x: 0, y: 0, w: 0, h: 0 };
+  let a: Box = fromSlot ? slotLayoutWithPosition(fromSlot, slotPositions[config.from]) : { x: 0, y: 0, w: 0, h: 0 };
+  let b: Box = toSlot ? slotLayoutWithPosition(toSlot, slotPositions[config.to]) : { x: 0, y: 0, w: 0, h: 0 };
+  if (config.from === 'MOTHERBOARD') {
+    a = inflateHubBox(a);
+  }
+  if (config.to === 'MOTHERBOARD') {
+    b = inflateHubBox(b);
+  }
   const ac = boxCenter(a);
   const bc = boxCenter(b);
   const isSpoke = config.from === 'MOTHERBOARD' || config.to === 'MOTHERBOARD';
