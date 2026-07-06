@@ -168,7 +168,7 @@ async function openMyQuotesAsUser(page: Page) {
       body: JSON.stringify({ items: priceAlerts, page: 0, size: 20, total: priceAlerts.length })
     });
   });
-  // 저장 견적 단위 성능 요약(카드 스트립) — CPU/GPU 벤치마크 점수를 돌려준다.
+  // 저장 견적 성능 비교 매트릭스 — 견적별 CPU/GPU 벤치마크 점수를 돌려준다.
   await page.route('**/api/tools/performance/check', async (route) => {
     await route.fulfill({
       status: 200,
@@ -235,10 +235,15 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(firstBuild).toContainText('QHD 균형 저장 견적');
   await expect(firstBuild.getByRole('link', { name: '견적 상세' })).toHaveAttribute('href', '/builds/build-qhd-balanced');
   await expect(firstBuild.getByRole('button', { name: '부품 변경' })).toBeVisible();
-  // 저장 견적 단위 성능 요약 — CPU/GPU 벤치마크 등급으로 저장 견적끼리 비교.
-  const perf = firstBuild.getByTestId('saved-build-performance-build-qhd-balanced');
-  await expect(perf).toContainText('성능 요약');
-  await expect(perf).toContainText('상위급');
+  // 저장 견적 성능 비교 매트릭스 — 견적을 열로 세우고 카테고리(종합/CPU/GPU)를 행으로 좌우 비교.
+  const perfMatrix = page.getByTestId('saved-builds-comparison');
+  await expect(perfMatrix).toContainText('저장 견적 성능 한눈에 비교');
+  await expect(perfMatrix).toContainText('종합');
+  await expect(perfMatrix).toContainText('CPU');
+  await expect(perfMatrix).toContainText('GPU');
+  await expect(perfMatrix).toContainText('상위급');
+  // 견적 이름이 열 헤더로 노출된다.
+  await expect(perfMatrix).toContainText('QHD 균형 저장 견적');
   await firstBuild.getByRole('button', { name: '목표가 등록' }).click();
 
   await expect(page.getByLabel('저장 견적 부품')).toHaveValue('part-cpu-9700x');
