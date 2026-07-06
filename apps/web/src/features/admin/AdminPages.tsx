@@ -4,6 +4,7 @@ export { AdminBuildGraphLayoutsPage } from './pages/AdminBuildGraphLayoutsPage';
 export { AdminLoadTestsPage } from './pages/AdminLoadTestsPage';
 export { AdminPartsPage } from './pages/AdminPartsPage';
 export { AdminPriceJobsPage } from './pages/AdminPriceJobsPage';
+export { AdminSupportChatSessionsPage } from './pages/AdminSupportChatSessionsPage';
 export { AdminTicketDetailPage } from './pages/AdminTicketDetailPage';
 export { AdminTicketsPage } from './pages/AdminTicketsPage';
 export { AgentSessionAdminPage } from './pages/AgentSessionAdminPage';

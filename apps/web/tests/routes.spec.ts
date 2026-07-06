@@ -27,6 +27,7 @@ const routes = [
   '/admin/price-jobs',
   '/admin/build-graph-layouts',
   '/admin/load-tests',
+  '/admin/support-chat-sessions',
   '/admin/as-tickets',
   '/admin/as-tickets/00000000-0000-4000-8000-000000006001'
 ];
