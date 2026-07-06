@@ -42,6 +42,7 @@
 - `build_graph_layouts`
 - `price_jobs`
 - `pipeline_job_runs`
+- `recommendation_drift_snapshots`
 - `agent_sessions`
 - `tool_invocations`
 - `rag_evidence`
@@ -889,8 +890,8 @@ Index:
 |---|---|---:|---|---|
 | `id` | `BIGSERIAL` | no | - | 내부 PK |
 | `public_id` | `UUID` | no | - | 외부 ID |
-| `job_name` | `TEXT` | no | - | `PART_PRICE_REFRESH`, `DANAWA_SNAPSHOT_REFRESH`, `DANAWA_TREND_REFRESH`, `MANUFACTURER_RELEASE_SCAN`, `SHADOW_SCORE_RETENTION` |
-| `trigger_type` | `TEXT` | no | - | `SCHEDULED` |
+| `job_name` | `TEXT` | no | - | `PART_PRICE_REFRESH`, `DANAWA_SNAPSHOT_REFRESH`, `DANAWA_TREND_REFRESH`, `MANUFACTURER_RELEASE_SCAN`, `SHADOW_SCORE_RETENTION`, `RECOMMENDATION_AUTO_RETRAIN`(M2), `RECOMMENDATION_DRIFT`(M3) |
+| `trigger_type` | `TEXT` | no | - | `SCHEDULED`(기본), `DRIFT_TRIGGERED`(M3 심각 PSI 발 재훈련) |
 | `status` | `TEXT` | no | - | `SUCCEEDED`, `FAILED`, `SKIPPED_FROZEN`, `SKIPPED_LOCKED` |
 | `result_summary` | `JSONB` | yes | - | 서비스 결과 맵(attempted/updated/errors 등) |
 | `error_summary` | `TEXT` | yes | - | 실패/스킵 사유 |
@@ -904,6 +905,25 @@ Index:
 - unique: `pipeline_job_runs.public_id`
 - index: `(job_name, created_at DESC)`
 - index: `pipeline_job_runs.created_at DESC`
+
+### recommendation_drift_snapshots
+
+목적: M3 드리프트 모니터링의 일일 스냅샷. 카탈로그 피처 PSI(현재 ACTIVE 부품 분포 vs 기준 모델 학습창 분포)·예측 drift PSI(shadow score 최근 7일 vs 직전 7일)·운영 지표(fallback 비율·scorer scoreErrors 증분·훈련 실패율)와 임계 초과 경보를 담는다. `snapshot_date` UNIQUE로 재실행 시 upsert 멱등 (V93).
+
+주 owner: 3번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGSERIAL` | no | - | 내부 PK |
+| `snapshot_date` | `DATE` | no | - | 스냅샷 날짜 (UNIQUE) |
+| `metrics` | `JSONB` | no | - | `catalogFeaturePsi`/`predictionDriftPsi`/`operational` 3계열 |
+| `alerts` | `JSONB` | yes | - | 임계 초과 항목 `[{series, level(WARN/SEVERE), value}]` |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성/갱신 시각 |
+
+Index:
+
+- unique: `recommendation_drift_snapshots.snapshot_date`
+- index: `recommendation_drift_snapshots.snapshot_date DESC`
 
 ### compatibility_rules
 
@@ -2609,9 +2629,13 @@ V68__agent_log_summary_as_feedback.sql
 V90__manufacturer_post_classification_source.sql
 V91__pipeline_job_runs.sql
 V92__manufacturer_source_failure_tracking.sql
+V93__recommendation_drift_snapshots.sql
+V94__motherboard_memory_slots.sql
 ```
 
-`V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다.
+`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다.
+
+`V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR(PC Agent 통합 계열)과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다(다음 번호는 `V95`부터).
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.
 

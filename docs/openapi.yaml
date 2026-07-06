@@ -256,7 +256,7 @@ paths:
   /api/ai/build-chat:
     post:
       summary: AI 챗봇 LLM/RAG 기반 Build 추천
-      description: 축소된 Build Chat. 지원 범위는 예산/현재 견적 기반 추천 조합 생성, 부품 교체 성능 시뮬레이션, 명확화 질문뿐이다. 화면 이동, 견적초안 조작, 단일 부품 추천, 일반 상담 요청은 고정 안내 메시지(GENERAL)로 응답한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 428을 반환한다.
+      description: 축소된 Build Chat. 지원 범위는 예산/현재 견적 기반 추천 조합 생성, 부품 교체 성능 시뮬레이션, 명확화 질문뿐이다. 예산·용도가 모두 없는 모호 요청은 견적 없이 되묻기(quickReplies 칩 + clarification)로 응답하고, 프론트가 clarificationContext를 에코한 후속 답변과 합성해 추천한다(되묻기 최대 1회, 그 뒤엔 기본 예산 가정을 명시하고 추천). 화면 이동, 견적초안 조작, 단일 부품 추천, 일반 상담 요청은 고정 안내 메시지(GENERAL)로 응답한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 428을 반환한다.
       security:
         - bearerAuth: []
       parameters:
@@ -422,6 +422,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationModelSummaryResponse"
+  /api/admin/recommendation-shadow/summary:
+    get:
+      summary: Shadow 비교 관측 (M4)
+      description: 최근 days일 HOME/PART shadow 실모델 점수를 스코어링 회차별로 묶어, features로 재구성한 baseline 순위 대비 모델 순위의 역전율·top-4 교체율을 집계한다. baseline-shadow·BUILD_CHAT·중복 회차는 제외된다. 승급 전 "모델이 순위를 얼마나 바꾸는가"의 판단 근거.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 7
+          description: 집계 창(일). 1~30으로 클램프된다.
+      responses:
+        "200":
+          description: shadow 비교 요약
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationShadowSummaryResponse"
+  /api/admin/recommendation-drift:
+    get:
+      summary: Drift 스냅샷 목록 (M3)
+      description: 최근 days일 드리프트 스냅샷(카탈로그 피처 PSI·예측 drift PSI·운영 지표·경보) 목록을 최신순으로 반환한다. 일일 스케줄러가 recommendation_drift_snapshots에 기록한다(스케줄러 미활성 시 빈 목록).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 14
+          description: 조회 창(일). 1~90으로 클램프된다.
+      responses:
+        "200":
+          description: drift 스냅샷 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationDriftResponse"
   /api/admin/recommendation-training/overview:
     get:
       summary: 추천 학습 운영 요약
@@ -629,7 +671,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: SHADOW 모델이 아니거나, holdout 평가 지표가 기록되지 않은 모델(최신 학습 워커로 재훈련 필요)이거나, scorer reload에 실패한 경우
+          description: SHADOW 모델이 아니거나, holdout 평가 지표가 기록되지 않은 모델(최신 학습 워커로 재훈련 필요)이거나, 모델이 현재 서빙 스코어러의 피처 계약과 다른 스키마로 훈련된 경우(학습-서빙 스큐), 또는 scorer reload에 실패한 경우
           content:
             application/json:
               schema:
@@ -3326,6 +3368,13 @@ components:
           description: 현재 견적초안(그래프 상태) 문맥. 모든 화면에서 전달하며, 서버는 견적 완성 제약과 시뮬레이션 기준으로만 사용하고 직접 저장하지 않는다.
           allOf:
             - $ref: "#/components/schemas/QuoteDraftDto"
+        clarificationContext:
+          nullable: true
+          description: 직전 되묻기(clarification) 응답의 originalMessage 에코. 서버는 이 값과 message를 합성해 한 문장처럼 라우팅한다(무상태 왕복, 되묻기 최대 1회 — 합성 후에도 정보가 부족하면 기본 예산 가정을 명시하고 추천한다).
+          type: object
+          properties:
+            originalMessage:
+              type: string
     AiBuildChatResponse:
       type: object
       required: [answerType, message, builds, warnings]
@@ -3353,6 +3402,22 @@ components:
           items:
             type: string
           description: Build chat RAG 검색에 사용된 reusable evidence public id 목록
+        quickReplies:
+          type: array
+          items:
+            type: string
+          description: 되묻기(명확화) 응답에 함께 오는 선택지 칩. 각 항목은 그 자체로 완전한 프롬프트(용도+예산)라서 그대로 다음 message로 보내면 된다.
+        clarification:
+          nullable: true
+          type: object
+          description: 모호 요청 되묻기 정보. 프론트는 다음 요청의 clarificationContext로 originalMessage를 에코한다.
+          properties:
+            missingSlots:
+              type: array
+              items:
+                type: string
+            originalMessage:
+              type: string
         agentSessionId:
           type: string
           nullable: true
@@ -3719,6 +3784,65 @@ components:
         createdAt:
           type: string
           format: date-time
+        activationWarning:
+          type: string
+          nullable: true
+          description: 활성화 시 승급 근거가 약했던 경우의 경고 문구(M1 champion-challenger). 활성화 응답에서만 채워진다.
+    RecommendationShadowSummaryResponse:
+      type: object
+      required: [windowDays, totalGroups, scoredGroups, scoredCandidates, avgInversionRate, avgTop4ReplacementRate]
+      properties:
+        windowDays:
+          type: integer
+          example: 7
+        totalGroups:
+          type: integer
+          description: 창 안의 전체 스코어링 회차 수
+        scoredGroups:
+          type: integer
+          description: 후보 2개 이상이라 지표를 낸 회차 수
+        scoredCandidates:
+          type: integer
+        avgInversionRate:
+          type: number
+          format: double
+          nullable: true
+          description: baseline 순위 대비 모델 순위의 평균 역전율(0~1). scoredGroups=0이면 null
+        avgTop4ReplacementRate:
+          type: number
+          format: double
+          nullable: true
+          description: baseline 상위 4 중 모델 상위 4에서 빠진 평균 비율(0~1)
+        generatedAt:
+          type: string
+    RecommendationDriftResponse:
+      type: object
+      required: [items, total]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            type: object
+            required: [snapshotDate, metrics, alerts]
+            properties:
+              snapshotDate:
+                type: string
+                format: date
+              metrics:
+                type: object
+                additionalProperties: true
+                description: "3계열: catalogFeaturePsi(피처별 psi/skipped), predictionDriftPsi(psi/modelChanged), operational(fallbackRatio·scoreErrorsDelta·trainingJobFailureRate)"
+              alerts:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+                  description: "임계 초과 항목 {series, level(WARN/SEVERE), value}"
+              createdAt:
+                type: string
+                nullable: true
     RecommendationModelSummaryResponse:
       type: object
       required: [homeParts, generatedAt]

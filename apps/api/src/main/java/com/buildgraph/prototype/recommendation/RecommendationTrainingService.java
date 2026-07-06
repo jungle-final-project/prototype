@@ -12,6 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -249,6 +250,315 @@ public class RecommendationTrainingService {
         return datasetById(longValue(dataset, "id"));
     }
 
+    // ---- M2 자동 재훈련 (설계 §3) ------------------------------------------------
+
+    /** 조건 판정 결과. proceed=false면 reason이 skip 사유. */
+    record AutoRetrainDecision(boolean proceed, String reason) {
+    }
+
+    /**
+     * M2 자동 재훈련의 순수 조건 판정(단위 테스트 대상). 실패 백오프 → 데이터량 → 간격 순으로 본다.
+     */
+    static AutoRetrainDecision autoRetrainDecision(
+            long untrainedEvents,
+            long untrainedPositives,
+            Integer daysSinceLastSuccess,
+            int consecutiveAutoFailures,
+            int minNewEvents,
+            int minNewPositives,
+            int minIntervalDays
+    ) {
+        if (consecutiveAutoFailures >= 2) {
+            return new AutoRetrainDecision(false,
+                    "자동 재훈련이 연속 " + consecutiveAutoFailures + "회 실패해 중단되었습니다. 관리자 확인이 필요합니다.");
+        }
+        if (consecutiveAutoFailures == 1) {
+            return new AutoRetrainDecision(false, "직전 자동 재훈련이 실패해 재시도를 보류합니다(관리자 확인 후 재개).");
+        }
+        if (untrainedEvents < minNewEvents) {
+            return new AutoRetrainDecision(false, "새 이벤트 " + untrainedEvents + " < " + minNewEvents);
+        }
+        if (untrainedPositives < minNewPositives) {
+            return new AutoRetrainDecision(false, "새 양성 라벨 " + untrainedPositives + " < " + minNewPositives);
+        }
+        if (daysSinceLastSuccess != null && daysSinceLastSuccess < minIntervalDays) {
+            return new AutoRetrainDecision(false,
+                    "마지막 성공 훈련 후 " + daysSinceLastSuccess + "일 < " + minIntervalDays + "일");
+        }
+        return new AutoRetrainDecision(true, "조건 충족");
+    }
+
+    /**
+     * 자동 재훈련 1회 시도. 조건 미충족이면 {skipped:true, reason} 을, 충족이면 dataset·job을 자동 생성하고
+     * {created:true, ...} 를 반환한다. 절대 예외를 던지지 않아야 recorder가 SUCCEEDED+result_summary로 기록한다
+     * (조건 미충족은 정상 결과이지 실패가 아님). 승급은 하지 않는다(원칙 2).
+     */
+    @Transactional
+    public Map<String, Object> runAutoRetrain(int minNewEvents, int minNewPositives, int minIntervalDays, int minRows) {
+        long untrainedEvents = countUntrainedEligible(false);
+        long untrainedPositives = countUntrainedEligible(true);
+        Integer daysSinceLastSuccess = daysSinceLastSuccessfulTraining();
+        int consecutiveFailures = consecutiveAutoRetrainFailures();
+
+        AutoRetrainDecision decision = autoRetrainDecision(
+                untrainedEvents, untrainedPositives, daysSinceLastSuccess, consecutiveFailures,
+                minNewEvents, minNewPositives, minIntervalDays);
+        if (!decision.proceed()) {
+            return MockData.map(
+                    "skipped", true,
+                    "reason", decision.reason(),
+                    "untrainedEvents", untrainedEvents,
+                    "untrainedPositives", untrainedPositives
+            );
+        }
+
+        archivePreviousAutoDatasets();
+        Long datasetId = createDatasetInternal(
+                "auto-" + java.time.LocalDate.now(), MockData.map("trigger", "AUTO_RETRAIN"));
+        int concentrationExcluded = applyConcentrationGuard(datasetId);
+        int highWeightExcluded = applyHighWeightGuard(datasetId);
+        refreshDatasetCounts(datasetId);
+
+        long included = includedCount(datasetId);
+        // 워커의 min_rows 미달이면 job을 만들지 않는다. job을 만들면 워커가 SKIPPED_LOW_DATASET로 마감하는데,
+        // 그 상태는 미학습/실패 게이트가 인식하지 못해 같은 데이터로 매주 무한 재생성된다(설계 §3a #4).
+        // 방금 만든 DRAFT dataset은 아카이브해 누적을 막는다.
+        if (included < minRows) {
+            archivePreviousAutoDatasets();
+            return MockData.map(
+                    "skipped", true,
+                    "reason", "오염 가드 적용 후 포함 " + included + "건 < 최소 " + minRows + "건",
+                    "concentrationExcluded", concentrationExcluded,
+                    "highWeightExcluded", highWeightExcluded
+            );
+        }
+        lockDatasetById(datasetId);
+        Long jobId = createJobInternal(datasetId, "자동 재훈련 스케줄러(AUTO_RETRAIN)가 학습을 등록했습니다.");
+        return MockData.map(
+                "created", true,
+                "datasetId", datasetId,
+                "jobId", jobId,
+                "untrainedEvents", untrainedEvents,
+                "untrainedPositives", untrainedPositives,
+                "includedItems", included,
+                "concentrationExcluded", concentrationExcluded,
+                "highWeightExcluded", highWeightExcluded
+        );
+    }
+
+    /** created_by=NULL(자동)로 dataset을 만들고 eligible 이벤트를 담는다. datasetId 반환. */
+    Long createDatasetInternal(String name, Map<String, Object> filters) {
+        Map<String, Object> dataset = jdbcTemplate.queryForMap("""
+                INSERT INTO recommendation_training_datasets (
+                  name,
+                  source_surface,
+                  filters,
+                  status,
+                  created_by
+                )
+                VALUES (?, 'HOME_PARTS_WITH_AS_FEEDBACK', ?::jsonb, 'DRAFT', NULL)
+                RETURNING id, public_id::text AS public_id
+                """, name, writeJson(filters));
+        Long datasetId = longValue(dataset, "id");
+        for (Map<String, Object> event : eligibleEvents(filters)) {
+            jdbcTemplate.update("""
+                    INSERT INTO recommendation_training_dataset_items (
+                      dataset_id,
+                      event_id,
+                      included,
+                      label_score_snapshot,
+                      features_snapshot,
+                      event_snapshot
+                    )
+                    VALUES (?, ?, true, ?, ?::jsonb, ?::jsonb)
+                    ON CONFLICT (dataset_id, event_id) DO NOTHING
+                    """,
+                    datasetId,
+                    longValue(event, "event_id"),
+                    event.get("label_score"),
+                    writeJson(featureSnapshot(event)),
+                    writeJson(eventSnapshot(event)));
+        }
+        refreshDatasetCounts(datasetId);
+        return datasetId;
+    }
+
+    /** queued_by=NULL(자동)로 QUEUED job을 만든다. jobId 반환. */
+    Long createJobInternal(Long datasetId, String logSummary) {
+        Long included = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM recommendation_training_dataset_items
+                WHERE dataset_id = ?
+                  AND included = true
+                """, Long.class, datasetId);
+        if (included == null || included <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "포함된 학습 데이터가 없습니다.");
+        }
+        Map<String, Object> job = jdbcTemplate.queryForMap("""
+                INSERT INTO recommendation_training_jobs (
+                  dataset_id,
+                  status,
+                  queued_by,
+                  log_summary
+                )
+                VALUES (?, 'QUEUED', NULL, ?)
+                RETURNING id
+                """, datasetId, logSummary);
+        return longValue(job, "id");
+    }
+
+    private void lockDatasetById(Long datasetId) {
+        refreshDatasetCounts(datasetId);
+        jdbcTemplate.update("""
+                UPDATE recommendation_training_datasets
+                SET status = 'LOCKED',
+                    locked_at = now(),
+                    updated_at = now()
+                WHERE id = ?
+                  AND status = 'DRAFT'
+                """, datasetId);
+    }
+
+    private void archivePreviousAutoDatasets() {
+        jdbcTemplate.update("""
+                UPDATE recommendation_training_datasets
+                SET status = 'ARCHIVED',
+                    updated_at = now()
+                WHERE filters->>'trigger' = 'AUTO_RETRAIN'
+                  AND status IN ('DRAFT', 'LOCKED')
+                """);
+    }
+
+    /**
+     * 오염 가드 ①(설계 3b): 단일 user가 dataset 양성 라벨의 30% 초과 시 그 user의 아이템 전부 제외.
+     * 자동 LOCK이 우회하는 B5(이벤트 위조) 방어. 제외 행 수 반환.
+     */
+    private int applyConcentrationGuard(Long datasetId) {
+        return jdbcTemplate.update("""
+                UPDATE recommendation_training_dataset_items i
+                SET included = false,
+                    excluded_reason = 'AUTO_SUSPECT_CONCENTRATION',
+                    updated_at = now()
+                FROM recommendation_events e
+                WHERE i.event_id = e.id
+                  AND i.dataset_id = ?
+                  AND i.included = true
+                  AND e.user_id IN (
+                    SELECT e2.user_id
+                    FROM recommendation_training_dataset_items i2
+                    JOIN recommendation_events e2 ON e2.id = i2.event_id
+                    WHERE i2.dataset_id = ?
+                      AND i2.included = true
+                      AND i2.label_score_snapshot > 0
+                      AND e2.user_id IS NOT NULL
+                    GROUP BY e2.user_id
+                    HAVING count(*) > 0.30 * (
+                      SELECT count(*)
+                      FROM recommendation_training_dataset_items i3
+                      WHERE i3.dataset_id = ?
+                        AND i3.included = true
+                        AND i3.label_score_snapshot > 0
+                    )
+                  )
+                """, datasetId, datasetId, datasetId);
+    }
+
+    /**
+     * 오염 가드 ②(설계 3b): 고가중(label_score_snapshot >= 3.0) 아이템이 포함분의 20% 초과 시
+     * 초과분을 최신순으로 제외. 제외 행 수 반환.
+     */
+    private int applyHighWeightGuard(Long datasetId) {
+        // 최신순은 dataset item의 created_at(단일 트랜잭션이라 전부 동일)이 아니라 원 이벤트(e.created_at)
+        // 기준으로 매긴다 — 방금 위조된 최신 고가중 버스트를 제거하는 게 B5 방어의 목적이다.
+        // 남길 개수 keep = floor(0.25 * non_high)로 두면 제외 후 고가중/전체 ≤ 20%가 보장된다
+        // (keep/(non_high+keep) ≤ 0.25*non_high/(1.25*non_high) = 0.20).
+        return jdbcTemplate.update("""
+                UPDATE recommendation_training_dataset_items t
+                SET included = false,
+                    excluded_reason = 'AUTO_HIGH_WEIGHT_CAP',
+                    updated_at = now()
+                FROM (
+                  SELECT i.id,
+                         row_number() OVER (ORDER BY e.created_at DESC, e.id DESC) AS rn,
+                         count(*) OVER () AS high_count,
+                         (SELECT count(*)
+                          FROM recommendation_training_dataset_items a
+                          WHERE a.dataset_id = ?
+                            AND a.included = true) AS total
+                  FROM recommendation_training_dataset_items i
+                  JOIN recommendation_events e ON e.id = i.event_id
+                  WHERE i.dataset_id = ?
+                    AND i.included = true
+                    AND i.label_score_snapshot >= 3.0
+                ) ranked
+                WHERE t.id = ranked.id
+                  AND ranked.rn <= ranked.high_count - floor(0.25 * (ranked.total - ranked.high_count))
+                """, datasetId, datasetId);
+    }
+
+    private long includedCount(Long datasetId) {
+        Long count = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM recommendation_training_dataset_items
+                WHERE dataset_id = ?
+                  AND included = true
+                """, Long.class, datasetId);
+        return count == null ? 0L : count;
+    }
+
+    private long countUntrainedEligible(boolean positivesOnly) {
+        Long count = jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM recommendation_events e
+                WHERE e.source_surface IN ('HOME_RECOMMENDED_PARTS', 'ADMIN_HOME_PART_FEEDBACK', 'ADMIN_AS_FEEDBACK')
+                  AND (? = false OR e.label_score > 0)
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM recommendation_training_dataset_items i
+                    JOIN recommendation_training_jobs j ON j.dataset_id = i.dataset_id
+                    WHERE i.event_id = e.id
+                      AND i.included = true
+                      AND j.status = 'SUCCEEDED'
+                  )
+                """, Long.class, positivesOnly);
+        return count == null ? 0L : count;
+    }
+
+    private Integer daysSinceLastSuccessfulTraining() {
+        return jdbcTemplate.queryForObject("""
+                SELECT CASE
+                         WHEN max(finished_at) IS NULL THEN NULL
+                         ELSE floor(extract(epoch FROM (now() - max(finished_at))) / 86400)::int
+                       END
+                FROM recommendation_training_jobs
+                WHERE status = 'SUCCEEDED'
+                  AND finished_at IS NOT NULL
+                """, Integer.class);
+    }
+
+    private int consecutiveAutoRetrainFailures() {
+        // SKIPPED_LOW_DATASET도 '진행 방해'로 취급한다: min_rows pre-check로 보통은 job이 안 만들어지지만,
+        // 워커 min_rows가 Java 설정보다 크면 job이 SKIPPED로 끝날 수 있어 백오프 대상에 포함한다.
+        List<String> recent = jdbcTemplate.queryForList("""
+                SELECT j.status
+                FROM recommendation_training_jobs j
+                JOIN recommendation_training_datasets d ON d.id = j.dataset_id
+                WHERE d.filters->>'trigger' = 'AUTO_RETRAIN'
+                  AND j.status IN ('SUCCEEDED', 'FAILED', 'SKIPPED_LOW_DATASET')
+                ORDER BY j.created_at DESC, j.id DESC
+                LIMIT 5
+                """, String.class);
+        int failures = 0;
+        for (String status : recent) {
+            if ("FAILED".equals(status) || "SKIPPED_LOW_DATASET".equals(status)) {
+                failures += 1;
+            } else {
+                break;
+            }
+        }
+        return failures;
+    }
+
     public Map<String, Object> datasetItems(String datasetPublicId) {
         Map<String, Object> dataset = requireDataset(datasetPublicId);
         List<Map<String, Object>> items = jdbcTemplate.queryForList("""
@@ -366,6 +676,13 @@ public class RecommendationTrainingService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "holdout 평가 지표가 없는 모델은 활성화할 수 없습니다. 최신 학습 워커로 재훈련하세요.");
         }
+        // 학습-서빙 피처 스큐 게이트(M6): 모델이 지금 서빙 중인 스코어러의 FEATURES와 다른 스키마로
+        // 훈련됐으면 승급을 막는다. reload보다 먼저 검사해, 차단 시 스코어러 인메모리 상태를 바꾸지 않는다.
+        assertServingSchemaCompatible(model);
+        // Champion-Challenger 승급 게이트(M1): 워커가 기록한 comparison.verdict를 본다. 공정 비교
+        // (현재 ACTIVE 챔피언과 대조 + holdout 겹침 0)에서 챔피언이 더 우수하면 승급을 막는다.
+        // INCONCLUSIVE/INSUFFICIENT_DATA/verdict 부재/stale/겹침>0은 승급 허용(사람 판단 존중, 경고만).
+        String activationWarning = evaluatePromotionVerdict(json(metrics.get("comparison")));
         Map<String, Object> reload = scoringClient.reload(artifactPath);
         Object loaded = reload.get("modelLoaded");
         if (!(loaded instanceof Boolean bool && bool)) {
@@ -386,7 +703,57 @@ public class RecommendationTrainingService {
                 """, longValue(model, "id"));
         // 홈 서빙 경로가 다음 요청부터 즉시 동기 스코어링(실모델 순위 반영)으로 전환하도록 알린다.
         homePartRecommendationService.notifyScorerModelChanged(true);
-        return modelById(longValue(model, "id"));
+        Map<String, Object> activated = modelById(longValue(model, "id"));
+        if (activationWarning != null) {
+            activated.put("activationWarning", activationWarning);
+        }
+        return activated;
+    }
+
+    /**
+     * M1 승급 게이트 판정. 워커 metrics.comparison.verdict를 소비한다.
+     * CHAMPION_BETTER이면서 (1) 비교 대상 챔피언이 현재 ACTIVE와 동일하고 (2) holdout이 챔피언 학습
+     * 구간과 겹치지 않은(공정 비교) 경우에만 409로 승급을 막는다. 그 외에는 승급을 허용하되, 근거가
+     * 약한 경우(챔피언 우세이나 불공정, INCONCLUSIVE/INSUFFICIENT_DATA) 경고 문구를 반환한다.
+     * @return 경고 문구(없으면 null)
+     */
+    private String evaluatePromotionVerdict(Map<String, Object> comparison) {
+        return evaluatePromotionVerdict(comparison, currentActiveModelVersion());
+    }
+
+    // DB 조회를 분리한 순수 판정 로직(단위 테스트 대상). activeModelVersion은 현재 ACTIVE 챔피언의 버전.
+    static String evaluatePromotionVerdict(Map<String, Object> comparison, String activeModelVersion) {
+        String verdict = text(comparison.get("verdict"));
+        if (verdict == null || "CHALLENGER_BETTER".equals(verdict)) {
+            return null;
+        }
+        if ("CHAMPION_BETTER".equals(verdict)) {
+            boolean sameChampion = Objects.equals(text(comparison.get("champion")), activeModelVersion);
+            boolean fairHoldout = comparison.containsKey("holdoutOverlapWithChampion")
+                    && doubleValue(comparison.get("holdoutOverlapWithChampion")) == 0.0;
+            if (sameChampion && fairHoldout) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "현재 활성 모델이 더 우수해 승급이 거절되었습니다("
+                                + firstText(text(comparison.get("verdictReason")), "champion 우세") + ").");
+            }
+            return "챔피언 우세 판정이나 공정 비교 조건(동일 챔피언·holdout 겹침 0) 미충족으로 승급을 허용했습니다.";
+        }
+        return "승급 근거가 충분치 않습니다(verdict=" + verdict + "). 지표를 확인하고 신중히 판단하세요.";
+    }
+
+    private String currentActiveModelVersion() {
+        return jdbcTemplate.queryForList("""
+                        SELECT model_version
+                        FROM recommendation_model_versions
+                        WHERE deleted_at IS NULL
+                          AND status = 'ACTIVE'
+                        ORDER BY activated_at DESC NULLS LAST, created_at DESC
+                        LIMIT 1
+                        """)
+                .stream()
+                .findFirst()
+                .map(row -> text(row.get("model_version")))
+                .orElse(null);
     }
 
     @Transactional
@@ -486,7 +853,10 @@ public class RecommendationTrainingService {
                                ps.collected_at AS price_collected_at,
                                CASE
                                  WHEN ps.collected_at IS NULL THEN NULL
-                                 ELSE extract(epoch FROM (now() - ps.collected_at)) / 86400.0
+                                 -- M2 3d: 학습 age는 dataset 생성 시점(now())이 아니라 이벤트(라벨) 발생
+                                 -- 시점 기준으로 고정한다. now() 기준이면 같은 이벤트도 매주 값이 달라져
+                                 -- M1 '같은 holdout 비교' 전제가 깨진다(미래 정보 주입).
+                                 ELSE extract(epoch FROM (e.created_at - ps.collected_at)) / 86400.0
                                END AS price_age_days,
                                EXISTS (
                                  SELECT 1
@@ -521,7 +891,8 @@ public class RecommendationTrainingService {
                           SELECT snapshot.collected_at
                           FROM price_snapshots snapshot
                           WHERE snapshot.part_id = p.id
-                            AND snapshot.collected_at <= now()
+                            -- 이벤트 발생 이후 수집된 미래 가격 스냅샷을 고르지 않도록 컷오프도 e.created_at 기준.
+                            AND snapshot.collected_at <= e.created_at
                           ORDER BY snapshot.collected_at DESC, snapshot.id DESC
                           LIMIT 1
                         ) ps ON true
@@ -859,6 +1230,17 @@ public class RecommendationTrainingService {
         return value == null ? 0L : Long.parseLong(value.toString());
     }
 
+    private static double doubleValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return value == null ? 0.0 : Double.parseDouble(value.toString());
+        } catch (NumberFormatException ignored) {
+            return 0.0;
+        }
+    }
+
     private static boolean booleanValue(Object value) {
         if (value instanceof Boolean bool) {
             return bool;
@@ -909,6 +1291,45 @@ public class RecommendationTrainingService {
         } catch (Exception ignored) {
             return Map.of();
         }
+    }
+
+    /**
+     * 학습-서빙 피처 스큐 게이트(M6). 모델의 feature_schema.features가 현재 스코어러의 서빙 피처
+     * 계약과 다르면 409로 활성화를 막는다. 안전측 설계: 어느 한쪽 스키마를 확정할 수 없으면(구모델의
+     * 스키마 부재, 스코어러 상태 조회 실패) 게이트를 발동하지 않고 뒤의 reload 게이트에 맡긴다 —
+     * 스큐를 "확실히 감지"했을 때만 차단하고, 판정 불능으로 승급을 막지 않는다.
+     */
+    private void assertServingSchemaCompatible(Map<String, Object> model) {
+        List<String> modelFeatures = featureNames(json(model.get("feature_schema")).get("features"));
+        List<String> scorerFeatures;
+        try {
+            scorerFeatures = featureNames(json(scoringClient.health().get("featureSchema")).get("features"));
+        } catch (RuntimeException probeFailed) {
+            return;
+        }
+        if (servingSchemaMismatch(modelFeatures, scorerFeatures)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "이 모델은 현재 서빙 피처 스키마와 다르게 훈련되었습니다(학습-서빙 스큐). 최신 워커로 재훈련 후 활성화하세요.");
+        }
+    }
+
+    // 순수 스큐 판정(단위 테스트 대상). 양쪽 스키마를 모두 확정할 수 있고 서로 다를 때만 true.
+    // 어느 한쪽이 비면(구모델 스키마 부재 등) 판정 불능으로 보고 차단하지 않는다.
+    static boolean servingSchemaMismatch(List<String> modelFeatures, List<String> scorerFeatures) {
+        return !modelFeatures.isEmpty() && !scorerFeatures.isEmpty() && !scorerFeatures.equals(modelFeatures);
+    }
+
+    private static List<String> featureNames(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (item != null) {
+                names.add(item.toString());
+            }
+        }
+        return names;
     }
 
     private static String writeJson(Object value) {

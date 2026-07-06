@@ -66,7 +66,7 @@ public class ToolCheckService {
     ) {
         Map<String, ToolBuildPart> byCategory = byCategory(parts);
         return switch (tool) {
-            case "compatibility" -> compatibility(byCategory);
+            case "compatibility" -> compatibility(byCategory, parts);
             case "power" -> power(byCategory);
             case "size" -> size(byCategory);
             case "performance" -> performance(byCategory, context);
@@ -75,8 +75,8 @@ public class ToolCheckService {
         };
     }
 
-    /** Evaluates socket, memory, and cooler support compatibility. */
-    private Map<String, Object> compatibility(Map<String, ToolBuildPart> byCategory) {
+    /** Evaluates socket, memory, cooler support, and RAM slot capacity compatibility. */
+    private Map<String, Object> compatibility(Map<String, ToolBuildPart> byCategory, List<ToolBuildPart> parts) {
         ToolBuildPart cpu = byCategory.get("CPU");
         ToolBuildPart motherboard = byCategory.get("MOTHERBOARD");
         ToolBuildPart ram = byCategory.get("RAM");
@@ -84,12 +84,34 @@ public class ToolCheckService {
         boolean socketMatched = same(stringAttr(cpu, "socket"), stringAttr(motherboard, "socket"));
         boolean memoryMatched = same(firstText(stringAttr(ram, "memoryType"), "DDR5"), firstText(stringAttr(motherboard, "memoryType"), "DDR5"));
         boolean coolerMatched = socketSupported(cooler, stringAttr(cpu, "socket"));
-        boolean pass = socketMatched && memoryMatched && coolerMatched;
+        // 총 스틱 수 = Σ(수량 × 상품당 모듈 수). "32GB(16Gx2)" 킷은 moduleCount=2로 스틱 2개다.
+        // byCategory는 카테고리당 1개로 접히므로 RAM 여러 상품이 담긴 견적은 전체 목록으로 합산한다.
+        int ramSticksTotal = parts.stream()
+                .filter(part -> "RAM".equalsIgnoreCase(firstText(part.category(), "")))
+                .mapToInt(part -> part.effectiveQuantity() * Math.max(1, intAttr(part, "moduleCount", 1)))
+                .sum();
+        int memorySlots = intAttr(motherboard, "memorySlots", 0);
+        // 보드에 memorySlots 데이터가 없으면(신규 인테이크 유입 등) 검사를 생략한다 — 없는 데이터로 FAIL을 내지 않는다.
+        boolean ramSlotsChecked = motherboard != null && memorySlots > 0 && ramSticksTotal > 0;
+        boolean ramSlotsMatched = !ramSlotsChecked || ramSticksTotal <= memorySlots;
+        boolean pass = socketMatched && memoryMatched && coolerMatched && ramSlotsMatched;
+        String summary = pass
+                ? "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다."
+                : !ramSlotsMatched
+                        ? "램 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
+                        : "소켓 또는 메모리 호환성 확인이 필요합니다.";
         return tool("compatibility",
                 pass ? "PASS" : "FAIL",
                 socketMatched && memoryMatched ? "HIGH" : "MEDIUM",
-                pass ? "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다." : "소켓 또는 메모리 호환성 확인이 필요합니다.",
-                MockData.map("socketMatched", socketMatched, "memoryTypeMatched", memoryMatched, "coolerSocketMatched", coolerMatched));
+                summary,
+                MockData.map(
+                        "socketMatched", socketMatched,
+                        "memoryTypeMatched", memoryMatched,
+                        "coolerSocketMatched", coolerMatched,
+                        "ramSticksTotal", ramSticksTotal,
+                        "memorySlots", memorySlots > 0 ? memorySlots : null,
+                        "ramSlotsChecked", ramSlotsChecked,
+                        "ramSlotsMatched", ramSlotsMatched));
     }
 
     /** Evaluates PSU rated capacity against estimated build load. */

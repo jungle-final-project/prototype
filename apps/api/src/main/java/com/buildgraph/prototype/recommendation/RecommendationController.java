@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -19,17 +20,20 @@ public class RecommendationController {
     private final RecommendationLearningService recommendationLearningService;
     private final RecommendationTrainingService recommendationTrainingService;
     private final HomePartRecommendationService homePartRecommendationService;
+    private final RecommendationDriftService recommendationDriftService;
     private final CurrentUserService currentUserService;
 
     public RecommendationController(
             RecommendationLearningService recommendationLearningService,
             RecommendationTrainingService recommendationTrainingService,
             HomePartRecommendationService homePartRecommendationService,
+            RecommendationDriftService recommendationDriftService,
             CurrentUserService currentUserService
     ) {
         this.recommendationLearningService = recommendationLearningService;
         this.recommendationTrainingService = recommendationTrainingService;
         this.homePartRecommendationService = homePartRecommendationService;
+        this.recommendationDriftService = recommendationDriftService;
         this.currentUserService = currentUserService;
     }
 
@@ -83,6 +87,24 @@ public class RecommendationController {
     Map<String, Object> recommendationModelSummary(@RequestHeader(value = "Authorization", required = false) String authorization) {
         currentUserService.requireAdmin(authorization);
         return recommendationLearningService.modelSummary();
+    }
+
+    @GetMapping("/admin/recommendation-shadow/summary")
+    Map<String, Object> recommendationShadowSummary(
+            @RequestParam(value = "days", defaultValue = "7") int days,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return recommendationLearningService.shadowComparisonSummary(days);
+    }
+
+    @GetMapping("/admin/recommendation-drift")
+    Map<String, Object> recommendationDrift(
+            @RequestParam(value = "days", defaultValue = "14") int days,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        currentUserService.requireAdmin(authorization);
+        return recommendationDriftService.recentSnapshots(days);
     }
 
     @GetMapping("/admin/recommendation-training/overview")
