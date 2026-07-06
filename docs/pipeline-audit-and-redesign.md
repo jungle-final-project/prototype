@@ -7,6 +7,7 @@
 > **구현 상태 (2026-07-06 갱신)** — 브랜치 `claude/pipeline-hardening`(-p1/-p2), 커밋 6d55466 → 9ad000a:
 > **P0 전체(P0-1~P0-9) ✅ · P1 중 B9/O6/O4/B6/B7/A5 ✅ · P2 중 A9(조건부 GET+poll_interval)/O7(advisory lock)/B11(리랭커 관측성) ✅ + 계획 외 차단 자동 철수(V92) 추가 구현.**
 > 미착수/보류(정책 결정 필요): canonical dedup, 자동 retraining cadence, 온라인 A/B, B10 shadow 비교 대시보드, O5 price_jobs 좀비 스위퍼, A6~A8. B8은 부분 해소(holdout 지표 존재 게이트까지 — '기존 모델 대비 우위' 정량 비교 게이트는 미구현).
+> 이 중 추천 계열 보류 항목(자동 retraining, 정량 승급 게이트, B10, 온라인 A/B, drift 감지)의 **구체 설계는 `docs/mlops-maturity-design.md`(L1→L2 로드맵, 3렌즈 적대적 리뷰 반영)로 확정**했다 — 구현 착수 시 그 문서를 기준으로 한다.
 > 아래 본문은 **구현 전(2026-07-05) 감사 스냅샷 원형을 보존**하며, 해소된 항목에는 짧은 각주만 덧붙였다. 세부는 §7 구현 상태 표 참조.
 
 ## 0. 검증 방법론
