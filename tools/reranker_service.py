@@ -184,6 +184,8 @@ def make_handler(state: ScorerState):
                 "modelLoaded": scorer.model is not None,
                 "modelLoadError": scorer.load_error,
                 "counters": counters,
+                # 활성화 게이트(M6)가 모델의 feature_schema와 대조할 현재 서빙 피처 계약.
+                "featureSchema": {"features": FEATURES},
             })
 
         def do_POST(self):  # noqa: N802 - stdlib callback name
@@ -245,6 +247,7 @@ def make_handler(state: ScorerState):
                 "modelVersion": scorer.model_version,
                 "modelLoaded": scorer.model is not None,
                 "modelLoadError": scorer.load_error,
+                "featureSchema": {"features": FEATURES},
             })
 
         def read_json(self) -> dict[str, Any]:

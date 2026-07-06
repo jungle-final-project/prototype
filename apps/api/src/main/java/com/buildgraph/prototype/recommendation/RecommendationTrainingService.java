@@ -366,6 +366,9 @@ public class RecommendationTrainingService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "holdout 평가 지표가 없는 모델은 활성화할 수 없습니다. 최신 학습 워커로 재훈련하세요.");
         }
+        // 학습-서빙 피처 스큐 게이트(M6): 모델이 지금 서빙 중인 스코어러의 FEATURES와 다른 스키마로
+        // 훈련됐으면 승급을 막는다. reload보다 먼저 검사해, 차단 시 스코어러 인메모리 상태를 바꾸지 않는다.
+        assertServingSchemaCompatible(model);
         Map<String, Object> reload = scoringClient.reload(artifactPath);
         Object loaded = reload.get("modelLoaded");
         if (!(loaded instanceof Boolean bool && bool)) {
@@ -909,6 +912,43 @@ public class RecommendationTrainingService {
         } catch (Exception ignored) {
             return Map.of();
         }
+    }
+
+    /**
+     * 학습-서빙 피처 스큐 게이트(M6). 모델의 feature_schema.features가 현재 스코어러의 서빙 피처
+     * 계약과 다르면 409로 활성화를 막는다. 안전측 설계: 어느 한쪽 스키마를 확정할 수 없으면(구모델의
+     * 스키마 부재, 스코어러 상태 조회 실패) 게이트를 발동하지 않고 뒤의 reload 게이트에 맡긴다 —
+     * 스큐를 "확실히 감지"했을 때만 차단하고, 판정 불능으로 승급을 막지 않는다.
+     */
+    private void assertServingSchemaCompatible(Map<String, Object> model) {
+        List<String> modelFeatures = featureNames(json(model.get("feature_schema")).get("features"));
+        if (modelFeatures.isEmpty()) {
+            return;
+        }
+        List<String> scorerFeatures;
+        try {
+            scorerFeatures = featureNames(json(scoringClient.health().get("featureSchema")).get("features"));
+        } catch (RuntimeException probeFailed) {
+            return;
+        }
+        if (scorerFeatures.isEmpty() || scorerFeatures.equals(modelFeatures)) {
+            return;
+        }
+        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "이 모델은 현재 서빙 피처 스키마와 다르게 훈련되었습니다(학습-서빙 스큐). 최신 워커로 재훈련 후 활성화하세요.");
+    }
+
+    private static List<String> featureNames(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (item != null) {
+                names.add(item.toString());
+            }
+        }
+        return names;
     }
 
     private static String writeJson(Object value) {
