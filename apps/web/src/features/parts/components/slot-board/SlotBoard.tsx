@@ -217,7 +217,9 @@ function BoardSlot({
       title={filled ? visibleName : undefined}
       className={`group relative z-20 rounded-lg p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${surfaceClass} ${borderClass} ${
         isFlashing ? 'slot-attach-flash slot-plug-in' : ''
-      } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''}`}
+      } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''} ${
+        filled && !isSelected ? statusPulseClass(slotStatus) : ''
+      }`}
     >
       <button
         type="button"
@@ -553,6 +555,14 @@ function edgeGeometryOnLine(config: SlotEdgeConfig) {
       y: inv * inv * start.y + 2 * inv * labelT * control.y + labelT * labelT * end.y
     }
   };
+}
+
+// 장착된 슬롯의 상태색 히어로 펄스 — 파란 "다음 선택" 펄스처럼 상태색 링으로 숨쉬게 한다.
+function statusPulseClass(status: 'PASS' | 'WARN' | 'FAIL' | 'NONE') {
+  if (status === 'FAIL') return 'slot-fail-pulse';
+  if (status === 'WARN') return 'slot-warn-pulse';
+  if (status === 'PASS') return 'slot-pass-pulse';
+  return '';
 }
 
 function partStatusByCategory(graph?: BuildGraphResolveResponse) {

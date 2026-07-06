@@ -164,6 +164,45 @@ background:
   animation: slot-empty-pulse 2.4s ease-in-out infinite;
 }
 
+/* 상태색 히어로 펄스: 파란 "다음 선택" 펄스처럼, 장착된 슬롯을 상태색 링으로 숨쉬게 한다.
+   정상=은은한 초록(느림), 간섭 주의=주황(보통), 장착 불가=빨강(강하고 빠름 — 시선을 끈다). */
+@keyframes slot-pass-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(16, 185, 129, 0);
+  }
+}
+@keyframes slot-warn-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 9px rgba(245, 158, 11, 0);
+  }
+}
+@keyframes slot-fail-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}
+.slot-pass-pulse {
+  animation: slot-pass-pulse 3s ease-in-out infinite;
+}
+.slot-warn-pulse {
+  animation: slot-warn-pulse 2.4s ease-in-out infinite;
+}
+.slot-fail-pulse {
+  animation: slot-fail-pulse 1.8s ease-in-out infinite;
+}
+
 /* "다음 선택" 반짝임: 은은한 광택 띠가 주기적으로 카드를 훑고 지나간다.
    체크리스트 다음 행과 보드의 다음 실장 지점이 같은 주기로 반짝여 시선을 잇는다. */
 @keyframes slot-hint-shimmer {
@@ -216,6 +255,9 @@ background:
   .slot-edge-draw,
   .slot-port-pulse,
   .slot-empty-pulse,
+  .slot-pass-pulse,
+  .slot-warn-pulse,
+  .slot-fail-pulse,
   .slot-panel-in {
     animation: none;
   }
