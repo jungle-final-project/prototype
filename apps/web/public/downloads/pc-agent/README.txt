@@ -2,8 +2,8 @@ PCAgent download
 
 This local demo build does not ship a signed installer or Windows Service yet.
 
-Web download gives you PCAgent.exe and pcagent-activation.json.
-Keep both files in the same folder, then double-click PCAgent.exe:
+Web download gives you PCAgent.zip.
+Extract the zip first, then double-click PCAgent.exe:
 
   Creates %LOCALAPPDATA%\BuildGraphAgent\agent-config.json when missing.
   Creates %LOCALAPPDATA%\BuildGraphAgent\logs.
@@ -12,6 +12,12 @@ Keep both files in the same folder, then double-click PCAgent.exe:
   Reads pcagent-activation.json once to register this device.
   Deletes pcagent-activation.json after successful registration.
   Shows a PCAgent tray icon.
+
+The zip contains:
+
+  PCAgent.exe
+  pcagent-activation.json
+  README.txt
 
 Tray menu:
 
@@ -42,6 +48,7 @@ The build creates:
 
 Run examples:
 
+  Extract PCAgent.zip
   PCAgent.exe
   agent-cli.exe doctor --config agent-config.json
   agent-cli.exe collect --config agent-config.json --iterations 1

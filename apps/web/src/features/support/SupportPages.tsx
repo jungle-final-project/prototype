@@ -12,6 +12,12 @@ type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'upload
 type AgentDownloadState = 'idle' | 'issuing' | 'done' | 'error';
 type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
+type ZipEntryInput = {
+  name: string;
+  data: Uint8Array<ArrayBuffer>;
+};
+
+const crc32Table = createCrc32Table();
 
 const remoteSymptomTypes = new Set([
   'REMOTE_AGENT',
@@ -374,9 +380,9 @@ export function SupportNewPage() {
     setAgentDownloadMessage('');
     try {
       const activation = await issueAgentActivationToken();
-      await downloadAgentExe(activation.activationToken);
+      await downloadAgentPackage(activation.activationToken);
       setAgentDownloadState('done');
-      setAgentDownloadMessage('PCAgent.exe와 등록 파일을 내려받았습니다. 두 파일을 같은 폴더에 둔 채 PCAgent.exe를 실행하면 자동 등록됩니다.');
+      setAgentDownloadMessage('PCAgent.zip을 내려받았습니다. 압축을 풀고 PCAgent.exe를 실행하면 자동 등록됩니다.');
     } catch (cause) {
       setAgentDownloadState('error');
       setAgentDownloadMessage(cause instanceof ApiError && cause.status === 401
@@ -1006,29 +1012,136 @@ function toSupportRequestKind(value?: string | null): SupportRequestKind {
   return 'DIAGNOSIS_ONLY';
 }
 
-async function downloadAgentExe(activationToken: string) {
+async function downloadAgentPackage(activationToken: string) {
   const response = await fetch('/downloads/pc-agent/agent.exe');
   if (!response.ok) {
     throw new Error('Agent exe download failed.');
   }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  downloadUrl(url, 'PCAgent.exe');
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  downloadActivationConfig(activationToken);
-}
-
-function downloadActivationConfig(activationToken: string) {
+  const exe = new Uint8Array(await response.arrayBuffer());
   const config = {
     apiBaseUrl: resolveAgentApiBaseUrl(),
     webBaseUrl: window.location.origin,
     activationToken,
     environment: import.meta.env.MODE ?? 'local'
   };
-  const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  downloadUrl(url, 'pcagent-activation.json');
+  const encoder = new TextEncoder();
+  const zip = createZipBlob([
+    { name: 'PCAgent.exe', data: exe },
+    { name: 'pcagent-activation.json', data: encoder.encode(`${JSON.stringify(config, null, 2)}\n`) },
+    { name: 'README.txt', data: encoder.encode(createAgentPackageReadme()) }
+  ]);
+  const url = URL.createObjectURL(zip);
+  downloadUrl(url, 'PCAgent.zip');
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function createAgentPackageReadme() {
+  return [
+    'PCAgent',
+    '',
+    '1. Extract this zip file first.',
+    '2. Keep PCAgent.exe and pcagent-activation.json in the same folder.',
+    '3. Double-click PCAgent.exe.',
+    '',
+    'pcagent-activation.json is a one-time registration file.',
+    'PCAgent deletes it automatically after registration succeeds.',
+    ''
+  ].join('\n');
+}
+
+function createZipBlob(entries: ZipEntryInput[]) {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array<ArrayBuffer>[] = [];
+  const centralParts: Uint8Array<ArrayBuffer>[] = [];
+  let offset = 0;
+  const { dosTime, dosDate } = toDosDateTime(new Date());
+
+  entries.forEach((entry) => {
+    const nameBytes = encoder.encode(entry.name.replace(/\\/g, '/'));
+    const crc = crc32(entry.data);
+
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(localHeader.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, dosTime, true);
+    localView.setUint16(12, dosDate, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, entry.data.length, true);
+    localView.setUint32(22, entry.data.length, true);
+    localView.setUint16(26, nameBytes.length, true);
+    localView.setUint16(28, 0, true);
+    localHeader.set(nameBytes, 30);
+
+    const centralHeader = new Uint8Array(46 + nameBytes.length);
+    const centralView = new DataView(centralHeader.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, dosTime, true);
+    centralView.setUint16(14, dosDate, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, entry.data.length, true);
+    centralView.setUint32(24, entry.data.length, true);
+    centralView.setUint16(28, nameBytes.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    centralHeader.set(nameBytes, 46);
+
+    localParts.push(localHeader, entry.data);
+    centralParts.push(centralHeader);
+    offset += localHeader.length + entry.data.length;
+  });
+
+  const centralOffset = offset;
+  const centralSize = centralParts.reduce((size, part) => size + part.length, 0);
+  const endRecord = new Uint8Array(22);
+  const endView = new DataView(endRecord.buffer);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, entries.length, true);
+  endView.setUint16(10, entries.length, true);
+  endView.setUint32(12, centralSize, true);
+  endView.setUint32(16, centralOffset, true);
+  endView.setUint16(20, 0, true);
+
+  return new Blob([...localParts, ...centralParts, endRecord], { type: 'application/zip' });
+}
+
+function createCrc32Table() {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+}
+
+function crc32(data: Uint8Array) {
+  let crc = 0xffffffff;
+  data.forEach((byte) => {
+    crc = crc32Table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  });
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function toDosDateTime(date: Date) {
+  const year = Math.max(1980, date.getFullYear());
+  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { dosTime, dosDate };
 }
 
 function resolveAgentApiBaseUrl() {
