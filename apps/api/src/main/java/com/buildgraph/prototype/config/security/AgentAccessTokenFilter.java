@@ -21,6 +21,7 @@ public class AgentAccessTokenFilter extends OncePerRequestFilter {
             "/api/agent/heartbeat",
             "/api/agent/log-uploads",
             "/api/agent/log-uploads/as-rag-preview",
+            "/api/agent/diagnosis-chat",
             "/api/agent/as-drafts"
     );
 

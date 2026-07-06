@@ -80,6 +80,24 @@ cd C:\나만무\prototype
 
 로컬 웹 데모에서 내려받는 바이너리 원본은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다. 실제 사용자는 웹 다운로드 버튼으로 `PCAgent.zip`을 받고 압축 해제 후 같은 폴더의 `PCAgent.exe`를 실행해야 합니다. 첫 실행 후에는 시작프로그램이 `%LOCALAPPDATA%\BuildGraphAgent\PCAgent.exe`를 가리키므로 압축 해제 폴더가 이동되거나 삭제되어도 자동 실행 경로가 깨지지 않습니다. 기존 `BuildGraphAgent-<activationToken>.exe` 파일명 방식도 호환 목적으로 인식하지만, 신규 다운로드 흐름에서는 token을 파일명에 노출하지 않습니다.
 
+## AI 진단 탭
+
+로그 뷰어의 두 번째 탭은 `AI 진단`입니다. 이 탭은 상태 탭에서 `PC 진단받기`를 눌러 저장된 최신 진단 기록을 컨텍스트로 사용해 `/api/agent/diagnosis-chat`에 질문을 보냅니다.
+
+- 상태 탭: 최근 30분 로그 진단 실행, 위험도/요약 확인, 명시적 AS 접수
+- AI 진단 탭: 최신 진단 결과에 대한 대화형 자가 조치 상담
+- AS 접수: 사용자가 상태 탭에서 동의 후 `AS 접수 신청`을 누를 때만 `/api/agent/log-uploads`로 진행
+
+`/api/agent/diagnosis-chat`은 agent token Bearer 인증을 사용하지만 `Idempotency-Key`를 요구하지 않습니다. 서버 DB에 `as_tickets`, `agent_log_uploads`, `as_chat_sessions`, `as_chat_messages`를 만들지 않으며, 대화 기록은 로컬 `diagnosis-chat-history.jsonl`에만 저장됩니다.
+
+## 업데이트
+
+설치된 PCAgent는 상태 화면의 `업데이트 확인` 버튼으로 `webBaseUrl/downloads/pc-agent/latest.json`을 조회합니다. manifest의 `version`이 현재 `agentVersion`보다 높으면 `downloadUrl`의 exe를 내려받고 `sha256`을 검증한 뒤 `%LOCALAPPDATA%\BuildGraphAgent\updates`에 staging합니다. 검증이 끝나면 작은 `apply-pcagent-update.cmd`를 실행해 현재 PCAgent를 종료한 뒤 `%LOCALAPPDATA%\BuildGraphAgent\PCAgent.exe`만 교체하고 다시 시작합니다.
+
+업데이트는 실행파일만 교체하며 `agent-config.json`, agent token, 로그, 진단 기록은 유지합니다. 업데이트 적용 후 `agent-config.json`의 `agentVersion`도 새 버전으로 갱신됩니다.
+
+새 exe를 배포할 때는 `build-agent-exe.cmd`를 실행합니다. 이 스크립트는 `dist/agent.exe`와 `dist/agent-cli.exe`를 다시 만들고, `apps/web/public/downloads/pc-agent/agent.exe`를 교체한 뒤 `DEFAULT_AGENT_VERSION`과 생성된 SHA-256으로 `latest.json`을 자동 갱신합니다. 웹 다운로드 파일을 바꾸지 않는 로컬 dist 빌드만 필요하면 `build-agent-exe.ps1 -NoSyncWebDownload`를 사용합니다.
+
 ## 출력 예시
 
 `status` 예시:
@@ -97,7 +115,7 @@ registration: REGISTERED
 logDir: C:\...\apps\pc-agent\out\logs
 logFile: out\logs\agent-metrics.jsonl
 logBytes: 412
-agentVersion: 0.1.0
+agentVersion: 0.1.4
 policyVersion: policy-v1
 agentToken: present
 ```

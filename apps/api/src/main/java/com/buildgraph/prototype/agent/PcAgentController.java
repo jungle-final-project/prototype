@@ -22,9 +22,14 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/agent")
 public class PcAgentController {
     private final PcAgentAsService pcAgentAsService;
+    private final AgentDiagnosisChatService agentDiagnosisChatService;
 
-    public PcAgentController(PcAgentAsService pcAgentAsService) {
+    public PcAgentController(
+            PcAgentAsService pcAgentAsService,
+            AgentDiagnosisChatService agentDiagnosisChatService
+    ) {
         this.pcAgentAsService = pcAgentAsService;
+        this.agentDiagnosisChatService = agentDiagnosisChatService;
     }
 
     @PostMapping("/devices/register")
@@ -150,6 +155,14 @@ public class PcAgentController {
                 ),
                 requireIdempotencyKey(idempotencyKey)
         );
+    }
+
+    @PostMapping("/diagnosis-chat")
+    Map<String, Object> diagnosisChat(
+            @AuthenticationPrincipal AgentPrincipal principal,
+            @RequestBody(required = false) Map<String, Object> request
+    ) {
+        return agentDiagnosisChatService.reply(principal, request == null ? Map.of() : request);
     }
 
     @PostMapping(value = "/as-drafts", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 try:
     import tkinter as tk
@@ -78,6 +78,8 @@ CONSENT_PATH = "/api/agent/consents"
 LOG_UPLOAD_PATH = "/api/agent/log-uploads"
 AS_DRAFT_PATH = "/api/agent/as-drafts"
 AS_RAG_PREVIEW_PATH = "/api/agent/log-uploads/as-rag-preview"
+DIAGNOSIS_CHAT_PATH = "/api/agent/diagnosis-chat"
+UPDATE_MANIFEST_PATH = "/downloads/pc-agent/latest.json"
 REGISTERED_STATUS = "REGISTERED"
 UNREGISTERED_STATUS = "UNREGISTERED"
 DISPLAY_APP_NAME = "PCAgent"
@@ -91,7 +93,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.0"
+DEFAULT_AGENT_VERSION = "0.1.4"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -99,6 +101,11 @@ EVENT_PANEL_SIGNAL_LIMIT = 3
 STATUS_LOG_SUMMARY_LIMIT = 6
 DIAGNOSIS_HISTORY_FILE = "diagnosis-history.jsonl"
 DIAGNOSIS_HISTORY_LIMIT = 100
+DIAGNOSIS_CHAT_HISTORY_FILE = "diagnosis-chat-history.jsonl"
+DIAGNOSIS_CHAT_HISTORY_LIMIT = 100
+UPDATE_DIR_NAME = "updates"
+UPDATE_APPLY_SCRIPT_FILE = "apply-pcagent-update.cmd"
+UPDATE_PENDING_FILE = "pending-update.json"
 HOME_MEMORY_WARNING_THRESHOLD = 85.0
 DIAGNOSIS_DETAIL_EVENT_LIMIT = 5
 DIAGNOSIS_DETAIL_WARNING_THRESHOLD = HOME_MEMORY_WARNING_THRESHOLD
@@ -475,6 +482,15 @@ class AgentConfig:
         return UNREGISTERED_STATUS
 
 
+@dataclass(frozen=True)
+class AgentUpdateInfo:
+    version: str
+    download_url: str
+    sha256: str
+    file_name: str = f"{APP_NAME}.exe"
+    notes: str = ""
+
+
 def required_config_text(data: dict[str, Any], field: str) -> str:
     if field not in data:
         raise ConfigError(f"Missing required config field: {field}")
@@ -526,6 +542,20 @@ def load_config(path: Path) -> AgentConfig:
     return AgentConfig.from_dict(data)
 
 
+def ensure_runtime_config_version(path: Path) -> None:
+    try:
+        data = read_config_json(path)
+    except ConfigError:
+        return
+    if data.get("agentVersion") == DEFAULT_AGENT_VERSION:
+        return
+    data["agentVersion"] = DEFAULT_AGENT_VERSION
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+    restrict_file_to_current_user(path)
+
+
 def app_data_dir() -> Path:
     root = os.environ.get("LOCALAPPDATA")
     if root:
@@ -557,6 +587,212 @@ def support_new_url(config: AgentConfig) -> str:
 
 def support_draft_url(config: AgentConfig, draft_id: str) -> str:
     return f"{support_new_url(config)}?draftId={quote(draft_id)}"
+
+
+def update_manifest_url(config: AgentConfig) -> str:
+    return f"{web_base_url(config)}{UPDATE_MANIFEST_PATH}"
+
+
+def update_dir() -> Path:
+    return app_data_dir() / UPDATE_DIR_NAME
+
+
+def normalize_version_parts(version: str) -> list[int]:
+    parts: list[int] = []
+    for token in re.split(r"[^0-9]+", version):
+        if token:
+            parts.append(int(token))
+    return parts or [0]
+
+
+def compare_versions(left: str, right: str) -> int:
+    left_parts = normalize_version_parts(left)
+    right_parts = normalize_version_parts(right)
+    size = max(len(left_parts), len(right_parts))
+    left_parts.extend([0] * (size - len(left_parts)))
+    right_parts.extend([0] * (size - len(right_parts)))
+    if left_parts > right_parts:
+        return 1
+    if left_parts < right_parts:
+        return -1
+    return 0
+
+
+def update_available(current_version: str, latest_version: str) -> bool:
+    return compare_versions(latest_version, current_version) > 0
+
+
+def parse_agent_update_manifest(payload: Any, manifest_url: str) -> AgentUpdateInfo:
+    if not isinstance(payload, dict):
+        raise AgentError("update manifest root must be a JSON object.")
+    version = str(payload.get("version") or "").strip()
+    download_url = str(payload.get("downloadUrl") or "").strip()
+    sha256 = str(payload.get("sha256") or "").strip().lower()
+    if not version:
+        raise AgentError("update manifest is missing version.")
+    if not download_url:
+        raise AgentError("update manifest is missing downloadUrl.")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise AgentError("update manifest sha256 must be a 64-character hex string.")
+    file_name = sanitize_filename(str(payload.get("fileName") or f"{APP_NAME}.exe"), f"{APP_NAME}.exe")
+    notes = sanitize_display_text(payload.get("notes"), 500)
+    return AgentUpdateInfo(
+        version=version,
+        download_url=urljoin(manifest_url, download_url),
+        sha256=sha256,
+        file_name=file_name,
+        notes="" if notes == "-" else notes,
+    )
+
+
+def fetch_agent_update_manifest(
+    config: AgentConfig,
+    timeout_seconds: int = 8,
+    opener: Any = None,
+) -> AgentUpdateInfo:
+    manifest_url = update_manifest_url(config)
+    request = urllib.request.Request(
+        manifest_url,
+        method="GET",
+        headers={"Accept": "application/json"},
+    )
+    open_fn = opener or urllib.request.urlopen
+    try:
+        with open_fn(request, timeout=timeout_seconds) as response:
+            payload = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exception:
+        detail = exception.read().decode("utf-8", errors="replace")
+        raise AgentError(f"update check failed: HTTP {exception.code} {detail}") from exception
+    except urllib.error.URLError as exception:
+        raise AgentError(f"update check failed: {exception.reason}") from exception
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exception:
+        raise AgentError(f"update manifest is not JSON: {payload[:200]}") from exception
+    return parse_agent_update_manifest(data, manifest_url)
+
+
+def sanitize_filename(value: str, fallback: str) -> str:
+    name = Path(value).name.strip()
+    if not name:
+        return fallback
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name)
+
+
+def download_bytes(url: str, timeout_seconds: int = 30, opener: Any = None) -> bytes:
+    request = urllib.request.Request(url, method="GET")
+    open_fn = opener or urllib.request.urlopen
+    try:
+        with open_fn(request, timeout=timeout_seconds) as response:
+            return response.read()
+    except urllib.error.HTTPError as exception:
+        detail = exception.read().decode("utf-8", errors="replace")
+        raise AgentError(f"update download failed: HTTP {exception.code} {detail}") from exception
+    except urllib.error.URLError as exception:
+        raise AgentError(f"update download failed: {exception.reason}") from exception
+
+
+def stage_agent_update(
+    info: AgentUpdateInfo,
+    timeout_seconds: int = 30,
+    opener: Any = None,
+) -> Path:
+    data = download_bytes(info.download_url, timeout_seconds=timeout_seconds, opener=opener)
+    digest = hashlib.sha256(data).hexdigest()
+    if digest.lower() != info.sha256:
+        raise AgentError("downloaded PCAgent update failed sha256 verification.")
+    directory = update_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    staged_name = sanitize_filename(f"{APP_NAME}-{info.version}.exe", f"{APP_NAME}.exe")
+    staged_path = directory / staged_name
+    tmp_path = staged_path.with_suffix(staged_path.suffix + ".tmp")
+    tmp_path.write_bytes(data)
+    tmp_path.replace(staged_path)
+    pending_path = directory / UPDATE_PENDING_FILE
+    pending_path.write_text(
+        json.dumps(
+            {
+                "version": info.version,
+                "downloadUrl": info.download_url,
+                "sha256": info.sha256,
+                "stagedPath": str(staged_path),
+                "createdAt": datetime.now(KST).isoformat(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return staged_path
+
+
+def write_update_apply_script(staged_executable: Path, target_executable: Path, latest_version: str) -> Path:
+    script_path = update_dir() / UPDATE_APPLY_SCRIPT_FILE
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path = pid_file()
+    config_path = default_background_config_path()
+    script = f"""@echo off
+setlocal
+set "SOURCE={staged_executable}"
+set "TARGET={target_executable}"
+set "PIDFILE={pid_path}"
+set "CONFIG={config_path}"
+set "VERSION={latest_version}"
+if exist "%PIDFILE%" (
+  set /p AGENT_PID=<"%PIDFILE%"
+  if not "%AGENT_PID%"=="" taskkill /PID %AGENT_PID% /T /F >nul 2>nul
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:TARGET; Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'PCAgent.exe' -and $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $target, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}" >nul 2>nul
+timeout /t 2 /nobreak >nul
+copy /Y "%SOURCE%" "%TARGET%" >nul
+if errorlevel 1 (
+  echo Failed to update PCAgent executable.
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:CONFIG; if (Test-Path -LiteralPath $p) {{ $j=Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; $j.agentVersion=$env:VERSION; $j | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $p -Encoding UTF8 }}" >nul 2>nul
+start "" "%TARGET%" run-background
+exit /b 0
+"""
+    script_path.write_text(script, encoding="utf-8")
+    return script_path
+
+
+def prepare_agent_update(config: AgentConfig, opener: Any = None) -> dict[str, Any]:
+    info = fetch_agent_update_manifest(config, opener=opener)
+    if not update_available(config.agent_version, info.version):
+        return {
+            "status": "UP_TO_DATE",
+            "currentVersion": config.agent_version,
+            "latestVersion": info.version,
+        }
+    if not getattr(sys, "frozen", False):
+        return {
+            "status": "DEV_MODE",
+            "currentVersion": config.agent_version,
+            "latestVersion": info.version,
+            "downloadUrl": info.download_url,
+        }
+    staged_path = stage_agent_update(info, opener=opener)
+    target = installed_executable_path()
+    script_path = write_update_apply_script(staged_path, target, info.version)
+    return {
+        "status": "READY",
+        "currentVersion": config.agent_version,
+        "latestVersion": info.version,
+        "stagedPath": str(staged_path),
+        "scriptPath": str(script_path),
+    }
+
+
+def launch_update_apply_script(script_path: Path) -> None:
+    if os.name != "nt":
+        raise AgentError("PCAgent self-update is currently supported only on Windows packaged builds.")
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(script_path)],
+        cwd=str(script_path.parent),
+        **hidden_subprocess_kwargs(),
+    )
 
 
 def hidden_subprocess_kwargs() -> dict[str, Any]:
@@ -634,6 +870,7 @@ def device_fingerprint_hash() -> str:
 
 def ensure_default_config(path: Path) -> Path:
     if path.exists():
+        ensure_runtime_config_version(path)
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
@@ -1868,6 +2105,10 @@ def as_rag_preview_endpoint(api_base_url: str) -> str:
     return api_base_url.rstrip("/") + AS_RAG_PREVIEW_PATH
 
 
+def diagnosis_chat_endpoint(api_base_url: str) -> str:
+    return api_base_url.rstrip("/") + DIAGNOSIS_CHAT_PATH
+
+
 def support_mode_label_for_service(recommended_service: Any) -> str:
     return {
         "REMOTE_SUPPORT": "원격지원 신청",
@@ -1888,6 +2129,10 @@ def format_as_rag_preview(result: dict[str, Any]) -> str:
 
 def diagnosis_history_path(config: AgentConfig) -> Path:
     return config.log_dir.parent / DIAGNOSIS_HISTORY_FILE
+
+
+def diagnosis_chat_history_path(config: AgentConfig) -> Path:
+    return config.log_dir.parent / DIAGNOSIS_CHAT_HISTORY_FILE
 
 
 def string_list(value: Any, limit: int = 6) -> list[str]:
@@ -2015,6 +2260,102 @@ def read_diagnosis_history(config: AgentConfig, limit: int = DIAGNOSIS_HISTORY_L
             if record is not None:
                 rows.append(record)
     return list(reversed(rows[-limit:]))
+
+
+def latest_diagnosis_record(config: AgentConfig) -> dict[str, Any] | None:
+    records = read_diagnosis_history(config, limit=1)
+    return records[0] if records else None
+
+
+def diagnosis_chat_context(record: dict[str, Any]) -> dict[str, Any]:
+    evidence_ids: list[str] = []
+    evidence = record.get("evidence")
+    if isinstance(evidence, list):
+        for index, item in enumerate(evidence[:5]):
+            if isinstance(item, dict):
+                reason_code = sanitize_display_text(item.get("reasonCode"), 80)
+                title = sanitize_display_text(item.get("title"), 80)
+                evidence_ids.append(reason_code if reason_code != "-" else f"pc-agent-evidence-{index + 1}:{title}")
+    return {
+        "diagnosisId": sanitize_display_text(record.get("id"), 80),
+        "summaryText": sanitize_display_text(record.get("summaryText"), 420),
+        "recommendationMessage": sanitize_display_text(record.get("recommendationMessage"), 260),
+        "recommendedService": sanitize_display_text(record.get("recommendedService"), 80),
+        "recommendedDecision": sanitize_display_text(record.get("supportDecision"), 80),
+        "confidence": sanitize_display_text(record.get("confidence"), 20),
+        "reasonCodes": string_list(record.get("reasonCodes"), 6),
+        "remoteActions": string_list(record.get("remoteActions"), 6),
+        "visitReasons": string_list(record.get("visitReasons"), 6),
+        "blockingFactors": string_list(record.get("blockingFactors"), 6),
+        "evidenceIds": evidence_ids,
+    }
+
+
+def normalize_diagnosis_chat_message(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    role = str(value.get("role") or "").strip().lower()
+    if role not in {"user", "assistant"}:
+        return None
+    content = sanitize_display_text(value.get("content"), 2000)
+    if content == "-":
+        return None
+    return {
+        "id": sanitize_display_text(value.get("id") or f"chat-{uuid.uuid4()}", 80),
+        "diagnosisId": sanitize_display_text(value.get("diagnosisId"), 80),
+        "createdAt": sanitize_display_text(value.get("createdAt"), 40),
+        "role": role,
+        "content": content,
+        "payload": value.get("payload") if isinstance(value.get("payload"), dict) else {},
+    }
+
+
+def append_diagnosis_chat_message(
+    config: AgentConfig,
+    diagnosis_id: str,
+    role: str,
+    content: str,
+    payload: dict[str, Any] | None = None,
+) -> Path:
+    path = diagnosis_chat_history_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "id": f"chat-{uuid.uuid4()}",
+        "diagnosisId": sanitize_display_text(diagnosis_id, 80),
+        "createdAt": datetime.now(KST).isoformat(),
+        "role": role,
+        "content": sanitize_display_text(content, 2000),
+        "payload": payload or {},
+    }
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path
+
+
+def read_diagnosis_chat_history(
+    config: AgentConfig,
+    diagnosis_id: str | None = None,
+    limit: int = DIAGNOSIS_CHAT_HISTORY_LIMIT,
+) -> list[dict[str, Any]]:
+    path = diagnosis_chat_history_path(config)
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = normalize_diagnosis_chat_message(value)
+            if message is None:
+                continue
+            if diagnosis_id is not None and message.get("diagnosisId") != diagnosis_id:
+                continue
+            rows.append(message)
+    return rows[-limit:]
 
 
 def format_diagnosis_history_time(value: Any) -> str:
@@ -2191,6 +2532,59 @@ def preview_as_rag(
         raise UploadError(f"AS RAG preview response is not JSON: {payload[:200]}") from exception
     if not isinstance(result, dict) or not result.get("recommendedService"):
         raise UploadError(f"AS RAG preview response did not include recommendedService: {result}")
+    return result
+
+
+def send_diagnosis_chat(
+    config: AgentConfig,
+    diagnosis_record: dict[str, Any],
+    messages: Sequence[dict[str, Any]],
+    message: str,
+    timeout_seconds: int = 20,
+) -> dict[str, Any]:
+    if not config.agent_token:
+        raise UploadError("agentToken is missing. Run register first or wait for Goal 10 token storage.")
+    text = message.strip()
+    if not text:
+        raise UploadError("diagnosis chat message is empty.")
+    payload = {
+        "message": text,
+        "diagnosis": diagnosis_chat_context(diagnosis_record),
+        "messages": [
+            {
+                "role": str(item.get("role") or ""),
+                "content": sanitize_display_text(item.get("content"), 2000),
+            }
+            for item in messages[-8:]
+            if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
+        ],
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        diagnosis_chat_endpoint(config.api_base_url),
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.agent_token}",
+            "Content-Type": "application/json; charset=utf-8",
+            "Content-Length": str(len(body)),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exception:
+        detail = exception.read().decode("utf-8", errors="replace")
+        raise UploadError(f"diagnosis chat failed: HTTP {exception.code} {detail}") from exception
+    except urllib.error.URLError as exception:
+        raise UploadError(f"diagnosis chat failed: {exception.reason}") from exception
+
+    try:
+        result = json.loads(response_body)
+    except json.JSONDecodeError as exception:
+        raise UploadError(f"diagnosis chat response is not JSON: {response_body[:200]}") from exception
+    if not isinstance(result, dict) or not result.get("assistantMessage"):
+        raise UploadError(f"diagnosis chat response did not include assistantMessage: {result}")
     return result
 
 
@@ -3962,6 +4356,7 @@ def show_log_viewer(
     home_detection_title = tk.StringVar(value="최근 감지 신호 없음")
     home_detection_detail = tk.StringVar(value="최근 로그에서 AS 접수가 필요한 신호는 아직 없습니다.")
     home_support_status = tk.StringVar(value="")
+    update_status = tk.StringVar(value="")
     home_consent = tk.BooleanVar(value=False)
     home_detection_value: dict[str, Any] = {"signal": None}
     home_diagnosis_ready = {"ready": False}
@@ -4027,7 +4422,7 @@ def show_log_viewer(
         nav_items.append((name, item))
 
     add_nav_item("상태", "●", lambda: show_status_tab())
-    add_nav_item("진단", "+", lambda: show_support_tab())
+    add_nav_item("AI 진단", "+", lambda: show_support_tab())
     add_nav_item("기록", "≡", lambda: show_log_tab())
     add_nav_item("설정", "○", lambda: open_log_folder(config_path))
     render_nav()
@@ -4037,6 +4432,23 @@ def show_log_viewer(
 
     header = tk.Frame(content, background=colors["app_bg"])
     header.pack(fill="x")
+    update_status_label = tk.Label(
+        header,
+        textvariable=update_status,
+        font=ui_font(FONT_SECONDARY_PX),
+        foreground=colors["muted"],
+        background=colors["app_bg"],
+        anchor="e",
+    )
+    update_status_label.pack(side="right", padx=(8, 0), pady=(0, 8))
+    rounded_button(
+        header,
+        "업데이트 확인",
+        lambda: check_for_agent_update(),
+        "secondary",
+        width=116,
+        height=30,
+    ).pack(side="right", pady=(0, 8))
     range_badge = tk.Label(
         header,
         textvariable=range_status,
@@ -4055,14 +4467,24 @@ def show_log_viewer(
 
     status_header = tk.Frame(status_view, background=colors["app_bg"])
     status_header.pack(fill="x", pady=(0, 8))
+    status_title_row = tk.Frame(status_header, background=colors["app_bg"])
+    status_title_row.pack(fill="x")
     tk.Label(
-        status_header,
+        status_title_row,
         text="상태 홈",
         font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
         foreground=colors["text"],
         background=colors["app_bg"],
         anchor="w",
-    ).pack(fill="x")
+    ).pack(side="left", fill="x", expand=True)
+    rounded_button(
+        status_title_row,
+        "업데이트 확인",
+        lambda: check_for_agent_update(),
+        "secondary",
+        width=116,
+        height=30,
+    ).pack(side="right", padx=(8, 0))
     tk.Label(
         status_header,
         text="PCAgent가 시스템을 안전하게 보호하고 있습니다.",
@@ -4978,6 +5400,251 @@ def show_log_viewer(
 
     support_actions = tk.Frame(support_inner, background=colors["card_bg"])
     support_actions.pack(fill="x")
+
+    for legacy_widget in (
+        diagnosis_header,
+        diagnosis_summary_card,
+        diagnosis_metric_grid,
+        diagnosis_events_card,
+        diagnosis_ai_card,
+        diagnosis_actions,
+    ):
+        legacy_widget.pack_forget()
+
+    diagnosis_chat_context_text = tk.StringVar(value="상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
+    diagnosis_chat_status = tk.StringVar(value="")
+    diagnosis_chat_current: dict[str, Any] = {"record": None}
+    diagnosis_chat_running = {"active": False}
+
+    diagnosis_chat_card, diagnosis_chat_inner = rounded_container(
+        support_view,
+        520,
+        padding=(18, 16),
+        radius=16,
+    )
+    diagnosis_chat_card.pack(fill="both", expand=True)
+    diagnosis_chat_inner.columnconfigure(0, weight=1)
+    diagnosis_chat_inner.rowconfigure(2, weight=1)
+    tk.Label(
+        diagnosis_chat_inner,
+        text="AI 진단",
+        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
+        foreground=colors["text"],
+        background=colors["card_bg"],
+        anchor="w",
+    ).grid(row=0, column=0, sticky="ew")
+    tk.Label(
+        diagnosis_chat_inner,
+        textvariable=diagnosis_chat_context_text,
+        font=ui_font(FONT_SECONDARY_PX),
+        foreground=colors["muted"],
+        background=colors["card_bg"],
+        anchor="w",
+        wraplength=760,
+    ).grid(row=1, column=0, sticky="ew", pady=(4, 12))
+
+    diagnosis_chat_transcript = tk.Text(
+        diagnosis_chat_inner,
+        height=15,
+        wrap="word",
+        relief="flat",
+        borderwidth=1,
+        highlightthickness=1,
+        highlightbackground=colors["border"],
+        font=ui_font(FONT_BODY_PX),
+        background=colors["section_bg"],
+        foreground=colors["text"],
+        state="disabled",
+        padx=10,
+        pady=8,
+    )
+    diagnosis_chat_transcript.grid(row=2, column=0, sticky="nsew")
+    diagnosis_chat_transcript.tag_configure("user", foreground="#155f8b", spacing3=8)
+    diagnosis_chat_transcript.tag_configure("assistant", foreground=colors["text"], spacing3=8)
+    diagnosis_chat_transcript.tag_configure("system", foreground=colors["muted"], spacing3=8)
+
+    quick_question_row = tk.Frame(diagnosis_chat_inner, background=colors["card_bg"])
+    quick_question_row.grid(row=3, column=0, sticky="ew", pady=(10, 8))
+
+    diagnosis_chat_input = tk.Text(
+        diagnosis_chat_inner,
+        height=3,
+        wrap="word",
+        relief="flat",
+        borderwidth=1,
+        highlightthickness=1,
+        highlightbackground=colors["border"],
+        font=ui_font(FONT_BODY_PX),
+    )
+    diagnosis_chat_input.grid(row=4, column=0, sticky="ew")
+
+    diagnosis_chat_bottom = tk.Frame(diagnosis_chat_inner, background=colors["card_bg"])
+    diagnosis_chat_bottom.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+    diagnosis_chat_bottom.columnconfigure(0, weight=1)
+    tk.Label(
+        diagnosis_chat_bottom,
+        textvariable=diagnosis_chat_status,
+        font=ui_font(FONT_SECONDARY_PX),
+        foreground="#16766b",
+        background=colors["card_bg"],
+        anchor="w",
+        wraplength=560,
+    ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+    diagnosis_chat_escalation = tk.Frame(diagnosis_chat_inner, background=colors["section_bg"], padx=12, pady=10)
+    diagnosis_chat_escalation_text = tk.StringVar(value="")
+    tk.Label(
+        diagnosis_chat_escalation,
+        textvariable=diagnosis_chat_escalation_text,
+        font=ui_font(FONT_SECONDARY_PX),
+        foreground=colors["text"],
+        background=colors["section_bg"],
+        anchor="w",
+        wraplength=560,
+    ).pack(side="left", fill="x", expand=True)
+
+    def set_chat_transcript(messages: list[dict[str, Any]], empty_text: str) -> None:
+        diagnosis_chat_transcript.configure(state="normal")
+        diagnosis_chat_transcript.delete("1.0", "end")
+        if not messages:
+            diagnosis_chat_transcript.insert("end", empty_text + "\n", "system")
+        for item in messages:
+            role = str(item.get("role") or "")
+            content = sanitize_display_text(item.get("content"), 2000)
+            if role == "user":
+                diagnosis_chat_transcript.insert("end", f"나: {content}\n\n", "user")
+            elif role == "assistant":
+                diagnosis_chat_transcript.insert("end", f"AI: {content}\n\n", "assistant")
+        diagnosis_chat_transcript.configure(state="disabled")
+        diagnosis_chat_transcript.see("end")
+
+    def update_chat_escalation(response: dict[str, Any] | None) -> None:
+        escalation = response.get("escalation") if isinstance(response, dict) else None
+        if not isinstance(escalation, dict) or not bool(escalation.get("recommended")):
+            diagnosis_chat_escalation.grid_forget()
+            return
+        reason = sanitize_display_text(escalation.get("reason"), 220)
+        diagnosis_chat_escalation_text.set(f"AS 접수가 필요할 수 있습니다. {reason}")
+        if not diagnosis_chat_escalation.winfo_ismapped():
+            diagnosis_chat_escalation.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+
+    rounded_button(
+        diagnosis_chat_escalation,
+        "AS 접수로 이동",
+        lambda: show_status_tab(),
+        "primary",
+        width=118,
+        height=30,
+    ).pack(side="right", padx=(10, 0))
+
+    def refresh_diagnosis_chat_context() -> None:
+        try:
+            current_config = reload_viewer_config()
+            record = latest_diagnosis_record(current_config)
+        except Exception as exception:
+            diagnosis_chat_current["record"] = None
+            diagnosis_chat_context_text.set("진단 기록을 읽을 수 없습니다.")
+            diagnosis_chat_status.set(event_panel_failure_message(exception))
+            set_chat_transcript([], "진단 기록을 다시 확인해 주세요.")
+            update_chat_escalation(None)
+            return
+
+        diagnosis_chat_current["record"] = record
+        if record is None:
+            diagnosis_chat_context_text.set("상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
+            diagnosis_chat_status.set("")
+            set_chat_transcript([], "최근 진단 결과가 있으면 여기서 바로 질문할 수 있습니다.")
+            update_chat_escalation(None)
+            return
+
+        diagnosis_id = str(record.get("id") or "")
+        label = sanitize_display_text(record.get("recommendedServiceLabel"), 50)
+        confidence = sanitize_display_text(record.get("confidence"), 20)
+        diagnosis_chat_context_text.set(
+            f"최근 진단 기준: {format_diagnosis_history_time(record.get('createdAt'))} / {label} / 신뢰도 {confidence}"
+        )
+        messages = read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT)
+        set_chat_transcript(messages, "최근 진단 결과에 대해 궁금한 점을 물어보세요.")
+        last_response = next(
+            (
+                item.get("payload")
+                for item in reversed(messages)
+                if item.get("role") == "assistant" and isinstance(item.get("payload"), dict)
+            ),
+            None,
+        )
+        update_chat_escalation(last_response if isinstance(last_response, dict) else None)
+        diagnosis_chat_status.set("")
+
+    def submit_diagnosis_chat(question: str | None = None) -> None:
+        if diagnosis_chat_running["active"]:
+            return
+        text = (question if question is not None else diagnosis_chat_input.get("1.0", "end")).strip()
+        if not text:
+            diagnosis_chat_status.set("질문을 입력해 주세요.")
+            return
+        try:
+            current_config = reload_viewer_config()
+            record = diagnosis_chat_current.get("record") or latest_diagnosis_record(current_config)
+        except Exception as exception:
+            diagnosis_chat_status.set(event_panel_failure_message(exception))
+            return
+        if not isinstance(record, dict):
+            diagnosis_chat_status.set("상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
+            return
+
+        diagnosis_id = str(record.get("id") or "")
+        history = read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT)
+        append_diagnosis_chat_message(current_config, diagnosis_id, "user", text)
+        diagnosis_chat_input.delete("1.0", "end")
+        set_chat_transcript(
+            read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT),
+            "",
+        )
+        diagnosis_chat_running["active"] = True
+        diagnosis_chat_status.set("AI가 최근 진단 결과를 확인하고 있습니다.")
+
+        def apply_success(response: dict[str, Any]) -> None:
+            assistant_message = sanitize_display_text(response.get("assistantMessage"), 2000)
+            append_diagnosis_chat_message(current_config, diagnosis_id, "assistant", assistant_message, response)
+            set_chat_transcript(
+                read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT),
+                "",
+            )
+            update_chat_escalation(response)
+            diagnosis_chat_status.set("")
+            diagnosis_chat_running["active"] = False
+
+        def apply_error(exception: Exception) -> None:
+            diagnosis_chat_status.set(event_panel_failure_message(exception))
+            diagnosis_chat_running["active"] = False
+
+        def run_chat() -> None:
+            try:
+                response = send_diagnosis_chat(current_config, record, history, text)
+                root.after(0, lambda: apply_success(response))
+            except Exception as exception:
+                root.after(0, lambda current=exception: apply_error(current))
+
+        threading.Thread(target=run_chat, daemon=True).start()
+
+    for quick_text in ("원인 쉽게 설명", "직접 해볼 조치", "위험한 상태야?", "AS 접수해야 해?"):
+        rounded_button(
+            quick_question_row,
+            quick_text,
+            lambda value=quick_text: submit_diagnosis_chat(value),
+            "secondary",
+            width=116,
+            height=30,
+        ).pack(side="left", padx=(0, 8))
+    rounded_button(
+        diagnosis_chat_bottom,
+        "보내기",
+        lambda: submit_diagnosis_chat(),
+        "primary",
+        width=88,
+        height=32,
+    ).grid(row=0, column=1, sticky="e")
     log_filter_state = {"logTabOpened": False, "userTouched": False}
 
     def selected_date_text() -> str:
@@ -5301,6 +5968,58 @@ def show_log_viewer(
 
         threading.Thread(target=run_preview, daemon=True).start()
 
+    update_running = {"active": False}
+
+    def check_for_agent_update() -> None:
+        if update_running["active"]:
+            return
+        update_running["active"] = True
+        update_status.set("업데이트 확인 중...")
+        try:
+            current_config = reload_viewer_config()
+        except Exception as exception:
+            update_status.set(event_panel_failure_message(exception))
+            update_running["active"] = False
+            return
+
+        def finish(result: dict[str, Any]) -> None:
+            status = str(result.get("status") or "")
+            latest = sanitize_display_text(result.get("latestVersion"), 40)
+            if status == "UP_TO_DATE":
+                update_status.set(f"최신 버전입니다. ({latest})")
+                update_running["active"] = False
+                return
+            if status == "DEV_MODE":
+                update_status.set(f"최신 {latest} 확인됨. 개발 실행은 exe 재빌드가 필요합니다.")
+                update_running["active"] = False
+                return
+            if status == "READY":
+                script_path = Path(str(result["scriptPath"]))
+                update_status.set(f"최신 {latest} 적용 중입니다. PCAgent를 다시 시작합니다.")
+                try:
+                    launch_update_apply_script(script_path)
+                except Exception as exception:
+                    update_status.set(event_panel_failure_message(exception))
+                    update_running["active"] = False
+                    return
+                root.after(700, lambda: os._exit(0))
+                return
+            update_status.set("업데이트 상태를 확인할 수 없습니다.")
+            update_running["active"] = False
+
+        def fail(exception: Exception) -> None:
+            update_status.set(event_panel_failure_message(exception))
+            update_running["active"] = False
+
+        def run_update_check() -> None:
+            try:
+                result = prepare_agent_update(current_config)
+                root.after(0, lambda: finish(result))
+            except Exception as exception:
+                root.after(0, lambda current=exception: fail(current))
+
+        threading.Thread(target=run_update_check, daemon=True).start()
+
     def prepare_home_support_context() -> None:
         signal = home_detection_value.get("signal")
         fill_support_from_signal(signal if isinstance(signal, dict) else None)
@@ -5490,14 +6209,14 @@ def show_log_viewer(
             tree.focus_set()
 
     def show_support_tab(signal: dict[str, Any] | None = None) -> None:
-        selected_nav.set("진단")
+        selected_nav.set("AI 진단")
         render_nav()
         status_view.pack_forget()
         log_view.pack_forget()
         support_view.pack(fill="both", expand=True)
         range_badge.pack_forget()
         range_status.set("")
-        refresh_diagnosis_detail()
+        refresh_diagnosis_chat_context()
 
     def set_current_hour() -> None:
         current_date, current_hour = default_log_filter_values()

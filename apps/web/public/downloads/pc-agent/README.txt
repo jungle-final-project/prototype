@@ -27,6 +27,13 @@ Tray menu:
   Open AS page
   Stop
 
+Updates:
+
+  PCAgent checks downloads/pc-agent/latest.json from webBaseUrl.
+  If latest.json has a newer version, PCAgent downloads agent.exe, verifies sha256,
+  stages it in %LOCALAPPDATA%\BuildGraphAgent\updates, and restarts with the new executable.
+  Existing agent-config.json, agent token, and logs are kept.
+
 The log viewer lets you choose a date and 1-hour range.
 
 Config fields:
@@ -47,6 +54,13 @@ The build creates:
   apps\pc-agent\dist\agent.exe      silent tray/viewer executable
   apps\pc-agent\dist\agent-cli.exe  console executable for status/doctor
 
+It also syncs:
+
+  apps\web\public\downloads\pc-agent\agent.exe
+  apps\web\public\downloads\pc-agent\latest.json
+
+Use build-agent-exe.ps1 -NoSyncWebDownload only for a local dist build.
+
 Run examples:
 
   Extract PCAgent.zip
@@ -60,5 +74,4 @@ Not included yet:
 
   Windows Service
   installer
-  auto-update
   signed release channel
