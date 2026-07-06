@@ -17,6 +17,7 @@ import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
+import com.buildgraph.prototype.ticket.SupportChatWebSocketHandler;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
@@ -61,6 +62,9 @@ class AdminControllerTest {
 
     @MockitoBean
     private TicketQueryService ticketQueryService;
+
+    @MockitoBean
+    private SupportChatWebSocketHandler supportChatWebSocketHandler;
 
     @MockitoBean
     private PriceQueryService priceQueryService;
@@ -336,5 +340,34 @@ class AdminControllerTest {
                 "reviewStatus", "APPROVED",
                 "adminNote", "Remote support link sent."
         ), ADMIN);
+    }
+
+    @Test
+    void updateAsTicketBroadcastsSupportChatRoomWhenTicketStatusChanges() throws Exception {
+        when(ticketQueryService.update("ticket-public-id", Map.of(
+                "status", "CLOSED"
+        ), ADMIN)).thenReturn(Map.of(
+                "id", "ticket-public-id",
+                "status", "CLOSED",
+                "supportChatRoomId", "00000000-0000-4000-8000-000000009001",
+                "causeCandidates", List.of(),
+                "upgradeCandidates", List.of()
+        ));
+
+        mockMvc.perform(patch("/api/admin/as-tickets/ticket-public-id")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "status": "CLOSED"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("ticket-public-id"))
+                .andExpect(jsonPath("$.status").value("CLOSED"))
+                .andExpect(jsonPath("$.supportChatRoomId").value("00000000-0000-4000-8000-000000009001"));
+
+        verify(ticketQueryService).update("ticket-public-id", Map.of("status", "CLOSED"), ADMIN);
+        verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
     }
 }

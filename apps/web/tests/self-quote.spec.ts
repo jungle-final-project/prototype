@@ -125,7 +125,14 @@ const emptyDraft = {
   itemCount: 0
 };
 
-function draftItem(partId: string, category: string, name: string, price: number, quantity = 1) {
+function draftItem(
+  partId: string,
+  category: string,
+  name: string,
+  price: number,
+  quantity = 1,
+  attributes: Record<string, unknown> = {}
+) {
   return {
     id: `draft-item-${partId}`,
     partId,
@@ -136,7 +143,7 @@ function draftItem(partId: string, category: string, name: string, price: number
     unitPriceAtAdd: price,
     currentPrice: price,
     lineTotal: price * quantity,
-    attributes: {}
+    attributes
   };
 }
 
@@ -277,7 +284,7 @@ test('fills all 8 slots from the current quote draft and shows mini slot overflo
   await expect(statusBar.getByText(`${fullDraft.totalPrice.toLocaleString()}원`)).toBeVisible();
 });
 
-test('renders the slot board as a motherboard-style dependency diagram with mounted part media', async ({ page }) => {
+test('renders the slot board as an information-first compatibility diagram with mounted part media', async ({ page }) => {
   await loginAsUser(page);
   const visualDraftItems = [
     {
@@ -353,9 +360,14 @@ test('renders the slot board as a motherboard-style dependency diagram with moun
   await page.goto('/self-quote');
 
   const board = page.getByTestId('slot-board');
-  await expect(page.getByText('메인보드 구성도 (의존성 그래프)')).toBeVisible();
+  await expect(page.getByText('구성 관계도 — 부품 간 호환 상태')).toBeVisible();
   await expect(board).toHaveAttribute('data-visual-mode', 'motherboard');
-  await expect(page.getByTestId('slot-board-motherboard-art')).toBeVisible();
+  // 장식용 배경 평면도는 리디자인에서 제거됨 — 범례가 색 체계를 설명한다.
+  await expect(page.getByTestId('slot-board-motherboard-art')).toHaveCount(0);
+  // 범례는 보드 헤더에 있다 ('호환 가능'은 장착 슬롯 뱃지에도 쓰이므로 first = 헤더).
+  await expect(page.getByText('호환 가능', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('장착 불가', { exact: true })).toBeVisible();
+  await expect(page.getByText('미장착', { exact: true })).toBeVisible();
 
   const gpuSlot = page.getByTestId('slot-GPU');
   await expect(gpuSlot.getByTestId('slot-part-image')).toHaveAttribute('src', 'https://example.test/visual-gpu.png');
@@ -365,6 +377,90 @@ test('renders the slot board as a motherboard-style dependency diagram with moun
   const edges = page.getByTestId('slot-board-edges');
   await expect(edges.getByText('PCIe x16 4.0')).toBeVisible();
   await expect(edges.getByText('24핀 전원')).toBeVisible();
+});
+
+test('shows the AI start banner on an empty quote with manual and AI entry points', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  const banner = page.getByTestId('quote-start-banner');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('AI에게 예산과 용도만 알려주세요');
+
+  // 직접 고르기 → CPU 후보 패널이 열린다.
+  await page.getByTestId('quote-manual-start').click();
+  await expect(page).toHaveURL('/self-quote?category=CPU');
+  await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+
+  // AI로 시작하기 → 챗봇 패널이 열린다.
+  await page.getByTestId('quote-ai-start').click();
+  await expect(page.getByTestId('ai-chatbot-panel')).toBeVisible();
+});
+
+test('renders the quote checklist with progress, next-slot guide, and total', async ({ page }) => {
+  await loginAsUser(page);
+  const checklistItems = [
+    draftItem('part-check-cpu', 'CPU', '체크 CPU', 300000),
+    draftItem('part-check-board', 'MOTHERBOARD', '체크 보드', 200000)
+  ];
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...emptyDraft, items: checklistItems, totalPrice: 500000, itemCount: 2 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  const checklist = page.getByTestId('quote-checklist');
+  await expect(checklist.getByTestId('quote-checklist-progress')).toHaveText('2/8 완료');
+  await expect(checklist.getByTestId('quote-checklist-total')).toHaveText('500,000원');
+
+  await expect(checklist.getByTestId('checklist-CPU')).toHaveAttribute('data-filled', 'true');
+  await expect(checklist.getByTestId('checklist-CPU')).toContainText('체크 CPU');
+  await expect(checklist.getByTestId('checklist-CPU')).toContainText('300,000원');
+
+  // 권장 순서상 다음 슬롯(RAM)이 체크리스트·보드 양쪽에서 강조된다.
+  await expect(checklist.getByTestId('checklist-RAM')).toHaveAttribute('data-next', 'true');
+  await expect(checklist.getByTestId('checklist-RAM')).toContainText('다음 선택');
+  await expect(page.getByTestId('slot-RAM')).toHaveAttribute('data-next', 'true');
+  await expect(page.getByTestId('quote-next-guide')).toContainText('다음: 3. RAM를 선택해 주세요');
+
+  // 체크리스트 클릭 = 해당 후보 패널 열기 (가이드는 강제가 아니라서 아무 항목이나 열 수 있다).
+  await checklist.getByTestId('checklist-PSU').click();
+  await expect(page).toHaveURL('/self-quote?category=PSU');
+  await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
+});
+
+test('shows the completion guide when all eight slots are filled', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('quote-complete-guide')).toContainText('8개 품목이 모두 채워졌어요');
+  await expect(page.getByTestId('quote-next-guide')).toHaveCount(0);
+  await expect(page.getByTestId('quote-start-banner')).toHaveCount(0);
+  await expect(page.getByTestId('quote-checklist-progress')).toHaveText('8/8 완료');
 });
 
 test('applies saved admin slot positions from the graph response when they use slot-board percent coordinates', async ({ page }) => {
@@ -682,9 +778,15 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
   await expect(panel.getByText('간섭 GPU 후보')).toBeVisible();
   await expect(panel.getByText('간섭 주의')).toBeVisible();
   await expect(panel.getByRole('button', { name: '간섭 GPU 후보 담기' })).toBeEnabled();
-  // FAIL 후보는 숨기고 개수 없이 문구만 노출한다.
-  await expect(panel.getByText('실패 GPU 후보')).toHaveCount(0);
-  await expect(panel.getByText('안 맞는 후보는 숨김')).toBeVisible();
+  // FAIL 후보는 숨기지 않고 회색 비활성 + 선택 불가 사유를 함께 보여준다.
+  await expect(panel.getByText('실패 GPU 후보')).toBeVisible();
+  const failCard = panel.locator('[data-compat="FAIL"]');
+  await expect(failCard).toHaveCount(1);
+  // '선택 불가'는 뱃지와 비활성 버튼 양쪽에 붙는다 — 뱃지(first)와 버튼을 각각 확인.
+  await expect(failCard.getByText('선택 불가', { exact: true }).first()).toBeVisible();
+  await expect(failCard.getByText('파워 용량이 부족합니다.')).toBeVisible();
+  await expect(panel.getByRole('button', { name: '실패 GPU 후보 선택 불가' })).toBeDisabled();
+  await expect(panel.getByText('안 맞는 후보는 회색으로 표시하고 사유를 알려드려요')).toBeVisible();
 
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
@@ -729,7 +831,7 @@ test('adds a candidate part into an empty slot from the panel', async ({ page })
   await expect(page.getByTestId('slot-status-bar').getByText('미장착 슬롯 7개가 있습니다')).toBeVisible();
 });
 
-test('fetches the next candidate page automatically when a whole page is hidden as FAIL', async ({ page }) => {
+test('shows a whole FAIL page greyed out with reasons instead of auto-fetching the next page', async ({ page }) => {
   await loginAsUser(page);
   const requestedPages: string[] = [];
 
@@ -754,11 +856,17 @@ test('fetches the next candidate page automatically when a whole page is hidden 
 
   await page.goto('/self-quote?category=PSU');
 
-  await expect.poll(() => requestedPages).toContain('1');
+  // 전부 FAIL이어도 자동으로 다음 페이지를 당기지 않고, 회색 카드 20개 + 사유를 그대로 보여준다.
   const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel.getByText('실패 파워 1', { exact: true })).toBeVisible();
+  await expect(panel.locator('[data-compat="FAIL"]')).toHaveCount(20);
+  await expect(panel.getByText('용량 부족').first()).toBeVisible();
+  expect(requestedPages).toEqual(['0']);
+
+  // 다음 페이지는 사용자가 직접 '후보 더 보기'로 불러온다.
+  await panel.getByRole('button', { name: '후보 더 보기' }).dispatchEvent('click');
   await expect(panel.getByText('통과 파워 후보')).toBeVisible();
-  await expect(panel.getByText(/실패 파워/)).toHaveCount(0);
-  await expect(panel.getByText('안 맞는 후보는 숨김')).toBeVisible();
+  expect(requestedPages).toContain('1');
 });
 
 test('loads more candidates in 20 item pages from the panel', async ({ page }) => {
@@ -1026,6 +1134,27 @@ test('updates RAM quantity with the panel stepper', async ({ page }) => {
 
   await expect.poll(() => patchRequests).toEqual([{ partId: 'part-ram-qty', quantity: 3 }]);
   await expect(page.getByTestId('slot-RAM').locator('[data-mini-slot-filled="true"]')).toHaveCount(3);
+});
+
+test('counts a dual-stick RAM kit as two mini slots', async ({ page }) => {
+  await loginAsUser(page);
+
+  // "32GB(16Gx2)" 킷: 상품 1개(quantity 1)지만 moduleCount=2라 스틱 2개를 차지한다.
+  const kit = draftItem('part-ram-kit', 'RAM', '32GB 2개들이 킷', 180000, 1, { moduleCount: 2 });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...emptyDraft, items: [kit], totalPrice: kit.lineTotal, itemCount: 1 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('slot-RAM').locator('[data-mini-slot-filled="true"]')).toHaveCount(2);
 });
 
 test('opens the candidate panel from the category deep link', async ({ page }) => {
@@ -1321,7 +1450,8 @@ test('self quote chatbot sends current draft and never mutates the draft automat
   await expect(page.getByTestId('ai-chat-messages')).toContainText('나머지 카테고리를 내부 자산 기준으로 채웠습니다.');
 
   expect(draftMutationMethods).toHaveLength(0);
-  await expect(page.getByText('RTX 5070 챗봇 테스트')).toBeVisible();
+  // 부품명은 체크리스트와 슬롯 카드 양쪽에 보이므로 슬롯 카드로 한정해 확인한다.
+  await expect(page.getByTestId('slot-GPU')).toContainText('RTX 5070 챗봇 테스트');
 });
 
 test('opens cooler candidate panel from home category link', async ({ page }) => {

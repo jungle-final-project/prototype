@@ -6,6 +6,7 @@ import com.buildgraph.prototype.common.PipelineJobRunRecorder;
 import com.buildgraph.prototype.price.PriceQueryService;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
 import com.buildgraph.prototype.rag.RagQueryService;
+import com.buildgraph.prototype.ticket.SupportChatWebSocketHandler;
 import com.buildgraph.prototype.ticket.TicketQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.Map;
@@ -30,6 +31,7 @@ public class AdminController {
     private final RagQueryService ragQueryService;
     private final RagEmbeddingService ragEmbeddingService;
     private final TicketQueryService ticketQueryService;
+    private final SupportChatWebSocketHandler supportChatWebSocketHandler;
     private final PriceQueryService priceQueryService;
     private final BuildGraphLayoutService buildGraphLayoutService;
     private final CurrentUserService currentUserService;
@@ -41,6 +43,7 @@ public class AdminController {
             RagQueryService ragQueryService,
             RagEmbeddingService ragEmbeddingService,
             TicketQueryService ticketQueryService,
+            SupportChatWebSocketHandler supportChatWebSocketHandler,
             PriceQueryService priceQueryService,
             BuildGraphLayoutService buildGraphLayoutService,
             CurrentUserService currentUserService,
@@ -51,6 +54,7 @@ public class AdminController {
         this.ragQueryService = ragQueryService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.ticketQueryService = ticketQueryService;
+        this.supportChatWebSocketHandler = supportChatWebSocketHandler;
         this.priceQueryService = priceQueryService;
         this.buildGraphLayoutService = buildGraphLayoutService;
         this.currentUserService = currentUserService;
@@ -164,7 +168,12 @@ public class AdminController {
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
-        return ticketQueryService.update(id, request, admin);
+        Map<String, Object> ticket = ticketQueryService.update(id, request, admin);
+        String supportChatRoomId = stringOrNull(ticket.get("supportChatRoomId"));
+        if (supportChatRoomId != null) {
+            supportChatWebSocketHandler.broadcastRoomUpdate(supportChatRoomId);
+        }
+        return ticket;
     }
 
     @GetMapping("/price-jobs")
@@ -180,4 +189,11 @@ public class AdminController {
         return priceQueryService.runPriceJob(admin);
     }
 
+    private static String stringOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isBlank() || "null".equalsIgnoreCase(text) ? null : text;
+    }
 }

@@ -5,7 +5,8 @@ import { RequireUser } from './features/auth/RequireUser';
 import { CheckoutCompletePage, CheckoutPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, LatestBuildResultPage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
 import { AsChatPage, SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
-import { AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
+import { SupportChatWidget } from './features/support/SupportChatWidget';
+import { AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminSupportChatSessionsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
 import { AiBuildAssistant } from './features/quote/components/AiBuildAssistant';
 
 export default function App() {
@@ -22,8 +23,8 @@ export default function App() {
         <Route path="/parts/:partId" element={<RequireUser><PartDetailPage /></RequireUser>} />
         <Route path="/builds/:buildId/change-part" element={<RequireUser><ChangePartPage /></RequireUser>} />
         <Route path="/my/quotes" element={<RequireUser><MyQuotesPage /></RequireUser>} />
-        <Route path="/support/ai-chat" element={<RequireUser><AsChatPage /></RequireUser>} />
         <Route path="/support/new" element={<RequireUser><SupportNewPage /></RequireUser>} />
+        <Route path="/support/ai-chat" element={<RequireUser><AsChatPage /></RequireUser>} />
         <Route path="/support/:ticketId" element={<RequireUser><SupportTicketPage /></RequireUser>} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
@@ -38,13 +39,23 @@ export default function App() {
         <Route path="/admin/price-jobs" element={<RequireAdmin><AdminPriceJobsPage /></RequireAdmin>} />
         <Route path="/admin/build-graph-layouts" element={<RequireAdmin><AdminBuildGraphLayoutsPage /></RequireAdmin>} />
         <Route path="/admin/load-tests" element={<RequireAdmin><AdminLoadTestsPage /></RequireAdmin>} />
+        <Route path="/admin/support-chat-sessions" element={<RequireAdmin><AdminSupportChatSessionsPage /></RequireAdmin>} />
         <Route path="/admin/as-tickets" element={<RequireAdmin><AdminTicketsPage /></RequireAdmin>} />
         <Route path="/admin/as-tickets/:ticketId" element={<RequireAdmin><AdminTicketDetailPage /></RequireAdmin>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <GlobalSupportChatWidget />
       <GlobalAiBuildAssistant />
     </>
   );
+}
+
+function GlobalSupportChatWidget() {
+  const { pathname } = useLocation();
+  if (pathname === '/login' || pathname === '/signup' || pathname.startsWith('/admin') || pathname === '/support/new') {
+    return null;
+  }
+  return <SupportChatWidget />;
 }
 
 function GlobalAiBuildAssistant() {

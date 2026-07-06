@@ -18,6 +18,12 @@ export default defineConfig({
             proxyReq.removeHeader('origin');
           });
         }
+      },
+      '/ws': {
+        target: apiProxyTarget,
+        ws: true,
+        changeOrigin: true,
+        secure: false
       }
     }
   }

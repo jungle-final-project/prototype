@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 
 class AgentAsMigrationContractTest {
     private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V56__pc_agent_gold_mode_contract.sql");
-    private static final Path LOG_SUMMARY_MIGRATION = Path.of("src/main/resources/db/migration/V96__pc_agent_log_summary_routing.sql");
-    private static final Path FINAL_SCENARIO_MIGRATION = Path.of("src/main/resources/db/migration/V97__final_support_scenario_additive_contract.sql");
+    private static final Path LOG_SUMMARY_MIGRATION = Path.of("src/main/resources/db/migration/V99__pc_agent_log_summary_routing.sql");
+    private static final Path FINAL_SCENARIO_MIGRATION = Path.of("src/main/resources/db/migration/V100__final_support_scenario_additive_contract.sql");
 
     @Test
     void migrationCreatesGoldModeAgentTablesInParentChildOrder() throws Exception {

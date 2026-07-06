@@ -1,5 +1,6 @@
 package com.buildgraph.prototype.ticket;
 
+import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.support.AsLogRagAnalysisService;
@@ -106,10 +107,13 @@ public class TicketQueryService {
         return ticket(DbValueMapper.string(row, "id"));
     }
 
+    @Transactional
     public Map<String, Object> create(Map<String, Object> request, CurrentUserService.CurrentUser user) {
         if (user == null) {
             return create(request);
         }
+        lockUserForTicketCreate(user.internalId());
+        rejectWhenOpenSupportChatExists(user.internalId());
         String symptom = request == null
                 ? "게임 중 프레임 급락"
                 : String.valueOf(request.getOrDefault("symptom", "게임 중 프레임 급락"));
@@ -154,7 +158,7 @@ public class TicketQueryService {
                   ?::jsonb,
                   ?::jsonb
                 )
-                RETURNING public_id::text AS id
+                RETURNING id AS internal_id, public_id::text AS id
                 """,
                 ticketPublicId,
                 user.internalId(),
@@ -170,7 +174,50 @@ public class TicketQueryService {
                 toJson(draft.logSummary()),
                 toJson(draft.supportRouting()),
                 toJson(draft.aiDiagnosisRequest()));
+        SupportChatRoomCreator.ensureRoom(jdbcTemplate, user.internalId(), longValue(row, "internal_id"));
         return ticket(DbValueMapper.string(row, "id"), user);
+    }
+
+    private void lockUserForTicketCreate(Long userInternalId) {
+        List<Map<String, Object>> locked = jdbcTemplate.queryForList("""
+                SELECT id
+                FROM users
+                WHERE id = ?
+                  AND deleted_at IS NULL
+                FOR UPDATE
+                """, userInternalId);
+        if (locked.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.");
+        }
+    }
+
+    private void rejectWhenOpenSupportChatExists(Long userInternalId) {
+        jdbcTemplate.queryForList("""
+                        SELECT t.public_id::text AS as_ticket_id,
+                               r.public_id::text AS support_chat_room_id
+                        FROM support_chat_rooms r
+                        JOIN as_tickets t ON t.id = r.as_ticket_id
+                        WHERE r.user_id = ?
+                          AND r.status = 'ACTIVE'
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                          AND t.status NOT IN ('CLOSED', 'CANCELLED')
+                        ORDER BY COALESCE(r.last_message_at, r.updated_at, r.created_at) DESC, r.id DESC
+                        LIMIT 1
+                        """, userInternalId)
+                .stream()
+                .findFirst()
+                .ifPresent(row -> {
+                    throw new ApiException(
+                            HttpStatus.CONFLICT,
+                            "CONFLICT_STATE",
+                            "진행 중인 AS 상담이 있습니다.",
+                            MockData.map(
+                                    "asTicketId", DbValueMapper.string(row, "as_ticket_id"),
+                                    "supportChatRoomId", DbValueMapper.string(row, "support_chat_room_id")
+                            )
+                    );
+                });
     }
 
     public Map<String, Object> ticket(String id) {
@@ -755,6 +802,7 @@ public class TicketQueryService {
     private String ticketSql() {
         return """
                 SELECT t.public_id::text AS id,
+                       user_owner.public_id::text AS user_id,
                        t.status,
                        t.analysis_status,
                        t.review_status,
@@ -763,6 +811,22 @@ public class TicketQueryService {
                        t.auto_response_allowed,
                        t.symptom,
                        lu.public_id::text AS log_upload_id,
+                       lu.summary AS uploaded_log_summary,
+                       als.public_id::text AS log_summary_id,
+                       als.summary_payload AS log_summary_payload,
+                       als.feature_payload AS log_feature_payload,
+                       als.risk_flags AS log_risk_flags,
+                       atl.public_id::text AS as_label_id,
+                       atl.failure_category AS as_label_failure_category,
+                       atl.severity AS as_label_severity,
+                       related_part.public_id::text AS as_label_related_part_id,
+                       atl.recommendation_id AS as_label_recommendation_id,
+                       atl.use_for_recommendation_training AS as_label_use_for_recommendation_training,
+                       atl.note AS as_label_note,
+                       room.public_id::text AS support_chat_room_id,
+                       room.user_unread_count AS support_chat_user_unread_count,
+                       room.admin_unread_count AS support_chat_admin_unread_count,
+                       room.last_message_at AS support_chat_last_message_at,
                        admin.public_id::text AS assigned_admin_id,
                        t.cause_candidates,
                        t.upgrade_candidates,
@@ -791,7 +855,16 @@ public class TicketQueryService {
                        vr.preferred_date AS visit_preferred_date,
                        vr.time_slot AS visit_time_slot
                 FROM as_tickets t
+                JOIN users user_owner ON user_owner.id = t.user_id
                 LEFT JOIN agent_log_uploads lu ON lu.id = t.log_upload_id
+                LEFT JOIN agent_log_summaries als ON als.as_ticket_id = t.id
+                LEFT JOIN as_ticket_labels atl ON atl.as_ticket_id = t.id
+                LEFT JOIN parts related_part ON related_part.id = atl.related_part_id
+                LEFT JOIN support_chat_rooms room
+                  ON room.as_ticket_id = t.id
+                 AND room.user_id = t.user_id
+                 AND room.status = 'ACTIVE'
+                 AND room.deleted_at IS NULL
                 LEFT JOIN users admin ON admin.id = t.assigned_admin_id
                 LEFT JOIN LATERAL (
                   SELECT session_url, status
@@ -813,6 +886,7 @@ public class TicketQueryService {
     private Map<String, Object> ticketMap(Map<String, Object> row) {
         return MockData.map(
                 "id", DbValueMapper.string(row, "id"),
+                "userId", DbValueMapper.string(row, "user_id"),
                 "status", DbValueMapper.string(row, "status"),
                 "analysisStatus", DbValueMapper.string(row, "analysis_status"),
                 "reviewStatus", DbValueMapper.string(row, "review_status"),
@@ -821,6 +895,16 @@ public class TicketQueryService {
                 "autoResponseAllowed", row.get("auto_response_allowed"),
                 "symptom", DbValueMapper.string(row, "symptom"),
                 "logUploadId", DbValueMapper.string(row, "log_upload_id"),
+                "uploadedLogSummary", DbValueMapper.string(row, "uploaded_log_summary"),
+                "logSummaryId", DbValueMapper.string(row, "log_summary_id"),
+                "logSummaryPayload", DbValueMapper.json(row, "log_summary_payload", Map.of()),
+                "logFeaturePayload", DbValueMapper.json(row, "log_feature_payload", Map.of()),
+                "logRiskFlags", DbValueMapper.json(row, "log_risk_flags", Map.of()),
+                "asTrainingLabel", asTrainingLabel(row),
+                "supportChatRoomId", DbValueMapper.string(row, "support_chat_room_id"),
+                "supportChatUserUnreadCount", numberInt(row.get("support_chat_user_unread_count")),
+                "supportChatAdminUnreadCount", numberInt(row.get("support_chat_admin_unread_count")),
+                "supportChatLastMessageAt", DbValueMapper.timestamp(row, "support_chat_last_message_at"),
                 "assignedAdminId", DbValueMapper.string(row, "assigned_admin_id"),
                 "causeCandidates", DbValueMapper.json(row, "cause_candidates", List.of()),
                 "upgradeCandidates", DbValueMapper.json(row, "upgrade_candidates", List.of()),
@@ -848,6 +932,22 @@ public class TicketQueryService {
                 "visitTimeSlot", DbValueMapper.string(row, "visit_time_slot"),
                 "resolvedAt", DbValueMapper.timestamp(row, "resolved_at"),
                 "createdAt", DbValueMapper.timestamp(row, "created_at")
+        );
+    }
+
+    private Map<String, Object> asTrainingLabel(Map<String, Object> row) {
+        String labelId = DbValueMapper.string(row, "as_label_id");
+        if (labelId == null) {
+            return null;
+        }
+        return MockData.map(
+                "id", labelId,
+                "failureCategory", DbValueMapper.string(row, "as_label_failure_category"),
+                "severity", DbValueMapper.string(row, "as_label_severity"),
+                "relatedPartId", DbValueMapper.string(row, "as_label_related_part_id"),
+                "recommendationId", DbValueMapper.string(row, "as_label_recommendation_id"),
+                "useForRecommendationTraining", row.get("as_label_use_for_recommendation_training"),
+                "note", DbValueMapper.string(row, "as_label_note")
         );
     }
 
@@ -943,6 +1043,13 @@ public class TicketQueryService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private static Integer numberInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return value == null ? 0 : Integer.valueOf(value.toString());
     }
 
     private static void validatePublicUuid(String fieldName, String value) {

@@ -312,7 +312,9 @@ public class PartCompatibleCandidateService {
                 DbValueMapper.string(row, "name"),
                 DbValueMapper.string(row, "manufacturer"),
                 firstNumber(row.get("price"), firstNumber(row.get("current_price"), 0)),
-                objectMap(row.get("attributes"))
+                objectMap(row.get("attributes")),
+                // 드래프트 행에는 quantity가 있고, 후보 행에는 없어 1로 평가된다(교체 단품 가정).
+                firstNumber(row.get("quantity"), 1)
         );
     }
 

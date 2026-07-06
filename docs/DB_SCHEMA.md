@@ -42,6 +42,7 @@
 - `build_graph_layouts`
 - `price_jobs`
 - `pipeline_job_runs`
+- `recommendation_drift_snapshots`
 - `agent_sessions`
 - `tool_invocations`
 - `rag_evidence`
@@ -889,8 +890,8 @@ Index:
 |---|---|---:|---|---|
 | `id` | `BIGSERIAL` | no | - | 내부 PK |
 | `public_id` | `UUID` | no | - | 외부 ID |
-| `job_name` | `TEXT` | no | - | `PART_PRICE_REFRESH`, `DANAWA_SNAPSHOT_REFRESH`, `DANAWA_TREND_REFRESH`, `MANUFACTURER_RELEASE_SCAN`, `SHADOW_SCORE_RETENTION` |
-| `trigger_type` | `TEXT` | no | - | `SCHEDULED` |
+| `job_name` | `TEXT` | no | - | `PART_PRICE_REFRESH`, `DANAWA_SNAPSHOT_REFRESH`, `DANAWA_TREND_REFRESH`, `MANUFACTURER_RELEASE_SCAN`, `SHADOW_SCORE_RETENTION`, `RECOMMENDATION_AUTO_RETRAIN`(M2), `RECOMMENDATION_DRIFT`(M3) |
+| `trigger_type` | `TEXT` | no | - | `SCHEDULED`(기본), `DRIFT_TRIGGERED`(M3 심각 PSI 발 재훈련) |
 | `status` | `TEXT` | no | - | `SUCCEEDED`, `FAILED`, `SKIPPED_FROZEN`, `SKIPPED_LOCKED` |
 | `result_summary` | `JSONB` | yes | - | 서비스 결과 맵(attempted/updated/errors 등) |
 | `error_summary` | `TEXT` | yes | - | 실패/스킵 사유 |
@@ -904,6 +905,25 @@ Index:
 - unique: `pipeline_job_runs.public_id`
 - index: `(job_name, created_at DESC)`
 - index: `pipeline_job_runs.created_at DESC`
+
+### recommendation_drift_snapshots
+
+목적: M3 드리프트 모니터링의 일일 스냅샷. 카탈로그 피처 PSI(현재 ACTIVE 부품 분포 vs 기준 모델 학습창 분포)·예측 drift PSI(shadow score 최근 7일 vs 직전 7일)·운영 지표(fallback 비율·scorer scoreErrors 증분·훈련 실패율)와 임계 초과 경보를 담는다. `snapshot_date` UNIQUE로 재실행 시 upsert 멱등 (V93).
+
+주 owner: 3번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGSERIAL` | no | - | 내부 PK |
+| `snapshot_date` | `DATE` | no | - | 스냅샷 날짜 (UNIQUE) |
+| `metrics` | `JSONB` | no | - | `catalogFeaturePsi`/`predictionDriftPsi`/`operational` 3계열 |
+| `alerts` | `JSONB` | yes | - | 임계 초과 항목 `[{series, level(WARN/SEVERE), value}]` |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성/갱신 시각 |
+
+Index:
+
+- unique: `recommendation_drift_snapshots.snapshot_date`
+- index: `recommendation_drift_snapshots.snapshot_date DESC`
 
 ### compatibility_rules
 
@@ -1688,7 +1708,7 @@ Index:
 
 목적: AS 티켓 1건에 대해 사용자가 AI 챗봇 상담을 이어갈 수 있는 active 대화 세션을 저장한다.
 
-Owner: 3번, AS 협업 4번
+Owner: 3번 AS AI Chat
 
 | 컬럼명 | 타입 | nullable | FK | 설명 |
 |---|---|---:|---|---|
@@ -1715,12 +1735,13 @@ MVP 기준 결정값:
 - 한 사용자와 한 AS 티켓에는 active chat session 1개만 유지한다.
 - `GET /api/ai/as-chat`은 active session이 없어도 row를 만들지 않는다.
 - `POST /api/ai/as-chat`은 active session이 없으면 생성한다.
+- 사용자-관리자 상담방은 이 테이블을 쓰지 않고 별도 `support_chat_rooms`를 사용한다.
 
 ### as_chat_messages
 
 목적: AS AI 챗봇의 사용자/AI 메시지와 AI 구조화 응답을 저장한다.
 
-Owner: 3번, AS 협업 4번
+Owner: 3번 AS AI Chat
 
 | 컬럼명 | 타입 | nullable | FK | 설명 |
 |---|---|---:|---|---|
@@ -1746,6 +1767,78 @@ MVP 기준 결정값:
 - `role=ASSISTANT` 메시지는 LLM JSON 계약을 만족한 경우에만 저장한다.
 - LLM JSON 계약 실패 시 assistant message는 저장하지 않고 연결된 `agent_sessions`를 `FAILED`로 종료한다.
 - `as_tickets.cause_candidates`, `as_tickets.upgrade_candidates`는 이 테이블 저장 과정에서 수정하지 않는다.
+
+### support_chat_rooms
+
+목적: AS 티켓 1건에 대한 사용자-관리자 상담방(사람 상담) 상태를 저장한다. AS AI Chat(`as_chat_*`)과 완전히 분리된 테이블이다.
+
+Owner: 4번 사용자-관리자 상담방
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID (상담방 ID) |
+| `user_id` | `BIGINT` | no | `users.id` | 상담 사용자 |
+| `as_ticket_id` | `BIGINT` | no | `as_tickets.id` | 기준 AS 티켓 |
+| `status` | `VARCHAR(30)` | no | - | `ACTIVE`, `ARCHIVED` |
+| `title` | `VARCHAR(160)` | no | - | 상담방 제목 (기본 `AS 상담방`) |
+| `last_message_preview` | `VARCHAR(240)` | yes | - | 목록/전역 위젯에 표시할 마지막 메시지 요약 |
+| `last_message_at` | `TIMESTAMPTZ` | yes | - | 마지막 상담 메시지 시각 |
+| `user_unread_count` | `INTEGER` | no | - | 사용자가 읽지 않은 관리자 메시지 수 |
+| `admin_unread_count` | `INTEGER` | no | - | 관리자가 읽지 않은 사용자 메시지 수 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+| `updated_at` | `TIMESTAMPTZ` | yes | - | 마지막 갱신 시각 |
+| `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
+
+Index:
+
+- unique: `support_chat_rooms.public_id`
+- unique partial: `ux_support_chat_rooms_active_ticket_user` on `(user_id, as_ticket_id)` where `status='ACTIVE' AND deleted_at IS NULL`
+- index: `support_chat_rooms.user_id`
+- index: `support_chat_rooms.as_ticket_id`
+- index: `support_chat_rooms.last_message_at`
+- index: `support_chat_rooms.deleted_at`
+
+MVP 기준 결정값:
+
+- 한 사용자와 한 AS 티켓에는 active 상담방 1개만 유지한다(partial unique).
+- 한 사용자는 `support_chat_rooms.status='ACTIVE'`이고 연결 티켓이 `CLOSED`, `CANCELLED`가 아닌 진행 중 상담방을 1개만 가질 수 있다. 이 제약은 P1에서 DB migration 없이 `POST /api/as-tickets`의 사용자 row `FOR UPDATE` 잠금과 서비스 검증으로 보장한다.
+- `POST /api/as-tickets`는 active 상담방과 최초 `SYSTEM` 메시지를 `ON CONFLICT DO NOTHING`으로 멱등하게 생성한다.
+- `V97__support_chat_rooms_backfill_repair.sql`은 기존 non-deleted AS 티켓 중 상담방이 누락된 데이터를 보정하고, 잘못 `ARCHIVED`된 최신 room을 active room 부재 시에만 `ACTIVE`로 복구한다.
+- 티켓 종료만으로 `support_chat_rooms.status`를 `ARCHIVED`로 바꾸지 않는다. 종료 티켓의 상담 기록은 읽기 가능해야 하며 전송 지점에서만 차단한다.
+- `GET /api/support/chat-sessions/current`는 티켓이 없는 사용자에게 row를 만들지 않고 `supportNewPath=/support/new`를 반환한다.
+- `GET /api/support/chat-sessions/current?asTicketId=...`는 로그인 사용자 소유 티켓이면 active 상담방을 보장한다.
+- 관리자 목록은 `as_tickets.status NOT IN ('CLOSED','CANCELLED')`인 상담방만 노출한다.
+- 상담방은 LLM/RAG/Tool을 호출하지 않는다.
+
+### support_chat_messages
+
+목적: 사용자-관리자 상담방의 사용자/관리자/시스템 메시지를 저장한다.
+
+Owner: 4번 사용자-관리자 상담방
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 ID |
+| `room_id` | `BIGINT` | no | `support_chat_rooms.id` | 상담방 |
+| `role` | `VARCHAR(30)` | no | - | `USER`, `ADMIN`, `SYSTEM` |
+| `content` | `TEXT` | no | - | 사용자, 관리자, 시스템 메시지 본문 |
+| `sender_user_id` | `BIGINT` | yes | `users.id` | 실제 메시지를 보낸 사용자 또는 관리자 (`SYSTEM`은 `NULL`) |
+| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
+
+Index:
+
+- unique: `support_chat_messages.public_id`
+- index: `support_chat_messages.room_id`
+- index: `support_chat_messages.sender_user_id`
+- index: `support_chat_messages.created_at`
+
+MVP 기준 결정값:
+
+- `role=USER` / `role=ADMIN` 메시지는 `sender_user_id`를 저장한다.
+- `role=SYSTEM` 메시지는 상담방 생성 안내 같은 시스템 메시지이며 `sender_user_id`는 `NULL`이다.
+- 상세 조회는 최근 100개 메시지만 시간순으로 반환한다.
 
 ### llm_generations
 
@@ -2536,9 +2629,16 @@ V68__agent_log_summary_as_feedback.sql
 V90__manufacturer_post_classification_source.sql
 V91__pipeline_job_runs.sql
 V92__manufacturer_source_failure_tracking.sql
+V93__recommendation_drift_snapshots.sql
+V94__motherboard_memory_slots.sql
+V95__support_chat_rooms.sql
+V96__support_chat_rooms_split.sql
+V97__support_chat_rooms_backfill_repair.sql
 ```
 
-`V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다.
+`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다. `V95`~`V97`은 사용자-관리자 support chat 전용 테이블 분리와 백필 보정 migration이다.
+
+`V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR(PC Agent 통합 계열)과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다(다음 번호는 `V98`부터).
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.
 

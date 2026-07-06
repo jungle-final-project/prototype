@@ -26,7 +26,7 @@ export function AdminShell({ children, title, exportRows = [], exportFileName = 
       <AdminSidebar />
       <div className="min-w-[1024px] flex-1">
         <div className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-7">
-          <div className="text-lg font-bold text-brand-navy">{title}</div>
+          <h1 className="text-lg font-bold text-brand-navy">{title}</h1>
           <div className="flex gap-2">
             <button
               type="button"
@@ -66,6 +66,7 @@ function AdminSidebar() {
       items: [
         { to: '/admin', label: '대시보드', Icon: Home, match: (path: string) => path === '/admin' },
         { to: '/admin/as-tickets', label: 'AS 티켓', Icon: LifeBuoy, match: (path: string) => path.startsWith('/admin/as-tickets') },
+        { to: '/admin/support-chat-sessions', label: '상담방', Icon: LifeBuoy, match: (path: string) => path.startsWith('/admin/support-chat-sessions') },
         { to: '/admin/parts', label: '부품/가격', Icon: Cpu, match: (path: string) => path === '/admin/parts' },
         { to: '/admin/price-jobs', label: '가격 작업', Icon: RefreshCw, match: (path: string) => path.startsWith('/admin/price-jobs') }
       ]
