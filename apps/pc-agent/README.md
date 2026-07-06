@@ -88,7 +88,7 @@ cd C:\나만무\prototype
 - AI 진단 탭: 최신 진단 결과에 대한 대화형 자가 조치 상담
 - AS 접수: 사용자가 상태 탭에서 동의 후 `AS 접수 신청`을 누를 때만 `/api/agent/log-uploads`로 진행
 
-`/api/agent/diagnosis-chat`은 agent token Bearer 인증을 사용하지만 `Idempotency-Key`를 요구하지 않습니다. 서버 DB에 `as_tickets`, `agent_log_uploads`, `as_chat_sessions`, `as_chat_messages`를 만들지 않으며, 대화 기록은 로컬 `diagnosis-chat-history.jsonl`에만 저장됩니다.
+`/api/agent/diagnosis-chat`은 agent token Bearer 인증을 사용하지만 `Idempotency-Key`를 요구하지 않습니다. API 서버에 `OPENAI_API_KEY`가 설정되어 있으면 PC Agent 진단 전용 structured LLM 응답을 사용하고, 키가 없거나 LLM 호출이 실패하면 rule fallback 답변을 반환합니다. 이 요청에는 `diagnosis_chat_context()`가 만든 진단 요약/판정/근거 ID와 최근 대화만 담으며 raw JSONL 로그, raw path, process list는 보내지 않습니다. 서버 DB에 `as_tickets`, `agent_log_uploads`, `as_chat_sessions`, `as_chat_messages`를 만들지 않으며, 대화 기록은 로컬 `diagnosis-chat-history.jsonl`에만 저장됩니다.
 
 ## 업데이트
 

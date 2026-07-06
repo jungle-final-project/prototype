@@ -8,12 +8,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AgentDiagnosisChatService {
+    private static final Logger log = LoggerFactory.getLogger(AgentDiagnosisChatService.class);
     private static final int RECENT_MESSAGE_LIMIT = 8;
+
+    private final AgentDiagnosisChatLlmClient llmClient;
+
+    public AgentDiagnosisChatService(AgentDiagnosisChatLlmClient llmClient) {
+        this.llmClient = llmClient;
+    }
 
     public Map<String, Object> reply(AgentPrincipal principal, Map<String, Object> request) {
         if (principal == null) {
@@ -26,7 +35,58 @@ public class AgentDiagnosisChatService {
         List<Map<String, Object>> causeCandidates = causeCandidates(context);
         List<Map<String, Object>> nextActions = nextActions(context, message);
         Map<String, Object> escalation = escalation(context, message);
+        Map<String, Object> ruleResponse = ruleResponse(context, message, recentMessages, causeCandidates, nextActions, escalation);
+        AgentDiagnosisChatLlmClient.Prompt llmPrompt = new AgentDiagnosisChatLlmClient.Prompt(
+                message,
+                diagnosis,
+                diagnosisContext(context),
+                recentMessages,
+                ruleResponse,
+                context.evidenceIds()
+        );
 
+        long startedAt = System.nanoTime();
+        try {
+            return llmClient.reply(llmPrompt)
+                    .map(result -> {
+                        log.info(
+                                "PC Agent diagnosis chat LLM response generated: model={} latencyMs={} recentMessages={} evidenceIds={}",
+                                result.model(),
+                                result.latencyMs(),
+                                recentMessages.size(),
+                                context.evidenceIds().size()
+                        );
+                        return llmResponse(result, ruleResponse);
+                    })
+                    .orElseGet(() -> {
+                        log.info(
+                                "PC Agent diagnosis chat rule fallback used: reason=LLM_NOT_CONFIGURED latencyMs={} recentMessages={} evidenceIds={}",
+                                elapsedMs(startedAt),
+                                recentMessages.size(),
+                                context.evidenceIds().size()
+                        );
+                        return ruleResponse;
+                    });
+        } catch (RuntimeException error) {
+            log.warn(
+                    "PC Agent diagnosis chat rule fallback used: reason={} latencyMs={} recentMessages={} evidenceIds={}",
+                    safeReason(error),
+                    elapsedMs(startedAt),
+                    recentMessages.size(),
+                    context.evidenceIds().size()
+            );
+            return ruleResponse;
+        }
+    }
+
+    private static Map<String, Object> ruleResponse(
+            DiagnosisContext context,
+            String message,
+            List<Map<String, Object>> recentMessages,
+            List<Map<String, Object>> causeCandidates,
+            List<Map<String, Object>> nextActions,
+            Map<String, Object> escalation
+    ) {
         return MockData.map(
                 "assistantMessage", assistantMessage(context, message, nextActions, escalation, recentMessages.size()),
                 "causeCandidates", causeCandidates,
@@ -38,6 +98,68 @@ public class AgentDiagnosisChatService {
                 "toolResults", List.of(),
                 "messageLimit", RECENT_MESSAGE_LIMIT
         );
+    }
+
+    private static Map<String, Object> llmResponse(
+            AgentDiagnosisChatLlmClient.Result result,
+            Map<String, Object> ruleResponse
+    ) {
+        Map<String, Object> payload = result.payload();
+        return MockData.map(
+                "assistantMessage", textOrFallback(payload, "assistantMessage", ruleResponse.get("assistantMessage")),
+                "causeCandidates", listOrFallback(payload.get("causeCandidates"), ruleResponse.get("causeCandidates")),
+                "nextActions", listOrFallback(payload.get("nextActions"), ruleResponse.get("nextActions")),
+                "escalation", objectOrFallback(payload.get("escalation"), ruleResponse.get("escalation")),
+                "ticketDraft", objectOrFallback(payload.get("ticketDraft"), ruleResponse.get("ticketDraft")),
+                "model", firstNonBlank(result.model(), "buildgraph-agent-diagnosis-llm-v1"),
+                "evidence", ruleResponse.get("evidence"),
+                "toolResults", ruleResponse.get("toolResults"),
+                "messageLimit", RECENT_MESSAGE_LIMIT
+        );
+    }
+
+    private static Map<String, Object> diagnosisContext(DiagnosisContext context) {
+        return MockData.map(
+                "summary", context.summary(),
+                "recommendedService", context.recommendedService(),
+                "recommendedDecision", context.recommendedDecision(),
+                "confidence", context.confidence(),
+                "primaryCause", context.primaryCause(),
+                "secondaryCause", context.secondaryCause(),
+                "reason", context.reason(),
+                "requiresVisit", context.requiresVisit(),
+                "remoteRecommended", context.remoteRecommended(),
+                "evidenceIds", context.evidenceIds()
+        );
+    }
+
+    private static List<?> listOrFallback(Object value, Object fallback) {
+        if (value instanceof List<?> list && !list.isEmpty()) {
+            return list.stream().limit(3).toList();
+        }
+        return fallback instanceof List<?> list ? list : List.of();
+    }
+
+    private static Map<String, Object> objectOrFallback(Object value, Object fallback) {
+        if (value instanceof Map<?, ?> map && !map.isEmpty()) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, item) -> result.put(String.valueOf(key), item));
+            return result;
+        }
+        if (fallback instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, item) -> result.put(String.valueOf(key), item));
+            return result;
+        }
+        return Map.of();
+    }
+
+    private static String textOrFallback(Map<String, Object> payload, String key, Object fallback) {
+        Object value = payload.get(key);
+        if (value instanceof String text && !text.isBlank()) {
+            return text.trim();
+        }
+        return fallback == null ? "" : String.valueOf(fallback);
     }
 
     private static String assistantMessage(
@@ -226,6 +348,18 @@ public class AgentDiagnosisChatService {
             );
         }
         return text.trim();
+    }
+
+    private static long elapsedMs(long startedAt) {
+        return Math.max(0L, (System.nanoTime() - startedAt) / 1_000_000L);
+    }
+
+    private static String safeReason(RuntimeException error) {
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return message.replaceAll("\\s+", " ").trim();
     }
 
     private record DiagnosisContext(

@@ -2355,7 +2355,7 @@ paths:
   /api/agent/diagnosis-chat:
     post:
       summary: PC Agent local diagnosis chatbot
-      description: Agent token으로 최근 PC 진단 결과에 대한 대화형 문제 해결 답변을 반환한다. 서버 DB에 AS 티켓, 로그 업로드, AS 채팅 세션/메시지를 생성하지 않는다.
+      description: Agent token으로 최근 PC 진단 결과에 대한 대화형 문제 해결 답변을 반환한다. OPENAI_API_KEY가 설정되어 있으면 PC Agent 진단 전용 structured LLM 응답을 사용하고, 키 누락 또는 LLM 실패 시 rule fallback으로 응답한다. 서버 DB에 AS 티켓, 로그 업로드, AS 채팅 세션/메시지를 생성하지 않는다.
       security:
         - bearerAuth: []
       requestBody:
@@ -6378,7 +6378,8 @@ components:
           additionalProperties: true
         model:
           type: string
-          example: buildgraph-agent-diagnosis-rule-v1
+          description: 실제 LLM 응답이면 모델명, fallback이면 buildgraph-agent-diagnosis-rule-v1.
+          example: gpt-5.4-mini
         evidence:
           type: array
           items:
