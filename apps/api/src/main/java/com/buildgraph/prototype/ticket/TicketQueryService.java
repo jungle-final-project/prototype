@@ -2,6 +2,7 @@ package com.buildgraph.prototype.ticket;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -33,6 +34,8 @@ public class TicketQueryService {
 
     @Transactional
     public Map<String, Object> create(Map<String, Object> request, CurrentUserService.CurrentUser user) {
+        lockUserForTicketCreate(user.internalId());
+        rejectWhenOpenSupportChatExists(user.internalId());
         String symptom = request == null ? "게임 중 프레임 급락" : String.valueOf(request.getOrDefault("symptom", "게임 중 프레임 급락"));
         String logUploadId = request == null ? null : stringOrNull(request.get("logUploadId"));
         Long logUploadInternalId = logUploadId == null ? null : logUploadInternalId(logUploadId, user.internalId());
@@ -50,6 +53,48 @@ public class TicketQueryService {
                 """, user.internalId(), logUploadInternalId, symptom);
         SupportChatRoomCreator.ensureRoom(jdbcTemplate, user.internalId(), numberLong(row.get("internal_id")));
         return ticket(DbValueMapper.string(row, "id"), user);
+    }
+
+    private void lockUserForTicketCreate(Long userInternalId) {
+        List<Map<String, Object>> locked = jdbcTemplate.queryForList("""
+                SELECT id
+                FROM users
+                WHERE id = ?
+                  AND deleted_at IS NULL
+                FOR UPDATE
+                """, userInternalId);
+        if (locked.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.");
+        }
+    }
+
+    private void rejectWhenOpenSupportChatExists(Long userInternalId) {
+        jdbcTemplate.queryForList("""
+                        SELECT t.public_id::text AS as_ticket_id,
+                               r.public_id::text AS support_chat_room_id
+                        FROM support_chat_rooms r
+                        JOIN as_tickets t ON t.id = r.as_ticket_id
+                        WHERE r.user_id = ?
+                          AND r.status = 'ACTIVE'
+                          AND r.deleted_at IS NULL
+                          AND t.deleted_at IS NULL
+                          AND t.status NOT IN ('CLOSED', 'CANCELLED')
+                        ORDER BY COALESCE(r.last_message_at, r.updated_at, r.created_at) DESC, r.id DESC
+                        LIMIT 1
+                        """, userInternalId)
+                .stream()
+                .findFirst()
+                .ifPresent(row -> {
+                    throw new ApiException(
+                            HttpStatus.CONFLICT,
+                            "CONFLICT_STATE",
+                            "진행 중인 AS 상담이 있습니다.",
+                            MockData.map(
+                                    "asTicketId", DbValueMapper.string(row, "as_ticket_id"),
+                                    "supportChatRoomId", DbValueMapper.string(row, "support_chat_room_id")
+                            )
+                    );
+                });
     }
 
     public Map<String, Object> ticket(String id, CurrentUserService.CurrentUser user) {

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib/api';
-import { AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, type AiAssistantOpenDetail } from '../../../lib/events';
+import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, type AiAssistantOpenDetail } from '../../../lib/events';
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -80,6 +80,9 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   useEffect(() => {
     const openAssistant = (event: Event) => {
       const detail = (event as CustomEvent<AiAssistantOpenDetail>).detail;
+      if (!isDesktopAssistant) {
+        window.dispatchEvent(new Event(SUPPORT_CHAT_CLOSE_EVENT));
+      }
       setOpen(true);
       if (detail?.prefill) {
         if (detail.autoSubmit) {
@@ -89,14 +92,30 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
         }
       }
     };
-    const toggleAssistant = () => setOpen((current) => !current);
+    const toggleAssistant = () => setOpen((current) => {
+      const nextOpen = !current;
+      if (nextOpen && !isDesktopAssistant) {
+        window.dispatchEvent(new Event(SUPPORT_CHAT_CLOSE_EVENT));
+      }
+      return nextOpen;
+    });
+    const closeAssistant = () => setOpen(false);
+    const closeForSupportChat = () => {
+      if (!isDesktopAssistant) {
+        setOpen(false);
+      }
+    };
     window.addEventListener(AI_BUILD_ASSISTANT_OPEN_EVENT, openAssistant);
     window.addEventListener(AI_BUILD_ASSISTANT_TOGGLE_EVENT, toggleAssistant);
+    window.addEventListener(AI_BUILD_ASSISTANT_CLOSE_EVENT, closeAssistant);
+    window.addEventListener(SUPPORT_CHAT_OPEN_EVENT, closeForSupportChat);
     return () => {
       window.removeEventListener(AI_BUILD_ASSISTANT_OPEN_EVENT, openAssistant);
       window.removeEventListener(AI_BUILD_ASSISTANT_TOGGLE_EVENT, toggleAssistant);
+      window.removeEventListener(AI_BUILD_ASSISTANT_CLOSE_EVENT, closeAssistant);
+      window.removeEventListener(SUPPORT_CHAT_OPEN_EVENT, closeForSupportChat);
     };
-  }, []);
+  }, [isDesktopAssistant]);
 
   useEffect(() => {
     const shouldReserveSpace = open && isDesktopAssistant;

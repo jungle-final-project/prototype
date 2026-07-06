@@ -6,24 +6,28 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
 public class SupportChatWebSocketHandler extends TextWebSocketHandler {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int SEND_TIME_LIMIT_MS = 10_000;
+    private static final int SEND_BUFFER_SIZE_LIMIT_BYTES = 64 * 1024;
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
     private final SupportChatService supportChatService;
     private final CurrentUserService currentUserService;
-    private final Map<String, Set<WebSocketSession>> sessionsByChatId = new ConcurrentHashMap<>();
+    private final Map<String, Set<SessionRegistration>> sessionsByChatId = new ConcurrentHashMap<>();
 
     public SupportChatWebSocketHandler(SupportChatService supportChatService, CurrentUserService currentUserService) {
         this.supportChatService = supportChatService;
@@ -39,9 +43,14 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
             session.getAttributes().put("chatSessionId", handshake.sessionId());
             session.getAttributes().put("mode", handshake.mode());
             session.getAttributes().put("authorization", "Bearer " + handshake.token());
+            WebSocketSession outboundSession = new ConcurrentWebSocketSessionDecorator(
+                    session,
+                    SEND_TIME_LIMIT_MS,
+                    SEND_BUFFER_SIZE_LIMIT_BYTES
+            );
             sessionsByChatId.computeIfAbsent(handshake.sessionId(), ignored -> ConcurrentHashMap.newKeySet())
-                    .add(session);
-            send(session, "CHAT_UPDATED", detail(handshake, user));
+                    .add(new SessionRegistration(session.getId(), outboundSession));
+            send(outboundSession, "CHAT_UPDATED", detail(handshake, user));
         } catch (Exception error) {
             session.close(CloseStatus.NOT_ACCEPTABLE.withReason("invalid support chat socket"));
         }
@@ -66,18 +75,19 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void broadcastRoomUpdate(String chatSessionId) {
-        Set<WebSocketSession> sessions = sessionsByChatId.getOrDefault(chatSessionId, Set.of());
-        for (WebSocketSession session : sessions) {
+        Set<SessionRegistration> sessions = sessionsByChatId.getOrDefault(chatSessionId, Set.of());
+        for (SessionRegistration registration : sessions) {
+            WebSocketSession session = registration.session();
             try {
                 if (!session.isOpen()) {
-                    removeSession(chatSessionId, session);
+                    removeSession(chatSessionId, registration);
                     continue;
                 }
                 send(session, "CHAT_UPDATED", detailFor(session, chatSessionId));
             } catch (Exception error) {
                 // 한 세션의 전송 실패가 REST 응답이나 다른 세션 push를 막으면 안 된다. 놓친 갱신은 fallback polling이 보완한다.
                 closeQuietly(session);
-                removeSession(chatSessionId, session);
+                removeSession(chatSessionId, registration);
             }
         }
     }
@@ -92,9 +102,22 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void removeSession(String chatSessionId, WebSocketSession session) {
-        Set<WebSocketSession> sessions = sessionsByChatId.get(chatSessionId);
+        Set<SessionRegistration> sessions = sessionsByChatId.get(chatSessionId);
         if (sessions != null) {
-            sessions.remove(session);
+            String sessionId = session.getId();
+            sessions.removeIf(registration -> registration.session() == session
+                    || Objects.equals(registration.originalSessionId(), sessionId)
+                    || Objects.equals(registration.session().getId(), sessionId));
+            if (sessions.isEmpty()) {
+                sessionsByChatId.remove(chatSessionId);
+            }
+        }
+    }
+
+    private void removeSession(String chatSessionId, SessionRegistration registration) {
+        Set<SessionRegistration> sessions = sessionsByChatId.get(chatSessionId);
+        if (sessions != null) {
+            sessions.remove(registration);
             if (sessions.isEmpty()) {
                 sessionsByChatId.remove(chatSessionId);
             }
@@ -184,5 +207,8 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     private record Handshake(String token, String mode, String sessionId) {
+    }
+
+    private record SessionRegistration(String originalSessionId, WebSocketSession session) {
     }
 }

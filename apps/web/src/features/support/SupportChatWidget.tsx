@@ -3,73 +3,81 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { LifeBuoy, MessageCircle, Send, X } from 'lucide-react';
 import { AUTH_CHANGED_EVENT, getCachedAuthUser, getToken } from '../../lib/api';
+import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT } from '../../lib/events';
 import { getCurrentUser } from '../auth/authApi';
 import { getCurrentSupportChat, getSupportChatSession, openSupportChatSocket, postSupportChatMessage, type SupportChatSocket } from './supportChatApi';
 import type { SupportChatMessage, SupportChatSessionDto } from './types';
 
-// 소켓 미연결 시 활성 폴링 간격. 소켓 연결 시에도 완전히 끄지 않고 낮은 빈도로 유지해,
-// 다중 인스턴스에서 broadcast가 도달하지 않아도 상대 메시지를 놓치지 않게 한다.
-const ACTIVE_POLL_MS = 5000;
-const SOCKET_FALLBACK_POLL_MS = 15000;
+const DEFAULT_POLL_MS = 5000;
 const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
+const SUPPORT_CHAT_MOBILE_QUERY = '(max-width: 767px)';
 
 export function SupportChatWidget() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const socketRef = useRef<SupportChatSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const wasAtBottomRef = useRef(true);
+  const forceScrollToBottomRef = useRef(false);
+  const previousLastMessageIdRef = useRef<string | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [authToken, setAuthToken] = useState(() => getToken());
+  const [newMarkerMessageId, setNewMarkerMessageId] = useState<string | null>(null);
   const hidden = shouldHideSupportChat(location.pathname);
   const hasToken = Boolean(authToken);
-  const cachedRole = cachedUserRole();
+  const cachedUser = getCachedAuthUser();
+  const cachedRole = cachedUserRole(cachedUser);
   const roleQuery = useQuery({
-    queryKey: ['support-chat', 'current-user-role'],
+    queryKey: ['support-chat', authScopeKey(cachedUser), 'current-user-role'],
     queryFn: getCurrentUser,
     enabled: hasToken && !hidden && cachedRole == null,
     staleTime: 30_000,
     retry: false
   });
   const currentRole = cachedRole ?? roleQuery.data?.role ?? null;
+  const authScope = authScopeKey(roleQuery.data ?? cachedUser);
   const canUseUserChat = currentRole === 'USER';
   const routeTicketId = supportTicketIdFromPath(location.pathname);
+  const shouldAutoOpen = new URLSearchParams(location.search).get('chat') === '1';
 
   const currentQuery = useQuery({
-    queryKey: ['support-chat', 'current', routeTicketId ?? 'latest'],
+    queryKey: ['support-chat', authScope, 'current', routeTicketId ?? 'latest'],
     queryFn: () => getCurrentSupportChat(routeTicketId),
     enabled: hasToken && !hidden && canUseUserChat,
-    refetchInterval: open ? false : socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS,
+    refetchInterval: (query) => open ? false : pollingInterval(query.state.data as SupportChatSessionDto | undefined),
     retry: false
   });
 
   const sessionId = currentQuery.data?.contact?.id ?? null;
   const detailQuery = useQuery({
-    queryKey: ['support-chat', sessionId],
+    queryKey: ['support-chat', authScope, sessionId],
     queryFn: () => getSupportChatSession(sessionId as string),
     enabled: Boolean(open && sessionId),
-    refetchInterval: open && sessionId ? (socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS) : false,
+    refetchInterval: (query) => open && sessionId ? pollingInterval(query.state.data as SupportChatSessionDto | undefined) : false,
     retry: false
   });
 
   const updateChatCache = useCallback((detail: SupportChatSessionDto) => {
+    wasAtBottomRef.current = isNearBottom(messagesRef.current);
     queryClient.setQueryData<SupportChatSessionDto | undefined>(
-      ['support-chat', 'current', routeTicketId ?? 'latest'],
+      ['support-chat', authScope, 'current', routeTicketId ?? 'latest'],
       (existing) => shouldApplyDetail(detail, existing) ? detail : existing
     );
     if (detail.contact?.id) {
       queryClient.setQueryData<SupportChatSessionDto | undefined>(
-        ['support-chat', detail.contact.id],
+        ['support-chat', authScope, detail.contact.id],
         (existing) => shouldApplyDetail(detail, existing) ? detail : existing
       );
     }
-  }, [queryClient, routeTicketId]);
+  }, [authScope, queryClient, routeTicketId]);
 
   const sendMutation = useMutation({
     mutationFn: (content: string) => postSupportChatMessage(sessionId as string, content),
     onSuccess: (detail) => {
+      forceScrollToBottomRef.current = true;
       setMessage('');
       setSendError(null);
       updateChatCache(detail);
@@ -81,14 +89,30 @@ export function SupportChatWidget() {
 
   const activeChat = detailQuery.data ?? currentQuery.data;
   const contact = activeChat?.contact ?? null;
-  const messageCount = activeChat?.messages.length ?? 0;
+  const messages = activeChat?.messages ?? [];
+  const messageCount = messages.length;
   const unreadCount = currentQuery.data?.contact?.userUnreadCount ?? 0;
   const canSend = Boolean(contact?.canSendMessage && message.trim() && !sendMutation.isPending);
+
+  const openChat = useCallback((announce = true) => {
+    setOpen(true);
+    if (isSupportChatMobile()) {
+      window.dispatchEvent(new Event(AI_BUILD_ASSISTANT_CLOSE_EVENT));
+    }
+    if (announce) {
+      window.dispatchEvent(new Event(SUPPORT_CHAT_OPEN_EVENT));
+    }
+  }, []);
+
+  const closeChat = useCallback(() => {
+    setOpen(false);
+    setNewMarkerMessageId(null);
+  }, []);
 
   useEffect(() => {
     const handleAuthChanged = () => {
       setAuthToken(getToken());
-      setOpen(false);
+      closeChat();
       setMessage('');
       setSendError(null);
       socketRef.current?.close();
@@ -98,7 +122,33 @@ export function SupportChatWidget() {
     };
     window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
     return () => window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
-  }, [queryClient]);
+  }, [closeChat, queryClient]);
+
+  useEffect(() => {
+    const handleSupportOpen = () => openChat(false);
+    const handleSupportClose = () => closeChat();
+    const handleAiOpen = () => {
+      if (isSupportChatMobile()) {
+        closeChat();
+      }
+    };
+    window.addEventListener(SUPPORT_CHAT_OPEN_EVENT, handleSupportOpen);
+    window.addEventListener(SUPPORT_CHAT_CLOSE_EVENT, handleSupportClose);
+    window.addEventListener(AI_BUILD_ASSISTANT_OPEN_EVENT, handleAiOpen);
+    window.addEventListener(AI_BUILD_ASSISTANT_TOGGLE_EVENT, handleAiOpen);
+    return () => {
+      window.removeEventListener(SUPPORT_CHAT_OPEN_EVENT, handleSupportOpen);
+      window.removeEventListener(SUPPORT_CHAT_CLOSE_EVENT, handleSupportClose);
+      window.removeEventListener(AI_BUILD_ASSISTANT_OPEN_EVENT, handleAiOpen);
+      window.removeEventListener(AI_BUILD_ASSISTANT_TOGGLE_EVENT, handleAiOpen);
+    };
+  }, [closeChat, openChat]);
+
+  useEffect(() => {
+    if (shouldAutoOpen && hasToken && canUseUserChat && !hidden) {
+      openChat();
+    }
+  }, [canUseUserChat, hasToken, hidden, openChat, shouldAutoOpen]);
 
   useEffect(() => {
     socketRef.current?.close();
@@ -169,14 +219,27 @@ export function SupportChatWidget() {
 
   useEffect(() => {
     if (!open || !messagesRef.current) return;
+    const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
+    const previousLastMessageId = previousLastMessageIdRef.current;
+    const hasNewMessage = Boolean(previousLastMessageId && lastMessageId && previousLastMessageId !== lastMessageId);
+    const shouldScroll = forceScrollToBottomRef.current || !hasNewMessage || wasAtBottomRef.current;
+    const markerMessageId = hasNewMessage && !shouldScroll
+      ? firstMessageAfter(messages, previousLastMessageId) ?? lastMessageId
+      : null;
+    previousLastMessageIdRef.current = lastMessageId;
+    forceScrollToBottomRef.current = false;
+
     const frame = window.requestAnimationFrame(() => {
-      const element = messagesRef.current;
-      if (element) {
-        element.scrollTop = element.scrollHeight;
+      if (shouldScroll) {
+        scrollMessagesToBottom(messagesRef.current);
+        setNewMarkerMessageId(null);
+        wasAtBottomRef.current = true;
+      } else {
+        setNewMarkerMessageId(markerMessageId);
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [open, sessionId, messageCount]);
+  }, [messages, open, sessionId]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -195,7 +258,7 @@ export function SupportChatWidget() {
       <button
         type="button"
         aria-label="상담방 열기"
-        onClick={() => setOpen(true)}
+        onClick={() => openChat()}
         className="fixed bottom-5 left-5 z-50 grid h-14 w-14 place-items-center rounded-2xl border border-emerald-900 bg-emerald-700 text-white shadow-2xl transition hover:-translate-y-0.5 hover:bg-emerald-800 focus:outline-none focus:ring-4 focus:ring-emerald-100"
       >
         <MessageCircle size={24} />
@@ -223,7 +286,7 @@ export function SupportChatWidget() {
         <button
           type="button"
           aria-label="상담방 닫기"
-          onClick={() => setOpen(false)}
+          onClick={closeChat}
           className="grid h-9 w-9 place-items-center rounded-md border border-white/15 text-white transition hover:bg-white/10 focus:outline-none focus:ring-4 focus:ring-white/20"
         >
           <X size={17} />
@@ -239,12 +302,42 @@ export function SupportChatWidget() {
               <span>{socketConnected ? '실시간 연결' : '자동 새로고침'}</span>
             </div>
           </div>
-          <div ref={messagesRef} data-testid="support-chat-messages" className="flex-1 overflow-y-auto bg-slate-50 p-4">
-            <div className="space-y-3">
-              {(activeChat?.messages ?? []).map((item) => (
-                <SupportChatBubble key={item.id} message={item} />
-              ))}
+          <div className="relative flex-1 overflow-hidden bg-slate-50">
+            <div
+              ref={messagesRef}
+              data-testid="support-chat-messages"
+              className="h-full overflow-y-auto p-4"
+              onScroll={(event) => {
+                const nearBottom = isNearBottom(event.currentTarget);
+                wasAtBottomRef.current = nearBottom;
+                if (nearBottom) {
+                  setNewMarkerMessageId(null);
+                }
+              }}
+            >
+              <div className="space-y-3">
+                {messages.map((item) => (
+                  <div key={item.id}>
+                    {newMarkerMessageId === item.id ? <NewMessageMarker /> : null}
+                    <SupportChatBubble message={item} />
+                  </div>
+                ))}
+              </div>
             </div>
+            {newMarkerMessageId ? (
+              <button
+                type="button"
+                aria-label="새 메시지로 이동"
+                onClick={() => {
+                  scrollMessagesToBottom(messagesRef.current);
+                  wasAtBottomRef.current = true;
+                  setNewMarkerMessageId(null);
+                }}
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-emerald-700 px-4 py-2 text-xs font-bold text-white shadow-lg"
+              >
+                새 메시지로 이동
+              </button>
+            ) : null}
           </div>
           <form onSubmit={submit} className="border-t border-slate-200 bg-white p-3">
             {contact.canSendMessage ? (
@@ -332,6 +425,16 @@ function SupportChatBubble({ message }: { message: SupportChatMessage }) {
   );
 }
 
+function NewMessageMarker() {
+  return (
+    <div className="my-3 flex items-center gap-3" aria-label="새 메시지">
+      <div className="h-px flex-1 bg-emerald-200" />
+      <span className="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-black text-emerald-800">새 메시지</span>
+      <div className="h-px flex-1 bg-emerald-200" />
+    </div>
+  );
+}
+
 function shouldHideSupportChat(pathname: string) {
   return pathname === '/login'
     || pathname === '/signup'
@@ -339,13 +442,22 @@ function shouldHideSupportChat(pathname: string) {
     || pathname === '/support/new';
 }
 
-function cachedUserRole() {
-  const user = getCachedAuthUser();
+function cachedUserRole(user: unknown) {
   if (!user || typeof user !== 'object') {
     return null;
   }
   const role = (user as { role?: unknown }).role;
   return role === 'USER' || role === 'ADMIN' ? role : null;
+}
+
+function authScopeKey(user: unknown) {
+  if (!user || typeof user !== 'object') {
+    return 'anonymous';
+  }
+  const record = user as { id?: unknown; role?: unknown };
+  const id = typeof record.id === 'string' && record.id ? record.id : 'unknown';
+  const role = typeof record.role === 'string' && record.role ? record.role : 'unknown';
+  return `${role}:${id}`;
 }
 
 function supportTicketIdFromPath(pathname: string) {
@@ -364,6 +476,11 @@ function errorMessage(error: unknown) {
   return error instanceof Error && error.message ? error.message : '메시지를 전송하지 못했습니다.';
 }
 
+function pollingInterval(detail?: SupportChatSessionDto) {
+  const value = detail?.pollingIntervalMs;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_POLL_MS;
+}
+
 function shouldApplyDetail(incoming: SupportChatSessionDto, existing?: SupportChatSessionDto) {
   const incomingTime = detailTime(incoming);
   const existingTime = existing ? detailTime(existing) : null;
@@ -376,4 +493,29 @@ function detailTime(detail: SupportChatSessionDto) {
   if (!value) return null;
   const time = Date.parse(value);
   return Number.isNaN(time) ? null : time;
+}
+
+function isNearBottom(element: HTMLElement | null) {
+  if (!element) return true;
+  return element.scrollHeight - element.clientHeight - element.scrollTop < 24;
+}
+
+function scrollMessagesToBottom(element: HTMLElement | null) {
+  if (element) {
+    element.scrollTop = element.scrollHeight;
+  }
+}
+
+function firstMessageAfter(messages: SupportChatMessage[], previousLastMessageId: string | null) {
+  const previousIndex = previousLastMessageId
+    ? messages.findIndex((message) => message.id === previousLastMessageId)
+    : -1;
+  if (previousIndex >= 0 && previousIndex < messages.length - 1) {
+    return messages[previousIndex + 1].id;
+  }
+  return messages.length > 0 ? messages[messages.length - 1].id : null;
+}
+
+function isSupportChatMobile() {
+  return typeof window !== 'undefined' && window.matchMedia(SUPPORT_CHAT_MOBILE_QUERY).matches;
 }

@@ -103,6 +103,19 @@ class SupportChatServiceTest {
         verify(jdbcTemplate, never()).update(contains("admin_unread_count = 0"), eq(7001L));
     }
 
+    @Test
+    void closedTicketChatHistoryRemainsReadableWithoutActiveRoomFilter() {
+        mockRoom("ARCHIVED", "CLOSED", 2, 0);
+        mockMessages();
+
+        Map<String, Object> detail = service.detailSnapshot(ROOM_ID, USER);
+
+        assertThat((Map<String, Object>) detail.get("contact"))
+                .containsEntry("status", "ARCHIVED")
+                .containsEntry("ticketStatus", "CLOSED")
+                .containsEntry("canSendMessage", false);
+    }
+
     private void assertBadRequest(Map<String, Object> request) {
         assertThatThrownBy(() -> service.postUserMessage(ROOM_ID, request, USER))
                 .isInstanceOf(ResponseStatusException.class)

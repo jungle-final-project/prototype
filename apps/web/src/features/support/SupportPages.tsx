@@ -2,13 +2,18 @@ import { ChangeEvent, FormEvent, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge } from '../../components/ui';
-import { ApiError } from '../../lib/api';
+import { ApiError, getCachedAuthUser } from '../../lib/api';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { createSupportTicket, getSupportTicket, uploadAgentLog } from './supportApi';
-import type { AsTicketDto, CauseCandidate } from './types';
+import { getCurrentSupportChat } from './supportChatApi';
+import type { AsTicketDto, CauseCandidate, SupportChatContact } from './types';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
+type BlockingSupportChat = {
+  asTicketId: string;
+  supportChatRoomId?: string | null;
+};
 
 export function AsChatPage() {
   const [searchParams] = useSearchParams();
@@ -218,6 +223,14 @@ export function SupportNewPage() {
   const [logPreview, setLogPreview] = useState('');
   const [submitState, setSubmitState] = useState<SubmitState>('default');
   const [error, setError] = useState('');
+  const [conflictChat, setConflictChat] = useState<BlockingSupportChat | null>(null);
+  const authScope = authScopeKey(getCachedAuthUser());
+  const currentChatQuery = useQuery({
+    queryKey: ['support-chat', authScope, 'intake-current'],
+    queryFn: () => getCurrentSupportChat(),
+    retry: false
+  });
+  const blockingChat = conflictChat ?? blockingChatFromContact(currentChatQuery.data?.contact ?? null);
 
   function downloadSampleJsonl() {
     const sampleLines = [
@@ -263,6 +276,11 @@ export function SupportNewPage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError('');
+    if (blockingChat) {
+      setSubmitState('ticket_error');
+      setError('진행 중인 AS 상담이 있습니다.');
+      return;
+    }
 
     const title = symptomTitle.trim();
     const detail = symptomDetail.trim();
@@ -291,6 +309,13 @@ export function SupportNewPage() {
       setSubmitState('uploading');
       await uploadAndCreateTicket(title, detail, selectedFile);
     } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409 && cause.code === 'CONFLICT_STATE') {
+        const refetched = await currentChatQuery.refetch();
+        setConflictChat(blockingChatFromError(cause) ?? blockingChatFromContact(refetched.data?.contact ?? null));
+        setSubmitState('ticket_error');
+        setError('진행 중인 AS 상담이 있습니다.');
+        return;
+      }
       if (cause instanceof TicketCreateError) {
         setSubmitState('ticket_error');
         setError('AS 티켓 생성에 실패했습니다. 로그인 상태를 확인한 뒤 다시 시도해 주세요.');
@@ -304,22 +329,20 @@ export function SupportNewPage() {
   async function uploadAndCreateTicket(title: string, detail: string, file: File) {
     const uploadedLog = await uploadAgentLog(30, consentAccepted, file);
     const symptom = `${title}\n\n${detail}`;
-    try {
-      const ticket = await createSupportTicket(symptom, uploadedLog.id);
-      setSubmitState('ticket_created');
-      navigate(`/support/${ticket.id}`);
-    } catch {
-      throw new TicketCreateError();
-    }
+    const ticket = await createSupportTicket(symptom, uploadedLog.id);
+    setSubmitState('ticket_created');
+    navigate(`/support/${ticket.id}`);
   }
 
   const isUploading = submitState === 'uploading';
+  const isSubmitDisabled = isUploading || Boolean(blockingChat);
 
   return (
     <Screen>
       <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="AS 접수" subtitle="증상과 PC Agent 로그를 함께 보내면 담당자가 더 정확히 확인할 수 있습니다.">
           <div className="space-y-4">
+            {blockingChat ? <ActiveSupportChatNotice chat={blockingChat} /> : null}
             <div>
               <label htmlFor="support-symptom-title" className="mb-1 block text-xs font-bold text-slate-600">증상 제목</label>
               <input
@@ -370,7 +393,7 @@ export function SupportNewPage() {
             </label>
             {error ? <StateMessage type="warn" title="AS 접수 확인 필요" body={error} /> : null}
             {submitState === 'ticket_created' ? <StateMessage type="success" title="AS 티켓 생성 완료" body="생성된 티켓 상세 화면으로 이동합니다." /> : null}
-            <button disabled={isUploading} className="rounded bg-brand-blue px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+            <button disabled={isSubmitDisabled} className="rounded bg-brand-blue px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
               {isUploading ? '로그 업로드 및 티켓 생성 중...' : 'AS 접수하기'}
             </button>
           </div>
@@ -390,6 +413,56 @@ export function SupportNewPage() {
 }
 
 class TicketCreateError extends Error {}
+
+function ActiveSupportChatNotice({ chat }: { chat: BlockingSupportChat }) {
+  return (
+    <div className="space-y-3">
+      <StateMessage
+        type="info"
+        title="진행 중인 AS 상담이 있습니다."
+        body="관리자가 상담을 닫기 전까지 새 AS 접수를 만들 수 없습니다."
+      />
+      <Link
+        to={`/support/${chat.asTicketId}?chat=1`}
+        className="inline-flex rounded bg-brand-blue px-4 py-3 text-sm font-bold text-white hover:bg-blue-700"
+      >
+        진행 중인 상담방으로 이동
+      </Link>
+    </div>
+  );
+}
+
+function blockingChatFromContact(contact: SupportChatContact | null): BlockingSupportChat | null {
+  if (!contact || contact.canSendMessage === false) {
+    return null;
+  }
+  return {
+    asTicketId: contact.asTicketId,
+    supportChatRoomId: contact.id
+  };
+}
+
+function blockingChatFromError(error: ApiError): BlockingSupportChat | null {
+  const asTicketId = error.details?.asTicketId;
+  if (typeof asTicketId !== 'string' || !asTicketId) {
+    return null;
+  }
+  const supportChatRoomId = error.details?.supportChatRoomId;
+  return {
+    asTicketId,
+    supportChatRoomId: typeof supportChatRoomId === 'string' ? supportChatRoomId : null
+  };
+}
+
+function authScopeKey(user: unknown) {
+  if (!user || typeof user !== 'object') {
+    return 'anonymous';
+  }
+  const record = user as { id?: unknown; role?: unknown };
+  const id = typeof record.id === 'string' && record.id ? record.id : 'unknown';
+  const role = typeof record.role === 'string' && record.role ? record.role : 'unknown';
+  return `${role}:${id}`;
+}
 
 function uploadFailureMessage(cause: unknown) {
   if (cause instanceof ApiError && cause.status === 400) {

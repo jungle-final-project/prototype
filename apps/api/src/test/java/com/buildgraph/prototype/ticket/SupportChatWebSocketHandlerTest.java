@@ -3,6 +3,7 @@ package com.buildgraph.prototype.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
+import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
@@ -79,6 +81,21 @@ class SupportChatWebSocketHandlerTest {
     }
 
     @Test
+    void missingPayloadTypeReturnsErrorFrameWithoutThrowing() throws Exception {
+        WebSocketSession session = session("user");
+
+        assertThatCode(() -> handler.handleTextMessage(session, new TextMessage("""
+                {
+                  "content": "type 필드가 없습니다."
+                }
+                """))).doesNotThrowAnyException();
+
+        verify(supportChatService, never()).postUserMessage(any(), any(), any());
+        verify(supportChatService, never()).postAdminMessage(any(), any(), any());
+        assertSentFrame(session, "ERROR", "INVALID_WS_PAYLOAD");
+    }
+
+    @Test
     void socketOpenAndBroadcastUseUnreadSafeSnapshot() throws Exception {
         WebSocketSession session = session("user");
         when(session.getUri()).thenReturn(URI.create("ws://localhost/ws/support-chat?token=jwt-token&mode=user&sessionId=" + ROOM_ID));
@@ -98,6 +115,26 @@ class SupportChatWebSocketHandlerTest {
         verify(supportChatService, never()).detail(ROOM_ID, USER);
     }
 
+    @Test
+    void broadcastKeepsOtherSessionsWhenOneSessionSendFails() throws Exception {
+        WebSocketSession failingSession = connectedSession();
+        WebSocketSession healthySession = connectedSession();
+        when(supportChatService.detailSnapshot(ROOM_ID, USER)).thenReturn(MockData.map(
+                "contact", MockData.map("id", ROOM_ID, "userUnreadCount", 2),
+                "messages", List.of(),
+                "pollingIntervalMs", 5000
+        ));
+
+        handler.afterConnectionEstablished(failingSession);
+        handler.afterConnectionEstablished(healthySession);
+        doThrow(new IOException("socket write failed")).when(failingSession).sendMessage(any(TextMessage.class));
+
+        assertThatCode(() -> handler.broadcastRoomUpdate(ROOM_ID)).doesNotThrowAnyException();
+
+        verify(failingSession).close();
+        verify(healthySession, times(2)).sendMessage(any(TextMessage.class));
+    }
+
     private static WebSocketSession session(String mode) {
         WebSocketSession session = mock(WebSocketSession.class);
         Map<String, Object> attributes = new HashMap<>();
@@ -105,6 +142,15 @@ class SupportChatWebSocketHandlerTest {
         attributes.put("mode", mode);
         attributes.put("authorization", "Bearer jwt-token");
         when(session.getAttributes()).thenReturn(attributes);
+        return session;
+    }
+
+    private WebSocketSession connectedSession() {
+        WebSocketSession session = session("user");
+        when(session.getUri()).thenReturn(URI.create("ws://localhost/ws/support-chat?token=jwt-token&mode=user&sessionId=" + ROOM_ID));
+        when(session.isOpen()).thenReturn(true);
+        when(currentUserService.requireUser("Bearer jwt-token")).thenReturn(USER);
+        when(supportChatService.userCanAccess(ROOM_ID, USER)).thenReturn(true);
         return session;
     }
 

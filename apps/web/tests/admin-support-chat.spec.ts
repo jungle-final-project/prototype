@@ -116,6 +116,42 @@ test('admin auto-selected support chat detail is loaded without mark-read side e
   await expect.poll(() => detailUrls.find((url) => url.includes('00000000-0000-4000-8000-000000009001')) ?? '').toContain('markRead=false');
 });
 
+test('admin support chat shows a new message marker when reading older messages', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminLongSupportChat(page);
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect(page.getByText('실시간 연결')).toBeVisible();
+
+  const scroller = page.getByTestId('admin-support-chat-messages');
+  await expect.poll(async () => scroller.evaluate((element) => element.scrollTop > 0)).toBe(true);
+  await scroller.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await pushAdminChatMessage(page, '관리자가 읽는 중 도착한 새 메시지');
+
+  await expect(page.getByText('새 메시지', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '새 메시지로 이동' })).toBeVisible();
+  await expect.poll(async () => scroller.evaluate((element) => element.scrollTop < 8)).toBe(true);
+});
+
+test('admin guard reacts when auth is cleared', async ({ page }) => {
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect(page.getByRole('heading', { name: '상담방 관리' })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const apiModulePath = '/src/lib/api.ts';
+    const { clearToken } = await import(/* @vite-ignore */ apiModulePath);
+    clearToken();
+  });
+
+  await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeVisible();
+});
+
 async function mockAdmin(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');
@@ -302,4 +338,101 @@ async function mockAdminSupportChats(
     }
     await route.fallback();
   });
+}
+
+async function mockAdminLongSupportChat(page: Page) {
+  const room = {
+    id: '00000000-0000-4000-8000-000000009001',
+    asTicketId: '00000000-0000-4000-8000-000000006001',
+    status: 'ACTIVE',
+    ticketStatus: 'OPEN',
+    title: 'AS 상담방',
+    symptom: 'GPU 온도 상승',
+    lastMessagePreview: '긴 대화 확인 중입니다.',
+    lastMessageAt: '2026-07-06T10:35:00Z',
+    userUnreadCount: 0,
+    adminUnreadCount: 2,
+    canSendMessage: true,
+    user: {
+      id: '00000000-0000-4000-8000-000000001004',
+      email: 'user-a@example.com',
+      name: 'User A'
+    }
+  };
+  const messages = Array.from({ length: 36 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-00000002${String(index).padStart(4, '0')}`,
+    role: index === 0 ? 'SYSTEM' : index % 2 === 0 ? 'ADMIN' : 'USER',
+    content: index === 35 ? '관리자 화면의 가장 최신 메시지입니다.' : `관리자 상담 메시지 ${index + 1}`,
+    senderName: index % 2 === 0 ? 'BuildGraph Admin' : 'User A',
+    createdAt: `2026-07-06T10:${String(index).padStart(2, '0')}:00Z`
+  }));
+  const detail = { contact: room, messages, pollingIntervalMs: 5000 };
+
+  await page.route('**/api/admin/support/chat-sessions', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [room], pollingIntervalMs: 5000 })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detail) });
+      return;
+    }
+    await route.fallback();
+  });
+}
+
+async function pushAdminChatMessage(page: Page, content: string) {
+  await page.evaluate((messageContent) => {
+    const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
+    const socket = sockets[sockets.length - 1];
+    socket?.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({
+        type: 'CHAT_UPDATED',
+        detail: {
+          contact: {
+            id: '00000000-0000-4000-8000-000000009001',
+            asTicketId: '00000000-0000-4000-8000-000000006001',
+            status: 'ACTIVE',
+            ticketStatus: 'OPEN',
+            title: 'AS 상담방',
+            symptom: 'GPU 온도 상승',
+            lastMessagePreview: messageContent,
+            lastMessageAt: '2026-07-06T10:40:00Z',
+            userUnreadCount: 0,
+            adminUnreadCount: 3,
+            canSendMessage: true,
+            user: {
+              id: '00000000-0000-4000-8000-000000001004',
+              email: 'user-a@example.com',
+              name: 'User A'
+            }
+          },
+          messages: [
+            ...Array.from({ length: 36 }, (_, index) => ({
+              id: `00000000-0000-4000-8000-00000002${String(index).padStart(4, '0')}`,
+              role: index === 0 ? 'SYSTEM' : index % 2 === 0 ? 'ADMIN' : 'USER',
+              content: index === 35 ? '관리자 화면의 가장 최신 메시지입니다.' : `관리자 상담 메시지 ${index + 1}`,
+              senderName: index % 2 === 0 ? 'BuildGraph Admin' : 'User A',
+              createdAt: `2026-07-06T10:${String(index).padStart(2, '0')}:00Z`
+            })),
+            {
+              id: '00000000-0000-4000-8000-000000029999',
+              role: 'USER',
+              content: messageContent,
+              senderName: 'User A',
+              createdAt: '2026-07-06T10:40:00Z'
+            }
+          ],
+          pollingIntervalMs: 5000
+        }
+      })
+    }));
+  }, content);
 }

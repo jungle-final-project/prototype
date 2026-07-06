@@ -2,30 +2,32 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
-import { AUTH_CHANGED_EVENT } from '../../../lib/api';
+import { AUTH_CHANGED_EVENT, getCachedAuthUser } from '../../../lib/api';
 import { getAdminSupportChatSession, getAdminSupportChatSessions, openSupportChatSocket, postAdminSupportChatMessage, type SupportChatSocket } from '../../support/supportChatApi';
 import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto } from '../../support/types';
 
-// 소켓 미연결 시 활성 폴링 간격. 소켓 연결 시에도 완전히 끄지 않고 낮은 빈도로 유지해,
-// 다중 인스턴스에서 broadcast가 도달하지 않아도 상대 메시지를 놓치지 않게 한다.
-const ACTIVE_POLL_MS = 5000;
-const SOCKET_FALLBACK_POLL_MS = 15000;
+const DEFAULT_POLL_MS = 5000;
 const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
 
 export function AdminSupportChatSessionsPage() {
   const queryClient = useQueryClient();
   const socketRef = useRef<SupportChatSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const wasAtBottomRef = useRef(true);
+  const forceScrollToBottomRef = useRef(false);
+  const previousLastMessageIdRef = useRef<string | null>(null);
+  const [authScope, setAuthScope] = useState(() => authScopeKey(getCachedAuthUser()));
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedSessionMarkRead, setSelectedSessionMarkRead] = useState(false);
   const [message, setMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [newMarkerMessageId, setNewMarkerMessageId] = useState<string | null>(null);
 
   const listQuery = useQuery({
-    queryKey: ['admin-support-chat-sessions'],
+    queryKey: ['admin-support-chat-sessions', authScope],
     queryFn: getAdminSupportChatSessions,
-    refetchInterval: 5000,
+    refetchInterval: (query) => pollingInterval(query.state.data as SupportChatSessionListDto | undefined),
     retry: false
   });
   const rooms = listQuery.data?.items ?? [];
@@ -38,15 +40,16 @@ export function AdminSupportChatSessionsPage() {
   }, [rooms, selectedSessionId]);
 
   const detailQuery = useQuery({
-    queryKey: ['admin-support-chat-session', selectedSessionId, selectedSessionMarkRead],
+    queryKey: ['admin-support-chat-session', authScope, selectedSessionId, selectedSessionMarkRead],
     queryFn: () => getAdminSupportChatSession(selectedSessionId as string, selectedSessionMarkRead),
     enabled: Boolean(selectedSessionId),
-    refetchInterval: socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS,
+    refetchInterval: (query) => selectedSessionId ? pollingInterval(query.state.data as SupportChatSessionDto | undefined) : false,
     retry: false
   });
 
   useEffect(() => {
     const handleAuthChanged = () => {
+      setAuthScope(authScopeKey(getCachedAuthUser()));
       socketRef.current?.close();
       socketRef.current = null;
       setSocketConnected(false);
@@ -54,6 +57,7 @@ export function AdminSupportChatSessionsPage() {
       setSelectedSessionMarkRead(false);
       setMessage('');
       setSendError(null);
+      setNewMarkerMessageId(null);
       queryClient.removeQueries({ queryKey: ['admin-support-chat-sessions'] });
       queryClient.removeQueries({ queryKey: ['admin-support-chat-session'] });
     };
@@ -113,7 +117,10 @@ export function AdminSupportChatSessionsPage() {
             setSendError(error.message);
           }
         },
-        onDetail: (detail) => cacheDetail(queryClient, detail)
+        onDetail: (detail) => {
+          wasAtBottomRef.current = isNearBottom(messagesRef.current);
+          cacheDetail(queryClient, authScope, detail);
+        }
       });
       socketRef.current = socket;
     };
@@ -126,14 +133,15 @@ export function AdminSupportChatSessionsPage() {
       socketRef.current = null;
       setSocketConnected(false);
     };
-  }, [selectedSessionId, queryClient]);
+  }, [authScope, selectedSessionId, queryClient]);
 
   const sendMutation = useMutation({
     mutationFn: (content: string) => postAdminSupportChatMessage(selectedSessionId as string, content),
     onSuccess: (detail) => {
+      forceScrollToBottomRef.current = true;
       setMessage('');
       setSendError(null);
-      cacheDetail(queryClient, detail);
+      cacheDetail(queryClient, authScope, detail);
       void listQuery.refetch();
     },
     onError: (error) => {
@@ -142,7 +150,7 @@ export function AdminSupportChatSessionsPage() {
   });
 
   const selectedRoom = detailQuery.data?.contact ?? rooms.find((room) => room.id === selectedSessionId) ?? null;
-  const messageCount = detailQuery.data?.messages.length ?? 0;
+  const messages = detailQuery.data?.messages ?? [];
   const canSend = Boolean(selectedSessionId && selectedRoom?.canSendMessage && message.trim() && !sendMutation.isPending);
   const roomRows = rooms.map((room) => ({
     선택: (
@@ -185,14 +193,27 @@ export function AdminSupportChatSessionsPage() {
 
   useEffect(() => {
     if (!messagesRef.current) return;
+    const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
+    const previousLastMessageId = previousLastMessageIdRef.current;
+    const hasNewMessage = Boolean(previousLastMessageId && lastMessageId && previousLastMessageId !== lastMessageId);
+    const shouldScroll = forceScrollToBottomRef.current || !hasNewMessage || wasAtBottomRef.current;
+    const markerMessageId = hasNewMessage && !shouldScroll
+      ? firstMessageAfter(messages, previousLastMessageId) ?? lastMessageId
+      : null;
+    previousLastMessageIdRef.current = lastMessageId;
+    forceScrollToBottomRef.current = false;
+
     const frame = window.requestAnimationFrame(() => {
-      const element = messagesRef.current;
-      if (element) {
-        element.scrollTop = element.scrollHeight;
+      if (shouldScroll) {
+        scrollMessagesToBottom(messagesRef.current);
+        setNewMarkerMessageId(null);
+        wasAtBottomRef.current = true;
+      } else {
+        setNewMarkerMessageId(markerMessageId);
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [selectedSessionId, messageCount]);
+  }, [messages, selectedSessionId]);
 
   return (
     <AdminShell title="상담방 관리" exportRows={exportRows} exportFileName="admin-support-chat-sessions.csv">
@@ -225,12 +246,42 @@ export function AdminSupportChatSessionsPage() {
                   <span>{socketConnected ? '실시간 연결' : '자동 새로고침'}</span>
                 </div>
               </div>
-              <div ref={messagesRef} data-testid="admin-support-chat-messages" className="h-[440px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
-                <div className="space-y-3">
-                  {detailQuery.data.messages.map((item) => (
-                    <AdminChatBubble key={item.id} message={item} />
-                  ))}
+              <div className="relative h-[440px] overflow-hidden rounded border border-slate-200 bg-slate-50">
+                <div
+                  ref={messagesRef}
+                  data-testid="admin-support-chat-messages"
+                  className="h-full overflow-y-auto p-4"
+                  onScroll={(event) => {
+                    const nearBottom = isNearBottom(event.currentTarget);
+                    wasAtBottomRef.current = nearBottom;
+                    if (nearBottom) {
+                      setNewMarkerMessageId(null);
+                    }
+                  }}
+                >
+                  <div className="space-y-3">
+                    {messages.map((item) => (
+                      <div key={item.id}>
+                        {newMarkerMessageId === item.id ? <NewMessageMarker /> : null}
+                        <AdminChatBubble message={item} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
+                {newMarkerMessageId ? (
+                  <button
+                    type="button"
+                    aria-label="새 메시지로 이동"
+                    onClick={() => {
+                      scrollMessagesToBottom(messagesRef.current);
+                      wasAtBottomRef.current = true;
+                      setNewMarkerMessageId(null);
+                    }}
+                    className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-blue px-4 py-2 text-xs font-bold text-white shadow-lg"
+                  >
+                    새 메시지로 이동
+                  </button>
+                ) : null}
               </div>
               <form onSubmit={submit} className="mt-4">
                 {selectedRoom?.canSendMessage === false ? (
@@ -283,14 +334,24 @@ function AdminChatBubble({ message }: { message: SupportChatMessage }) {
   );
 }
 
-function cacheDetail(queryClient: ReturnType<typeof useQueryClient>, detail: SupportChatSessionDto) {
+function NewMessageMarker() {
+  return (
+    <div className="my-3 flex items-center gap-3" aria-label="새 메시지">
+      <div className="h-px flex-1 bg-blue-200" />
+      <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-black text-brand-blue">새 메시지</span>
+      <div className="h-px flex-1 bg-blue-200" />
+    </div>
+  );
+}
+
+function cacheDetail(queryClient: ReturnType<typeof useQueryClient>, authScope: string, detail: SupportChatSessionDto) {
   if (detail.contact?.id) {
     queryClient.setQueriesData<SupportChatSessionDto | undefined>(
-      { queryKey: ['admin-support-chat-session', detail.contact.id] },
+      { queryKey: ['admin-support-chat-session', authScope, detail.contact.id] },
       (existing) => shouldApplyDetail(detail, existing) ? detail : existing
     );
     queryClient.setQueryData<SupportChatSessionListDto | undefined>(
-      ['admin-support-chat-sessions'],
+      ['admin-support-chat-sessions', authScope],
       (existing) => patchAdminList(existing, detail.contact as SupportChatContact)
     );
   }
@@ -329,6 +390,21 @@ function errorMessage(error: unknown) {
   return error instanceof Error && error.message ? error.message : '메시지를 전송하지 못했습니다.';
 }
 
+function pollingInterval(detail?: { pollingIntervalMs?: number }) {
+  const value = detail?.pollingIntervalMs;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_POLL_MS;
+}
+
+function authScopeKey(user: unknown) {
+  if (!user || typeof user !== 'object') {
+    return 'anonymous';
+  }
+  const record = user as { id?: unknown; role?: unknown };
+  const id = typeof record.id === 'string' && record.id ? record.id : 'unknown';
+  const role = typeof record.role === 'string' && record.role ? record.role : 'unknown';
+  return `${role}:${id}`;
+}
+
 function shouldApplyDetail(incoming: SupportChatSessionDto, existing?: SupportChatSessionDto) {
   const incomingTime = detailTime(incoming);
   const existingTime = existing ? detailTime(existing) : null;
@@ -345,4 +421,25 @@ function timestamp(value?: string | null) {
   if (!value) return 0;
   const time = Date.parse(value);
   return Number.isNaN(time) ? 0 : time;
+}
+
+function isNearBottom(element: HTMLElement | null) {
+  if (!element) return true;
+  return element.scrollHeight - element.clientHeight - element.scrollTop < 24;
+}
+
+function scrollMessagesToBottom(element: HTMLElement | null) {
+  if (element) {
+    element.scrollTop = element.scrollHeight;
+  }
+}
+
+function firstMessageAfter(messages: SupportChatMessage[], previousLastMessageId: string | null) {
+  const previousIndex = previousLastMessageId
+    ? messages.findIndex((message) => message.id === previousLastMessageId)
+    : -1;
+  if (previousIndex >= 0 && previousIndex < messages.length - 1) {
+    return messages[previousIndex + 1].id;
+  }
+  return messages.length > 0 ? messages[messages.length - 1].id : null;
 }
