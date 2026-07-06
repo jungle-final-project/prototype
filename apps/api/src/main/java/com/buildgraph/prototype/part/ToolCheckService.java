@@ -67,7 +67,7 @@ public class ToolCheckService {
         Map<String, ToolBuildPart> byCategory = byCategory(parts);
         return switch (tool) {
             case "compatibility" -> compatibility(byCategory, parts);
-            case "power" -> power(byCategory);
+            case "power" -> power(byCategory, parts);
             case "size" -> size(byCategory);
             case "performance" -> performance(byCategory, context);
             case "price" -> price(parts, budget, currentTotalPrice);
@@ -158,10 +158,12 @@ public class ToolCheckService {
     }
 
     /** Evaluates PSU rated capacity against estimated build load. */
-    private Map<String, Object> power(Map<String, ToolBuildPart> byCategory) {
+    private Map<String, Object> power(Map<String, ToolBuildPart> byCategory, List<ToolBuildPart> parts) {
         ToolBuildPart gpu = byCategory.get("GPU");
         ToolBuildPart psu = byCategory.get("PSU");
-        int estimatedWattage = estimatedWattage(new ArrayList<>(byCategory.values()));
+        // byCategory는 카테고리당 1개로 접힌다 — SSD 3개·RAM 2종 같은 복수 장착의 전력이 빠지지 않게
+        // 전체 목록으로 합산한다(수량 가중은 estimatedWattage 내부).
+        int estimatedWattage = estimatedWattage(parts);
         int psuCapacity = intAttr(psu, "capacityW", 0);
         int vendorRecommendedPsu = intAttr(gpu, "requiredSystemPowerW", 0);
         int requiredRatedCapacity = Math.max(vendorRecommendedPsu, estimatedWattage + 120);
@@ -823,15 +825,17 @@ public class ToolCheckService {
         return false;
     }
 
-    /** Sums current selected part prices. */
+    /** Sums current selected part prices weighted by quantity — UI 총액과 같은 규칙. */
     private static int total(List<ToolBuildPart> parts) {
-        return parts.stream().mapToInt(part -> part.price() == null ? 0 : part.price()).sum();
+        return parts.stream()
+                .mapToInt(part -> (part.price() == null ? 0 : part.price()) * part.effectiveQuantity())
+                .sum();
     }
 
-    /** Estimates continuous system draw for power checks. */
+    /** Estimates continuous system draw for power checks — 수량 가중(스틱 검사와 같은 원칙). */
     private static int estimatedWattage(List<ToolBuildPart> parts) {
         return parts.stream()
-                .mapToInt(ToolCheckService::estimatedPartPowerDraw)
+                .mapToInt(part -> estimatedPartPowerDraw(part) * (part == null ? 1 : part.effectiveQuantity()))
                 .sum() + 60;
     }
 
