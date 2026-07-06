@@ -36,7 +36,9 @@ public class PartQueryService {
             Integer page,
             Integer size,
             String sort,
-            String compatibilitySource
+            String compatibilitySource,
+            String compatibilityMode,
+            String replaceTargetPartId
     ) {
         PartSearch search = new PartSearch(category, query, manufacturer, status, minPrice, maxPrice, page, size, sort);
         String normalizedCompatibilitySource = normalizeCompatibilitySource(compatibilitySource);
@@ -44,7 +46,9 @@ public class PartQueryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "호환성순 정렬에는 category와 compatibilitySource가 필요합니다.");
         }
         if (normalizedCompatibilitySource != null && search.category() != null) {
-            return partsWithCompatibility(user, search, normalizedCompatibilitySource);
+            // compatibilityMode/replaceTargetPartId는 호환 평가가 켜졌을 때만 의미가 있다 —
+            // compatibilitySource 단독 무시 규칙과 같은 원칙으로, 평가 없는 조회에서는 무시한다.
+            return partsWithCompatibility(user, search, normalizedCompatibilitySource, compatibilityMode, replaceTargetPartId);
         }
         return MockData.map(
                 "items", partRows(search),
@@ -65,7 +69,7 @@ public class PartQueryService {
             Integer size,
             String sort
     ) {
-        return parts(null, category, query, manufacturer, status, minPrice, maxPrice, page, size, sort, null);
+        return parts(null, category, query, manufacturer, status, minPrice, maxPrice, page, size, sort, null, null, null);
     }
 
     public Map<String, Object> part(String id) {
@@ -267,7 +271,7 @@ public class PartQueryService {
                 .toList();
     }
 
-    private Map<String, Object> partsWithCompatibility(CurrentUserService.CurrentUser user, PartSearch search, String compatibilitySource) {
+    private Map<String, Object> partsWithCompatibility(CurrentUserService.CurrentUser user, PartSearch search, String compatibilitySource, String compatibilityMode, String replaceTargetPartId) {
         if (user == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
         }
@@ -276,6 +280,8 @@ public class PartQueryService {
                     user,
                     compatibilitySource,
                     search.category(),
+                    compatibilityMode,
+                    replaceTargetPartId,
                     allPartRowsForCompatibility(search)
             ).stream()
                     .sorted(Comparator
@@ -293,6 +299,8 @@ public class PartQueryService {
                 user,
                 compatibilitySource,
                 search.category(),
+                compatibilityMode,
+                replaceTargetPartId,
                 partRows(search)
         );
         return MockData.map(

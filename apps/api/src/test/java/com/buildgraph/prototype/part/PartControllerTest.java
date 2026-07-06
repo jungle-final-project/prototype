@@ -188,7 +188,9 @@ class PartControllerTest {
                 isNull(),
                 isNull(),
                 eq("compatibility"),
-                eq("QUOTE_DRAFT_CURRENT")
+                eq("QUOTE_DRAFT_CURRENT"),
+                eq("ADD"),
+                isNull()
         )).thenReturn(Map.of(
                 "items", java.util.List.of(Map.of(
                         "id", "part-gpu-pass",
@@ -213,12 +215,14 @@ class PartControllerTest {
                         .header("Authorization", USER_TOKEN)
                         .param("category", "GPU")
                         .param("sort", "compatibility")
-                        .param("compatibilitySource", "QUOTE_DRAFT_CURRENT"))
+                        .param("compatibilitySource", "QUOTE_DRAFT_CURRENT")
+                        .param("compatibilityMode", "ADD"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].compatibility.status").value("PASS"))
                 .andExpect(jsonPath("$.items[0].compatibility.statusLabel").value("호환됨"));
 
         verify(currentUserService).requireUser(USER_TOKEN);
+        // compatibilityMode/replaceTargetPartId도 쿼리 파라미터에서 그대로 위임되는지 함께 확인한다.
         verify(partQueryService).parts(
                 eq(user),
                 eq("GPU"),
@@ -230,7 +234,9 @@ class PartControllerTest {
                 isNull(),
                 isNull(),
                 eq("compatibility"),
-                eq("QUOTE_DRAFT_CURRENT")
+                eq("QUOTE_DRAFT_CURRENT"),
+                eq("ADD"),
+                isNull()
         );
     }
 

@@ -33,7 +33,7 @@ class PartQueryServiceTest {
         );
         CurrentUserService.CurrentUser user = user();
         when(jdbcTemplate.queryForList(anyString(), eq("GPU"))).thenReturn(rawRows);
-        when(compatibilityService.partRowsWithCompatibility(eq(user), eq("QUOTE_DRAFT_CURRENT"), eq("GPU"), anyList()))
+        when(compatibilityService.partRowsWithCompatibility(eq(user), eq("QUOTE_DRAFT_CURRENT"), eq("GPU"), eq(null), eq(null), anyList()))
                 .thenReturn(evaluatedRows);
 
         Map<String, Object> response = service.parts(
@@ -47,7 +47,9 @@ class PartQueryServiceTest {
                 0,
                 20,
                 "compatibility",
-                "QUOTE_DRAFT_CURRENT"
+                "QUOTE_DRAFT_CURRENT",
+                null,
+                null
         );
 
         List<Map<String, Object>> items = castList(response.get("items"));
