@@ -1472,6 +1472,23 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertNotIn("token", message.lower())
         self.assertNotIn("c:\\users", message.lower())
 
+    def test_registration_failure_messages_guide_web_redownload(self) -> None:
+        error = agent.UploadError(
+            "AS RAG preview failed: HTTP 401 "
+            '{"code":"UNAUTHORIZED","message":"Agent activation token is invalid."} '
+            "token=secret C:\\Users\\me\\raw.log"
+        )
+
+        preview_message = agent.as_rag_preview_failure_message(error)
+        compact_message = agent.compact_as_rag_preview_failure_message(error)
+
+        self.assertIn("다시 다운로드", preview_message)
+        self.assertIn("등록 토큰", preview_message)
+        self.assertIn("BuildGraphAgent-*.exe", compact_message)
+        self.assertNotIn("secret", preview_message.lower())
+        self.assertNotIn("c:\\users", preview_message.lower())
+        self.assertNotIn("invalid", preview_message.lower())
+
     def test_upload_event_panel_request_uses_existing_incident_upload_flow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

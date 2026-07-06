@@ -2808,10 +2808,35 @@ def event_panel_symptom(signals: Sequence[dict[str, Any]]) -> str:
     return " / ".join(summaries[:EVENT_PANEL_SIGNAL_LIMIT])
 
 
+AGENT_REGISTRATION_ERROR_MARKERS = (
+    "agenttoken is missing",
+    "agent token is required",
+    "agent activation token is invalid",
+    "activation token is invalid",
+    "device is inactive",
+    "http 401",
+    "http 403",
+)
+
+AGENT_REGISTRATION_EVENT_HELP = (
+    "Agent 등록이 필요합니다. 웹 지원 페이지에서 PC Agent를 다시 다운로드해 실행해 주세요."
+)
+AGENT_REGISTRATION_PREVIEW_HELP = (
+    "Agent 등록이 필요합니다. 웹 지원 페이지에서 등록 토큰이 포함된 PC Agent를 다시 다운로드해 실행해 주세요."
+)
+AGENT_REGISTRATION_COMPACT_HELP = (
+    "진단 실패: 웹에서 PC Agent를 다시 다운로드해 BuildGraphAgent-*.exe를 실행해 주세요."
+)
+
+
+def is_agent_registration_error_text(text: str) -> bool:
+    return any(marker in text for marker in AGENT_REGISTRATION_ERROR_MARKERS)
+
+
 def event_panel_failure_message(exception: Exception) -> str:
     text = str(exception).lower()
-    if "agenttoken is missing" in text or "http 401" in text or "http 403" in text:
-        return "Agent 등록 상태를 확인해야 전송할 수 있습니다."
+    if is_agent_registration_error_text(text):
+        return AGENT_REGISTRATION_EVENT_HELP
     if "consent" in text or "consentaccepted" in text:
         return "서버 업로드 동의가 필요해 전송할 수 없습니다."
     if "no log rows" in text or "log file does not exist" in text:
@@ -2823,8 +2848,8 @@ def event_panel_failure_message(exception: Exception) -> str:
 
 def as_rag_preview_failure_message(exception: Exception) -> str:
     text = str(exception).lower()
-    if "agenttoken is missing" in text or "http 401" in text or "http 403" in text:
-        return "Agent 등록 상태를 확인해야 AI 추천을 받을 수 있습니다."
+    if is_agent_registration_error_text(text):
+        return AGENT_REGISTRATION_PREVIEW_HELP
     if "consent" in text or "consentaccepted" in text:
         return "서버 업로드 동의가 필요해 AI 추천을 받을 수 없습니다."
     if "no log rows" in text or "log file does not exist" in text:
@@ -2839,6 +2864,26 @@ def as_rag_preview_failure_message(exception: Exception) -> str:
     ):
         return "서버 연결을 확인할 수 없어 AI 추천을 받지 못했습니다."
     return "AI 추천을 받지 못했습니다. 등록, 동의, 서버 연결 상태를 확인해 주세요."
+
+
+def compact_as_rag_preview_failure_message(exception: Exception) -> str:
+    text = str(exception).lower()
+    if is_agent_registration_error_text(text):
+        return AGENT_REGISTRATION_COMPACT_HELP
+    if "consent" in text or "consentaccepted" in text:
+        return "진단 실패: 서버 업로드 동의가 필요합니다."
+    if "no log rows" in text or "log file does not exist" in text:
+        return "진단 실패: 분석할 로그가 아직 없습니다."
+    if (
+        "timed out" in text
+        or "timeout" in text
+        or "connection" in text
+        or "refused" in text
+        or "unreachable" in text
+        or "연결" in text
+    ):
+        return "진단 실패: 서버 연결을 확인해 주세요."
+    return "진단 실패. 등록, 동의, 서버 상태를 확인해 주세요."
 
 
 def latest_upload_status(rows: Sequence[dict[str, Any]]) -> str:
@@ -5168,7 +5213,7 @@ def show_log_viewer(
             current_path = path
         except Exception as exception:
             message = as_rag_preview_failure_message(exception)
-            set_preview_text(message, "진단 실패. 등록, 동의, 서버 상태를 확인해 주세요." if compact_target else None)
+            set_preview_text(message, compact_as_rag_preview_failure_message(exception) if compact_target else None)
             preview_running["active"] = False
             return
 
@@ -5195,7 +5240,7 @@ def show_log_viewer(
 
         def apply_error(exception: Exception) -> None:
             message = as_rag_preview_failure_message(exception)
-            set_preview_text(message, "진단 실패. 등록, 동의, 서버 상태를 확인해 주세요." if compact_target else None)
+            set_preview_text(message, compact_as_rag_preview_failure_message(exception) if compact_target else None)
             finish()
 
         def run_preview() -> None:

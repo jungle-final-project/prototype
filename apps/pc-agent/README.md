@@ -63,6 +63,8 @@ build-agent-exe.cmd
 
 `agent.exe`는 사용자용 무콘솔 실행 파일입니다. 인자 없이 더블클릭하면 `%LOCALAPPDATA%\BuildGraphAgent` 아래에 기본 config/log 폴더를 만들고, Windows 시작프로그램에 등록한 뒤 트레이 아이콘으로 백그라운드 수집을 시작합니다. 트레이 메뉴에서는 로그 뷰어 열기, 로그 폴더 열기, AS 페이지 열기, 종료를 사용할 수 있습니다. 로그 뷰어는 날짜와 시간을 선택해 1시간 단위 JSONL row를 가볍게 보여주는 창입니다. 이것은 Windows Service가 아니라 MVP용 시작프로그램 기반 백그라운드 실행입니다.
 
+사용자 등록은 웹 지원 페이지의 PC Agent 다운로드 흐름을 기준으로 합니다. 웹은 `/api/users/me/agent-activation-token`으로 activation token을 발급한 뒤 다운로드 파일명을 `BuildGraphAgent-<activationToken>.exe`로 저장하고, Agent는 첫 실행 때 이 파일명에서 token을 읽어 기존 `agentToken`을 지운 뒤 현재 prototype DB에 다시 등록합니다. 저장소의 `apps/web/public/downloads/pc-agent/agent.exe`를 직접 실행하면 파일명에 activation token이 없으므로, 기존 로컬 config나 demo token이 현재 DB와 맞지 않는 환경에서는 PC 진단이 등록 실패로 끝날 수 있습니다.
+
 터미널 출력이 필요한 `status`, `doctor`, `register`, `collect`, `upload` 검증은 콘솔 실행 파일인 `agent-cli.exe`를 사용합니다.
 
 현재 로그 뷰어의 첫 화면은 상태 홈입니다. 상태 홈은 서버 연결, 마지막 업로드, 시작프로그램, 버전 카드와 최근 감지 신호, 로그 현황 테이블을 보여줍니다. 카드 상태는 로컬 config와 Agent 로그에 남은 heartbeat/upload/startup 정보를 기준으로 표시합니다. 이번 UI는 별도 동기 API 호출을 추가하지 않으며, heartbeat 호출, 로그 업로드 마법사, 위험 모달, AS 접수 마법사는 기존 흐름을 유지합니다. `tkinter`가 없는 패키징 환경에서는 PowerShell fallback 창이 같은 개인정보 기준으로 표시됩니다.
@@ -76,7 +78,7 @@ cd C:\나만무\prototype
 .\.venv\Scripts\python.exe apps\pc-agent\buildgraph_agent.py viewer --config apps\pc-agent\agent-config.example.json
 ```
 
-로컬 웹 데모에서 내려받는 파일은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다.
+로컬 웹 데모에서 내려받는 바이너리 원본은 `apps/web/public/downloads/pc-agent/agent.exe`에 둡니다. 새 exe를 만들면 해당 위치에 복사한 뒤 웹 이미지를 다시 빌드합니다. 실제 사용자는 웹 다운로드 버튼으로 토큰이 포함된 파일명(`BuildGraphAgent-<activationToken>.exe`)을 받아 실행해야 합니다.
 
 ## 출력 예시
 
