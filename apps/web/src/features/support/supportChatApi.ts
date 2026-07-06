@@ -17,6 +17,13 @@ export function postSupportChatMessage(sessionId: string, content: string) {
   });
 }
 
+export function putSupportChatVisitReservation(sessionId: string, payload: { scheduledAt: string; addressSnapshot?: string }) {
+  return api<SupportChatSessionDto>(`/api/support/chat-sessions/${sessionId}/visit-reservation`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+}
+
 export function postSupportChatWebSocketTicket(sessionId: string) {
   return api<SupportChatWebSocketTicketDto>(`/api/support/chat-sessions/${sessionId}/ws-ticket`, {
     method: 'POST'
@@ -36,6 +43,19 @@ export function postAdminSupportChatMessage(sessionId: string, content: string) 
   return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}/messages`, {
     method: 'POST',
     body: JSON.stringify({ content })
+  });
+}
+
+export function putAdminSupportChatVisitReservation(sessionId: string, payload: { scheduledAt: string; technicianNote?: string }) {
+  return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}/visit-reservation`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteAdminSupportChatVisitReservation(sessionId: string) {
+  return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}/visit-reservation`, {
+    method: 'DELETE'
   });
 }
 

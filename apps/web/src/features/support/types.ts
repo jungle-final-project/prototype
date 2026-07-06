@@ -62,11 +62,22 @@ export type SupportChatContact = {
   adminUnreadCount?: number;
   assignedAdminId?: string | null;
   canSendMessage?: boolean;
+  visitReservation?: VisitSupportReservation | null;
   user?: {
     id?: string;
     email?: string;
     name?: string;
   };
+};
+
+export type VisitSupportReservation = {
+  id: string;
+  status: 'REQUESTED' | 'RESCHEDULE_REQUESTED' | 'SCHEDULED' | 'VISIT_IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | string;
+  scheduledAt?: string | null;
+  addressSnapshot?: string | null;
+  technicianNote?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 };
 
 export type SupportChatMessage = {

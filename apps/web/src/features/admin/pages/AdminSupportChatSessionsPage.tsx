@@ -3,8 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getCachedAuthUser } from '../../../lib/api';
-import { getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, type SupportChatSocket } from '../../support/supportChatApi';
-import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto } from '../../support/types';
+import { deleteAdminSupportChatVisitReservation, getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, putAdminSupportChatVisitReservation, type SupportChatSocket } from '../../support/supportChatApi';
+import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto, VisitSupportReservation } from '../../support/types';
 
 const DEFAULT_POLL_MS = 5000;
 const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
@@ -23,6 +23,9 @@ export function AdminSupportChatSessionsPage() {
   const [selectedSessionMarkRead, setSelectedSessionMarkRead] = useState(false);
   const [message, setMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
+  const [visitScheduledAt, setVisitScheduledAt] = useState('');
+  const [visitTechnicianNote, setVisitTechnicianNote] = useState('');
+  const [visitError, setVisitError] = useState<string | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>('polling');
   const [queueSocketStatus, setQueueSocketStatus] = useState<SocketStatus>('polling');
   const [newMarkerMessageId, setNewMarkerMessageId] = useState<string | null>(null);
@@ -63,6 +66,9 @@ export function AdminSupportChatSessionsPage() {
       setSelectedSessionMarkRead(false);
       setMessage('');
       setSendError(null);
+      setVisitScheduledAt('');
+      setVisitTechnicianNote('');
+      setVisitError(null);
       setNewMarkerMessageId(null);
       queryClient.removeQueries({ queryKey: ['admin-support-chat-sessions'] });
       queryClient.removeQueries({ queryKey: ['admin-support-chat-session'] });
@@ -265,9 +271,46 @@ export function AdminSupportChatSessionsPage() {
     }
   });
 
+  const scheduleVisitMutation = useMutation({
+    mutationFn: () => putAdminSupportChatVisitReservation(selectedSessionId as string, {
+      scheduledAt: toSeoulOffsetDateTime(visitScheduledAt),
+      technicianNote: visitTechnicianNote.trim()
+    }),
+    onSuccess: (detail) => {
+      setVisitError(null);
+      cacheDetail(queryClient, authScope, detail);
+      void listQuery.refetch();
+    },
+    onError: (error) => {
+      setVisitError(errorMessage(error));
+    }
+  });
+
+  const cancelVisitMutation = useMutation({
+    mutationFn: () => deleteAdminSupportChatVisitReservation(selectedSessionId as string),
+    onSuccess: (detail) => {
+      setVisitError(null);
+      cacheDetail(queryClient, authScope, detail);
+      void listQuery.refetch();
+    },
+    onError: (error) => {
+      setVisitError(errorMessage(error));
+    }
+  });
+
   const selectedRoom = detailQuery.data?.contact ?? rooms.find((room) => room.id === selectedSessionId) ?? null;
   const messages = detailQuery.data?.messages ?? [];
   const canSend = Boolean(selectedSessionId && selectedRoom?.canSendMessage && message.trim() && !sendMutation.isPending);
+  const canScheduleVisit = Boolean(selectedSessionId && selectedRoom?.canSendMessage && visitScheduledAt && !scheduleVisitMutation.isPending);
+  const canCancelVisit = Boolean(selectedSessionId && selectedRoom?.canSendMessage && selectedRoom?.visitReservation && selectedRoom.visitReservation.status !== 'CANCELLED' && !cancelVisitMutation.isPending);
+
+  useEffect(() => {
+    const reservation = selectedRoom?.visitReservation;
+    setVisitScheduledAt(toDatetimeLocalValue(reservation?.scheduledAt));
+    setVisitTechnicianNote(reservation?.technicianNote ?? '');
+    setVisitError(null);
+  }, [selectedRoom?.id, selectedRoom?.visitReservation?.id, selectedRoom?.visitReservation?.scheduledAt, selectedRoom?.visitReservation?.technicianNote]);
+
   const roomRows = rooms.map((room) => ({
     선택: (
       <button
@@ -286,6 +329,7 @@ export function AdminSupportChatSessionsPage() {
     티켓: <Link to={`/admin/as-tickets/${room.asTicketId}`} className="font-bold text-brand-blue">{shortId(room.asTicketId)}</Link>,
     상태: <StatusBadge status={room.ticketStatus ?? room.status} />,
     안읽음: room.adminUnreadCount ?? 0,
+    예약: visitListLabel(room.visitReservation ?? null),
     증상: room.symptom ?? '-',
     최근메시지: room.lastMessagePreview ?? '-',
     최근시각: formatDateTime(room.lastMessageAt ?? undefined)
@@ -296,6 +340,7 @@ export function AdminSupportChatSessionsPage() {
     user: userLabel(room),
     ticketStatus: room.ticketStatus ?? room.status,
     adminUnreadCount: room.adminUnreadCount ?? 0,
+    visitReservation: visitListLabel(room.visitReservation ?? null),
     symptom: room.symptom ?? '',
     lastMessageAt: formatDateTime(room.lastMessageAt ?? undefined)
   }));
@@ -305,6 +350,19 @@ export function AdminSupportChatSessionsPage() {
     if (!canSend) return;
     setSendError(null);
     sendMutation.mutate(message.trim());
+  }
+
+  function submitVisitReservation(event: FormEvent) {
+    event.preventDefault();
+    if (!canScheduleVisit) return;
+    setVisitError(null);
+    scheduleVisitMutation.mutate();
+  }
+
+  function cancelVisitReservation() {
+    if (!canCancelVisit) return;
+    setVisitError(null);
+    cancelVisitMutation.mutate();
   }
 
   useEffect(() => {
@@ -342,7 +400,7 @@ export function AdminSupportChatSessionsPage() {
             <StateMessage type="info" title="상담방 없음" body="아직 관리할 사용자 상담방이 없습니다." />
           ) : null}
           {!listQuery.isLoading && !listQuery.isError && roomRows.length > 0 ? (
-            <DataTable columns={['선택', '사용자', '티켓', '상태', '안읽음', '증상', '최근메시지', '최근시각']} rows={roomRows} />
+            <DataTable columns={['선택', '사용자', '티켓', '상태', '안읽음', '예약', '증상', '최근메시지', '최근시각']} rows={roomRows} />
           ) : null}
         </Panel>
 
@@ -363,6 +421,27 @@ export function AdminSupportChatSessionsPage() {
                   <span>{socketStatusLabel(socketStatus)}</span>
                 </div>
               </div>
+              <AdminVisitReservationPanel
+                reservation={selectedRoom?.visitReservation ?? null}
+                scheduledAt={visitScheduledAt}
+                technicianNote={visitTechnicianNote}
+                error={visitError}
+                disabled={selectedRoom?.canSendMessage === false}
+                schedulePending={scheduleVisitMutation.isPending}
+                cancelPending={cancelVisitMutation.isPending}
+                canSchedule={canScheduleVisit}
+                canCancel={canCancelVisit}
+                onScheduledAtChange={(value) => {
+                  setVisitScheduledAt(value);
+                  setVisitError(null);
+                }}
+                onTechnicianNoteChange={(value) => {
+                  setVisitTechnicianNote(value);
+                  setVisitError(null);
+                }}
+                onSubmit={submitVisitReservation}
+                onCancel={cancelVisitReservation}
+              />
               <div className="relative h-[440px] overflow-hidden rounded border border-slate-200 bg-slate-50">
                 <div
                   ref={messagesRef}
@@ -461,6 +540,89 @@ function NewMessageMarker() {
   );
 }
 
+function AdminVisitReservationPanel({
+  reservation,
+  scheduledAt,
+  technicianNote,
+  error,
+  disabled,
+  schedulePending,
+  cancelPending,
+  canSchedule,
+  canCancel,
+  onScheduledAtChange,
+  onTechnicianNoteChange,
+  onSubmit,
+  onCancel
+}: {
+  reservation: VisitSupportReservation | null;
+  scheduledAt: string;
+  technicianNote: string;
+  error: string | null;
+  disabled: boolean;
+  schedulePending: boolean;
+  cancelPending: boolean;
+  canSchedule: boolean;
+  canCancel: boolean;
+  onScheduledAtChange: (value: string) => void;
+  onTechnicianNoteChange: (value: string) => void;
+  onSubmit: (event: FormEvent) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="mb-4 rounded border border-slate-200 bg-white p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-black text-slate-900">방문 예약</div>
+          <div className="mt-1 text-xs font-bold text-brand-blue">{adminVisitStatusLabel(reservation?.status)}</div>
+        </div>
+        {reservation?.scheduledAt ? (
+          <div className="text-right text-xs font-bold text-slate-700">{formatVisitTime(reservation.scheduledAt)}</div>
+        ) : null}
+      </div>
+      <div className="grid gap-2">
+        <label className="grid gap-1 text-xs font-bold text-slate-600">
+          방문 예약 시각
+          <input
+            type="datetime-local"
+            value={scheduledAt}
+            disabled={disabled}
+            onChange={(event) => onScheduledAtChange(event.target.value)}
+            className="h-10 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 disabled:bg-slate-100"
+          />
+        </label>
+        <label className="grid gap-1 text-xs font-bold text-slate-600">
+          기사 메모
+          <input
+            value={technicianNote}
+            disabled={disabled}
+            onChange={(event) => onTechnicianNoteChange(event.target.value)}
+            className="h-10 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 disabled:bg-slate-100"
+          />
+        </label>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={disabled || !canSchedule}
+            className="h-10 flex-1 rounded bg-brand-blue px-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+          >
+            {schedulePending ? '저장 중' : '예약 확정'}
+          </button>
+          <button
+            type="button"
+            disabled={disabled || !canCancel}
+            onClick={onCancel}
+            className="h-10 rounded border border-rose-200 px-3 text-xs font-black text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+          >
+            {cancelPending ? '취소 중' : '예약 취소'}
+          </button>
+        </div>
+        {error ? <p role="alert" className="text-xs font-bold text-rose-700">{error}</p> : null}
+      </div>
+    </form>
+  );
+}
+
 function cacheDetail(queryClient: ReturnType<typeof useQueryClient>, authScope: string, detail: SupportChatSessionDto) {
   if (detail.contact?.id) {
     queryClient.setQueriesData<SupportChatSessionDto | undefined>(
@@ -524,6 +686,65 @@ function socketStatusLabel(status: SocketStatus) {
     default:
       return '자동 새로고침';
   }
+}
+
+function visitListLabel(reservation?: VisitSupportReservation | null) {
+  if (!reservation) return '-';
+  const time = reservation.scheduledAt ? ` ${formatVisitTime(reservation.scheduledAt)}` : '';
+  return `${adminVisitStatusLabel(reservation.status)}${time}`;
+}
+
+function adminVisitStatusLabel(status?: string | null) {
+  switch (status) {
+    case 'REQUESTED':
+    case 'RESCHEDULE_REQUESTED':
+      return '확인 대기';
+    case 'SCHEDULED':
+      return '예약 확정됨';
+    case 'CANCELLED':
+      return '예약 취소됨';
+    case 'VISIT_IN_PROGRESS':
+      return '방문 진행 중';
+    case 'COMPLETED':
+      return '방문 완료';
+    default:
+      return '예약 없음';
+  }
+}
+
+function toSeoulOffsetDateTime(value: string) {
+  const normalized = value.length === 16 ? `${value}:00` : value;
+  return `${normalized}+09:00`;
+}
+
+function toDatetimeLocalValue(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 16);
+  }
+  return seoulDateTimeText(date).replace(' ', 'T');
+}
+
+function formatVisitTime(value?: string | null) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.replace('T', ' ').slice(0, 16);
+  }
+  return seoulDateTimeText(date);
+}
+
+function seoulDateTimeText(date: Date) {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(date);
 }
 
 function errorMessage(error: unknown) {

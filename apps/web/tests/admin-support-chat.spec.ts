@@ -177,6 +177,117 @@ test('admin support chat removes rooms from the list when the queue websocket se
   await expect(page.getByRole('cell', { name: 'user-b@example.com', exact: true })).toHaveCount(0);
 });
 
+test('admin support chat can schedule and cancel a visit reservation', async ({ page }) => {
+  let schedulePayload: unknown = null;
+  let cancelCalls = 0;
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001/visit-reservation', async (route) => {
+    if (route.request().method() === 'PUT') {
+      schedulePayload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(adminChatDetailWithReservation('SCHEDULED'))
+      });
+      return;
+    }
+    if (route.request().method() === 'DELETE') {
+      cancelCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(adminChatDetailWithReservation('CANCELLED'))
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/admin/support-chat-sessions');
+  await page.getByLabel('방문 예약 시각').fill('2099-07-10T14:30');
+  await page.getByLabel('기사 메모').fill('방문 전 연락');
+  await page.getByRole('button', { name: '예약 확정' }).click();
+
+  await expect.poll(() => schedulePayload).toEqual({
+    scheduledAt: '2099-07-10T14:30:00+09:00',
+    technicianNote: '방문 전 연락'
+  });
+  const visitPanel = page.locator('section').filter({ hasText: '기사 메모' });
+  await expect(visitPanel.getByText('예약 확정됨', { exact: true })).toBeVisible();
+  await expect(visitPanel.getByText('2099-07-10 14:30', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '예약 취소' }).click();
+  await expect.poll(() => cancelCalls).toBe(1);
+  await expect(visitPanel.getByText('예약 취소됨', { exact: true })).toBeVisible();
+});
+
+test('admin support chat keeps reservation input and shows an error when scheduling fails', async ({ page }) => {
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001/visit-reservation', async (route) => {
+    if (route.request().method() === 'PUT') {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'VALIDATION_ERROR',
+          message: '방문 예약 시각은 미래여야 합니다.'
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/admin/support-chat-sessions');
+  await page.getByLabel('방문 예약 시각').fill('2099-07-10T14:30');
+  await page.getByLabel('기사 메모').fill('방문 전 연락');
+  await page.getByRole('button', { name: '예약 확정' }).click();
+
+  await expect(page.getByLabel('방문 예약 시각')).toHaveValue('2099-07-10T14:30');
+  await expect(page.getByLabel('기사 메모')).toHaveValue('방문 전 연락');
+  await expect(page.getByText('방문 예약 시각은 미래여야 합니다.')).toBeVisible();
+});
+
+test('admin support chat updates visit reservation in the room list from queue patch', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+    return urls.some((url) => url.includes('/ws/admin/support-chat-queue'));
+  })).toBe(true);
+  await pushAdminQueueUpdated(page, {
+    id: '00000000-0000-4000-8000-000000009001',
+    asTicketId: '00000000-0000-4000-8000-000000006001',
+    status: 'ACTIVE',
+    ticketStatus: 'OPEN',
+    title: 'AS 상담방',
+    symptom: 'GPU 온도 상승',
+    lastMessagePreview: '방문 지원 예약이 확정되었습니다: 2099-07-10 14:30',
+    lastMessageAt: '2026-07-06T10:10:00Z',
+    userUnreadCount: 0,
+    adminUnreadCount: 2,
+    canSendMessage: true,
+    visitReservation: {
+      id: '00000000-0000-4000-8000-000000008001',
+      status: 'SCHEDULED',
+      scheduledAt: '2099-07-10T14:30:00+09:00'
+    },
+    user: {
+      id: '00000000-0000-4000-8000-000000001004',
+      email: 'user-a@example.com',
+      name: 'User A'
+    }
+  });
+
+  await expect(page.getByRole('row', { name: /user-a@example.com/ })).toContainText('예약 확정');
+  await expect(page.getByRole('row', { name: /user-a@example.com/ })).toContainText('2099-07-10 14:30');
+});
+
 test('admin support chat uses websocket tickets without leaking access tokens in the websocket url', async ({ page }) => {
   await mockOpenSupportWebSocket(page);
   await mockAdmin(page);
@@ -460,7 +571,11 @@ async function mockAdminSupportChats(
   });
   await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001**', async (route) => {
     onDetailRequest?.(route.request().url());
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detailA) });
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detailA) });
+      return;
+    }
+    await route.fallback();
   });
   await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009002**', async (route) => {
     onDetailRequest?.(route.request().url());
@@ -692,4 +807,42 @@ async function pushAdminQueueRemoved(page: Page, id: string) {
       })
     }));
   }, id);
+}
+
+function adminChatDetailWithReservation(status: string) {
+  return {
+    contact: {
+      id: '00000000-0000-4000-8000-000000009001',
+      asTicketId: '00000000-0000-4000-8000-000000006001',
+      status: 'ACTIVE',
+      ticketStatus: 'OPEN',
+      title: 'AS 상담방',
+      symptom: 'GPU 온도 상승',
+      lastMessagePreview: status === 'CANCELLED' ? '방문 지원 예약이 취소되었습니다.' : '방문 지원 예약이 확정되었습니다: 2099-07-10 14:30',
+      lastMessageAt: '2026-07-06T10:10:00Z',
+      userUnreadCount: 1,
+      adminUnreadCount: 0,
+      canSendMessage: true,
+      visitReservation: {
+        id: '00000000-0000-4000-8000-000000008001',
+        status,
+        scheduledAt: '2099-07-10T14:30:00+09:00',
+        technicianNote: status === 'CANCELLED' ? null : '방문 전 연락'
+      },
+      user: {
+        id: '00000000-0000-4000-8000-000000001004',
+        email: 'user-a@example.com',
+        name: 'User A'
+      }
+    },
+    messages: [
+      {
+        id: '00000000-0000-4000-8000-000000009101',
+        role: 'SYSTEM',
+        content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.',
+        createdAt: '2026-07-06T10:00:00Z'
+      }
+    ],
+    pollingIntervalMs: 5000
+  };
 }
