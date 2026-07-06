@@ -167,6 +167,8 @@ export function SelfQuotePage() {
   const failCount = graphQuery.data
     ? graphQuery.data.nodes.filter((node) => node.type === 'PART' && node.status === 'FAIL').length
     : 0;
+  // 빨간 부품 노드는 없는데 툴 검사가 FAIL인 경우(예: GPU 없는 견적의 파워 부족) — '조건 미충족'으로 구분 표기.
+  const unmetConditionCount = failCount === 0 ? blockingToolFailures(graphQuery.data, draftItems).length : 0;
 
   return (
     <Screen>
@@ -185,6 +187,7 @@ export function SelfQuotePage() {
           slotCount={SLOT_COUNT}
           warnCount={warnCount}
           failCount={failCount}
+          unmetConditionCount={unmetConditionCount}
           storageItems={draftItems.filter((item) => item.category === 'STORAGE')}
           graphLoading={graphQuery.isLoading}
         />
@@ -600,6 +603,30 @@ export function quoteDraftToRecommendedBuild(draft: QuoteDraft): AiRecommendedBu
   };
 }
 
+// 툴 FAIL이 구매를 차단해야 하는 장착 카테고리 — 해당 부품이 담겨 있을 때만 본다.
+// (예: PSU 없이 power FAIL은 '파워 미장착'이지 비호환이 아니다 — 최소구성 정책은 P2-3.)
+const TOOL_RELATED_CATEGORIES: Record<string, PartCategory[]> = {
+  compatibility: ['CPU', 'MOTHERBOARD', 'RAM', 'COOLER'],
+  power: ['PSU'],
+  size: ['CASE']
+};
+
+// 부품 노드/엣지에 실리지 않는 툴 FAIL(예: GPU 없는 견적의 파워 용량 부족)을 잡는다 —
+// 엣지는 양쪽 부품이 있어야 생기므로 상대 카테고리가 비면 툴 FAIL이 화면 어디에도 안 뜨는 사각이 있었다.
+function blockingToolFailures(graph: BuildGraphResolveResponse | undefined, items: QuoteDraftItem[]) {
+  if (!graph || items.length === 0) {
+    return [];
+  }
+  const filledCategories = new Set(items.map((item) => item.category));
+  return (graph.toolResults ?? []).filter((result) => {
+    if (result.status !== 'FAIL') {
+      return false;
+    }
+    const related = TOOL_RELATED_CATEGORIES[result.tool] ?? [];
+    return related.some((category) => filledCategories.has(category));
+  });
+}
+
 // FAIL이 있으면 구매만 차단한다. 장착된 카테고리와 관련된 검증 결과만 본다.
 function quoteHasCompatibilityFail(graph: BuildGraphResolveResponse | undefined, items: QuoteDraftItem[]) {
   if (!graph || items.length === 0) {
@@ -619,7 +646,7 @@ function quoteHasCompatibilityFail(graph: BuildGraphResolveResponse | undefined,
     return typeof sourceCategory === 'string' && typeof targetCategory === 'string'
       && filledCategories.has(sourceCategory) && filledCategories.has(targetCategory);
   });
-  return nodeFail || edgeFail;
+  return nodeFail || edgeFail || blockingToolFailures(graph, items).length > 0;
 }
 
 function isPartCategory(category: string): category is PartCategory {
@@ -676,6 +703,7 @@ function QuoteSummaryBar({
   slotCount,
   warnCount,
   failCount,
+  unmetConditionCount,
   storageItems,
   graphLoading
 }: {
@@ -684,19 +712,24 @@ function QuoteSummaryBar({
   slotCount: number;
   warnCount: number;
   failCount: number;
+  unmetConditionCount: number;
   storageItems: QuoteDraftItem[];
   graphLoading: boolean;
 }) {
+  // '조건 미충족' = 빨간 부품 노드는 없지만 검사(예: 파워 용량)가 FAIL — 구매 차단과 표기를 일치시킨다.
+  const hasRedState = failCount > 0 || unmetConditionCount > 0;
   const compatibilityText = graphLoading
     ? '확인 중'
     : failCount > 0
       ? `안 맞음 ${failCount}개`
-      : warnCount > 0
-        ? `주의 ${warnCount}개`
-        : filledCount === 0
-          ? '부품 없음'
-          : '이상 없음';
-  const compatibilityColor = failCount > 0
+      : unmetConditionCount > 0
+        ? '조건 미충족'
+        : warnCount > 0
+          ? `주의 ${warnCount}개`
+          : filledCount === 0
+            ? '부품 없음'
+            : '이상 없음';
+  const compatibilityColor = hasRedState
     ? 'text-red-600'
     : warnCount > 0
       ? 'text-amber-600'
@@ -727,8 +760,8 @@ function QuoteSummaryBar({
         </div>
       </div>
       <div className="panel flex items-center gap-3 px-4 py-3">
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${failCount > 0 ? 'bg-red-50' : warnCount > 0 ? 'bg-amber-50' : 'bg-emerald-50'}`}>
-          <svg viewBox="0 0 20 20" className={`h-5 w-5 ${failCount > 0 ? 'text-red-500' : warnCount > 0 ? 'text-amber-500' : 'text-emerald-500'}`} fill="none" stroke="currentColor" strokeWidth="2">
+        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${hasRedState ? 'bg-red-50' : warnCount > 0 ? 'bg-amber-50' : 'bg-emerald-50'}`}>
+          <svg viewBox="0 0 20 20" className={`h-5 w-5 ${hasRedState ? 'text-red-500' : warnCount > 0 ? 'text-amber-500' : 'text-emerald-500'}`} fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 5v4m0 2.5v.5" strokeLinecap="round" />
           </svg>
         </span>
