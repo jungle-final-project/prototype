@@ -1,6 +1,6 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BellRing, CheckCircle2, FileText, GitBranch, PencilLine, Save, ShoppingBag, Target, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
@@ -139,6 +139,10 @@ export function MyQuotesPage() {
             </div>
           </div>
         </section>
+
+        {!buildsQuery.isLoading && !buildsQuery.isError && builds.length ? (
+          <SavedBuildsComparison builds={builds} />
+        ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
           <Panel
@@ -367,8 +371,6 @@ function SavedBuildCard({
               </span>
             ))}
           </div>
-          {/* 저장 견적 단위 성능 요약 — 저장한 견적들을 성능으로 한눈에 비교한다(공개 벤치마크 참고값). */}
-          <SavedBuildPerformanceStrip build={build} />
         </div>
         <div className="shrink-0 lg:text-right">
           <div className="text-xs font-black text-slate-500">견적 합계</div>
@@ -409,55 +411,136 @@ function SavedBuildCard({
   );
 }
 
-// 저장 견적 카드의 경량 성능 요약: CPU/GPU 벤치마크 점수를 등급 막대로 — 저장 견적끼리 성능 비교.
-// 그래프 resolve(무거움) 대신 performance 툴만 부르는 경량 엔드포인트를 재사용한다.
-function SavedBuildPerformanceStrip({ build }: { build: BuildSummary }) {
-  const partIds = useMemo(() => {
-    return (build.items ?? [])
-      .filter((item) => item.category === 'CPU' || item.category === 'GPU')
-      .map((item) => resolvePartId(item))
-      .filter(Boolean);
-  }, [build.items]);
+// 저장 견적 성능 비교 매트릭스: 견적을 열(칼럼), 성능 카테고리를 행으로 세워 좌우로 비교한다.
+// 카드마다 흩어진 가로 스트립보다 카테고리별 좌우 비교가 시각적으로 명확하다(사용자 피드백).
+// 그래프 resolve(무거움) 대신 performance 툴만 부르는 경량 엔드포인트를 견적별로 병렬 조회한다.
+function perfPartIdsForBuild(build: BuildSummary): string[] {
+  return (build.items ?? [])
+    .filter((item) => item.category === 'CPU' || item.category === 'GPU')
+    .map((item) => resolvePartId(item))
+    .filter((id): id is string => Boolean(id));
+}
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['saved-build-performance', build.id, partIds.join(',')],
-    queryFn: () => checkBuildPerformance({ partIds }),
-    enabled: partIds.length > 0,
-    staleTime: 5 * 60 * 1000
+function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
+  const scorable = useMemo(
+    () => builds.filter((build) => perfPartIdsForBuild(build).length > 0),
+    [builds]
+  );
+
+  const perfResults = useQueries({
+    queries: scorable.map((build) => {
+      const partIds = perfPartIdsForBuild(build);
+      return {
+        queryKey: ['saved-build-performance', build.id, partIds.join(',')],
+        queryFn: () => checkBuildPerformance({ partIds }),
+        enabled: partIds.length > 0,
+        staleTime: 5 * 60 * 1000
+      };
+    })
   });
 
-  if (partIds.length === 0) {
+  if (scorable.length === 0) {
     return null;
   }
-  const details = (data?.details ?? {}) as { cpuBenchmarkScore?: number; gpuBenchmarkScore?: number };
-  const cpu = toPerfScore(details.cpuBenchmarkScore);
-  const gpu = toPerfScore(details.gpuBenchmarkScore);
+
+  const columns = scorable.map((build, index) => {
+    const details = (perfResults[index]?.data?.details ?? {}) as {
+      cpuBenchmarkScore?: number;
+      gpuBenchmarkScore?: number;
+    };
+    const cpu = toPerfScore(details.cpuBenchmarkScore);
+    const gpu = toPerfScore(details.gpuBenchmarkScore);
+    const overall = cpu !== null && gpu !== null ? Math.round((cpu + gpu) / 2) : cpu ?? gpu;
+    return { build, cpu, gpu, overall, isLoading: perfResults[index]?.isLoading ?? false };
+  });
+
+  const rows: { key: string; label: string; hint: string; pick: (col: (typeof columns)[number]) => number | null }[] = [
+    { key: 'overall', label: '종합', hint: 'CPU·GPU 평균', pick: (col) => col.overall },
+    { key: 'cpu', label: 'CPU', hint: '연산 성능', pick: (col) => col.cpu },
+    { key: 'gpu', label: 'GPU', hint: '그래픽 성능', pick: (col) => col.gpu }
+  ];
+
+  const comparing = columns.length > 1;
 
   return (
-    <div data-testid={`saved-build-performance-${build.id}`} className="mt-3 rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2.5">
-      <div className="mb-1.5 text-[11px] font-black text-slate-500">성능 요약 <span className="font-bold text-slate-400">(공개 벤치마크 참고)</span></div>
-      {isLoading ? (
-        <div className="h-7 animate-pulse rounded bg-slate-200" />
-      ) : (
-        <div className="grid grid-cols-2 gap-2.5">
-          <PerfMiniBar label="CPU" score={cpu} />
-          <PerfMiniBar label="GPU" score={gpu} />
+    <section data-testid="saved-builds-comparison" className="rounded-md border border-commerce-line bg-white p-5 shadow-product">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <p className="text-xs font-black tracking-wide text-brand-blue">성능 비교</p>
+          <h2 className="mt-1 text-lg font-black text-commerce-ink">
+            {comparing ? '저장 견적 성능 한눈에 비교' : '저장 견적 성능'}
+          </h2>
+          <p className="mt-1 break-keep text-xs leading-5 text-slate-500">
+            카테고리별로 세로로 나열하고, 견적을 좌우로 비교합니다. 초록 ▲ 는 해당 항목 최고 점수입니다.
+          </p>
         </div>
-      )}
-    </div>
+        <p className="text-[11px] font-bold text-slate-400">공개 벤치마크 참고값 · 실제 FPS·체감과 다를 수 있음</p>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[460px] border-collapse text-left">
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-10 bg-white pb-3 pr-3 align-bottom" scope="col">
+                <span className="sr-only">성능 항목</span>
+              </th>
+              {columns.map((col) => (
+                <th key={col.build.id} scope="col" className="min-w-[128px] px-2 pb-3 align-bottom">
+                  <div className="truncate text-sm font-black text-commerce-ink" title={col.build.name}>{col.build.name}</div>
+                  <div className="mt-0.5 text-xs font-black text-brand-blue">{col.build.totalPrice.toLocaleString()}원</div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const values = columns.map(row.pick);
+              const numeric = values.filter((value): value is number => value !== null);
+              const best = numeric.length ? Math.max(...numeric) : null;
+              return (
+                <tr key={row.key} className="border-t border-slate-100">
+                  <th scope="row" className="sticky left-0 z-10 bg-white py-3 pr-3 align-middle">
+                    <div className="text-xs font-black text-slate-700">{row.label}</div>
+                    <div className="text-[10px] font-bold text-slate-400">{row.hint}</div>
+                  </th>
+                  {columns.map((col, index) => {
+                    const score = values[index];
+                    const isBest = comparing && score !== null && best !== null && score === best;
+                    return (
+                      <td key={col.build.id} className="px-2 py-3 align-middle">
+                        {col.isLoading ? (
+                          <div className="h-7 animate-pulse rounded bg-slate-200" />
+                        ) : (
+                          <PerfCompareCell score={score} highlight={isBest} />
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
-function PerfMiniBar({ label, score }: { label: string; score: number | null }) {
-  const tone = score === null ? 'bg-slate-300' : score >= 80 ? 'bg-emerald-500' : score >= 55 ? 'bg-brand-blue' : 'bg-amber-500';
+function PerfCompareCell({ score, highlight }: { score: number | null; highlight: boolean }) {
+  if (score === null) {
+    return <div className="text-[11px] font-bold text-slate-400">자료 없음</div>;
+  }
+  const tone = score >= 80 ? 'bg-emerald-500' : score >= 55 ? 'bg-brand-blue' : 'bg-amber-500';
   return (
-    <div>
+    <div className={highlight ? 'rounded-md bg-emerald-50/70 px-1.5 py-1' : ''}>
       <div className="flex items-baseline justify-between gap-1">
-        <span className="text-[10px] font-black text-slate-600">{label}</span>
-        <span className="text-[10px] font-bold text-slate-500">{score === null ? '자료 없음' : `${perfTier(score)} · ${Math.round(score)}`}</span>
+        <span className={`text-sm font-black ${highlight ? 'text-emerald-600' : 'text-slate-700'}`}>
+          {Math.round(score)}
+          {highlight ? <span className="ml-0.5 text-[11px]">▲</span> : null}
+        </span>
+        <span className="text-[10px] font-bold text-slate-400">{perfTier(score)}</span>
       </div>
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
-        <div className={`h-full rounded-full ${tone}`} style={{ width: `${score === null ? 0 : Math.min(100, Math.max(4, score))}%` }} />
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.min(100, Math.max(4, score))}%` }} />
       </div>
     </div>
   );
