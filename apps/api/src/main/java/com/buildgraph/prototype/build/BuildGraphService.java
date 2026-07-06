@@ -226,6 +226,8 @@ public class BuildGraphService {
                 ? radiatorStatus(sizeDetails)
                 : lengthStatus(sizeDetails, "coolerHeightMm", "maxCpuCoolerHeightMm", "WARN");
         String psuDepthStatus = lengthStatus(sizeDetails, "psuDepthMm", "maxPsuLengthMm", "WARN");
+        // 보드 폼팩터 vs 케이스 지원 규격(P1-1) — checked 게이트로 결측이면 WARN(근거 부족).
+        String boardFitStatus = boardFitStatus(sizeDetails);
 
         List<Map<String, Object>> edges = new ArrayList<>();
         addEdgeIfPossible(edges, byCategory, "CPU", "MOTHERBOARD", "edge-cpu-board-socket", "REQUIRES", socketStatus, socketLabel(socketStatus), socketSummary(byCategory, socketStatus));
@@ -236,6 +238,8 @@ public class BuildGraphService {
         addEdgeIfPossible(edges, byCategory, "COOLER", "CASE", "edge-cooler-case-height", "REQUIRES", coolerCaseStatus, coolerCaseLabel(sizeDetails, coolerCaseStatus), coolerCaseSummary(toolByName, coolerCaseStatus));
         // 파워 깊이 vs 케이스 허용 길이(P0-3) — 엣지가 없으면 FAIL이 보드/구매 차단에 반영되지 않는다.
         addEdgeIfPossible(edges, byCategory, "PSU", "CASE", "edge-psu-case-depth", "REQUIRES", psuDepthStatus, psuDepthLabel(sizeDetails, psuDepthStatus), psuDepthSummary(toolByName, psuDepthStatus));
+        // 보드 규격 vs 케이스 지원(P1-1) — ITX 전용 케이스에 ATX 보드 같은 조합을 물리적 장착 불가로 표시한다.
+        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "CASE", "edge-board-case-form", "REQUIRES", boardFitStatus, boardFitLabel(sizeDetails, boardFitStatus), boardFitSummary(sizeDetails, boardFitStatus));
         addEdgeIfPossible(edges, byCategory, "CPU", "GPU", "edge-cpu-gpu-performance", "AFFECTS", toolStatus(toolByName, "performance"), "작업 성능", toolSummary(toolByName, "performance", "CPU와 GPU 조합으로 작업 적합도를 확인합니다."));
         if (!parts.isEmpty()) {
             edges.add(edge("edge-budget-total-price", "constraint-budget", "constraint-total-price", "AFFECTS", toolStatus(toolByName, "price"), "예산", priceSummary(toolByName, budget, total)));
@@ -699,6 +703,38 @@ public class BuildGraphService {
             return "WARN";
         }
         return Boolean.FALSE.equals(booleanValue(details.get("radiatorMatched"))) ? "FAIL" : "PASS";
+    }
+
+    /** MOTHERBOARD-CASE 엣지 status — 폼팩터 판정은 ToolCheckService.size()가 단일 소스다. */
+    private static String boardFitStatus(Map<String, Object> details) {
+        if (Boolean.TRUE.equals(booleanValue(details.get("boardFormFactorChecked")))) {
+            return Boolean.FALSE.equals(booleanValue(details.get("boardFormFactorMatched"))) ? "FAIL" : "PASS";
+        }
+        return "WARN";
+    }
+
+    private static String boardFitLabel(Map<String, Object> details, String status) {
+        if ("FAIL".equals(status)) {
+            return "보드 규격 미지원";
+        }
+        if ("WARN".equals(status)) {
+            return "보드 규격 미확인";
+        }
+        Object boardFormFactor = details.get("boardFormFactor");
+        return boardFormFactor == null ? "보드 규격" : boardFormFactor + " 장착";
+    }
+
+    private static String boardFitSummary(Map<String, Object> details, String status) {
+        Object boardFormFactor = details.get("boardFormFactor");
+        Object caseMaxFormFactor = details.get("caseMaxFormFactor");
+        if (boardFormFactor != null && caseMaxFormFactor != null) {
+            String base = "메인보드 규격 " + boardFormFactor + " / 케이스 지원 최대 " + caseMaxFormFactor + "입니다.";
+            if ("FAIL".equals(status)) {
+                return base + " 케이스가 이 보드 규격의 장착을 지원하지 않습니다.";
+            }
+            return base;
+        }
+        return "메인보드 규격이 케이스 지원 범위에 있는지 확인합니다.";
     }
 
     private static String psuDepthLabel(Map<String, Object> details, String status) {
