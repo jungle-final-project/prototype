@@ -23,6 +23,7 @@ import {
 } from '../../quote/aiSelection';
 import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
+import { UpgradeAdvisorPanel } from '../components/slot-board/UpgradeAdvisorPanel';
 import { SlotBoard } from '../components/slot-board/SlotBoard';
 import { SlotCandidatePanel } from '../components/slot-board/SlotCandidatePanel';
 import { SlotStatusBar } from '../components/slot-board/SlotStatusBar';
@@ -44,6 +45,7 @@ export function SelfQuotePage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const hasToken = Boolean(getToken());
   const loginHref = `/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
 
@@ -327,6 +329,28 @@ export function SelfQuotePage() {
             applyingBuildId={applyingBuildId}
             applyError={compareApplyError}
             onClose={() => setCompareOpen(false)}
+          />
+        ) : null}
+
+        {/* R1 업그레이드 진단: 부품이 담긴 견적(=기존 PC 구성)에서 증상 기반 교체 제안으로 진입한다. */}
+        {draftItems.length > 0 && !upgradeOpen ? (
+          <div className="panel flex flex-wrap items-center justify-between gap-2 border-commerce-line px-4 py-2.5">
+            <span className="text-xs font-bold text-slate-600">PC가 예전 같지 않다면 — 증상만 고르면 병목 부품 교체를 제안해 드려요</span>
+            <button
+              type="button"
+              data-testid="upgrade-advisor-open"
+              onClick={() => setUpgradeOpen(true)}
+              className="rounded-md border border-commerce-line bg-white px-3 py-1.5 text-xs font-black text-slate-700 transition hover:border-commerce-ink"
+            >
+              업그레이드 진단
+            </button>
+          </div>
+        ) : null}
+        {upgradeOpen && draftItems.length > 0 ? (
+          <UpgradeAdvisorPanel
+            draftItems={draftItems}
+            onOpenSlot={selectSlot}
+            onClose={() => setUpgradeOpen(false)}
           />
         ) : null}
 

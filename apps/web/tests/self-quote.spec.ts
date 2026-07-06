@@ -1794,6 +1794,100 @@ test('hides the compare entry when there is no recent AI recommendation batch', 
   await expect(page.getByTestId('quote-compare-open')).toHaveCount(0);
 });
 
+test('upgrade advisor turns a symptom into a replacement simulation question', async ({ page }) => {
+  // R1 업그레이드 진단: 증상 선택 → 현재 장착 부품보다 상위 후보 2안(최소/고성능) 제시 →
+  // 클릭하면 기존 교체 시뮬레이션 질문("…로 바꾸면 어때?")을 챗봇에 자동 전송한다.
+  // 챗봇 전송은 ownerKey(authUser)가 필요하다 — 토큰만으로는 로그인 안내로 빠진다.
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-test', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+  });
+  const partSearches: Array<{ category: string | null; minPrice: string | null }> = [];
+  const chatMessages: string[] = [];
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...emptyDraft,
+        items: [draftItem('part-gpu-now', 'GPU', '현재 GPU', 900000)],
+        totalPrice: 900000,
+        itemCount: 1
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    const minPrice = url.searchParams.get('minPrice');
+    partSearches.push({ category: url.searchParams.get('category'), minPrice });
+    const items = minPrice === '900001'
+      ? [candidatePart('part-gpu-step', 'GPU', '한 단계 위 GPU', { price: 1100000 })]
+      : minPrice === '1440000'
+        ? [candidatePart('part-gpu-max', 'GPU', '고성능 GPU', { price: 1600000 })]
+        : [];
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items, page: 0, size: 1, total: items.length }) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { message?: string };
+    chatMessages.push(body.message ?? '');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ answerType: 'GENERAL', message: '교체 성능을 비교했습니다.', builds: [], warnings: [] })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  await page.getByTestId('upgrade-advisor-open').click();
+  await expect(page.getByTestId('upgrade-advisor-panel')).toBeVisible();
+  await page.getByTestId('upgrade-symptom-frame').click();
+
+  // 현재가(90만) 기준 상위 후보 두 티어를 조회한다.
+  await expect(page.getByTestId('upgrade-option-minimal')).toContainText('한 단계 위 GPU');
+  await expect(page.getByTestId('upgrade-option-minimal')).toContainText('(+200,000원)');
+  await expect(page.getByTestId('upgrade-option-performance')).toContainText('고성능 GPU');
+  expect(partSearches.filter((search) => search.category === 'GPU').map((search) => search.minPrice)).toEqual(
+    expect.arrayContaining(['900001', '1440000'])
+  );
+
+  // 후보 클릭 → 챗봇이 열리고 교체 시뮬레이션 질문이 자동 전송된다.
+  await page.getByTestId('upgrade-option-minimal').click();
+  await expect(page.getByTestId('ai-chatbot-panel')).toBeVisible();
+  await expect.poll(() => chatMessages).toEqual(['한 단계 위 GPU로 바꾸면 어때?']);
+});
+
+test('upgrade advisor guides to mount the category first when it is missing', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...emptyDraft,
+        items: [draftItem('part-cpu-now', 'CPU', '현재 CPU', 400000)],
+        totalPrice: 400000,
+        itemCount: 1
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  await page.getByTestId('upgrade-advisor-open').click();
+  await page.getByTestId('upgrade-symptom-frame').click();
+
+  // GPU가 견적에 없으므로 진단 대신 장착 안내 + 후보 패널 열기로 이어준다.
+  await expect(page.getByTestId('upgrade-advisor-panel')).toContainText('먼저 GPU를 견적에 담아 주세요');
+  await page.getByTestId('upgrade-open-slot').click();
+  await expect(page).toHaveURL('/self-quote?category=GPU');
+  await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
+});
+
 test('shows selected AI build separately from the slot board and marks duplicate parts', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
