@@ -2,40 +2,64 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
+import { AUTH_CHANGED_EVENT } from '../../../lib/api';
 import { getAdminSupportChatSession, getAdminSupportChatSessions, openSupportChatSocket, postAdminSupportChatMessage, type SupportChatSocket } from '../../support/supportChatApi';
-import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto } from '../../support/types';
+import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto } from '../../support/types';
 
 // 소켓 미연결 시 활성 폴링 간격. 소켓 연결 시에도 완전히 끄지 않고 낮은 빈도로 유지해,
 // 다중 인스턴스에서 broadcast가 도달하지 않아도 상대 메시지를 놓치지 않게 한다.
 const ACTIVE_POLL_MS = 5000;
 const SOCKET_FALLBACK_POLL_MS = 15000;
+const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
 
 export function AdminSupportChatSessionsPage() {
   const queryClient = useQueryClient();
   const socketRef = useRef<SupportChatSocket | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionMarkRead, setSelectedSessionMarkRead] = useState(false);
   const [message, setMessage] = useState('');
+  const [sendError, setSendError] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
 
   const listQuery = useQuery({
     queryKey: ['admin-support-chat-sessions'],
     queryFn: getAdminSupportChatSessions,
-    refetchInterval: 5000
+    refetchInterval: 5000,
+    retry: false
   });
   const rooms = listQuery.data?.items ?? [];
 
   useEffect(() => {
     if (!selectedSessionId && rooms[0]?.id) {
+      setSelectedSessionMarkRead(false);
       setSelectedSessionId(rooms[0].id);
     }
   }, [rooms, selectedSessionId]);
 
   const detailQuery = useQuery({
-    queryKey: ['admin-support-chat-session', selectedSessionId],
-    queryFn: () => getAdminSupportChatSession(selectedSessionId as string),
+    queryKey: ['admin-support-chat-session', selectedSessionId, selectedSessionMarkRead],
+    queryFn: () => getAdminSupportChatSession(selectedSessionId as string, selectedSessionMarkRead),
     enabled: Boolean(selectedSessionId),
-    refetchInterval: socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS
+    refetchInterval: socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS,
+    retry: false
   });
+
+  useEffect(() => {
+    const handleAuthChanged = () => {
+      socketRef.current?.close();
+      socketRef.current = null;
+      setSocketConnected(false);
+      setSelectedSessionId(null);
+      setSelectedSessionMarkRead(false);
+      setMessage('');
+      setSendError(null);
+      queryClient.removeQueries({ queryKey: ['admin-support-chat-sessions'] });
+      queryClient.removeQueries({ queryKey: ['admin-support-chat-session'] });
+    };
+    window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
+  }, [queryClient]);
 
   useEffect(() => {
     socketRef.current?.close();
@@ -44,38 +68,90 @@ export function AdminSupportChatSessionsPage() {
     if (!selectedSessionId) {
       return undefined;
     }
-    const socket = openSupportChatSocket({
-      mode: 'admin',
-      sessionId: selectedSessionId,
-      onOpen: () => setSocketConnected(true),
-      onClose: () => setSocketConnected(false),
-      onError: () => setSocketConnected(false),
-      onDetail: (detail) => cacheDetail(queryClient, detail)
-    });
-    socketRef.current = socket;
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let reconnectAttempt = 0;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      if (reconnectTimer !== null) return;
+      const delay = SOCKET_RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, SOCKET_RECONNECT_DELAYS_MS.length - 1)];
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
+    const connect = () => {
+      if (disposed) return;
+      const socket = openSupportChatSocket({
+        mode: 'admin',
+        sessionId: selectedSessionId,
+        onOpen: () => {
+          if (disposed) return;
+          reconnectAttempt = 0;
+          setSocketConnected(true);
+        },
+        onClose: () => {
+          if (disposed) return;
+          setSocketConnected(false);
+          scheduleReconnect();
+        },
+        onError: () => {
+          if (disposed) return;
+          setSocketConnected(false);
+          scheduleReconnect();
+        },
+        onSocketError: (error) => {
+          if (error.message) {
+            setSendError(error.message);
+          }
+        },
+        onDetail: (detail) => cacheDetail(queryClient, detail)
+      });
+      socketRef.current = socket;
+    };
+
+    connect();
     return () => {
-      socket?.close();
+      disposed = true;
+      clearReconnectTimer();
+      socketRef.current?.close();
       socketRef.current = null;
       setSocketConnected(false);
     };
   }, [selectedSessionId, queryClient]);
 
   const sendMutation = useMutation({
-    mutationFn: () => postAdminSupportChatMessage(selectedSessionId as string, message.trim()),
+    mutationFn: (content: string) => postAdminSupportChatMessage(selectedSessionId as string, content),
     onSuccess: (detail) => {
       setMessage('');
+      setSendError(null);
       cacheDetail(queryClient, detail);
       void listQuery.refetch();
+    },
+    onError: (error) => {
+      setSendError(errorMessage(error));
     }
   });
 
   const selectedRoom = detailQuery.data?.contact ?? rooms.find((room) => room.id === selectedSessionId) ?? null;
+  const messageCount = detailQuery.data?.messages.length ?? 0;
   const canSend = Boolean(selectedSessionId && selectedRoom?.canSendMessage && message.trim() && !sendMutation.isPending);
   const roomRows = rooms.map((room) => ({
     선택: (
       <button
         type="button"
-        onClick={() => setSelectedSessionId(room.id)}
+        onClick={() => {
+          setSelectedSessionMarkRead(true);
+          setSelectedSessionId(room.id);
+        }}
         className={`rounded px-3 py-2 text-xs font-bold ${room.id === selectedSessionId ? 'bg-brand-blue text-white' : 'border border-slate-300 text-brand-navy'}`}
         aria-label={`${userLabel(room)} 상담방 선택`}
       >
@@ -103,13 +179,20 @@ export function AdminSupportChatSessionsPage() {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSend) return;
-    if (socketRef.current?.sendMessage(message.trim())) {
-      setMessage('');
-      void listQuery.refetch();
-      return;
-    }
-    sendMutation.mutate();
+    setSendError(null);
+    sendMutation.mutate(message.trim());
   }
+
+  useEffect(() => {
+    if (!messagesRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const element = messagesRef.current;
+      if (element) {
+        element.scrollTop = element.scrollHeight;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedSessionId, messageCount]);
 
   return (
     <AdminShell title="상담방 관리" exportRows={exportRows} exportFileName="admin-support-chat-sessions.csv">
@@ -142,7 +225,7 @@ export function AdminSupportChatSessionsPage() {
                   <span>{socketConnected ? '실시간 연결' : '자동 새로고침'}</span>
                 </div>
               </div>
-              <div className="h-[440px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
+              <div ref={messagesRef} data-testid="admin-support-chat-messages" className="h-[440px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
                 <div className="space-y-3">
                   {detailQuery.data.messages.map((item) => (
                     <AdminChatBubble key={item.id} message={item} />
@@ -153,16 +236,23 @@ export function AdminSupportChatSessionsPage() {
                 {selectedRoom?.canSendMessage === false ? (
                   <StateMessage type="info" title="종료된 상담방" body="종료된 AS 티켓 상담방에는 답변을 보낼 수 없습니다." />
                 ) : (
-                  <div className="flex gap-2">
-                    <input
-                      className="h-11 min-w-0 flex-1 rounded border border-slate-300 px-3 text-sm"
-                      placeholder="관리자 답변을 입력하세요"
-                      value={message}
-                      onChange={(event) => setMessage(event.target.value)}
-                    />
-                    <button disabled={!canSend} className="rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
-                      {sendMutation.isPending ? '전송 중' : '답변 전송'}
-                    </button>
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        className="h-11 min-w-0 flex-1 rounded border border-slate-300 px-3 text-sm"
+                        placeholder="관리자 답변을 입력하세요"
+                        value={message}
+                        maxLength={2000}
+                        onChange={(event) => {
+                          setMessage(event.target.value);
+                          setSendError(null);
+                        }}
+                      />
+                      <button disabled={!canSend} className="rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+                        {sendMutation.isPending ? '전송 중' : '답변 전송'}
+                      </button>
+                    </div>
+                    {sendError ? <p role="alert" className="text-xs font-bold text-rose-700">{sendError}</p> : null}
                   </div>
                 )}
               </form>
@@ -195,8 +285,26 @@ function AdminChatBubble({ message }: { message: SupportChatMessage }) {
 
 function cacheDetail(queryClient: ReturnType<typeof useQueryClient>, detail: SupportChatSessionDto) {
   if (detail.contact?.id) {
-    queryClient.setQueryData(['admin-support-chat-session', detail.contact.id], detail);
+    queryClient.setQueriesData<SupportChatSessionDto | undefined>(
+      { queryKey: ['admin-support-chat-session', detail.contact.id] },
+      (existing) => shouldApplyDetail(detail, existing) ? detail : existing
+    );
+    queryClient.setQueryData<SupportChatSessionListDto | undefined>(
+      ['admin-support-chat-sessions'],
+      (existing) => patchAdminList(existing, detail.contact as SupportChatContact)
+    );
   }
+}
+
+function patchAdminList(existing: SupportChatSessionListDto | undefined, contact: SupportChatContact) {
+  if (!existing) return existing;
+  const items = existing.items.some((item) => item.id === contact.id)
+    ? existing.items.map((item) => item.id === contact.id ? { ...item, ...contact } : item)
+    : [contact, ...existing.items];
+  return {
+    ...existing,
+    items: items.sort((left, right) => timestamp(right.lastMessageAt) - timestamp(left.lastMessageAt))
+  };
 }
 
 function messageLabel(message: SupportChatMessage) {
@@ -215,4 +323,26 @@ function shortId(id: string) {
 
 function formatDateTime(value?: string) {
   return value ? value.replace('T', ' ').slice(0, 19) : '-';
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message ? error.message : '메시지를 전송하지 못했습니다.';
+}
+
+function shouldApplyDetail(incoming: SupportChatSessionDto, existing?: SupportChatSessionDto) {
+  const incomingTime = detailTime(incoming);
+  const existingTime = existing ? detailTime(existing) : null;
+  return incomingTime === null || existingTime === null || incomingTime >= existingTime;
+}
+
+function detailTime(detail: SupportChatSessionDto) {
+  const lastMessage = detail.messages.length > 0 ? detail.messages[detail.messages.length - 1] : null;
+  const value = detail.contact?.lastMessageAt ?? lastMessage?.createdAt ?? null;
+  return timestamp(value);
+}
+
+function timestamp(value?: string | null) {
+  if (!value) return 0;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? 0 : time;
 }

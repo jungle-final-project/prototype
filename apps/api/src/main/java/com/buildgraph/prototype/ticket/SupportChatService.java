@@ -44,6 +44,10 @@ public class SupportChatService {
         return detail(roomId, user, true);
     }
 
+    public Map<String, Object> detailSnapshot(String roomId, CurrentUserService.CurrentUser user) {
+        return detail(roomId, user, false);
+    }
+
     public Map<String, Object> adminList() {
         List<Map<String, Object>> items = jdbcTemplate.queryForList(roomSelect() + """
                         WHERE r.deleted_at IS NULL
@@ -60,15 +64,26 @@ public class SupportChatService {
     }
 
     public Map<String, Object> adminDetail(String roomId, CurrentUserService.CurrentUser admin) {
+        return adminDetail(roomId, admin, true);
+    }
+
+    public Map<String, Object> adminDetailSnapshot(String roomId, CurrentUserService.CurrentUser admin) {
+        return adminDetail(roomId, admin, false);
+    }
+
+    public Map<String, Object> adminDetail(String roomId, CurrentUserService.CurrentUser admin, boolean markRead) {
         requireUuid(roomId);
         RoomRow room = roomForAdmin(roomId);
-        jdbcTemplate.update("""
-                UPDATE support_chat_rooms
-                SET admin_unread_count = 0,
-                    updated_at = COALESCE(updated_at, now())
-                WHERE id = ?
-                """, room.internalId());
-        return response(roomForAdmin(roomId), messages(room.internalId()));
+        if (markRead) {
+            jdbcTemplate.update("""
+                    UPDATE support_chat_rooms
+                    SET admin_unread_count = 0,
+                        updated_at = COALESCE(updated_at, now())
+                    WHERE id = ?
+                    """, room.internalId());
+            room = roomForAdmin(roomId);
+        }
+        return response(room, messages(room.internalId()));
     }
 
     @Transactional
@@ -343,7 +358,7 @@ public class SupportChatService {
                         "email", room.userEmail(),
                         "name", room.userName()
                 ),
-                "canSendMessage", !TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())
+                "canSendMessage", "ACTIVE".equals(room.status()) && !TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())
         );
     }
 
@@ -369,7 +384,11 @@ public class SupportChatService {
     }
 
     private static String requireMessage(Map<String, Object> request) {
-        String content = request == null ? null : stringOrNull(request.get("content"));
+        Object rawContent = request == null ? null : request.get("content");
+        if (rawContent != null && !(rawContent instanceof String)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "메시지 내용을 문자열로 입력해 주세요.");
+        }
+        String content = stringOrNull(rawContent);
         if (content == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "메시지 내용을 입력해 주세요.");
         }
@@ -382,6 +401,9 @@ public class SupportChatService {
     private static void requireMessageAllowed(RoomRow room) {
         if (TERMINAL_TICKET_STATUSES.contains(room.ticketStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "종료된 AS 티켓 상담방에는 메시지를 보낼 수 없습니다.");
+        }
+        if (!"ACTIVE".equals(room.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "활성 상태가 아닌 상담방에는 메시지를 보낼 수 없습니다.");
         }
     }
 

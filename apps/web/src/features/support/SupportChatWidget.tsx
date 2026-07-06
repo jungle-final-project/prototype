@@ -1,8 +1,8 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { LifeBuoy, MessageCircle, Send, X } from 'lucide-react';
-import { getCachedAuthUser, getToken } from '../../lib/api';
+import { AUTH_CHANGED_EVENT, getCachedAuthUser, getToken } from '../../lib/api';
 import { getCurrentUser } from '../auth/authApi';
 import { getCurrentSupportChat, getSupportChatSession, openSupportChatSocket, postSupportChatMessage, type SupportChatSocket } from './supportChatApi';
 import type { SupportChatMessage, SupportChatSessionDto } from './types';
@@ -11,16 +11,20 @@ import type { SupportChatMessage, SupportChatSessionDto } from './types';
 // 다중 인스턴스에서 broadcast가 도달하지 않아도 상대 메시지를 놓치지 않게 한다.
 const ACTIVE_POLL_MS = 5000;
 const SOCKET_FALLBACK_POLL_MS = 15000;
+const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
 
 export function SupportChatWidget() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const socketRef = useRef<SupportChatSocket | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [sendError, setSendError] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [authToken, setAuthToken] = useState(() => getToken());
   const hidden = shouldHideSupportChat(location.pathname);
-  const hasToken = Boolean(getToken());
+  const hasToken = Boolean(authToken);
   const cachedRole = cachedUserRole();
   const roleQuery = useQuery({
     queryKey: ['support-chat', 'current-user-role'],
@@ -37,7 +41,8 @@ export function SupportChatWidget() {
     queryKey: ['support-chat', 'current', routeTicketId ?? 'latest'],
     queryFn: () => getCurrentSupportChat(routeTicketId),
     enabled: hasToken && !hidden && canUseUserChat,
-    refetchInterval: open ? false : socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS
+    refetchInterval: open ? false : socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS,
+    retry: false
   });
 
   const sessionId = currentQuery.data?.contact?.id ?? null;
@@ -45,21 +50,55 @@ export function SupportChatWidget() {
     queryKey: ['support-chat', sessionId],
     queryFn: () => getSupportChatSession(sessionId as string),
     enabled: Boolean(open && sessionId),
-    refetchInterval: open && sessionId ? (socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS) : false
+    refetchInterval: open && sessionId ? (socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS) : false,
+    retry: false
   });
 
+  const updateChatCache = useCallback((detail: SupportChatSessionDto) => {
+    queryClient.setQueryData<SupportChatSessionDto | undefined>(
+      ['support-chat', 'current', routeTicketId ?? 'latest'],
+      (existing) => shouldApplyDetail(detail, existing) ? detail : existing
+    );
+    if (detail.contact?.id) {
+      queryClient.setQueryData<SupportChatSessionDto | undefined>(
+        ['support-chat', detail.contact.id],
+        (existing) => shouldApplyDetail(detail, existing) ? detail : existing
+      );
+    }
+  }, [queryClient, routeTicketId]);
+
   const sendMutation = useMutation({
-    mutationFn: () => postSupportChatMessage(sessionId as string, message.trim()),
+    mutationFn: (content: string) => postSupportChatMessage(sessionId as string, content),
     onSuccess: (detail) => {
       setMessage('');
+      setSendError(null);
       updateChatCache(detail);
+    },
+    onError: (error) => {
+      setSendError(errorMessage(error));
     }
   });
 
   const activeChat = detailQuery.data ?? currentQuery.data;
   const contact = activeChat?.contact ?? null;
+  const messageCount = activeChat?.messages.length ?? 0;
   const unreadCount = currentQuery.data?.contact?.userUnreadCount ?? 0;
   const canSend = Boolean(contact?.canSendMessage && message.trim() && !sendMutation.isPending);
+
+  useEffect(() => {
+    const handleAuthChanged = () => {
+      setAuthToken(getToken());
+      setOpen(false);
+      setMessage('');
+      setSendError(null);
+      socketRef.current?.close();
+      socketRef.current = null;
+      setSocketConnected(false);
+      queryClient.removeQueries({ queryKey: ['support-chat'] });
+    };
+    window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
+  }, [queryClient]);
 
   useEffect(() => {
     socketRef.current?.close();
@@ -68,39 +107,83 @@ export function SupportChatWidget() {
     if (!open || !sessionId) {
       return undefined;
     }
-    const socket = openSupportChatSocket({
-      mode: 'user',
-      sessionId,
-      onOpen: () => setSocketConnected(true),
-      onClose: () => setSocketConnected(false),
-      onError: () => setSocketConnected(false),
-      onDetail: updateChatCache
-    });
-    socketRef.current = socket;
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let reconnectAttempt = 0;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      if (reconnectTimer !== null) return;
+      const delay = SOCKET_RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, SOCKET_RECONNECT_DELAYS_MS.length - 1)];
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
+    const connect = () => {
+      if (disposed) return;
+      const socket = openSupportChatSocket({
+        mode: 'user',
+        sessionId,
+        onOpen: () => {
+          if (disposed) return;
+          reconnectAttempt = 0;
+          setSocketConnected(true);
+        },
+        onClose: () => {
+          if (disposed) return;
+          setSocketConnected(false);
+          scheduleReconnect();
+        },
+        onError: () => {
+          if (disposed) return;
+          setSocketConnected(false);
+          scheduleReconnect();
+        },
+        onSocketError: (error) => {
+          if (error.message) {
+            setSendError(error.message);
+          }
+        },
+        onDetail: updateChatCache
+      });
+      socketRef.current = socket;
+    };
+
+    connect();
     return () => {
-      socket?.close();
+      disposed = true;
+      clearReconnectTimer();
+      socketRef.current?.close();
       socketRef.current = null;
       setSocketConnected(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, sessionId]);
+  }, [open, sessionId, updateChatCache]);
 
-  function updateChatCache(detail: SupportChatSessionDto) {
-    queryClient.setQueryData(['support-chat', 'current', routeTicketId ?? 'latest'], detail);
-    if (detail.contact?.id) {
-      queryClient.setQueryData(['support-chat', detail.contact.id], detail);
-    }
-  }
+  useEffect(() => {
+    if (!open || !messagesRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const element = messagesRef.current;
+      if (element) {
+        element.scrollTop = element.scrollHeight;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, sessionId, messageCount]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSend || !sessionId) return;
     const outgoing = message.trim();
-    if (socketRef.current?.sendMessage(outgoing)) {
-      setMessage('');
-      return;
-    }
-    sendMutation.mutate();
+    setSendError(null);
+    sendMutation.mutate(outgoing);
   }
 
   if (hidden || !hasToken || !canUseUserChat) {
@@ -156,7 +239,7 @@ export function SupportChatWidget() {
               <span>{socketConnected ? '실시간 연결' : '자동 새로고침'}</span>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto bg-slate-50 p-4">
+          <div ref={messagesRef} data-testid="support-chat-messages" className="flex-1 overflow-y-auto bg-slate-50 p-4">
             <div className="space-y-3">
               {(activeChat?.messages ?? []).map((item) => (
                 <SupportChatBubble key={item.id} message={item} />
@@ -165,20 +248,27 @@ export function SupportChatWidget() {
           </div>
           <form onSubmit={submit} className="border-t border-slate-200 bg-white p-3">
             {contact.canSendMessage ? (
-              <div className="flex gap-2">
-                <input
-                  className="h-11 min-w-0 flex-1 rounded-md border border-slate-300 px-3 text-sm focus:border-emerald-600 focus:outline-none focus:ring-4 focus:ring-emerald-100"
-                  placeholder="메시지를 입력하세요"
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                />
-                <button
-                  disabled={!canSend}
-                  className="grid h-11 w-11 place-items-center rounded-md bg-emerald-700 text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-                  aria-label="전송"
-                >
-                  <Send size={18} />
-                </button>
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    className="h-11 min-w-0 flex-1 rounded-md border border-slate-300 px-3 text-sm focus:border-emerald-600 focus:outline-none focus:ring-4 focus:ring-emerald-100"
+                    placeholder="메시지를 입력하세요"
+                    value={message}
+                    maxLength={2000}
+                    onChange={(event) => {
+                      setMessage(event.target.value);
+                      setSendError(null);
+                    }}
+                  />
+                  <button
+                    disabled={!canSend}
+                    className="grid h-11 w-11 place-items-center rounded-md bg-emerald-700 text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    aria-label="전송"
+                  >
+                    <Send size={18} />
+                  </button>
+                </div>
+                {sendError ? <p role="alert" className="text-xs font-bold text-rose-700">{sendError}</p> : null}
               </div>
             ) : (
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
@@ -187,6 +277,20 @@ export function SupportChatWidget() {
             )}
           </form>
         </>
+      ) : currentQuery.isError || detailQuery.isError ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-slate-50 p-6 text-center">
+          <div className="grid h-12 w-12 place-items-center rounded-lg bg-white text-rose-700 shadow-sm">
+            <LifeBuoy size={24} />
+          </div>
+          <div>
+            <h3 className="text-base font-black text-slate-950">상담방 조회 실패</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">잠시 후 다시 시도해 주세요.</p>
+          </div>
+        </div>
+      ) : currentQuery.isLoading ? (
+        <div className="flex flex-1 items-center justify-center bg-slate-50 p-6 text-sm font-bold text-slate-600">
+          상담방을 불러오는 중입니다.
+        </div>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-slate-50 p-6 text-center">
           <div className="grid h-12 w-12 place-items-center rounded-lg bg-white text-emerald-700 shadow-sm">
@@ -254,4 +358,22 @@ function supportTicketIdFromPath(pathname: string) {
 
 function shortId(id: string) {
   return id.length <= 12 ? id : `${id.slice(0, 8)}...${id.slice(-4)}`;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message ? error.message : '메시지를 전송하지 못했습니다.';
+}
+
+function shouldApplyDetail(incoming: SupportChatSessionDto, existing?: SupportChatSessionDto) {
+  const incomingTime = detailTime(incoming);
+  const existingTime = existing ? detailTime(existing) : null;
+  return incomingTime === null || existingTime === null || incomingTime >= existingTime;
+}
+
+function detailTime(detail: SupportChatSessionDto) {
+  const lastMessage = detail.messages.length > 0 ? detail.messages[detail.messages.length - 1] : null;
+  const value = detail.contact?.lastMessageAt ?? lastMessage?.createdAt ?? null;
+  if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : time;
 }

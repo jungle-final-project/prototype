@@ -49,31 +49,35 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        String chatSessionId = String.valueOf(session.getAttributes().get("chatSessionId"));
-        String mode = String.valueOf(session.getAttributes().get("mode"));
-        String authorization = String.valueOf(session.getAttributes().get("authorization"));
-        Map<String, Object> payload = OBJECT_MAPPER.readValue(message.getPayload(), MAP_TYPE);
-        String content = String.valueOf(payload.getOrDefault("content", "")).trim();
-        Map<String, Object> request = Map.of("content", content);
-        if ("admin".equals(mode)) {
-            CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
-            supportChatService.postAdminMessage(chatSessionId, request, admin);
-        } else {
-            CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
-            supportChatService.postUserMessage(chatSessionId, request, user);
+        Map<String, Object> payload;
+        try {
+            payload = OBJECT_MAPPER.readValue(message.getPayload(), MAP_TYPE);
+        } catch (Exception error) {
+            sendError(session, "INVALID_WS_PAYLOAD", "잘못된 WebSocket 메시지입니다.", false);
+            return;
         }
-        broadcastRoomUpdate(chatSessionId);
+
+        Object type = payload.get("type");
+        if ("MESSAGE".equals(type)) {
+            sendError(session, "WS_MESSAGE_DISABLED", "메시지는 REST API로 전송해 주세요.", false);
+            return;
+        }
+        sendError(session, "INVALID_WS_PAYLOAD", "지원하지 않는 WebSocket 메시지입니다.", false);
     }
 
     public void broadcastRoomUpdate(String chatSessionId) {
         Set<WebSocketSession> sessions = sessionsByChatId.getOrDefault(chatSessionId, Set.of());
         for (WebSocketSession session : sessions) {
             try {
-                if (session.isOpen()) {
-                    send(session, "CHAT_UPDATED", detailFor(session, chatSessionId));
+                if (!session.isOpen()) {
+                    removeSession(chatSessionId, session);
+                    continue;
                 }
+                send(session, "CHAT_UPDATED", detailFor(session, chatSessionId));
             } catch (Exception error) {
                 // 한 세션의 전송 실패가 REST 응답이나 다른 세션 push를 막으면 안 된다. 놓친 갱신은 fallback polling이 보완한다.
+                closeQuietly(session);
+                removeSession(chatSessionId, session);
             }
         }
     }
@@ -84,12 +88,26 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
         if (chatSessionId == null) {
             return;
         }
-        Set<WebSocketSession> sessions = sessionsByChatId.get(chatSessionId.toString());
+        removeSession(chatSessionId.toString(), session);
+    }
+
+    private void removeSession(String chatSessionId, WebSocketSession session) {
+        Set<WebSocketSession> sessions = sessionsByChatId.get(chatSessionId);
         if (sessions != null) {
             sessions.remove(session);
             if (sessions.isEmpty()) {
-                sessionsByChatId.remove(chatSessionId.toString());
+                sessionsByChatId.remove(chatSessionId);
             }
+        }
+    }
+
+    private void closeQuietly(WebSocketSession session) {
+        try {
+            if (session.isOpen()) {
+                session.close();
+            }
+        } catch (Exception ignored) {
+            // 세션 정리 중 close 실패는 다음 polling/reconnect 경로가 보완한다.
         }
     }
 
@@ -130,24 +148,33 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
 
     private Map<String, Object> detail(Handshake handshake, CurrentUserService.CurrentUser user) {
         if ("admin".equals(handshake.mode())) {
-            return supportChatService.adminDetail(handshake.sessionId(), user);
+            return supportChatService.adminDetailSnapshot(handshake.sessionId(), user);
         }
-        return supportChatService.detail(handshake.sessionId(), user);
+        return supportChatService.detailSnapshot(handshake.sessionId(), user);
     }
 
     private Map<String, Object> detailFor(WebSocketSession session, String chatSessionId) {
         String mode = String.valueOf(session.getAttributes().get("mode"));
         String authorization = String.valueOf(session.getAttributes().get("authorization"));
         if ("admin".equals(mode)) {
-            return supportChatService.adminDetail(chatSessionId, currentUserService.requireAdmin(authorization));
+            return supportChatService.adminDetailSnapshot(chatSessionId, currentUserService.requireAdmin(authorization));
         }
-        return supportChatService.detail(chatSessionId, currentUserService.requireUser(authorization));
+        return supportChatService.detailSnapshot(chatSessionId, currentUserService.requireUser(authorization));
     }
 
     private void send(WebSocketSession session, String type, Map<String, Object> detail) throws IOException {
         session.sendMessage(new TextMessage(OBJECT_MAPPER.writeValueAsString(Map.of(
                 "type", type,
                 "detail", detail
+        ))));
+    }
+
+    private void sendError(WebSocketSession session, String code, String message, boolean retryable) throws IOException {
+        session.sendMessage(new TextMessage(OBJECT_MAPPER.writeValueAsString(Map.of(
+                "type", "ERROR",
+                "code", code,
+                "message", message,
+                "retryable", retryable
         ))));
     }
 

@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 test('admin manages support chat rooms from the admin page', async ({ page }) => {
   let postedMessage: unknown = null;
+  await mockOpenSupportWebSocket(page);
   await mockAdmin(page);
   await mockAdminSupportChats(page, (payload) => {
     postedMessage = payload;
@@ -21,7 +22,98 @@ test('admin manages support chat rooms from the admin page', async ({ page }) =>
   await page.getByRole('button', { name: '답변 전송' }).click();
 
   await expect.poll(() => postedMessage).toEqual({ content: '파워 로그를 추가로 확인하겠습니다.' });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends ?? [])).toEqual([]);
   await expect(page.getByText('파워 로그를 추가로 확인하겠습니다.')).toBeVisible();
+});
+
+test('admin support chat keeps input and shows an error when REST send fails', async ({ page }) => {
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001/messages', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'CONFLICT_STATE',
+          message: '종료된 AS 티켓 상담방에는 메시지를 보낼 수 없습니다.'
+        })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/admin/support-chat-sessions');
+  await page.getByPlaceholder('관리자 답변을 입력하세요').fill('닫힌 티켓 답변');
+  await page.getByRole('button', { name: '답변 전송' }).click();
+
+  await expect(page.getByPlaceholder('관리자 답변을 입력하세요')).toHaveValue('닫힌 티켓 답변');
+  await expect(page.getByText('종료된 AS 티켓 상담방에는 메시지를 보낼 수 없습니다.')).toBeVisible();
+});
+
+test('admin support chat limits answer input to 2000 characters', async ({ page }) => {
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+
+  await expect(page.getByPlaceholder('관리자 답변을 입력하세요')).toHaveAttribute('maxLength', '2000');
+});
+
+test('admin support chat updates the room list from websocket push', async ({ page }) => {
+  await mockOpenSupportWebSocket(page);
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {});
+
+  await page.goto('/admin/support-chat-sessions');
+  await expect(page.getByRole('cell', { name: '게임 실행 후 온도가 95도까지 올라갑니다.' })).toBeVisible();
+  await expect(page.getByText('실시간 연결')).toBeVisible();
+
+  await page.evaluate(() => {
+    const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
+    const socket = sockets[sockets.length - 1];
+    socket?.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({
+        type: 'CHAT_UPDATED',
+        detail: {
+          contact: {
+            id: '00000000-0000-4000-8000-000000009001',
+            asTicketId: '00000000-0000-4000-8000-000000006001',
+            status: 'ACTIVE',
+            ticketStatus: 'OPEN',
+            title: 'AS 상담방',
+            symptom: 'GPU 온도 상승',
+            lastMessagePreview: '방금 추가로 로그를 올렸습니다.',
+            lastMessageAt: '2026-07-06T10:09:00Z',
+            userUnreadCount: 0,
+            adminUnreadCount: 5,
+            canSendMessage: true,
+            user: {
+              id: '00000000-0000-4000-8000-000000001004',
+              email: 'user-a@example.com',
+              name: 'User A'
+            }
+          },
+          messages: [],
+          pollingIntervalMs: 5000
+        }
+      })
+    }));
+  });
+
+  await expect(page.getByRole('cell', { name: '방금 추가로 로그를 올렸습니다.' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /user-a@example.com/ })).toContainText('5');
+});
+
+test('admin auto-selected support chat detail is loaded without mark-read side effect', async ({ page }) => {
+  const detailUrls: string[] = [];
+  await mockAdmin(page);
+  await mockAdminSupportChats(page, () => {}, (url) => detailUrls.push(url));
+
+  await page.goto('/admin/support-chat-sessions');
+
+  await expect.poll(() => detailUrls.find((url) => url.includes('00000000-0000-4000-8000-000000009001')) ?? '').toContain('markRead=false');
 });
 
 async function mockAdmin(page: Page) {
@@ -48,7 +140,45 @@ async function mockAdmin(page: Page) {
   });
 }
 
-async function mockAdminSupportChats(page: Page, setPostedMessage: (payload: unknown) => void) {
+async function mockOpenSupportWebSocket(page: Page) {
+  await page.addInitScript(() => {
+    const sends: string[] = [];
+    const sockets: EventTarget[] = [];
+    class FakeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+
+      constructor(url: string) {
+        super();
+        this.url = url;
+        sockets.push(this);
+        setTimeout(() => this.dispatchEvent(new Event('open')), 0);
+      }
+
+      send(payload: string) {
+        sends.push(payload);
+      }
+
+      close() {
+        this.readyState = FakeWebSocket.CLOSED;
+        this.dispatchEvent(new Event('close'));
+      }
+    }
+    (window as unknown as { WebSocket: typeof WebSocket }).WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends = sends;
+    (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets = sockets;
+  });
+}
+
+async function mockAdminSupportChats(
+  page: Page,
+  setPostedMessage: (payload: unknown) => void,
+  onDetailRequest?: (url: string) => void
+) {
   const roomA = {
     id: '00000000-0000-4000-8000-000000009001',
     asTicketId: '00000000-0000-4000-8000-000000006001',
@@ -135,10 +265,12 @@ async function mockAdminSupportChats(page: Page, setPostedMessage: (payload: unk
     }
     await route.fallback();
   });
-  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001', async (route) => {
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009001**', async (route) => {
+    onDetailRequest?.(route.request().url());
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detailA) });
   });
-  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009002', async (route) => {
+  await page.route('**/api/admin/support/chat-sessions/00000000-0000-4000-8000-000000009002**', async (route) => {
+    onDetailRequest?.(route.request().url());
     if (route.request().method() === 'GET') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detailB) });
       return;

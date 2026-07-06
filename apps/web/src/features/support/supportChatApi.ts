@@ -17,8 +17,9 @@ export function postSupportChatMessage(sessionId: string, content: string) {
   });
 }
 
-export function getAdminSupportChatSession(sessionId: string) {
-  return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}`);
+export function getAdminSupportChatSession(sessionId: string, markRead = true) {
+  const query = markRead ? '' : '?markRead=false';
+  return api<SupportChatSessionDto>(`/api/admin/support/chat-sessions/${sessionId}${query}`);
 }
 
 export function getAdminSupportChatSessions() {
@@ -33,8 +34,14 @@ export function postAdminSupportChatMessage(sessionId: string, content: string) 
 }
 
 export type SupportChatSocket = {
-  sendMessage: (content: string) => boolean;
   close: () => void;
+};
+
+type SupportChatSocketError = {
+  type?: string;
+  code?: string;
+  message?: string;
+  retryable?: boolean;
 };
 
 export function openSupportChatSocket(options: {
@@ -44,6 +51,7 @@ export function openSupportChatSocket(options: {
   onOpen?: () => void;
   onClose?: () => void;
   onError?: () => void;
+  onSocketError?: (error: SupportChatSocketError) => void;
 }): SupportChatSocket | null {
   const token = getToken();
   if (!token || typeof WebSocket === 'undefined') {
@@ -55,22 +63,19 @@ export function openSupportChatSocket(options: {
   socket.addEventListener('error', () => options.onError?.());
   socket.addEventListener('message', (event) => {
     try {
-      const payload = JSON.parse(String(event.data)) as { type?: string; detail?: SupportChatSessionDto };
+      const payload = JSON.parse(String(event.data)) as { type?: string; detail?: SupportChatSessionDto } & SupportChatSocketError;
       if (payload.type === 'CHAT_UPDATED' && payload.detail) {
         options.onDetail(payload.detail);
+        return;
+      }
+      if (payload.type === 'ERROR') {
+        options.onSocketError?.(payload);
       }
     } catch {
       // Polling remains the fallback when a socket payload is malformed.
     }
   });
   return {
-    sendMessage(content: string) {
-      if (socket.readyState !== WebSocket.OPEN) {
-        return false;
-      }
-      socket.send(JSON.stringify({ type: 'MESSAGE', content }));
-      return true;
-    },
     close() {
       socket.close();
     }
