@@ -2460,7 +2460,7 @@ def read_log_hour(path: Path, date_text: str, hour: int, limit: int = 500) -> li
             if not isinstance(row, dict):
                 continue
             timestamp = parse_log_timestamp(row)
-            if timestamp and timestamp.date() == selected_date and timestamp.hour == hour and is_system_metric_row(row):
+            if timestamp and timestamp.date() == selected_date and timestamp.hour == hour:
                 rows.append(row)
     rows.sort(key=lambda row: parse_log_timestamp(row) or datetime.min.replace(tzinfo=KST), reverse=True)
     return rows[:limit]
@@ -2483,7 +2483,7 @@ def read_log_day_latest(path: Path, date_text: str, limit: int = LOG_TABLE_LIMIT
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(row, dict) or not is_system_metric_row(row):
+            if not isinstance(row, dict):
                 continue
             timestamp = parse_log_timestamp(row)
             if timestamp and timestamp.date() == selected_date:
@@ -2569,6 +2569,7 @@ def display_log_event_summary(row: dict[str, Any]) -> str:
         "SYSTEM_METRIC": "상태 수집",
         "DISPLAY_DRIVER_WARNING": "드라이버 경고",
         "EVENT_LOG": "시스템 이벤트",
+        "WINDOWS_EVENT": "시스템 이벤트",
         "AGENT_HEALTH": "Agent 상태",
     }
     if kind != "-":
@@ -2622,7 +2623,7 @@ def read_status_log_summary_rows(path: Path, limit: int = STATUS_LOG_SUMMARY_LIM
             continue
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=KST)
-        if timestamp >= cutoff and is_system_metric_row(row):
+        if timestamp >= cutoff:
             rows.append(row)
     return rows[-limit:]
 

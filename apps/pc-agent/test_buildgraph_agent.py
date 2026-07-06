@@ -1167,7 +1167,7 @@ class AgentGoal1112Test(unittest.TestCase):
 
             self.assertEqual([row["message"] for row in selected], ["middle", "start"])
 
-    def test_default_metric_readers_exclude_demo_metric_rows(self) -> None:
+    def test_log_readers_include_non_system_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent-metrics.jsonl"
             now = datetime.now(agent.KST)
@@ -1188,15 +1188,21 @@ class AgentGoal1112Test(unittest.TestCase):
                     "gpuUsagePercent": 12.0,
                     "message": "System metrics collected.",
                 },
+                {
+                    "timestamp": (system_at + timedelta(seconds=30)).isoformat(),
+                    "kind": "AGENT_HEALTH",
+                    "message": "Heartbeat accepted.",
+                },
             ]
             path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
             summary = agent.read_status_log_summary_rows(path, 6)
             selected = agent.read_log_hour(path, system_at.strftime("%Y-%m-%d"), system_at.hour)
 
-            self.assertEqual([row["kind"] for row in summary], ["SYSTEM_METRIC"])
-            self.assertEqual([row["kind"] for row in selected], ["SYSTEM_METRIC"])
-            self.assertEqual(agent.display_log_summary_values(summary[0])[4], "12.0%")
+            self.assertEqual([row["kind"] for row in summary], ["DEMO_METRIC", "SYSTEM_METRIC", "AGENT_HEALTH"])
+            self.assertEqual([row["kind"] for row in selected], ["AGENT_HEALTH", "SYSTEM_METRIC", "DEMO_METRIC"])
+            self.assertEqual(agent.display_log_summary_values(summary[1])[4], "12.0%")
+            self.assertIn("Agent 상태", agent.display_log_summary_values(summary[2]))
 
     def test_read_log_hour_accepts_envelope_collected_at(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1230,7 +1236,7 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(date_text, "2026-07-04")
         self.assertEqual(hour, 13)
 
-    def test_read_log_day_latest_uses_today_system_metrics_latest_first(self) -> None:
+    def test_read_log_day_latest_uses_today_logs_latest_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent-metrics.jsonl"
             rows = [
@@ -1260,7 +1266,7 @@ class AgentGoal1112Test(unittest.TestCase):
 
             selected = agent.read_log_day_latest(path, "2026-07-04", limit=10)
 
-            self.assertEqual([row["message"] for row in selected], ["latest", "older"])
+            self.assertEqual([row["message"] for row in selected], ["latest", "older", "demo"])
 
     def test_read_log_rows_for_filter_keeps_user_selected_hour(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1284,13 +1290,14 @@ class AgentGoal1112Test(unittest.TestCase):
             rows = [
                 {"timestamp": (now - timedelta(hours=2)).isoformat(), "kind": "SYSTEM_METRIC", "message": "old"},
                 {"timestamp": (now - timedelta(minutes=20)).isoformat(), "kind": "SYSTEM_METRIC", "message": "recent-1"},
+                {"timestamp": (now - timedelta(minutes=15)).isoformat(), "kind": "AGENT_HEALTH", "message": "recent-health"},
                 {"timestamp": (now - timedelta(minutes=10)).isoformat(), "kind": "SYSTEM_METRIC", "message": "recent-2"},
             ]
             path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
             summary = agent.read_status_log_summary_rows(path, 6)
 
-            self.assertEqual([row["message"] for row in summary], ["recent-1", "recent-2"])
+            self.assertEqual([row["message"] for row in summary], ["recent-1", "recent-health", "recent-2"])
 
     def test_display_log_summary_values_hide_sensitive_values(self) -> None:
         row = {
@@ -1745,6 +1752,50 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(metrics["디스크"]["status"], "정상")
             self.assertEqual(metrics["GPU"]["status"], "확인 불가")
             self.assertEqual(len(model["events"]), 1)
+
+    def test_diagnosis_detail_model_includes_non_metric_event_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent-metrics.jsonl"
+            now = datetime.now(agent.KST)
+            rows = [
+                {
+                    "timestamp": now.isoformat(),
+                    "kind": "SYSTEM_METRIC",
+                    "cpuUsagePercent": 24.0,
+                    "message": "System metrics collected.",
+                },
+                {
+                    "timestamp": (now + timedelta(seconds=10)).isoformat(),
+                    "kind": "AGENT_HEALTH",
+                    "message": "Heartbeat accepted.",
+                },
+                {
+                    "timestamp": (now + timedelta(seconds=20)).isoformat(),
+                    "kind": "WINDOWS_EVENT",
+                    "message": "Display driver warning repeated.",
+                },
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="raw-agent-token",
+                log_dir=Path(directory),
+                agent_version="1.2.3",
+                policy_version="test-policy",
+            )
+
+            with patch("buildgraph_agent.startup_dir", return_value=Path(directory)):
+                model = agent.diagnosis_detail_model(config, path)
+
+            event_types = [event["type"] for event in model["events"]]
+            event_contents = [event["content"] for event in model["events"]]
+            self.assertIn("Agent 상태", event_types)
+            self.assertIn("시스템 이벤트", event_types)
+            self.assertIn("Heartbeat accepted.", event_contents)
+            self.assertIn("Display driver warning repeated.", event_contents)
 
     def test_diagnosis_detail_model_has_no_collection_upload_or_server_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
