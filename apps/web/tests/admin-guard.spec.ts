@@ -1018,7 +1018,7 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
   await page.getByRole('button', { name: '고정하기' }).click();
   await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 0).toBeGreaterThan(41);
   // 클램프 상한 = 100 - 카드 폭. 허브 방사형 좌표에서 GPU 카드 폭이 21%라 상한은 79다.
-  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 999).toBeLessThanOrEqual(57.5);
+  await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 999).toBeLessThanOrEqual(60);
   await expect.poll(() => savedPayload?.positions?.GPU?.y ?? 0).toBeGreaterThan(53);
   await expect.poll(() => savedPayload?.positions?.PRICE).toBeUndefined();
   await expect(page.getByText('저장 완료')).toBeVisible();
