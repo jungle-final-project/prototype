@@ -685,6 +685,8 @@ test('keeps fallback topology edges when the graph api fails', async ({ page }) 
   await expect(page.getByTestId('slot-edge-MOTHERBOARD-RAM')).toHaveAttribute('data-status', 'BASE');
   // P1-1: 보드 규격 vs 케이스 지원 — 실장 관계(implied)라 선 없이 상태 점으로 표시된다.
   await expect(page.getByTestId('slot-edge-MOTHERBOARD-CASE')).toHaveAttribute('data-status', 'BASE');
+  // P1-2: 보드 M.2 슬롯 vs SSD 수 — 실장 관계(implied)라 SSD 실장 지점의 상태 점으로 표시된다.
+  await expect(page.getByTestId('slot-edge-MOTHERBOARD-STORAGE')).toHaveAttribute('data-status', 'BASE');
   await expect(page.getByTestId('slot-edge-GPU-PSU')).toHaveAttribute('data-status', 'BASE');
   await expect(page.getByTestId('slot-edge-GPU-CASE')).toHaveAttribute('data-status', 'BASE');
   await expect(page.getByTestId('slot-edge-COOLER-CASE')).toHaveAttribute('data-status', 'BASE');
