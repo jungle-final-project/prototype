@@ -149,6 +149,8 @@
   - 현재 결정: P2에서는 단일 인스턴스 push + polling fallback 한계로 문서화하고 Redis pub/sub fan-out은 다음 단계로 둔다.
 - [x] 연결 상태 표시를 실제 상태와 맞춘다.
   - 현재 구현: `실시간 연결`, `재연결 중`, `자동 새로고침`, `연결 끊김` 상태를 분리한다.
+- [x] 관리자 상담방 목록 전체를 전용 WebSocket으로 실시간 갱신한다.
+  - 현재 구현: `/ws/admin/support-chat-queue`가 단일 방 update/remove patch를 보내고, 상세 방 소켓과 독립적으로 동작한다.
 
 ## 테스트 체크리스트
 
@@ -176,6 +178,8 @@
 - [x] 인증 성공 후 최초 `CHAT_UPDATED`와 기존 broadcast가 동작하는 test
 - [x] REST CORS와 WS config가 같은 allowed origins 기본값을 사용하는 test
 - [x] support chat migration contract test
+- [x] admin queue ws-ticket endpoint 발급 test
+- [x] admin queue WebSocket 인증/patch/remove/실패 격리 test
 
 ### Frontend
 
@@ -202,6 +206,30 @@
 - [x] socket open 직후 `AUTH` frame이 전송되는 test
 - [x] ws-ticket API 401이 기존 REST refresh retry를 사용하는 test
 - [x] 사용자/관리자 연결 상태 UI test
+- [x] admin queue WebSocket update/remove/reconnect test
+
+## 방문 지원 예약 기능
+
+### Backend
+
+- [x] `visit_support_reservations.scheduled_at` migration contract test
+- [x] 사용자 예약 요청 `REQUESTED` 저장 test
+- [x] 사용자 변경 요청 `RESCHEDULE_REQUESTED` 저장 test
+- [x] 관리자 예약 확정 `SCHEDULED` 저장 test
+- [x] 관리자 예약 취소 `CANCELLED` 저장 test
+- [x] 종료 티켓 예약 변경 409 test
+- [x] 예약 변경 후 SYSTEM 메시지와 unread 갱신 test
+- [x] 예약 변경 후 room detail/queue broadcast controller test
+- [x] 상담방 detail/list `visitReservation` 포함 test
+
+### Frontend
+
+- [x] 사용자 위젯 예약 요청 form/API 호출 test
+- [x] 사용자 위젯 확정 예약 표시 및 취소 버튼 미노출 test
+- [x] 사용자 위젯 WebSocket detail push로 예약 패널 갱신 test
+- [x] 관리자 상담방 예약 확정/취소 API 호출 test
+- [x] 관리자 예약 실패 시 입력값 보존 및 오류 표시 test
+- [x] 관리자 queue patch로 목록 예약 상태/시각 갱신 test
 
 ### Manual/E2E
 
