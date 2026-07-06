@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -53,6 +54,7 @@ public class AgentLogQueryService {
         this(jdbcTemplate, new AsLogRagAnalysisService(jdbcTemplate));
     }
 
+    @Autowired
     public AgentLogQueryService(JdbcTemplate jdbcTemplate, AsLogRagAnalysisService asLogRagAnalysisService) {
         this.jdbcTemplate = jdbcTemplate;
         this.asLogRagAnalysisService = asLogRagAnalysisService;
