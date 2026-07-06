@@ -781,7 +781,7 @@ function SlotDetailPlaceholder({ onPick }: { onPick: (category: PartCategory) =>
               onClick={() => onPick(slot.category)}
               className="inline-flex items-center gap-1 rounded-full border border-commerce-line bg-white px-2.5 py-1 text-[11px] font-black text-slate-600 hover:border-brand-blue hover:text-brand-blue"
             >
-              <img src={slot.glyph} alt="" aria-hidden="true" className="h-3.5 w-3.5" />
+              <img src={slot.glyph} alt="" aria-hidden="true" className="h-3.5 w-auto max-w-10" />
               {slot.label}
             </button>
           ))}

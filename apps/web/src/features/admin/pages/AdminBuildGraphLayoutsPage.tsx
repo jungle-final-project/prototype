@@ -293,7 +293,7 @@ function SlotLayoutCard({
     >
       <span className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 text-[11px] font-black text-slate-600">
-          <img src={slot.glyph} alt="" aria-hidden="true" className="h-6 w-6" />
+          <img src={slot.glyph} alt="" aria-hidden="true" className="h-6 w-auto max-w-16" />
           {slot.label}
         </span>
         <Move size={14} className="text-slate-400" aria-hidden="true" />
