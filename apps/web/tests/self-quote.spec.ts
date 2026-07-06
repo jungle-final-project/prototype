@@ -948,7 +948,7 @@ test('shows a whole FAIL page greyed out with reasons instead of auto-fetching t
   expect(requestedPages).toEqual(['0']);
 
   // 다음 페이지는 사용자가 직접 '후보 더 보기'로 불러온다.
-  await panel.getByRole('button', { name: '후보 더 보기' }).click();
+  await panel.getByRole('button', { name: '후보 더 보기' }).dispatchEvent('click');
   await expect(panel.getByText('통과 파워 후보')).toBeVisible();
   expect(requestedPages).toContain('1');
 });

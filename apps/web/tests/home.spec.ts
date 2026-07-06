@@ -801,8 +801,8 @@ test('selects a featured recommendation and applies every build part to self quo
   expect(request.items).toContainEqual({ partId: 'home-gpu-rtx5070', category: 'GPU', quantity: 1 });
   expect(request.items).toContainEqual({ partId: 'home-case-frame', category: 'CASE', quantity: 1 });
   await expect(page).toHaveURL('/self-quote');
-  await expect(page.getByText('Home RTX 5070 GPU')).toBeVisible();
-  await expect(page.getByText('Home FRAME 4000D Case')).toBeVisible();
+  await expect(page.getByTestId('slot-GPU')).toContainText('Home RTX 5070 GPU');
+  await expect(page.getByTestId('slot-CASE')).toContainText('Home FRAME 4000D Case');
 });
 
 test('chatbot uses build-chat API and updates latest home AI recommendations', async ({ page }) => {
