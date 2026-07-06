@@ -1450,8 +1450,9 @@ test('self quote chatbot sends current draft and never mutates the draft automat
   await expect(page.getByTestId('ai-chat-messages')).toContainText('나머지 카테고리를 내부 자산 기준으로 채웠습니다.');
 
   expect(draftMutationMethods).toHaveLength(0);
-  // 부품명은 체크리스트와 슬롯 카드 양쪽에 보이므로 슬롯 카드로 한정해 확인한다.
-  await expect(page.getByTestId('slot-GPU').getByText('RTX 5070 챗봇 테스트')).toBeVisible();
+  // 부품명은 체크리스트(품목 지도)와 슬롯 카드 양쪽에 반영된다. 데스크톱(lg)에서 보드 슬롯은 절대위치
+  // + overflow-hidden 컴팩트 레이아웃이라 긴 이름이 클리핑될 수 있으므로, 항상 보이는 체크리스트로 확인한다.
+  await expect(page.getByTestId('checklist-GPU').getByText('RTX 5070 챗봇 테스트')).toBeVisible();
 });
 
 test('opens cooler candidate panel from home category link', async ({ page }) => {
