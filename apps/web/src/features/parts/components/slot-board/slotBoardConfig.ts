@@ -35,7 +35,7 @@ export const SLOT_CONFIGS: SlotConfig[] = [
   { category: 'CPU', label: 'CPU', glyph: '/slot-board/parts/cpu.svg', mount: 'board', layout: { x: 48.75, y: 30, w: 16.25, h: 26 } },
   { category: 'RAM', label: 'RAM', glyph: '/slot-board/parts/ram.svg', miniSlots: 4, miniFillBy: 'quantity', mount: 'board', layout: { x: 68.75, y: 24, w: 16.25, h: 36 } },
   { category: 'GPU', label: 'GPU', glyph: '/slot-board/parts/gpu.svg', mount: 'board', layout: { x: 37.5, y: 62, w: 40, h: 16 } },
-  { category: 'STORAGE', label: 'SSD', glyph: '/slot-board/parts/ssd.svg', miniSlots: 2, miniFillBy: 'items', mount: 'board', layout: { x: 80, y: 80, w: 15, h: 13 } },
+  { category: 'STORAGE', label: 'SSD', glyph: '/slot-board/parts/ssd.svg', miniSlots: 2, miniFillBy: 'quantity', mount: 'board', layout: { x: 80, y: 80, w: 15, h: 13 } },
   { category: 'MOTHERBOARD', label: '메인보드', glyph: '/slot-board/parts/motherboard.svg', mount: 'board', layout: { x: 36.25, y: 84, w: 21, h: 11 } },
   { category: 'COOLER', label: '쿨러', glyph: '/slot-board/parts/cooler.svg', mount: 'dock', layout: { x: 45, y: 2, w: 25, h: 16 } },
   { category: 'CASE', label: '케이스', glyph: '/slot-board/parts/case.svg', mount: 'dock', layout: { x: 1.25, y: 2, w: 30, h: 28 } },
@@ -78,6 +78,8 @@ export const FALLBACK_EDGES: SlotEdgeConfig[] = [
   { from: 'GPU', to: 'MOTHERBOARD', label: 'PCIe x16', implied: true },
   // 보드는 케이스 안에 실장된다 — 규격(폼팩터) 판정은 케이스 도킹 카드에 상태 점/사유로 표시한다(P1-1).
   { from: 'MOTHERBOARD', to: 'CASE', label: '보드 규격', implied: true },
+  // SSD는 보드 M.2 슬롯에 꽂힌다 — 슬롯 초과 판정은 SSD 실장 지점에 상태 점/사유로 표시한다(P1-2).
+  { from: 'MOTHERBOARD', to: 'STORAGE', label: 'M.2 장착', implied: true },
   // 도킹 부품 ↔ 보드/부품 관계 — 방사 배치라 대부분 짧은 직선이다.
   // 파워(좌하)가 명판 바로 옆이라 메인보드 칸에 직결한다 — 보드 쪽 끝은 포트 패드로 그려진다.
   { from: 'PSU', to: 'MOTHERBOARD', label: '24핀 전원' },

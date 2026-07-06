@@ -119,7 +119,19 @@ public class ToolCheckService {
         // 보드에 memorySlots 데이터가 없으면(신규 인테이크 유입 등) 검사를 생략한다 — 없는 데이터로 FAIL을 내지 않는다.
         boolean ramSlotsChecked = motherboard != null && memorySlots > 0 && ramSticksTotal > 0;
         boolean ramSlotsMatched = !ramSlotsChecked || ramSticksTotal <= memorySlots;
-        boolean pass = socketMatched && memoryMatched && coolerMatched && coolerTdpMatched && ramFormFactorMatched && ramSlotsMatched;
+        // M.2 SSD 장착 수 vs 보드 M.2 슬롯(P1-2). SATA(2.5인치) SSD는 M.2 슬롯을 쓰지 않으므로 제외한다 —
+        // 인터페이스/폼팩터가 M.2·NVMe인 저장장치만 수량 가중으로 합산한다.
+        int m2StorageTotal = parts.stream()
+                .filter(part -> "STORAGE".equalsIgnoreCase(firstText(part.category(), "")))
+                .filter(ToolCheckService::isM2Storage)
+                .mapToInt(ToolBuildPart::effectiveQuantity)
+                .sum();
+        int m2Slots = intAttr(motherboard, "m2Slots", 0);
+        // 보드에 m2Slots 데이터가 없으면(웹 검증 백필 전 유입 등) 검사를 생략한다.
+        boolean m2SlotsChecked = motherboard != null && m2Slots > 0 && m2StorageTotal > 0;
+        boolean m2SlotsMatched = !m2SlotsChecked || m2StorageTotal <= m2Slots;
+        boolean pass = socketMatched && memoryMatched && coolerMatched && coolerTdpMatched
+                && ramFormFactorMatched && ramSlotsMatched && m2SlotsMatched;
         String summary = pass
                 ? coolerTdpMarginLow
                         ? "쿨러 TDP 여유가 20% 미만이라 고부하 시 냉각 여유가 빠듯합니다."
@@ -130,7 +142,9 @@ public class ToolCheckService {
                                 ? "데스크탑 보드에 장착할 수 없는 램 폼팩터(" + String.join(", ", ramBadFormFactors) + ")입니다."
                                 : !ramSlotsMatched
                                         ? "램 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
-                                        : "소켓 또는 메모리 호환성 확인이 필요합니다.";
+                                        : !m2SlotsMatched
+                                                ? "M.2 SSD 수(" + m2StorageTotal + "개)가 메인보드 M.2 슬롯(" + m2Slots + "개)을 초과합니다."
+                                                : "소켓 또는 메모리 호환성 확인이 필요합니다.";
         // status는 PASS/FAIL 2-상태를 유지한다 — TDP 마진 WARN을 툴 status로 올리면 compatibility를
         // 구독하는 RAM/메인보드 후보 전체가 후보와 무관한 쿨러 마진으로 '간섭 주의'가 된다.
         // 마진 경고는 details(coolerTdpMarginLow)와 summary로 내리고, CPU-쿨러 엣지가 WARN을 그린다.
@@ -154,7 +168,25 @@ public class ToolCheckService {
                         "ramSticksTotal", ramSticksTotal,
                         "memorySlots", memorySlots > 0 ? memorySlots : null,
                         "ramSlotsChecked", ramSlotsChecked,
-                        "ramSlotsMatched", ramSlotsMatched));
+                        "ramSlotsMatched", ramSlotsMatched,
+                        "m2StorageTotal", m2StorageTotal,
+                        "m2Slots", m2Slots > 0 ? m2Slots : null,
+                        "m2SlotsChecked", m2SlotsChecked,
+                        "m2SlotsMatched", m2SlotsMatched));
+    }
+
+    /** 저장장치가 M.2 슬롯을 차지하는지 — 인터페이스/폼팩터가 M.2·NVMe면 M.2, SATA 2.5인치는 아니다. */
+    private static boolean isM2Storage(ToolBuildPart part) {
+        String iface = firstText(stringAttr(part, "interface"), "").toUpperCase(Locale.ROOT);
+        String formFactor = firstText(stringAttr(part, "formFactor"), "").toUpperCase(Locale.ROOT);
+        if (formFactor.contains("M.2") || formFactor.contains("M2")) {
+            return true;
+        }
+        if (formFactor.contains("2.5") || iface.equals("SATA")) {
+            return false;
+        }
+        // 인터페이스만 있는 경우: NVMe/M.2/PCIe는 M.2로 본다(현재 카탈로그 M.2 NVMe 표기 기준).
+        return iface.contains("M.2") || iface.contains("NVME") || iface.contains("PCIE");
     }
 
     /** Evaluates PSU rated capacity against estimated build load. */

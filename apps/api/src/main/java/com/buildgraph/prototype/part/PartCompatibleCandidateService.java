@@ -316,6 +316,9 @@ public class PartCompatibleCandidateService {
             // 파워는 용량(power)에 더해 깊이 vs 케이스 허용 길이(size)도 본다.
             case "PSU" -> List.of("power", "size");
             case "CASE" -> List.of("size");
+            // 저장장치는 M.2 SSD 장착 수 vs 보드 M.2 슬롯(compatibility)을 본다 —
+            // M.2 슬롯이 꽉 찬 견적에서 추가 M.2 SSD 후보가 회색(장착 불가)으로 보여야 한다.
+            case "STORAGE" -> List.of("compatibility");
             default -> List.of();
         };
     }

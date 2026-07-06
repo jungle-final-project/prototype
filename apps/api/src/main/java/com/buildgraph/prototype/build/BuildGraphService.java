@@ -228,6 +228,9 @@ public class BuildGraphService {
         String psuDepthStatus = lengthStatus(sizeDetails, "psuDepthMm", "maxPsuLengthMm", "WARN");
         // 보드 폼팩터 vs 케이스 지원 규격(P1-1) — checked 게이트로 결측이면 WARN(근거 부족).
         String boardFitStatus = boardFitStatus(sizeDetails);
+        // M.2 SSD 장착 수 vs 보드 M.2 슬롯(P1-2) — 판정은 ToolCheckService.compatibility()가 단일 소스다.
+        boolean m2SlotsExceeded = Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("m2SlotsMatched")));
+        String storageStatus = m2StorageStatus(compatibilityDetails);
 
         List<Map<String, Object>> edges = new ArrayList<>();
         addEdgeIfPossible(edges, byCategory, "CPU", "MOTHERBOARD", "edge-cpu-board-socket", "REQUIRES", socketStatus, socketLabel(socketStatus), socketSummary(byCategory, socketStatus));
@@ -240,6 +243,8 @@ public class BuildGraphService {
         addEdgeIfPossible(edges, byCategory, "PSU", "CASE", "edge-psu-case-depth", "REQUIRES", psuDepthStatus, psuDepthLabel(sizeDetails, psuDepthStatus), psuDepthSummary(toolByName, psuDepthStatus));
         // 보드 규격 vs 케이스 지원(P1-1) — ITX 전용 케이스에 ATX 보드 같은 조합을 물리적 장착 불가로 표시한다.
         addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "CASE", "edge-board-case-form", "REQUIRES", boardFitStatus, boardFitLabel(sizeDetails, boardFitStatus), boardFitSummary(sizeDetails, boardFitStatus));
+        // M.2 SSD 장착 수 vs 보드 M.2 슬롯(P1-2) — 슬롯 초과 조합을 물리적 장착 불가로 표시한다.
+        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "STORAGE", "edge-board-storage-m2", "REQUIRES", storageStatus, storageLabel(compatibilityDetails, storageStatus, m2SlotsExceeded), storageSummary(compatibilityDetails, storageStatus));
         addEdgeIfPossible(edges, byCategory, "CPU", "GPU", "edge-cpu-gpu-performance", "AFFECTS", toolStatus(toolByName, "performance"), "작업 성능", toolSummary(toolByName, "performance", "CPU와 GPU 조합으로 작업 적합도를 확인합니다."));
         if (!parts.isEmpty()) {
             edges.add(edge("edge-budget-total-price", "constraint-budget", "constraint-total-price", "AFFECTS", toolStatus(toolByName, "price"), "예산", priceSummary(toolByName, budget, total)));
@@ -703,6 +708,39 @@ public class BuildGraphService {
             return "WARN";
         }
         return Boolean.FALSE.equals(booleanValue(details.get("radiatorMatched"))) ? "FAIL" : "PASS";
+    }
+
+    /** MOTHERBOARD-STORAGE 엣지 status — M.2 슬롯 판정은 ToolCheckService.compatibility()가 단일 소스다. */
+    private static String m2StorageStatus(Map<String, Object> details) {
+        if (Boolean.TRUE.equals(booleanValue(details.get("m2SlotsChecked")))) {
+            return Boolean.FALSE.equals(booleanValue(details.get("m2SlotsMatched"))) ? "FAIL" : "PASS";
+        }
+        return "WARN";
+    }
+
+    private static String storageLabel(Map<String, Object> details, String status, boolean exceeded) {
+        if ("FAIL".equals(status) || exceeded) {
+            return "M.2 슬롯 부족";
+        }
+        if ("WARN".equals(status)) {
+            return "M.2 장착";
+        }
+        Integer m2Slots = numberValue(details.get("m2Slots"));
+        Integer used = numberValue(details.get("m2StorageTotal"));
+        return m2Slots == null ? "M.2 장착" : "M.2 " + firstText(String.valueOf(used), "0") + "/" + m2Slots;
+    }
+
+    private static String storageSummary(Map<String, Object> details, String status) {
+        Integer m2Slots = numberValue(details.get("m2Slots"));
+        Integer used = numberValue(details.get("m2StorageTotal"));
+        if (m2Slots != null && used != null) {
+            String base = "M.2 SSD " + used + "개 / 메인보드 M.2 슬롯 " + m2Slots + "개입니다.";
+            if ("FAIL".equals(status)) {
+                return base + " 장착 가능한 슬롯 수를 초과합니다.";
+            }
+            return base;
+        }
+        return "M.2 SSD 수가 메인보드 슬롯 안에 있는지 확인합니다.";
     }
 
     /** MOTHERBOARD-CASE 엣지 status — 폼팩터 판정은 ToolCheckService.size()가 단일 소스다. */
