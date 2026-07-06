@@ -2557,9 +2557,12 @@ V90__manufacturer_post_classification_source.sql
 V91__pipeline_job_runs.sql
 V92__manufacturer_source_failure_tracking.sql
 V93__recommendation_drift_snapshots.sql
+V94__motherboard_memory_slots.sql
 ```
 
-`V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다.
+`V93`은 추천 드리프트 스냅샷(MLOps 단계3, PR #72)이다. `V94`는 ACTIVE 메인보드 60개의 `attributes.memorySlots`(DIMM 슬롯 수)를 제조사 공식 스펙 웹 검증 기반으로 백필한다. 램 슬롯 초과 검사(compatibility tool)는 이 값이 있는 보드에서만 동작하며, 값이 없는 보드(신규 인테이크 유입)는 검사를 생략한다. RAM 상품의 스틱 수는 `attributes.moduleCount`(킷 구성, 예: 16Gx2 = 2)와 수량의 곱으로 센다.
+
+`V33`과 `V69`~`V89`는 의도적 공번(결번)이다. 특히 `V69`~`V89`는 병렬 PR(PC Agent 통합 계열)과의 migration 번호 충돌을 피하기 위해 건너뛰었으므로 새 migration을 이 구간 번호로 만들지 않는다(다음 번호는 `V95`부터).
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.
 

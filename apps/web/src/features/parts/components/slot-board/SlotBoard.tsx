@@ -431,10 +431,16 @@ function findGraphEdge(graph: BuildGraphResolveResponse | undefined, from: PartC
   });
 }
 
+// "32GB(16Gx2)" 같은 킷 상품은 스틱 2개를 차지한다. moduleCount 없는 상품은 단품(1)으로 본다.
+function itemStickCount(item: QuoteDraftItem): number {
+  const moduleCount = Number(item.attributes?.moduleCount);
+  return item.quantity * (Number.isFinite(moduleCount) && moduleCount >= 1 ? moduleCount : 1);
+}
+
 function MiniSlotRow({ slot, items }: { slot: SlotConfig; items: QuoteDraftItem[] }) {
   const total = slot.miniSlots ?? 0;
   const fillCount = slot.miniFillBy === 'quantity'
-    ? items.reduce((sum, item) => sum + item.quantity, 0)
+    ? items.reduce((sum, item) => sum + itemStickCount(item), 0)
     : items.length;
   const overflow = Math.max(0, fillCount - total);
 
