@@ -580,7 +580,8 @@ test('applies saved admin slot positions from the graph response when they use s
 
   await expect(page.getByTestId('slot-GPU')).toHaveAttribute('style', /--sx:\s*54%;\s*--sy:\s*8%/);
   await expect(page.getByTestId('slot-PSU')).toHaveAttribute('style', /--sx:\s*8%;\s*--sy:\s*64%/);
-  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('style', /--sx:\s*9%;\s*--sy:\s*6%/);
+  // 저장 좌표가 없는 슬롯은 허브 방사형 기본 좌표(CPU = 12시 방향)로 떨어진다.
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('style', /--sx:\s*39%;\s*--sy:\s*2\.5%/);
 });
 
 test('shows graph edge labels on the fallback topology relationships', async ({ page }) => {

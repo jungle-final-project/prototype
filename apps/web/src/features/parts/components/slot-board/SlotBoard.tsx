@@ -52,11 +52,11 @@ export function SlotBoard({ items, selectedCategory, nextCategory, onSlotSelect,
           </span>
         </div>
       </div>
-      {/* 보드 본체 — 배경 평면도/하드웨어 장식 없이 카드와 연결선만 (정보형 UI) */}
+      {/* 보드 본체 — 메인보드 허브 방사형: 중앙 허브에서 스포크가 뻗고 크로스 관계는 외곽 곡선 */}
       <div
         data-testid="slot-board"
         data-visual-mode="motherboard"
-        className="relative flex flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:aspect-[16/8.4] lg:overflow-hidden lg:bg-[#f8fbff] lg:p-4"
+        className="relative flex flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:aspect-[16/10] lg:overflow-hidden lg:bg-[#f8fbff] lg:p-4"
       >
         <SlotBoardEdges items={items} graph={graph} slotPositions={slotPositions} selectedCategory={selectedCategory} />
         {SLOT_CONFIGS.map((slot) => (
@@ -104,6 +104,8 @@ function BoardSlot({
   const lineTotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
   // 문제 상태는 장착된 슬롯에만 표시한다. 숨기지 않고 강조한다.
   const slotStatus = filled ? problemStatus ?? 'PASS' : 'NONE';
+  // 메인보드는 방사형의 중앙 허브 — 모든 스포크가 모이는 기준점이라 시각적으로 구분한다.
+  const isHub = slot.category === 'MOTHERBOARD';
   const isFlashing = useAttachFlash(items);
   const layoutVars: CSSProperties = {
     ['--sx' as string]: `${layout.x}%`,
@@ -118,7 +120,9 @@ function BoardSlot({
       : slotStatus === 'WARN'
         ? 'border-2 border-amber-400 ring-2 ring-amber-50'
         : filled
-          ? 'border border-emerald-200 hover:border-emerald-400 shadow-sm'
+          ? isHub
+            ? 'border-2 border-slate-300 shadow-md hover:border-slate-400'
+            : 'border border-emerald-200 hover:border-emerald-400 shadow-sm'
           : isNext
             ? 'border-2 border-brand-blue bg-blue-50/40 hover:border-blue-600'
             : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
@@ -338,52 +342,72 @@ function SlotBoardEdges({
 }
 
 type Box = { x: number; y: number; w: number; h: number };
+type Point = { x: number; y: number };
 
-// 두 슬롯을 잇는 직각(ㄱ자) 경로를 계산한다. 카드 가장자리에서 앵커를 시작해
-// 수평/수직으로만 꺾이게 하고, 라벨은 가장 긴 구간 중앙에 둔다.
+const BOARD_CENTER: Point = { x: 50, y: 50 };
+
+function boxCenter(box: Box): Point {
+  return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+}
+
+// 카드 중심에서 target 방향으로 나가는 광선이 카드 테두리와 만나는 점 — 선이 카드 밖에서 시작하게 한다.
+function boxAnchorToward(box: Box, target: Point): Point {
+  const center = boxCenter(box);
+  const dx = target.x - center.x;
+  const dy = target.y - center.y;
+  if (dx === 0 && dy === 0) {
+    return center;
+  }
+  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : (box.w / 2) / Math.abs(dx);
+  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : (box.h / 2) / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+  return { x: center.x + dx * scale, y: center.y + dy * scale };
+}
+
+// 허브 방사형 지오메트리: 허브(메인보드) 스포크는 중심을 향한 직선, 크로스 관계는
+// 설정된 곡률(bow)만큼 보드 바깥(+)/안쪽(-)으로 휘는 곡선. 라벨은 실제 선의 중앙에 둔다.
 function edgeGeometry(config: SlotEdgeConfig, slotPositions: Partial<Record<PartCategory, SlotBoardPosition>>) {
   const fromSlot = slotConfigFor(config.from);
   const toSlot = slotConfigFor(config.to);
   const a: Box = fromSlot ? slotLayoutWithPosition(fromSlot, slotPositions[config.from]) : { x: 0, y: 0, w: 0, h: 0 };
   const b: Box = toSlot ? slotLayoutWithPosition(toSlot, slotPositions[config.to]) : { x: 0, y: 0, w: 0, h: 0 };
-  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
-  const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const ac = boxCenter(a);
+  const bc = boxCenter(b);
+  const isSpoke = config.from === 'MOTHERBOARD' || config.to === 'MOTHERBOARD';
 
-  const dx = bc.x - ac.x;
-  const dy = bc.y - ac.y;
-  const overlapX = Math.abs(dx) < (a.w + b.w) / 4; // 두 카드가 가로로 거의 정렬됨
-  const overlapY = Math.abs(dy) < (a.h + b.h) / 4;
-
-  let start: { x: number; y: number };
-  let end: { x: number; y: number };
-  let corner: { x: number; y: number };
-
-  if (overlapX && !overlapY) {
-    // 세로로 나열 → 위/아래 가장자리를 잇는 직선(수직)
-    start = { x: ac.x, y: dy > 0 ? a.y + a.h : a.y };
-    end = { x: bc.x, y: dy > 0 ? b.y : b.y + b.h };
-    corner = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-  } else if (overlapY && !overlapX) {
-    // 가로로 나열 → 좌/우 가장자리를 잇는 직선(수평)
-    start = { x: dx > 0 ? a.x + a.w : a.x, y: ac.y };
-    end = { x: dx > 0 ? b.x : b.x + b.w, y: bc.y };
-    corner = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-  } else {
-    // 대각 배치 → 수평으로 나갔다가 수직으로 꺾어 도착(L자)
-    start = { x: dx > 0 ? a.x + a.w : a.x, y: ac.y };
-    end = { x: bc.x, y: dy > 0 ? b.y : b.y + b.h };
-    corner = { x: end.x, y: start.y };
+  const labelT = config.labelT ?? 0.5;
+  if (isSpoke || !config.bow) {
+    const start = boxAnchorToward(a, bc);
+    const end = boxAnchorToward(b, ac);
+    return {
+      path: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
+      start,
+      end,
+      label: { x: start.x + (end.x - start.x) * labelT, y: start.y + (end.y - start.y) * labelT }
+    };
   }
 
-  const path = `M ${start.x} ${start.y} L ${corner.x} ${corner.y} L ${end.x} ${end.y}`;
-  // 라벨은 시작-코너 구간과 코너-끝 구간 중 더 긴 쪽 중앙에 둔다.
-  const seg1 = Math.hypot(corner.x - start.x, corner.y - start.y);
-  const seg2 = Math.hypot(end.x - corner.x, end.y - corner.y);
-  const label = seg1 >= seg2
-    ? { x: (start.x + corner.x) / 2, y: (start.y + corner.y) / 2 }
-    : { x: (corner.x + end.x) / 2, y: (corner.y + end.y) / 2 };
-
-  return { path, start, end, label };
+  // 크로스 곡선: 두 중심의 중점을 보드 중앙 기준 바깥/안쪽으로 bow만큼 밀어 제어점을 만든다.
+  const mid = { x: (ac.x + bc.x) / 2, y: (ac.y + bc.y) / 2 };
+  const outward = { x: mid.x - BOARD_CENTER.x, y: mid.y - BOARD_CENTER.y };
+  const outwardLength = Math.hypot(outward.x, outward.y) || 1;
+  const control = {
+    x: mid.x + (outward.x / outwardLength) * config.bow,
+    y: mid.y + (outward.y / outwardLength) * config.bow
+  };
+  const start = boxAnchorToward(a, control);
+  const end = boxAnchorToward(b, control);
+  // 2차 베지어의 t 지점 — 라벨을 곡선 위에 정확히 얹는다.
+  const inv = 1 - labelT;
+  return {
+    path: `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`,
+    start,
+    end,
+    label: {
+      x: inv * inv * start.x + 2 * inv * labelT * control.x + labelT * labelT * end.x,
+      y: inv * inv * start.y + 2 * inv * labelT * control.y + labelT * labelT * end.y
+    }
+  };
 }
 
 function slotPositionsFromGraph(graph?: BuildGraphResolveResponse) {
