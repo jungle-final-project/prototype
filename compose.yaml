@@ -87,7 +87,6 @@ services:
       SPRING_MAIL_HOST: mailpit
       SPRING_MAIL_PORT: 1025
       AGENT_RUNNER_MODE: ${AGENT_RUNNER_MODE:-deterministic}
-      AGENT_LOG_STORAGE_ROOT: ${AGENT_LOG_STORAGE_ROOT:-/data/agent-logs}
       # 로컬 데모 스택에서만 데모 RSS 피드를 노출한다(프로덕션 기본 off).
       PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED: ${PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED:-true}
       # 데모 시연 직전 true로 켜면 가격/자산 수집이 일괄 동결된다.

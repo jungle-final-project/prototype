@@ -167,7 +167,7 @@
 - `python tools/validate_openapi.py`가 통과하는지 확인한다.
 - `apps/api`에서 `./gradlew.bat test --no-daemon`과 `./gradlew.bat bootJar --no-daemon`이 통과하는지 확인한다.
 - 가능하면 `docker compose config`, API/Web Docker image build, API runtime smoke(`/api/health`)까지 확인한다.
-- Agent 등록은 `POST /api/agent/devices/register`에서 `Authorization` header 없이 `demo-agent-activation-token`으로 시작한다.
+- Agent 등록은 activation token 발급(관리자 `POST /api/admin/agent-activation-tokens` 또는 사용자 자가 발급 `POST /api/users/me/agent-activation-token`) 후, `POST /api/agent/devices/register`에서 `Authorization` header 없이 발급 토큰으로 시작한다. 고정 데모 토큰(`demo-agent-activation-token`)은 더 이상 유효하지 않다.
 - Register 응답의 raw `agentToken`은 이후 Agent 요청에만 사용하고, 웹 JWT API에는 사용하지 않는다.
 - Agent mutation 요청에는 `Idempotency-Key`를 반드시 넣는다.
 - gzip upload는 `POST /api/agent/log-uploads`에 `file=@agent-log.jsonl.gz`, `rangeMinutes=30`으로 보낸다.

@@ -39,7 +39,8 @@ Agent 등록
 1. Agent 등록
    - `POST /api/agent/devices/register`
    - `Authorization` header를 보내지 않는다.
-   - request body에 `activationToken: "demo-agent-activation-token"`을 포함한다.
+   - 먼저 activation token을 발급받는다: 관리자 `POST /api/admin/agent-activation-tokens`(ADMIN JWT) 또는 사용자 자가 발급 `POST /api/users/me/agent-activation-token`(USER JWT).
+   - request body에 발급받은 `activationToken` 원문과 `deviceFingerprintHash`, `registrationIdempotencyKey`, `osVersion`, `agentVersion`, `policyVersion`을 포함한다. *(구 `demo-agent-activation-token` 고정 토큰 경로는 제거됨 — DB 발급 토큰만 유효)*
    - response의 `agentToken`은 Agent가 최초 1회 저장하고, 서버 DB에는 hash만 저장한다.
 2. 사용자 동의 저장
    - `POST /api/agent/consents`

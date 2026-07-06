@@ -171,7 +171,7 @@ MVP 기준 결정값:
 | `RESOLVED` | `IN_PROGRESS`, `ASSIGNED`, `OPEN`, `CANCELLED` | ADMIN | no | `409` | yes |
 | 위 표 외 모든 전이 | any | ADMIN | no | `409` | yes |
 
-### as_tickets analysis_status / review_status (V56)
+### as_tickets analysis_status / review_status (V69)
 
 `as_tickets.status`(접수 처리 상태)와 별도로 V56이 추가한 PC Agent 분석 상태 기계다.
 
@@ -1223,7 +1223,7 @@ Index:
 
 ### agent_activation_tokens
 
-목적: PC Agent 디바이스 등록에 사용하는 1회성 activation token을 저장한다 (V56).
+목적: PC Agent 디바이스 등록에 사용하는 1회성 activation token을 저장한다 (V69).
 
 Owner: 4번
 
@@ -1247,7 +1247,7 @@ Index:
 
 ### agent_devices
 
-목적: 사용자 PC에 설치된 PC Agent 디바이스의 등록/상태/버전을 저장한다 (V56).
+목적: 사용자 PC에 설치된 PC Agent 디바이스의 등록/상태/버전을 저장한다 (V69).
 
 Owner: 4번
 
@@ -1280,38 +1280,9 @@ Index:
 - index: `agent_devices.status`
 - index: `agent_devices.last_seen_at`
 
-### agent_consents
-
-목적: PC Agent 로그 수집/업로드/품질 개선 동의 이력을 저장한다 (V56).
-
-Owner: 4번
-
-| 컬럼명 | 타입 | nullable | FK | 설명 |
-|---|---|---:|---|---|
-| `id` | `BIGINT` | no | - | 내부 PK |
-| `public_id` | `UUID` | no | - | 외부 ID |
-| `user_id` | `BIGINT` | no | `users.id` | 동의 사용자 |
-| `device_id` | `BIGINT` | yes | `agent_devices.id` | 관련 디바이스 |
-| `consent_type` | `VARCHAR(50)` | no | - | `LOCAL_COLLECTION`, `SERVER_UPLOAD`, `QUALITY_IMPROVEMENT` |
-| `policy_version` | `VARCHAR(80)` | no | - | 동의한 정책 버전 |
-| `source` | `VARCHAR(50)` | no | - | 동의 입력 경로 |
-| `idempotency_key` | `VARCHAR(160)` | no | - | 멱등성 키 |
-| `accepted` | `BOOLEAN` | no | - | 동의 여부 |
-| `accepted_at` | `TIMESTAMPTZ` | yes | - | 동의 시각 |
-| `revoked_at` | `TIMESTAMPTZ` | yes | - | 철회 시각 |
-| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
-
-Index:
-
-- unique: `agent_consents.public_id`
-- unique: `(device_id, idempotency_key)`
-- index: `agent_consents.user_id`
-- index: `agent_consents.device_id`
-- index: `(user_id, consent_type, created_at)`
-
 ### agent_heartbeats
 
-목적: PC Agent 디바이스의 주기적 heartbeat(버전/서비스 상태)를 저장한다 (V56).
+목적: PC Agent 디바이스의 주기적 heartbeat(버전/서비스 상태)를 저장한다 (V69).
 
 Owner: 4번
 
@@ -1336,7 +1307,7 @@ Index:
 
 ### agent_update_policies
 
-목적: PC Agent 배포 채널별 최소 지원 버전/최신 버전/kill switch 정책을 저장한다 (V56).
+목적: PC Agent 배포 채널별 최소 지원 버전/최신 버전/kill switch 정책을 저장한다 (V69).
 
 Owner: 4번
 
@@ -1362,7 +1333,7 @@ Index:
 
 ### agent_update_rollouts
 
-목적: update policy 버전별 rollout 실행 상태를 저장한다 (V56).
+목적: update policy 버전별 rollout 실행 상태를 저장한다 (V69).
 
 Owner: 4번
 
@@ -1384,7 +1355,7 @@ Index:
 
 ### agent_upload_jobs
 
-목적: PC Agent 로그 업로드 작업 단위(요청 구간, 재시도 상태)를 저장한다 (V56).
+목적: PC Agent 로그 업로드 작업 단위(요청 구간, 재시도 상태)를 저장한다 (V69).
 
 Owner: 4번
 
@@ -1411,7 +1382,7 @@ Index:
 
 ### agent_log_bundles
 
-목적: 업로드된 gzip 로그 번들 파일의 저장 위치, checksum, 보관 만료를 저장한다 (V56).
+목적: 업로드된 gzip 로그 번들 파일의 저장 위치, checksum, 보관 만료를 저장한다 (V69).
 
 Owner: 4번
 
@@ -1438,7 +1409,7 @@ Index:
 
 ### agent_delete_requests
 
-목적: 사용자의 PC Agent 로그 삭제 요청(로컬/서버/전체)을 저장한다 (V56).
+목적: 사용자의 PC Agent 로그 삭제 요청(로컬/서버/전체)을 저장한다 (V69).
 
 Owner: 4번
 
@@ -1464,37 +1435,9 @@ Index:
 - index: `agent_delete_requests.device_id`
 - index: `agent_delete_requests.status`
 
-### remote_support_sessions
-
-목적: AS 티켓에 대한 원격 지원 세션(외부 도구 링크) 이력을 저장한다 (V56).
-
-Owner: 4번
-
-| 컬럼명 | 타입 | nullable | FK | 설명 |
-|---|---|---:|---|---|
-| `id` | `BIGINT` | no | - | 내부 PK |
-| `public_id` | `UUID` | no | - | 외부 ID |
-| `as_ticket_id` | `BIGINT` | no | `as_tickets.id` | 기준 AS 티켓 |
-| `device_id` | `BIGINT` | yes | `agent_devices.id` | 관련 디바이스 |
-| `provider` | `VARCHAR(80)` | no | - | `EXTERNAL_LINK`, `ANYDESK`, `TEAMVIEWER`, `ZOOM`, `GOOGLE_MEET` |
-| `session_url` | `TEXT` | yes | - | 세션 URL |
-| `status` | `VARCHAR(30)` | no | - | `REQUESTED`, `LINK_SENT`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
-| `requested_by_admin_id` | `BIGINT` | yes | `users.id` | 요청 관리자 |
-| `started_at` | `TIMESTAMPTZ` | yes | - | 시작 시각 |
-| `ended_at` | `TIMESTAMPTZ` | yes | - | 종료 시각 |
-| `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
-
-Index:
-
-- unique: `remote_support_sessions.public_id`
-- index: `remote_support_sessions.as_ticket_id`
-- index: `remote_support_sessions.device_id`
-- index: `remote_support_sessions.status`
-- index: `remote_support_sessions.created_at`
-
 ### visit_support_reservations
 
-목적: AS 티켓에 대한 방문 지원 예약을 저장한다 (V56).
+목적: AS 티켓에 대한 방문 지원 예약을 저장한다 (V69).
 
 Owner: 4번
 
@@ -1522,7 +1465,7 @@ Index:
 
 ### agent_idempotency_records
 
-목적: PC Agent API(`register`, `consents`, `heartbeat`, `log-uploads`)의 `Idempotency-Key` 재시도 응답을 저장한다 (V57). 내부 멱등성 기록 전용이라 `public_id`를 두지 않는다.
+목적: PC Agent API(`register`, `consents`, `heartbeat`, `log-uploads`)의 `Idempotency-Key` 재시도 응답을 저장한다 (V70). 내부 멱등성 기록 전용이라 `public_id`를 두지 않는다.
 
 Owner: 4번
 
@@ -1559,8 +1502,8 @@ Owner: 4번
 | `id` | `BIGINT` | no | - | 내부 PK |
 | `public_id` | `UUID` | no | - | 외부 ID |
 | `user_id` | `BIGINT` | no | `users.id` | 사용자 |
-| `device_id` | `BIGINT` | yes | `agent_devices.id` | 업로드 PC Agent 디바이스 (V56) |
-| `upload_job_id` | `BIGINT` | yes | `agent_upload_jobs.id` | Agent 업로드 job (V56) |
+| `device_id` | `BIGINT` | yes | `agent_devices.id` | 업로드 PC Agent 디바이스 (V69) |
+| `upload_job_id` | `BIGINT` | yes | `agent_upload_jobs.id` | Agent 업로드 job (V69) |
 | `range_minutes` | `INTEGER` | no | - | 계산된 incidentWindow 길이 |
 | `status` | `VARCHAR(30)` | no | - | log upload status |
 | `file_name` | `VARCHAR(255)` | no | - | 업로드 파일명 |
@@ -1782,11 +1725,11 @@ Owner: 4번
 | `assigned_admin_id` | `BIGINT` | yes | `users.id` | 담당 관리자 |
 | `symptom` | `TEXT` | no | - | 증상 |
 | `status` | `VARCHAR(30)` | no | - | AS ticket status |
-| `analysis_status` | `VARCHAR(30)` | no | - | PC Agent 로그 분석 진행 상태. `NOT_STARTED`(기본), `QUEUED`, `ANALYZING`, `RULE_READY`, `LLM_READY`, `FAILED` (V56) |
-| `review_status` | `VARCHAR(30)` | no | - | 관리자 검토 상태. `NOT_REQUIRED`(기본), `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` (V56) |
+| `analysis_status` | `VARCHAR(30)` | no | - | PC Agent 로그 분석 진행 상태. `NOT_STARTED`(기본), `QUEUED`, `ANALYZING`, `RULE_READY`, `LLM_READY`, `FAILED` (V69) |
+| `review_status` | `VARCHAR(30)` | no | - | 관리자 검토 상태. `NOT_REQUIRED`(기본), `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` (V69) |
 | `support_decision` | `VARCHAR(50)` | yes | - | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `REPAIR_OR_REPLACE`, `NEEDS_MORE_INFO`, `MONITOR_ONLY`, `UNSUPPORTED` — AS 접수 RAG가 직접 확정하는 coarse decision은 4종(`SELF_SOLVABLE`/`REMOTE_POSSIBLE`/`VISIT_REQUIRED`/`NEEDS_MORE_INFO`, API_CONTRACT 참조) |
-| `risk_level` | `VARCHAR(30)` | yes | - | `LOW`, `MEDIUM`, `HIGH` (V56) |
-| `auto_response_allowed` | `BOOLEAN` | no | - | 자동 응답 허용 여부. 기본 `false` (V56) |
+| `risk_level` | `VARCHAR(30)` | yes | - | `LOW`, `MEDIUM`, `HIGH` (V69) |
+| `auto_response_allowed` | `BOOLEAN` | no | - | 자동 응답 허용 여부. 기본 `false` (V69) |
 | `cause_candidates` | `JSONB` | yes | - | 원인 후보 배열 |
 | `upgrade_candidates` | `JSONB` | yes | - | 업그레이드 후보 배열 |
 | `incident_window` | `JSONB` | yes | - | `IncidentWindowDto` 계약 |
@@ -1821,10 +1764,6 @@ Index:
 - index: `as_tickets.support_decision`
 - index: `as_tickets.risk_level`
 - index: `as_tickets.assigned_admin_id`
-- index: `as_tickets.analysis_status`
-- index: `as_tickets.review_status`
-- index: `as_tickets.support_decision`
-- index: `as_tickets.risk_level`
 - index: `as_tickets.exception_approved_by`
 - index: `as_tickets.created_at`
 - index: `as_tickets.deleted_at`
@@ -2675,8 +2614,6 @@ V52__manufacturer_release_intake.sql
 V53__manufacturer_release_demo_source.sql
 V54__manufacturer_release_official_sources.sql
 V55__llm_generations_ai_profile_ladder.sql
-V56__pc_agent_gold_mode_contract.sql
-V57__agent_idempotency_records.sql
 V58__manufacturer_release_sources_legacy_agent_bridge.sql
 V59__llm_generations_build_chat_profiles.sql
 V60__part_alias_review_queue.sql
@@ -2706,7 +2643,7 @@ V91__pipeline_job_runs.sql
 V92__manufacturer_source_failure_tracking.sql
 ```
 
-`V33`과 `V82`~`V89`는 의도적 공번(결번)이다. `V69`~`V81`(PC Agent/AS, dev 병합)과 `V90`~`V92`(파이프라인)는 병렬 개발에서 번호 구간을 나눠 쓴 결과이며, `V82`~`V89`에는 새 migration을 만들지 않는다(다음 번호는 `V93`부터). `V90`~`V92`가 먼저 적용된 DB에 `V69`~`V81`이 나중에 도착하는 경우를 위해 Flyway `out-of-order`가 켜져 있다(application.yml).
+`V33`, `V56`~`V57`, `V82`~`V89`는 의도적 공번(결번)이다. `V56`/`V57`은 main 계보에서 agent 마이그레이션이 쓰던 구번호로, dev 재번호(`V69`/`V70`)로 대체되어 결번이 됐다. `V69`~`V81`(PC Agent/AS, dev 병합)과 `V90`~`V92`(파이프라인)는 병렬 개발에서 번호 구간을 나눠 쓴 결과이며, `V82`~`V89`에는 새 migration을 만들지 않는다(다음 번호는 `V93`부터). `V90`~`V92`가 먼저 적용된 DB에 `V69`~`V81`이 나중에 도착하는 경우를 위해 Flyway `out-of-order`가 켜져 있다(application.yml). 또한 `V69`/`V70`은 과거 계보에서 다른 번호(dev `V53`/`V54`, main `V56`/`V57`)로 적용된 이력이 있어, `FlywayLegacyAgentMigrationStrategy`가 해당 이력을 감지하면 repair 후 migrate한다(두 파일은 `IF NOT EXISTS` 멱등이라 재적용 안전).
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.
 
