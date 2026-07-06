@@ -215,7 +215,7 @@ CREATE TABLE recommendation_drift_snapshots (
 | 4 | M5 온라인 A/B | 버킷팅 + 서버 태깅 + 리포트 + openapi | **주간 활성 사용자 조건 충족 후** |
 
 - 단계 1~2는 스키마 변경 없이 가능(M2의 skipped 기록은 result_summary 방식 채택으로 CHECK 제약 회피).
-- 단계 3 마이그레이션 1개 — **번호는 예약하지 않는다**: PR #62(V69~V81)가 out-of-order 문제로 V93+ 재번호될 가능성이 높으므로, 머지 직전 저장소 최대 버전+1로 부여한다(Flyway out-of-order는 켜지 않는 정책 유지).
+- 단계 3 마이그레이션 1개 — **번호는 예약하지 않는다**: 머지 직전 저장소 최대 버전+1로 부여한다. *(정정 2026-07-06: PR #62의 V69~V81은 재번호 없이 dev→main 병합으로 합류했고, V92 적용 DB 대응을 위해 Flyway `out-of-order`가 켜졌다. V82~V89는 결번 유지 — DB_SCHEMA.md 참조. 다음 번호는 V93부터.)*
 
 ## 10. 발표 프레이밍 (팀장 피드백 대응)
 

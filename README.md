@@ -75,7 +75,6 @@ docker compose up --build
 | `RECOMMENDATION_TRAINING_POLL_SECONDS` | 선택 | 학습 Job polling 주기 | 기본값은 `5`초입니다. |
 | `SCHEDULING_POOL_SIZE` | 선택 | API `@Scheduled` 잡 스레드풀 크기 | 기본값은 `4`입니다. 파이프라인 잡(가격/다나와/릴리스 스캔/프리웜/티어 스냅샷)이 한 스레드를 공유하며 서로 막지 않게 격리합니다. compose.yaml에는 env 매핑이 없어 Docker에서 바꾸려면 compose에 매핑을 추가해야 합니다. |
 | `DEMO_FREEZE_MUTATIONS` | 선택 | 데모 동결 단일 스위치 | 기본값은 `false`입니다. `true`면 가격/다나와/추이/제조사 스캔 스케줄러 4종이 `SKIPPED_FROZEN`으로 건너뛰고, 관리자 가격 Job 실행(`POST /api/admin/price-jobs/run`)은 `409`로 거절됩니다. 읽기 API에는 영향이 없습니다. |
-| `AGENT_DEMO_ACTIVATION_TOKEN` | 선택 | PC Agent 데모 등록 토큰 | 기본값(빈값)이면 데모 등록 경로가 비활성화되어 `401`을 반환합니다. Docker Compose 로컬 스택은 `demo-agent-activation-token`으로 켜 둡니다. 프로덕션 배포에서는 반드시 비우거나 DB 발급 토큰 방식으로 대체합니다. |
 | `PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED` | 선택 | 인증 없는 데모 RSS 피드 노출 | 기본값은 `false`이며 이때 `/api/demo/manufacturer-release-feed.xml` 라우트 자체가 비활성화됩니다. Docker Compose 로컬 스택만 `true`입니다. |
 | `OPENAI_EMBEDDING_MODEL` | 선택 | RAG vector 검색 | 기본값은 `text-embedding-3-small`입니다. |
 | `OPENAI_EMBEDDING_DIMENSIONS` | 선택 | RAG vector 검색 | 기본값은 `1536`입니다. |

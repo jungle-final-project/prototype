@@ -2139,20 +2139,18 @@ paths:
                 $ref: "#/components/schemas/AgentLogUploadDto"
   /api/agent/devices/register:
     post:
-      summary: PC Agent 데모 디바이스 등록
-      description: activation token으로 agent 디바이스를 등록하고 이후 /api/agent/* 호출에 쓸 agent token을 발급한다. agent.demo-activation-token(AGENT_DEMO_ACTIVATION_TOKEN)이 비어 있으면(프로덕션 기본) 데모 등록 경로 자체가 비활성화되어 401을 반환한다.
+      summary: PC Agent 디바이스 등록
+      description: DB에서 발급된 activation token(관리자 POST /api/admin/agent-activation-tokens 또는 사용자 POST /api/users/me/agent-activation-token)으로 agent 디바이스를 등록하고 이후 /api/agent/* 호출에 쓸 agent token을 발급한다. registrationIdempotencyKey가 같으면 기존 등록을 갱신(agent token 재발급)한다.
       security: []
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
-              required: [activationToken, userEmail]
+              required: [activationToken, deviceFingerprintHash, registrationIdempotencyKey, osVersion, agentVersion, policyVersion]
               properties:
                 activationToken:
-                  type: string
-                userEmail:
                   type: string
                 deviceFingerprintHash:
                   type: string
@@ -2161,6 +2159,7 @@ paths:
                   nullable: true
                 registrationIdempotencyKey:
                   type: string
+                  description: "[A-Za-z0-9._:-]{1,160}"
                 osVersion:
                   type: string
                 agentVersion:
@@ -2176,19 +2175,82 @@ paths:
                 type: object
                 additionalProperties: true
         "400":
-          description: userEmail 누락
+          description: 필수 필드 누락 또는 registrationIdempotencyKey 형식 오류
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
-          description: activation token 불일치 또는 데모 등록 비활성(agent.demo-activation-token 미설정)
+          description: activation token 무효(미발급/철회/만료/소진)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/agent-activation-tokens:
+    post:
+      summary: PC Agent activation token 발급 (관리자)
+      description: 지정한 사용자(userId 또는 userEmail)에게 디바이스 등록용 activation token을 발급한다. 토큰은 해시로만 저장되며 응답의 원문은 재조회할 수 없다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                userEmail:
+                  type: string
+                ttlDays:
+                  type: integer
+                  minimum: 1
+                  maximum: 7
+                  default: 7
+      responses:
+        "200":
+          description: 발급된 activation token (id, activationToken, tokenType, expiresAt)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: userId/userEmail 둘 다 누락 또는 ttlDays 범위 초과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: 관리자 아님
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
-          description: userEmail에 해당하는 사용자 없음
+          description: 대상 사용자 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/users/me/agent-activation-token:
+    post:
+      summary: PC Agent activation token 자가 발급
+      description: 로그인 사용자가 자신의 디바이스 등록용 activation token을 발급한다(TTL 1일 고정).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 발급된 activation token (id, activationToken, tokenType, expiresAt)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: 미인증
           content:
             application/json:
               schema:

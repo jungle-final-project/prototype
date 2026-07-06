@@ -61,7 +61,7 @@
 6. 그 외 status는 `403 FORBIDDEN`으로 처리한다.
 7. 인증 성공 시 `AgentAuthenticationToken`을 만들어 SecurityContext에 저장한다.
 
-현재 DB 기준 필드는 `V56__pc_agent_gold_mode_contract.sql`의 `agent_devices` 테이블을 따른다.
+현재 DB 기준 필드는 `V69__pc_agent_gold_mode_contract.sql`의 `agent_devices` 테이블을 따른다.
 
 ## AgentPrincipal 필드
 

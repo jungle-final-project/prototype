@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class AgentIdempotencyMigrationContractTest {
-    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V57__agent_idempotency_records.sql");
+    private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V70__agent_idempotency_records.sql");
 
     @Test
     void migrationCreatesAgentScopedIdempotencyRecordTable() throws Exception {

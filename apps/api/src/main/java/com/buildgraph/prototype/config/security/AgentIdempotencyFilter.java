@@ -21,6 +21,13 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 
 class AgentIdempotencyFilter extends OncePerRequestFilter {
     private static final Set<String> MUTATION_METHODS = Set.of("POST", "PUT", "PATCH", "DELETE");
+    private static final Set<String> PC_AGENT_IDEMPOTENCY_PATHS = Set.of(
+            "/api/agent/consents",
+            "/api/agent/heartbeat",
+            "/api/agent/log-uploads",
+            "/api/agent/log-uploads/as-rag-preview",
+            "/api/agent/as-drafts"
+    );
 
     private final AgentIdempotencyKeyExtractor keyExtractor;
     private final AgentIdempotencyService idempotencyService;
@@ -38,8 +45,9 @@ class AgentIdempotencyFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !path(request).startsWith("/api/agent/")
-                || !MUTATION_METHODS.contains(request.getMethod());
+        return !PC_AGENT_IDEMPOTENCY_PATHS.contains(path(request))
+                || !MUTATION_METHODS.contains(request.getMethod())
+                || isMultipart(request);
     }
 
     @Override
@@ -141,7 +149,7 @@ class AgentIdempotencyFilter extends OncePerRequestFilter {
 
     private static boolean isMultipart(HttpServletRequest request) {
         String contentType = request.getContentType();
-        return contentType != null && contentType.toLowerCase().startsWith(MediaType.MULTIPART_FORM_DATA_VALUE);
+        return contentType != null && contentType.toLowerCase().startsWith("multipart/");
     }
 
     private static String multipartRequestHash(HttpServletRequest request) throws IOException, ServletException {

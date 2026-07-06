@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, Bot, Cpu, Download, Gauge, Home, LayoutGrid, LifeBuoy, Play, RefreshCw, Search } from 'lucide-react';
+import { Activity, Bot, Cpu, Download, Gauge, Home, LayoutGrid, LifeBuoy, MessageCircle, Play, RefreshCw, Search } from 'lucide-react';
 
 type ExportValue = string | number | boolean | null | undefined;
 
@@ -66,6 +66,7 @@ function AdminSidebar() {
       items: [
         { to: '/admin', label: '대시보드', Icon: Home, match: (path: string) => path === '/admin' },
         { to: '/admin/as-tickets', label: 'AS 티켓', Icon: LifeBuoy, match: (path: string) => path.startsWith('/admin/as-tickets') },
+        { to: '/admin/customer-contacts', label: '고객 연락', Icon: MessageCircle, match: (path: string) => path.startsWith('/admin/customer-contacts') },
         { to: '/admin/parts', label: '부품/가격', Icon: Cpu, match: (path: string) => path === '/admin/parts' },
         { to: '/admin/price-jobs', label: '가격 작업', Icon: RefreshCw, match: (path: string) => path.startsWith('/admin/price-jobs') }
       ]

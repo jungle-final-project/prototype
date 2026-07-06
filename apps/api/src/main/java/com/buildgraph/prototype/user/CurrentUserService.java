@@ -21,6 +21,13 @@ public class CurrentUserService {
 
     public CurrentUser requireUser(String authorization) {
         String token = bearerToken(authorization);
+        return requireUserByAccessToken(token);
+    }
+
+    public CurrentUser requireUserByAccessToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
         JWTClaimsSet claims = verifyJwt(token);
         return findByPublicId(claims.getSubject());
     }

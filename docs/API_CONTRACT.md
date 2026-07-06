@@ -443,6 +443,16 @@ Tool별 `context`와 `details` shape:
 
 ### Agent/RAG
 
+보안 경계:
+
+- `/api/agent/sessions`, `/api/agent/sessions/{id}/run`, `/api/agent/sessions/{id}`는 웹 사용자 JWT(`USER`) 기반 Agent/RAG API다.
+- PC Agent token 인증 체인은 아래 PC Agent 전용 경로에만 적용한다.
+  - `POST /api/agent/devices/register`
+  - `POST /api/agent/consents`
+  - `POST /api/agent/heartbeat`
+  - `POST /api/agent/log-uploads`
+- `/api/agent/sessions*`는 Agent raw token으로 인증하지 않는다. 웹 JWT와 Agent token을 섞지 않는다.
+
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/ai/agent-sessions` | USER | 3번 | `{ "requirementId": "2e0f8c9c-8e1c-4d75-94a2-5d6a4977de11", "buildId": null, "asTicketId": null }` | `{ "id": "7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a", "status": "QUEUED", "summary": null, "stateTimeline": [{ "from": null, "to": "QUEUED", "actor": "USER", "at": "2026-06-29T10:35:00Z" }] }` | `agent_sessions` |
@@ -522,18 +532,44 @@ AS AI Chat 규칙:
 
 ### PC Agent/AS
 
+PC Agent token lifecycle API:
+
+| Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
+|---|---|---|---|---|---|---|
+| `POST` | `/api/agent/devices/register` | none, activation token only | 4번 | `{ "activationToken": "demo-agent-activation-token", "deviceFingerprintHash": "fingerprint-hash", "registrationIdempotencyKey": "agent-register-key", "osVersion": "Windows 11", "agentVersion": "0.1.0", "policyVersion": "policy-v1" }` | `{ "deviceId": "00000000-0000-4000-8000-000000009001", "status": "ACTIVE", "agentToken": "raw-token-returned-once", "tokenType": "Bearer" }` | `agent_devices` |
+| `POST` | `/api/agent/consents` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `{ "consentType": "SERVER_UPLOAD", "policyVersion": "policy-v1", "accepted": true }` | `{ "id": "00000000-0000-4000-8000-000000009101", "consentType": "SERVER_UPLOAD", "accepted": true, "policyVersion": "policy-v1" }` | `agent_consents`, `agent_idempotency_records` |
+| `POST` | `/api/agent/heartbeat` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `{ "agentVersion": "0.1.0", "serviceStatus": "RUNNING", "policyVersion": "policy-v1" }` | `{ "deviceId": "00000000-0000-4000-8000-000000009001", "status": "ACTIVE", "lastSeenAt": "2026-07-02T10:00:00Z" }` | `agent_devices`, `agent_heartbeats`, `agent_idempotency_records` |
+| `POST` | `/api/agent/log-uploads` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `multipart/form-data`: gzip `file`, `symptomType`, `detectedAt`, optional `incidentStartedAt`, `incidentEndedAt`, `lastNormalBootAt`, `symptom` | `{ "uploadJobId": "00000000-0000-4000-8000-000000009201", "logUploadId": "00000000-0000-4000-8000-000000009301", "ticketId": "00000000-0000-4000-8000-000000009401", "analysisStatus": "RULE_READY", "reviewStatus": "REQUIRED", "supportDecision": "REMOTE_POSSIBLE", "rangeMinutes": 20, "rawSamplesCount": 2 }` | `agent_upload_jobs`, `agent_log_uploads`, `as_tickets` |
+| `POST` | `/api/agent/log-uploads/as-rag-preview` | AGENT_TOKEN + `Idempotency-Key` | 4번 | `multipart/form-data`: gzip `file`, `symptomType`, `detectedAt`, optional incident window fields | `{ "previewSource": "PC_AGENT_LOG_UPLOAD", "recommendedService": "REMOTE_SUPPORT", "recommendedServiceLabel": "원격지원 신청", "supportDecision": "REMOTE_POSSIBLE", "rangeMinutes": 20, "rawSamplesCount": 2 }` | `as_rag_evidence` |
+
+Register는 bootstrap 단계라 Authorization header를 받지 않는다. 서버는 raw `agentToken`을 저장하지 않고 hash만 저장한다. `/api/agent-logs/upload`는 웹 사용자가 JWT로 업로드하는 legacy/manual 경로이고, `/api/agent/log-uploads`는 PC Agent가 Agent token으로 업로드하는 경로다.
+
+`POST /api/agent/consents`의 `consentType`은 기존 `LOCAL_COLLECTION`, `SERVER_UPLOAD`, `QUALITY_IMPROVEMENT`를 유지하고, 최종 AS 시나리오를 위해 `REMOTE_CONNECTION`, `REMOTE_FULL_CONTROL`, `HIGH_RISK_REMOTE_ACTION`을 additive로 허용한다. 원격 연결, 전체 제어, 고위험 원격 조치는 각각 별도 동의 row로 남기며, ticket/session/action/playbook/risk notice 연결 정보는 V57 migration의 nullable 컬럼에 저장할 수 있다.
+
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/agent/devices/register` | no (activation token) | 4번 | `{ "activationToken": "demo-agent-activation-token", "userEmail": "user@example.com", "deviceFingerprintHash": "sha256-...", "osVersion": "Windows 11", "agentVersion": "0.1.0", "policyVersion": "demo-policy-v1" }` | `201 { "deviceId": "b7e1...", "status": "ACTIVE", "agentToken": "raw-agent-token", "tokenType": "Bearer" }` | `agent_devices`, `users` 읽기 |
 | `POST` | `/api/agent/consents` | AGENT | 4번 | `Idempotency-Key` header + `{ "consentType": "SERVER_UPLOAD", "policyVersion": "demo-policy-v1", "accepted": true }` | `{ "id": "c3ac...", "consentType": "SERVER_UPLOAD", "policyVersion": "demo-policy-v1", "accepted": true, "acceptedAt": "2026-07-03T10:00:00Z", "revokedAt": null }` | `agent_consents` |
 | `POST` | `/api/agent/heartbeat` | AGENT | 4번 | `Idempotency-Key` header + `{ "agentVersion": "0.1.0", "serviceStatus": "RUNNING" }` | `{ "id": "d2f1...", "deviceId": "b7e1...", "status": "ACTIVE", "receivedAt": "2026-07-03T10:00:00Z", "pendingCommands": [] }` | `agent_heartbeats`, `agent_devices` |
 | `POST` | `/api/agent-logs/upload` | USER | 4번 | `multipart/form-data` | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "fileSize": 12000, "rangeMinutes": 30, "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
+| `POST` | `/api/agent-logs/as-rag-preview` | USER | 4번 | `multipart/form-data` | `{ "recommendedService": "REMOTE_SUPPORT", "recommendedServiceLabel": "원격지원 신청", "recommendationMessage": "로그상 원격지원으로 먼저 확인할 가능성이 높습니다.", "supportDecision": "REMOTE_POSSIBLE" }` | `as_rag_evidence` |
 | `GET` | `/api/agent-logs/{id}` | USER | 4번 | - | `{ "id": "1b363bcb-42be-4428-b625-54a6b267d66f", "status": "UPLOADED", "fileName": "agent-log.jsonl", "rangeMinutes": 30, "summary": "GPU driver error 반복", "createdAt": "2026-06-29T10:40:00Z", "deleteAfter": "2026-07-29T10:40:00Z" }` | `agent_log_uploads` |
 | `POST` | `/api/as-tickets` | USER | 4번 | `{ "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "symptom": "화면이 멈춤" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets`, `agent_log_uploads` |
 | `GET` | `/api/as-tickets/{id}` | USER | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "causeCandidates": [], "upgradeCandidates": [], "adminNote": null, "createdAt": "2026-06-29T10:42:00Z" }` | `as_tickets` |
+| `POST` | `/api/as-tickets/{id}/remote-support-requests` | USER | 4번 | `{ "reason": "화면 공유로 확인이 필요합니다.", "contactPhone": "010-0000-0000" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "reviewStatus": "REQUIRED", "remoteSupportStatus": "REQUESTED" }` | `as_tickets`, `remote_support_sessions` |
+| `POST` | `/api/as-tickets/{id}/feedback` | USER | 4번 | `{ "rating": 5, "comment": "원격지원 후 해결됐습니다." }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "feedbackRating": 5, "feedbackComment": "원격지원 후 해결됐습니다." }` | `as_tickets` |
 | `GET` | `/api/admin/as-tickets` | ADMIN | 4번 | `?page=0&size=20` | `{ "items": [{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "userId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "assignedAdminId": null, "createdAt": "2026-06-29T10:42:00Z" }], "page": 0, "size": 20, "total": 1 }` | `as_tickets` |
 | `GET` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "assignedAdminId": null, "causeCandidates": [], "upgradeCandidates": [], "adminNote": null }` | `as_tickets`, `agent_log_uploads` |
 | `PATCH` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | `{ "status": "IN_PROGRESS", "assignedAdminId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "adminNote": "확인 중" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "IN_PROGRESS", "assignedAdminId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "adminNote": "확인 중", "resolvedAt": null, "updatedAt": "2026-06-29T10:45:00Z" }` | `as_tickets`, `users`, `admin_audit_logs` |
+| `GET` | `/api/admin/customer-contacts` | ADMIN | 4번 | - | `{ "items": [{ "id": "00000000-0000-4000-8000-000000064001", "userName": "Demo User", "supportRequestType": "REMOTE", "lastMessagePreview": "오늘 저녁 8시 이후 괜찮습니다.", "adminUnreadCount": 2, "ticketId": null }] }` | `as_chat_sessions`, `as_chat_messages`, `users`, `as_tickets` |
+| `GET` | `/api/admin/customer-contacts/{id}` | ADMIN | 4번 | - | `{ "contact": {}, "messages": [{ "role": "USER", "content": "인터넷이 안 돼요." }], "ticketDraft": {} }` | `as_chat_sessions`, `as_chat_messages` |
+| `POST` | `/api/admin/customer-contacts/{id}/messages` | ADMIN | 4번 | `{ "content": "원격으로 확인 후 도와드리겠습니다." }` | `CustomerContactDetail` | `as_chat_messages`, `as_chat_sessions` |
+| `POST` | `/api/admin/customer-contacts/{id}/ticket` | ADMIN | 4번 | `{ "symptomType": "NETWORK_INTERNET", "symptomSummary": "인터넷 연결 불가", "supportRequestType": "REMOTE", "preferredScheduleAt": "2026-07-03T20:00:00+09:00", "adminNote": "원격 확인 예정" }` | `CustomerContactDetail` | `as_tickets`, `as_chat_sessions`, `admin_audit_logs` |
+| `PATCH` | `/api/admin/customer-contacts/{id}/archive` | ADMIN | 4번 | - | `{ "id": "00000000-0000-4000-8000-000000064001", "status": "ARCHIVED" }` | `as_chat_sessions`, `admin_audit_logs` |
+| `GET` | `/api/support/chat-sessions/current` | USER | 4번 | - | `{ "contact": { "id": "00000000-0000-4000-8000-000000064001", "status": "ACTIVE" }, "messages": [], "pollingIntervalMs": 5000 }` | `as_chat_sessions`, `as_chat_messages` |
+| `POST` | `/api/support/chat-sessions` | USER | 4번 | `{ "supportRequestType": "REMOTE", "message": "인터넷이 안 돼요." }` | `CustomerContactDetail` | `as_chat_sessions`, `as_chat_messages` |
+| `GET` | `/api/support/chat-sessions/{id}/messages` | USER | 4번 | - | `CustomerContactDetail` | `as_chat_sessions`, `as_chat_messages` |
+| `POST` | `/api/support/chat-sessions/{id}/messages` | USER | 4번 | `{ "content": "오늘 저녁 8시 이후 괜찮습니다." }` | `CustomerContactDetail` | `as_chat_messages`, `as_chat_sessions` |
 
 `POST /api/agent-logs/upload` multipart fields:
 
@@ -549,8 +585,41 @@ AS AI Chat 규칙:
 
 PC Agent 등록/인증 규칙:
 
-- `POST /api/agent/devices/register`는 데모 등록 경로다. activation token은 `AGENT_DEMO_ACTIVATION_TOKEN` env로 주입하며, 값이 비어 있으면(프로덕션 기본) 데모 등록 경로 자체가 비활성화되어 `401 UNAUTHORIZED`를 반환한다. 실서비스는 DB 발급 토큰 방식으로 대체한다.
+- `POST /api/agent/devices/register`는 DB에서 발급된 activation token을 검증해 디바이스를 등록한다. 토큰 발급은 관리자 `POST /api/admin/agent-activation-tokens`(userId/userEmail 지정, ttlDays 1~7) 또는 사용자 자가 발급 `POST /api/users/me/agent-activation-token`(TTL 1일 고정)이며, 토큰은 해시로만 저장된다. 무효/철회/만료 토큰은 `401 UNAUTHORIZED`. 같은 `registrationIdempotencyKey`로 재등록하면 기존 디바이스 등록을 갱신(agent token 재발급)한다. *(구 `AGENT_DEMO_ACTIVATION_TOKEN` 데모 등록 경로는 2026-07-06 dev 병합으로 제거됨)*
 - 등록 성공 시 발급된 `agentToken`이 이후 agent API의 Bearer 토큰이다. `AGENT` 인증 라우트(`/api/agent/consents`, `/api/agent/heartbeat`, `/api/agent/log-uploads`)는 사용자 JWT가 아니라 agent token Bearer 인증과 `Idempotency-Key` header를 사용한다.
+
+AS 접수 페이지 RAG 분석:
+
+- `/api/agent-logs/upload`는 업로드된 JSONL 로그를 AS 접수 전용 RAG로 분석해 `AgentLogUploadDto.asRagAnalysis`를 반환하고 `agent_log_uploads.as_rag_analysis`에 저장한다.
+- AS 접수 전용 RAG는 `as_rag_evidence`만 사용한다.
+- 기존 챗봇/Agent RAG의 `rag_evidence`, `RagQueryService`, `AgentRagRetrievalService`, `/api/rag/*` 계약은 사용하거나 수정하지 않는다.
+- `/api/as-tickets` 생성 시 연결된 `agent_log_uploads.as_rag_analysis`를 읽어 `supportDecision`, `causeCandidates`, `logSummary`, `supportRouting`, `aiDiagnosisRequest`를 초기값으로 채운다.
+- `recommendedService` 값은 `DIAGNOSIS_ONLY`, `REMOTE_SUPPORT`, `VISIT_SUPPORT`만 사용하며 UI는 각각 `우선 진단만 받기`, `원격지원 신청`, `방문지원 신청`으로 표시한다.
+- AS 접수 전용 RAG가 직접 생성하는 `supportDecision`은 최종 시나리오 기준 coarse decision 4개(`SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`)만 사용한다.
+- 방문지원 추천은 `VISIT_BOOT_REMOTE_BLOCKED`, `VISIT_DISK_FAILURE`, `VISIT_WHEA_BSOD`, `VISIT_POWER_SHUTDOWN`, `VISIT_FAN_THERMAL`의 강한 신호가 있을 때만 올린다. 디스크 교체 가능성은 `REPAIR_OR_REPLACE` decision이 아니라 `visitReasons`/`reasonCodes`로 표현한다.
+- 미지원 가능성은 `UNSUPPORTED` decision으로 직접 확정하지 않고 `NEEDS_MORE_INFO`와 `blockingFactors`로 표현해 관리자 확인 대상으로 둔다.
+
+`POST /api/as-tickets/{id}/remote-support-requests`는 사용자가 원격지원 검토를 요청하는 신규 endpoint다. 서버는 티켓 소유자만 허용하고, `reason`이 비어 있으면 `400`을 반환한다. 같은 ticket에 `REQUESTED`, `LINK_SENT`, `IN_PROGRESS` 상태의 원격 세션이 이미 있으면 `409 CONFLICT_STATE`로 중복 생성을 막는다. 생성 시 `remote_support_sessions.status='REQUESTED'` row를 만들고 `as_tickets.review_status='REQUIRED'`로 올린다.
+
+`POST /api/as-tickets/{id}/feedback`은 티켓 소유 사용자의 처리 피드백을 저장한다. `rating`은 1~5 정수이며, 서버는 `feedback_rating`, `feedback_comment`, `feedback_created_at`을 갱신한다. 피드백은 raw log를 다시 열지 않고 ticket 처리 결과와 `LogSummary`/`supportRouting` 개선 데이터로만 사용한다.
+
+`POST /api/agent/log-uploads`는 PC Agent 서버 업로드 경로다. 서버는 `rangeMinutes=30` 고정값을 사용하지 않고 `symptomType`과 incident metadata로 `incidentWindow`를 계산한다.
+
+| field | type | required | 설명 |
+|---|---|---:|---|
+| `file` | gzip file | yes | RawLog JSONL gzip. 각 line은 `schemaVersion`, `collectedAt`, `agentId`, `sequence`, `kind`, `payload`, `privacyFlags`를 포함해야 한다. |
+| `symptomType` | enum | no | 원격 6종, 방문 5종, 미지원 7종 코드. 없으면 증상 문구에서 보수적으로 추론한다. |
+| `detectedAt` | date-time | no | 증상 감지 시각. 없으면 서버 현재 시각을 쓴다. |
+| `incidentStartedAt` / `incidentEndedAt` | date-time | no | 사용자가 명시 선택한 window. 없으면 증상별 정책 window를 쓴다. |
+| `lastNormalBootAt` | date-time | no | 부팅 불가/원격 불가 유형에서 마지막 정상 부팅 이후 critical event 요약용 시작점이다. |
+| `rangeMinutes` | number | no | legacy fallback only. 신규 판단은 `incidentWindow` 기준이다. |
+
+서버 RawLog 정책:
+
+- JSONL 한 줄이라도 파싱 실패하거나 필수 필드가 없으면 전체 업로드를 `400 FILE_VALIDATION_ERROR`로 거절한다.
+- `privacyFlags.containsRawPath=true`인데 마스킹되지 않은 로그는 거절한다. 마스킹된 로그도 event message의 경로, email, token/password류 문자열은 서버 요약 전에 재마스킹한다.
+- `LogSummary`는 `incidentWindow` 안의 로그만 사용해 `timeline`, `anomalies`, `correlations`, `ruleSignals`, `dataQuality`, `evidenceRefs`, `rawSamples`를 만든다.
+- `rawSamples`는 `evidenceRefs`와 연결된 로그만 최대 20개까지 포함한다. `AiDiagnosisRequest`에는 원본 gzip, 전체 JSONL, 전체 프로세스 목록, 전체 파일 경로를 넣지 않는다.
 
 `PATCH /api/admin/as-tickets/{id}` 허용 상태 전이:
 
@@ -569,6 +638,138 @@ PC Agent 등록/인증 규칙:
 - `RESOLVED`에서 `CLOSED` 외 상태로 변경하면 `409 CONFLICT_STATE`다.
 - 위 허용 전이표에 없는 전이는 `409 CONFLICT_STATE`다.
 - 409가 발생해도 DB status는 변경하지 않는다. admin 요청이므로 거절 이력은 `admin_audit_logs`에 기록한다.
+
+#### Agent AS 관리자 결정 필드
+
+`PATCH /api/admin/as-tickets/{id}`는 기존 status 변경뿐 아니라 데모 운영에 필요한 관리자 결정 필드를 같은 요청에서 저장한다.
+
+요청에 포함할 수 있는 필드:
+
+| field | allowed values / type | note |
+|---|---|---|
+| `status` | `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `CANCELLED` | 위 상태 전이표를 따른다. |
+| `assignedAdminId` | admin user `public_id` UUID | ADMIN role 사용자만 허용한다. |
+| `reviewStatus` | `NOT_REQUIRED`, `REQUIRED`, `IN_REVIEW`, `APPROVED`, `REJECTED` | 관리자 검토 상태다. |
+| `supportDecision` | `SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `REPAIR_OR_REPLACE`, `NEEDS_MORE_INFO`, `MONITOR_ONLY`, `UNSUPPORTED` | DB/API는 영어 enum만 사용하고, UI 라벨은 `SupportDecision` 계약의 한국어 라벨 매핑을 사용한다. 사용자 `/support/{ticketId}` 화면에도 노출된다. |
+| `riskLevel` | `LOW`, `MEDIUM`, `HIGH` | 데모 화면 표시용 위험도다. |
+| `diagnosticAccuracy` | `ACCURATE`, `PARTIAL`, `MISSED`, `UNKNOWN` | 관리자/운영자가 기록하는 진단 적중 여부다. |
+| `autoResponseAllowed` | boolean | 자동 안내 가능 여부다. |
+| `adminNote` | string | 사용자와 관리자 화면에 표시되는 관리자 메모다. |
+| `remoteSupportLink` | URI string | 외부 원격 지원 링크를 저장한다. Quick Assist 직접 연동은 MVP 제외다. |
+| `visitSupportRequired` | boolean | 방문 지원 예약 생성 여부다. |
+| `visitPreferredDate` | date string | `visitSupportRequired=true`일 때 사용할 수 있다. |
+| `visitTimeSlot` | `MORNING`, `AFTERNOON`, `EVENING` | 미입력 시 서버 기본값을 사용할 수 있다. |
+| `exceptionApprovalReason` | string | `UNSUPPORTED` 티켓을 원격/방문/수리 decision으로 전환할 때 필수다. |
+| `exceptionResponsibilityScope` | string | 예외 승인 시 책임 범위 기록이다. |
+| `exceptionUserMessage` | string | 예외 승인 후 사용자에게 안내할 문구다. |
+
+`UNSUPPORTED` 티켓은 기본적으로 원격/방문 예약을 만들 수 없다. 관리자가 `UNSUPPORTED -> REMOTE_POSSIBLE`, `UNSUPPORTED -> VISIT_REQUIRED`, `UNSUPPORTED -> REPAIR_OR_REPLACE`처럼 전환하려면 위 예외 승인 3개 필드를 함께 보내야 하며, 서버는 전환 후 decision과 예외 승인 필드를 `as_tickets`에 저장하고 `admin_audit_logs`에 남긴다.
+
+예시:
+
+```json
+{
+  "status": "IN_PROGRESS",
+  "assignedAdminId": "00000000-0000-4000-8000-000000000001",
+  "reviewStatus": "APPROVED",
+  "supportDecision": "REMOTE_POSSIBLE",
+  "riskLevel": "MEDIUM",
+  "autoResponseAllowed": true,
+  "adminNote": "Remote support link sent.",
+  "remoteSupportLink": "https://support.example.test/session/qa-ticket-after"
+}
+```
+
+사용자 `GET /api/as-tickets/{id}`와 관리자 `GET /api/admin/as-tickets/{id}` 응답은 `analysisStatus`, `reviewStatus`, `supportDecision`, `riskLevel`, `autoResponseAllowed`, `incidentWindow`, `logSummary`, `logSummaryText`, `supportRouting`, `safetyAdviceLevel`, `safetyNotices`, `feedbackRating`, `feedbackComment`, `feedbackCreatedAt`, `diagnosticAccuracy`, `aiDiagnosisRequest`, 예외 승인 필드, `adminNote`, `remoteSupportLink`, `remoteSupportStatus`, `visitSupportRequired`, `visitSupportStatus`, `visitPreferredDate`, `visitTimeSlot`을 포함할 수 있다.
+
+관리자 고객 연락 API는 상담방 선행 흐름을 위한 관리자 전용 계약이다. 사용자 측은 `GET /api/support/chat-sessions/current`와 `GET/POST /api/support/chat-sessions/{sessionId}/messages`를 fallback 조회/전송 경로로 유지한다. 실시간 채팅은 `GET /ws/support-chat?token={accessToken}&mode=user|admin&sessionId={chatSessionId}` WebSocket을 우선 사용한다. 브라우저 WebSocket은 Authorization header를 직접 보낼 수 없으므로 MVP에서는 query token으로 인증하되, 서버는 동일한 JWT 검증과 사용자/관리자 권한 검사를 적용한다. 저장/권한/조회 기준은 REST API와 동일하게 `as_chat_sessions`, `as_chat_messages`다.
+
+#### Agent AS 최종 지원 계약
+
+최종 PC Agent AS 시나리오의 구조 계약은 아래 DTO 이름으로 고정한다. A 범위에서는 구조와 validation만 고정하며, 실제 rule routing 생성 로직과 LLM 호출 로직은 다른 담당 범위다.
+
+`SupportDecision` 값과 UI 라벨:
+
+| enum | UI 라벨 |
+|---|---|
+| `SELF_SOLVABLE` | 자가 조치 가능 |
+| `REMOTE_POSSIBLE` | 원격지원 가능 |
+| `VISIT_REQUIRED` | 방문지원 필요 |
+| `REPAIR_OR_REPLACE` | 수리/교체 필요 |
+| `NEEDS_MORE_INFO` | 추가 정보 필요 |
+| `MONITOR_ONLY` | 관찰 필요 |
+| `UNSUPPORTED` | 지원 범위 밖 |
+
+최종 `FINAL_SUPPORT_SCENARIOS.md`의 신규 analyzer/routing 흐름은 coarse decision 4개(`SELF_SOLVABLE`, `REMOTE_POSSIBLE`, `VISIT_REQUIRED`, `NEEDS_MORE_INFO`)만 생성한다. 다만 기존 공통 계약과 Java/OpenAPI/DB 호환성을 깨지 않기 위해 `REPAIR_OR_REPLACE`, `MONITOR_ONLY`, `UNSUPPORTED` 값은 삭제하지 않는다. 신규 구현에서는 교체 가능성은 `visitReasons`/`reasonCodes`, 관찰 필요는 `nextActions` 또는 관리자 메모, 지원 범위 밖 사유는 `blockingFactors`와 예외 승인 metadata로 표현한다.
+
+`IncidentWindowDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `incidentId` | string | no | incident public id 또는 stable id |
+| `triggerType` | `USER_REQUEST`, `AGENT_ANOMALY` | no | 사용자 접수 또는 Agent 이상 감지 |
+| `symptomType` | support catalog enum | no | `REMOTE_DRIVER_OS`, `VISIT_DISK_FAILURE` 등 |
+| `detectedAt` | date-time | no | 감지 시각 |
+| `startedAt` | date-time | no | 선택 구간 시작 |
+| `endedAt` | date-time | no | `startedAt` 이후여야 한다. |
+| `preBufferSec` | number | no | 0 이상 |
+| `postBufferSec` | number | no | 0 이상 |
+| `selectedByUser` | boolean | no | 사용자가 확인/조정한 window 여부 |
+| `consentId` | string | no | 업로드 동의 public id |
+
+`LogSummaryDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `summaryVersion` | string | no | 계약 버전 |
+| `ticketId` | string | no | AS ticket public id |
+| `incidentWindow` | `IncidentWindowDto` | no | 증상별 window |
+| `deviceProfile` | object | no | 기기 요약 |
+| `userSymptom` | object | no | 사용자 증상 |
+| `baseline` | object | no | baseline 요약 |
+| `timeline` | object[] | no | 시간순 요약 |
+| `anomalies` | object[] | no | 이상 신호 |
+| `correlations` | object[] | no | 상관관계 |
+| `ruleSignals` | object[] | no | rule 근거 |
+| `dataQuality` | object | no | `level=ENOUGH/PARTIAL/INSUFFICIENT`, `missingSignals` |
+| `evidenceRefs` | object[] | no | raw sample 또는 rule 근거 참조 |
+| `rawSamples` | `RawLogSampleDto[]` | no | 최대 20개. 원본 전체 로그 전달 금지 |
+
+`SupportRoutingDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `recommendedDecision` | `SupportDecision` | no | 보수적으로 추천한다. 근거 부족 시 `NEEDS_MORE_INFO` |
+| `confidence` | `HIGH`, `MEDIUM`, `LOW` | no | 표시용 위험도/SLA 자동 배정 아님 |
+| `reasonCodes` | `SupportReasonCode[]` | no | 판정 근거 코드 |
+| `remoteActions` | `RemoteAction[]` | no | 가능한 원격 조치 후보 |
+| `visitReasons` | `VisitReason[]` | no | 방문 필요 근거 |
+| `blockingFactors` | `BlockingFactor[]` | no | 원격/방문 진행 차단 요인 |
+| `safetyAdviceLevel` | `NONE`, `CAUTION`, `STOP_USE_UNTIL_REVIEW` | yes | 위험 신호 감지 시 사용자 안전 안내 수준 |
+| `safetyNotices` | `SafetyNoticeDto[]` | yes | 위험 안내 코드와 사용자 표시 메시지 |
+| `allowAutoResponse` | boolean | yes | 관리자 승인 전 자동 응답 실행 가능 여부. 기본은 false |
+| `adminApprovalRequired` | boolean | yes | `requiresAdminApproval`의 additive alias |
+| `requiresAdminApproval` | boolean | no | 최종 결정은 관리자 승인 필요 |
+
+`SafetyNoticeDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `code` | string | no | `PHYSICAL_DAMAGE_RISK`, `DATA_LOSS_RISK`, `THERMAL_DAMAGE_RISK`, `POWER_PATH_RISK`, `HARDWARE_ERROR_RISK` 등 |
+| `message` | string | no | 사용자에게 표시할 안전 안내 문구 |
+
+`AiDiagnosisRequestDto` 필드:
+
+| field | type | nullable | note |
+|---|---|---:|---|
+| `requestId` | string | no | AI 요청 id |
+| `ticketId` | string | no | AS ticket public id |
+| `userSymptom` | object | no | 사용자 증상 |
+| `logSummary` | `LogSummaryDto` | no | 서버 요약 |
+| `rawSamples` | `RawLogSampleDto[]` | no | 최대 20개. raw log 전체 금지 |
+| `supportRouting` | `SupportRoutingDto` | no | LLM 전달 필수 |
+| `locale` | string | no | 예: `ko-KR` |
+| `outputContractVersion` | string | no | 출력 계약 버전 |
 
 ### Admin/Health
 
@@ -808,9 +1009,16 @@ PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/
 | `AgentLogUploadDto` | `fileSize` | `number` | yes | `12000` |
 | `AgentLogUploadDto` | `rangeMinutes` | `number` | no | `30` |
 | `AgentLogUploadDto` | `summary` | `string` | yes | `GPU driver error 반복` |
+| `AgentLogUploadDto` | `safetyAdviceLevel` | `SafetyAdviceLevel` | yes | `STOP_USE_UNTIL_REVIEW` |
+| `AgentLogUploadDto` | `safetyNotices` | `SafetyNoticeDto[]` | yes | `[{ "code": "THERMAL_DAMAGE_RISK" }]` |
 | `AgentLogUploadDto` | `deleteAfter` | `string` | no | `2026-07-29T10:40:00Z` |
 | `AsTicketDto` | `id` | `string` | no | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |
 | `AsTicketDto` | `status` | `string` | no | `OPEN` |
+| `AsTicketDto` | `analysisStatus` | `string` | yes | `RULE_READY` |
+| `AsTicketDto` | `reviewStatus` | `string` | yes | `APPROVED` |
+| `AsTicketDto` | `supportDecision` | `SupportDecision` | yes | `REMOTE_POSSIBLE` |
+| `AsTicketDto` | `riskLevel` | `string` | yes | `MEDIUM` |
+| `AsTicketDto` | `autoResponseAllowed` | `boolean` | yes | `false` |
 | `AsTicketDto` | `symptom` | `string` | no | `화면이 멈춤` |
 | `AsTicketDto` | `logUploadId` | `string` | yes | `1b363bcb-42be-4428-b625-54a6b267d66f` |
 | `AsTicketDto` | `logSummaryId` | `string` | yes | `7dfb98c8-7f35-4fd3-95e0-dfd58cbda77a` |
@@ -821,7 +1029,22 @@ PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/
 | `AsTicketDto` | `assignedAdminId` | `string` | yes | `c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd` |
 | `AsTicketDto` | `causeCandidates` | `object[]` | no | `[]` |
 | `AsTicketDto` | `upgradeCandidates` | `object[]` | no | `[]` |
+| `AsTicketDto` | `incidentWindow` | `IncidentWindowDto` | yes | `{ "symptomType": "REMOTE_DRIVER_OS" }` |
+| `AsTicketDto` | `logSummary` | `LogSummaryDto` | yes | `{ "summaryVersion": "1" }` |
+| `AsTicketDto` | `logSummaryText` | `string` | yes | `IncidentWindow summary: 2/3 logs used...` |
+| `AsTicketDto` | `supportRouting` | `SupportRoutingDto` | yes | `{ "recommendedDecision": "REMOTE_POSSIBLE" }` |
+| `AsTicketDto` | `safetyAdviceLevel` | `SafetyAdviceLevel` | yes | `STOP_USE_UNTIL_REVIEW` |
+| `AsTicketDto` | `safetyNotices` | `SafetyNoticeDto[]` | yes | `[{ "code": "DATA_LOSS_RISK", "message": "중요 데이터 백업 전까지 사용을 중지해 주세요." }]` |
+| `AsTicketDto` | `feedbackRating` | `number` | yes | `5` |
+| `AsTicketDto` | `feedbackComment` | `string` | yes | `원격지원 후 해결됐습니다.` |
+| `AsTicketDto` | `feedbackCreatedAt` | `string` | yes | `2026-07-03T10:20:00Z` |
+| `AsTicketDto` | `diagnosticAccuracy` | `DiagnosticAccuracy` | yes | `ACCURATE` |
 | `AsTicketDto` | `adminNote` | `string` | yes | `확인 중` |
+| `AsTicketDto` | `aiDiagnosisRequest` | `object` | yes | `{ "ticketId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "rawSamples": [] }` |
+| `AsTicketDto` | `exceptionApprovalReason` | `string` | yes | `Customer paid exception support.` |
+| `AsTicketDto` | `exceptionResponsibilityScope` | `string` | yes | `PC settings only.` |
+| `AsTicketDto` | `exceptionUserMessage` | `string` | yes | `Router hardware remains out of scope.` |
+| `AsTicketDto` | `exceptionApprovedAt` | `string` | yes | `2026-07-02T10:10:00Z` |
 | `AsTicketDto` | `resolvedAt` | `string` | yes | `null` |
 | `AdminDashboardDto` | `agentRunning` | `number` | no | `1` |
 | `AdminDashboardDto` | `openTickets` | `number` | no | `3` |

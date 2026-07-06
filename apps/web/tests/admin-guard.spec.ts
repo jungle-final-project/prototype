@@ -13,7 +13,8 @@ const adminRoutes = [
   '/admin/build-graph-layouts',
   '/admin/load-tests',
   '/admin/as-tickets',
-  '/admin/as-tickets/AS-1031'
+  '/admin/as-tickets/AS-1031',
+  '/admin/customer-contacts'
 ];
 
 async function mockRecommendationModelSummary(page: Page) {
@@ -872,7 +873,7 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
   await expect(page.locator('main')).toContainText('INACTIVE 초안 생성');
 });
 
-test('renders nine admin shell navigation entries for ADMIN role', async ({ page }) => {
+test('renders ten admin shell navigation entries for ADMIN role', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
@@ -908,13 +909,14 @@ test('renders nine admin shell navigation entries for ADMIN role', async ({ page
   await page.goto('/admin');
 
   const navigation = page.getByRole('navigation', { name: '관리자 메뉴' });
-  await expect(navigation.getByRole('link')).toHaveCount(9);
+  await expect(navigation.getByRole('link')).toHaveCount(10);
   await expect(navigation.getByRole('link', { name: '대시보드' })).toHaveAttribute('href', '/admin');
   await expect(navigation.getByRole('link', { name: '에이전트 세션' })).toHaveAttribute('href', '/admin/agent-sessions');
   await expect(navigation.getByRole('link', { name: '도구 이력' })).toHaveAttribute('href', '/admin/tool-invocations');
   await expect(navigation.getByRole('link', { name: '검색 근거' })).toHaveAttribute('href', '/admin/rag-evidence');
   await expect(navigation.getByRole('link', { name: '부품/가격' })).toHaveAttribute('href', '/admin/parts');
   await expect(navigation.getByRole('link', { name: 'AS 티켓' })).toHaveAttribute('href', '/admin/as-tickets');
+  await expect(navigation.getByRole('link', { name: '고객 연락' })).toHaveAttribute('href', '/admin/customer-contacts');
   await expect(navigation.getByRole('link', { name: '가격 작업' })).toHaveAttribute('href', '/admin/price-jobs');
   await expect(navigation.getByRole('link', { name: '슬롯 보드 배치' })).toHaveAttribute('href', '/admin/build-graph-layouts');
   await expect(navigation.getByRole('link', { name: '부하 테스트' })).toHaveAttribute('href', '/admin/load-tests');
