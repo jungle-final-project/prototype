@@ -411,9 +411,11 @@ function SavedBuildCard({
   );
 }
 
-// 저장 견적 성능 비교 매트릭스: 견적을 열(칼럼), 성능 카테고리를 행으로 세워 좌우로 비교한다.
-// 카드마다 흩어진 가로 스트립보다 카테고리별 좌우 비교가 시각적으로 명확하다(사용자 피드백).
-// 그래프 resolve(무거움) 대신 performance 툴만 부르는 경량 엔드포인트를 견적별로 병렬 조회한다.
+// 저장 견적 비교: 비교할 견적을 직접 고르고, 고른 견적의 CPU·GPU 등 모든 카테고리 부품과
+// 성능을 열(견적)×행(항목)으로 좌우 나열한다(사용자 피드백 — 전 카테고리 부품 대 부품 비교).
+// 성능 점수는 그래프 resolve(무거움) 대신 performance 툴만 부르는 경량 엔드포인트를 견적별로 병렬 조회한다.
+const COMPARE_CATEGORY_ORDER = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
+
 function perfPartIdsForBuild(build: BuildSummary): string[] {
   return (build.items ?? [])
     .filter((item) => item.category === 'CPU' || item.category === 'GPU')
@@ -421,14 +423,31 @@ function perfPartIdsForBuild(build: BuildSummary): string[] {
     .filter((id): id is string => Boolean(id));
 }
 
+function itemsForCategory(build: BuildSummary, category: string): BuildItem[] {
+  return (build.items ?? []).filter((item) => item.category === category);
+}
+
 function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
-  const scorable = useMemo(
-    () => builds.filter((build) => perfPartIdsForBuild(build).length > 0),
-    [builds]
+  const [selectedIds, setSelectedIds] = useState<string[]>(() => builds.slice(0, 2).map((build) => build.id));
+
+  // 견적 목록이 갱신되면 선택을 유효 범위로 정리한다(삭제된 견적 제거, 비면 앞 2개 기본 선택).
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const valid = prev.filter((id) => builds.some((build) => build.id === id));
+      if (valid.length > 0) {
+        return valid.length === prev.length ? prev : valid;
+      }
+      return builds.slice(0, 2).map((build) => build.id);
+    });
+  }, [builds]);
+
+  const selectedBuilds = useMemo(
+    () => builds.filter((build) => selectedIds.includes(build.id)),
+    [builds, selectedIds]
   );
 
   const perfResults = useQueries({
-    queries: scorable.map((build) => {
+    queries: selectedBuilds.map((build) => {
       const partIds = perfPartIdsForBuild(build);
       return {
         queryKey: ['saved-build-performance', build.id, partIds.join(',')],
@@ -439,11 +458,21 @@ function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
     })
   });
 
-  if (scorable.length === 0) {
+  if (builds.length === 0) {
     return null;
   }
 
-  const columns = scorable.map((build, index) => {
+  function toggleBuild(id: string) {
+    setSelectedIds((prev) => {
+      if (prev.includes(id)) {
+        // 최소 1개는 남긴다.
+        return prev.length > 1 ? prev.filter((value) => value !== id) : prev;
+      }
+      return [...prev, id];
+    });
+  }
+
+  const columns = selectedBuilds.map((build, index) => {
     const details = (perfResults[index]?.data?.details ?? {}) as {
       cpuBenchmarkScore?: number;
       gpuBenchmarkScore?: number;
@@ -454,74 +483,175 @@ function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
     return { build, cpu, gpu, overall, isLoading: perfResults[index]?.isLoading ?? false };
   });
 
-  const rows: { key: string; label: string; hint: string; pick: (col: (typeof columns)[number]) => number | null }[] = [
+  const comparing = columns.length > 1;
+
+  // 선택된 견적 중 하나라도 포함하는 카테고리만 행으로 노출(정규 순서 유지).
+  const categories = COMPARE_CATEGORY_ORDER.filter((category) =>
+    selectedBuilds.some((build) => itemsForCategory(build, category).length > 0)
+  );
+
+  const perfRows: { key: string; label: string; hint: string; pick: (col: (typeof columns)[number]) => number | null }[] = [
     { key: 'overall', label: '종합', hint: 'CPU·GPU 평균', pick: (col) => col.overall },
     { key: 'cpu', label: 'CPU', hint: '연산 성능', pick: (col) => col.cpu },
     { key: 'gpu', label: 'GPU', hint: '그래픽 성능', pick: (col) => col.gpu }
   ];
 
-  const comparing = columns.length > 1;
+  const colCount = columns.length + 1;
+  const lowestTotal = columns.length ? Math.min(...columns.map((col) => col.build.totalPrice)) : null;
 
   return (
     <section data-testid="saved-builds-comparison" className="rounded-md border border-commerce-line bg-white p-5 shadow-product">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <p className="text-xs font-black tracking-wide text-brand-blue">성능 비교</p>
-          <h2 className="mt-1 text-lg font-black text-commerce-ink">
-            {comparing ? '저장 견적 성능 한눈에 비교' : '저장 견적 성능'}
-          </h2>
+          <p className="text-xs font-black tracking-wide text-brand-blue">견적 비교</p>
+          <h2 className="mt-1 text-lg font-black text-commerce-ink">견적 골라 부품·성능 비교</h2>
           <p className="mt-1 break-keep text-xs leading-5 text-slate-500">
-            카테고리별로 세로로 나열하고, 견적을 좌우로 비교합니다. 초록 ▲ 는 해당 항목 최고 점수입니다.
+            비교할 견적을 고르면 CPU·GPU 등 모든 카테고리 부품과 성능을 좌우로 나열합니다.
           </p>
         </div>
-        <p className="text-[11px] font-bold text-slate-400">공개 벤치마크 참고값 · 실제 FPS·체감과 다를 수 있음</p>
+        <p className="text-[11px] font-bold text-slate-400">성능은 공개 벤치마크 참고값 · 실제 FPS·체감과 다를 수 있음</p>
       </div>
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[460px] border-collapse text-left">
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-10 bg-white pb-3 pr-3 align-bottom" scope="col">
-                <span className="sr-only">성능 항목</span>
-              </th>
-              {columns.map((col) => (
-                <th key={col.build.id} scope="col" className="min-w-[128px] px-2 pb-3 align-bottom">
-                  <div className="truncate text-sm font-black text-commerce-ink" title={col.build.name}>{col.build.name}</div>
-                  <div className="mt-0.5 text-xs font-black text-brand-blue">{col.build.totalPrice.toLocaleString()}원</div>
+
+      {/* 비교할 견적 선택 칩 */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-black text-slate-500">비교할 견적</span>
+        {builds.map((build) => {
+          const active = selectedIds.includes(build.id);
+          return (
+            <button
+              key={build.id}
+              type="button"
+              data-testid={`compare-toggle-${build.id}`}
+              aria-pressed={active}
+              onClick={() => toggleBuild(build.id)}
+              className={`inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                active
+                  ? 'border-brand-blue bg-blue-50 text-brand-blue'
+                  : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
+              }`}
+              title={build.name}
+            >
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${active ? 'bg-brand-blue' : 'bg-slate-300'}`} />
+              <span className="truncate">{build.name}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {columns.length === 0 ? (
+        <p className="mt-4 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs font-bold text-slate-500">
+          비교할 견적을 하나 이상 선택하세요.
+        </p>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[460px] border-collapse text-left">
+            <thead>
+              <tr>
+                <th className="sticky left-0 z-10 bg-white pb-3 pr-3 align-bottom" scope="col">
+                  <span className="sr-only">비교 항목</span>
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
-              const values = columns.map(row.pick);
-              const numeric = values.filter((value): value is number => value !== null);
-              const best = numeric.length ? Math.max(...numeric) : null;
-              return (
-                <tr key={row.key} className="border-t border-slate-100">
-                  <th scope="row" className="sticky left-0 z-10 bg-white py-3 pr-3 align-middle">
-                    <div className="text-xs font-black text-slate-700">{row.label}</div>
-                    <div className="text-[10px] font-bold text-slate-400">{row.hint}</div>
+                {columns.map((col) => (
+                  <th key={col.build.id} scope="col" className="min-w-[140px] px-2 pb-3 align-bottom">
+                    <div className="truncate text-sm font-black text-commerce-ink" title={col.build.name}>{col.build.name}</div>
+                    <div className="mt-0.5 flex items-center gap-1">
+                      <span className="text-xs font-black text-brand-blue">{col.build.totalPrice.toLocaleString()}원</span>
+                      {comparing && lowestTotal !== null && col.build.totalPrice === lowestTotal ? (
+                        <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] font-black text-slate-500">최저가</span>
+                      ) : null}
+                    </div>
                   </th>
-                  {columns.map((col, index) => {
-                    const score = values[index];
-                    const isBest = comparing && score !== null && best !== null && score === best;
-                    return (
-                      <td key={col.build.id} className="px-2 py-3 align-middle">
-                        {col.isLoading ? (
-                          <div className="h-7 animate-pulse rounded bg-slate-200" />
-                        ) : (
-                          <PerfCompareCell score={score} highlight={isBest} />
-                        )}
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {/* 구성 부품 섹션 */}
+              <SectionRow label="구성 부품" colSpan={colCount} />
+              {categories.map((category) => {
+                const cells = columns.map((col) => itemsForCategory(col.build, category));
+                const presentNames = cells
+                  .map((items) => items[0]?.name)
+                  .filter((name): name is string => Boolean(name));
+                const differs =
+                  comparing && (new Set(presentNames).size > 1 || presentNames.length !== columns.length);
+                return (
+                  <tr key={category} className="border-t border-slate-100">
+                    <th scope="row" className="sticky left-0 z-10 bg-white py-3 pr-3 align-top">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-slate-700">{labelForCategory(category)}</span>
+                        {differs ? (
+                          <span className="rounded bg-amber-50 px-1 py-0.5 text-[9px] font-black text-amber-600">차이</span>
+                        ) : null}
+                      </div>
+                    </th>
+                    {cells.map((items, index) => (
+                      <td key={columns[index].build.id} className="px-2 py-3 align-top">
+                        <PartCompareCell items={items} />
                       </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    ))}
+                  </tr>
+                );
+              })}
+
+              {/* 성능 섹션 (공개 벤치마크 참고) */}
+              <SectionRow label="성능 (공개 벤치마크 참고)" colSpan={colCount} />
+              {perfRows.map((row) => {
+                const values = columns.map(row.pick);
+                const numeric = values.filter((value): value is number => value !== null);
+                const best = numeric.length ? Math.max(...numeric) : null;
+                return (
+                  <tr key={row.key} className="border-t border-slate-100">
+                    <th scope="row" className="sticky left-0 z-10 bg-white py-3 pr-3 align-middle">
+                      <div className="text-xs font-black text-slate-700">{row.label}</div>
+                      <div className="text-[10px] font-bold text-slate-400">{row.hint}</div>
+                    </th>
+                    {columns.map((col, index) => {
+                      const score = values[index];
+                      const isBest = comparing && score !== null && best !== null && score === best;
+                      return (
+                        <td key={col.build.id} className="px-2 py-3 align-middle">
+                          {col.isLoading ? (
+                            <div className="h-7 animate-pulse rounded bg-slate-200" />
+                          ) : (
+                            <PerfCompareCell score={score} highlight={isBest} />
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
+  );
+}
+
+function SectionRow({ label, colSpan }: { label: string; colSpan: number }) {
+  return (
+    <tr>
+      <td colSpan={colSpan} className="sticky left-0 bg-slate-50 px-3 py-1.5 text-[11px] font-black uppercase tracking-wide text-slate-500">
+        {label}
+      </td>
+    </tr>
+  );
+}
+
+function PartCompareCell({ items }: { items: BuildItem[] }) {
+  if (items.length === 0) {
+    return <div className="text-[11px] font-bold text-slate-300">미포함</div>;
+  }
+  const [primary, ...rest] = items;
+  const totalPrice = items.reduce((sum, item) => sum + (item.price ?? 0), 0);
+  return (
+    <div>
+      <div className="line-clamp-2 text-xs font-bold leading-4 text-commerce-ink" title={items.map((item) => item.name).join(', ')}>
+        {primary.name}
+        {rest.length > 0 ? <span className="font-black text-slate-400"> 외 {rest.length}</span> : null}
+      </div>
+      <div className="mt-0.5 text-[11px] font-semibold text-slate-500">{totalPrice.toLocaleString()}원</div>
+    </div>
   );
 }
 
