@@ -55,15 +55,27 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> payload = OBJECT_MAPPER.readValue(message.getPayload(), MAP_TYPE);
         String content = String.valueOf(payload.getOrDefault("content", "")).trim();
         Map<String, Object> request = Map.of("content", content);
-        Map<String, Object> detail;
         if ("admin".equals(mode)) {
             CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
-            detail = supportChatService.postAdminMessage(chatSessionId, request, admin);
+            supportChatService.postAdminMessage(chatSessionId, request, admin);
         } else {
             CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
-            detail = supportChatService.postUserMessage(chatSessionId, request, user);
+            supportChatService.postUserMessage(chatSessionId, request, user);
         }
-        broadcast(chatSessionId, "CHAT_UPDATED", detail);
+        broadcastRoomUpdate(chatSessionId);
+    }
+
+    public void broadcastRoomUpdate(String chatSessionId) {
+        Set<WebSocketSession> sessions = sessionsByChatId.getOrDefault(chatSessionId, Set.of());
+        for (WebSocketSession session : sessions) {
+            try {
+                if (session.isOpen()) {
+                    send(session, "CHAT_UPDATED", detailFor(session, chatSessionId));
+                }
+            } catch (Exception error) {
+                // 한 세션의 전송 실패가 REST 응답이나 다른 세션 push를 막으면 안 된다. 놓친 갱신은 fallback polling이 보완한다.
+            }
+        }
     }
 
     @Override
@@ -123,13 +135,13 @@ public class SupportChatWebSocketHandler extends TextWebSocketHandler {
         return supportChatService.detail(handshake.sessionId(), user);
     }
 
-    private void broadcast(String chatSessionId, String type, Map<String, Object> detail) throws IOException {
-        Set<WebSocketSession> sessions = sessionsByChatId.getOrDefault(chatSessionId, Set.of());
-        for (WebSocketSession session : sessions) {
-            if (session.isOpen()) {
-                send(session, type, detail);
-            }
+    private Map<String, Object> detailFor(WebSocketSession session, String chatSessionId) {
+        String mode = String.valueOf(session.getAttributes().get("mode"));
+        String authorization = String.valueOf(session.getAttributes().get("authorization"));
+        if ("admin".equals(mode)) {
+            return supportChatService.adminDetail(chatSessionId, currentUserService.requireAdmin(authorization));
         }
+        return supportChatService.detail(chatSessionId, currentUserService.requireUser(authorization));
     }
 
     private void send(WebSocketSession session, String type, Map<String, Object> detail) throws IOException {

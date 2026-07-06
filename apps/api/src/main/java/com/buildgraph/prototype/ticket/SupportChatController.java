@@ -16,10 +16,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class SupportChatController {
     private final SupportChatService supportChatService;
     private final CurrentUserService currentUserService;
+    private final SupportChatWebSocketHandler supportChatWebSocketHandler;
 
-    public SupportChatController(SupportChatService supportChatService, CurrentUserService currentUserService) {
+    public SupportChatController(
+            SupportChatService supportChatService,
+            CurrentUserService currentUserService,
+            SupportChatWebSocketHandler supportChatWebSocketHandler
+    ) {
         this.supportChatService = supportChatService;
         this.currentUserService = currentUserService;
+        this.supportChatWebSocketHandler = supportChatWebSocketHandler;
     }
 
     @GetMapping("/current")
@@ -47,6 +53,8 @@ public class SupportChatController {
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
-        return supportChatService.postUserMessage(id, request == null ? Map.of() : request, user);
+        Map<String, Object> detail = supportChatService.postUserMessage(id, request == null ? Map.of() : request, user);
+        supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        return detail;
     }
 }

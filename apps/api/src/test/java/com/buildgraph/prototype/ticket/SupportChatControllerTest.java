@@ -48,6 +48,9 @@ class SupportChatControllerTest {
     @MockitoBean
     private CurrentUserService currentUserService;
 
+    @MockitoBean
+    private SupportChatWebSocketHandler supportChatWebSocketHandler;
+
     @Test
     void currentChatWithoutTicketGuidesUserToSupportNew() throws Exception {
         when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
@@ -89,6 +92,7 @@ class SupportChatControllerTest {
                 .andExpect(jsonPath("$.messages[0].content").value("지금 상담 가능할까요?"));
 
         verify(supportChatService).postUserMessage("chat-session-id", Map.of("content", "지금 상담 가능할까요?"), USER);
+        verify(supportChatWebSocketHandler).broadcastRoomUpdate("chat-session-id");
     }
 
     @Test
@@ -111,6 +115,7 @@ class SupportChatControllerTest {
 
         verify(currentUserService).requireAdmin(ADMIN_TOKEN);
         verify(supportChatService).postAdminMessage("chat-session-id", Map.of("content", "확인 후 답변드리겠습니다."), ADMIN);
+        verify(supportChatWebSocketHandler).broadcastRoomUpdate("chat-session-id");
     }
 
     private static Map<String, Object> chatDetail(String sessionId, String content) {

@@ -1,14 +1,21 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
-import { getAdminSupportChatSession, getAdminSupportChatSessions, postAdminSupportChatMessage } from '../../support/supportChatApi';
+import { getAdminSupportChatSession, getAdminSupportChatSessions, openSupportChatSocket, postAdminSupportChatMessage, type SupportChatSocket } from '../../support/supportChatApi';
 import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto } from '../../support/types';
+
+// 소켓 미연결 시 활성 폴링 간격. 소켓 연결 시에도 완전히 끄지 않고 낮은 빈도로 유지해,
+// 다중 인스턴스에서 broadcast가 도달하지 않아도 상대 메시지를 놓치지 않게 한다.
+const ACTIVE_POLL_MS = 5000;
+const SOCKET_FALLBACK_POLL_MS = 15000;
 
 export function AdminSupportChatSessionsPage() {
   const queryClient = useQueryClient();
+  const socketRef = useRef<SupportChatSocket | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [message, setMessage] = useState('');
+  const [socketConnected, setSocketConnected] = useState(false);
 
   const listQuery = useQuery({
     queryKey: ['admin-support-chat-sessions'],
@@ -27,8 +34,31 @@ export function AdminSupportChatSessionsPage() {
     queryKey: ['admin-support-chat-session', selectedSessionId],
     queryFn: () => getAdminSupportChatSession(selectedSessionId as string),
     enabled: Boolean(selectedSessionId),
-    refetchInterval: 5000
+    refetchInterval: socketConnected ? SOCKET_FALLBACK_POLL_MS : ACTIVE_POLL_MS
   });
+
+  useEffect(() => {
+    socketRef.current?.close();
+    socketRef.current = null;
+    setSocketConnected(false);
+    if (!selectedSessionId) {
+      return undefined;
+    }
+    const socket = openSupportChatSocket({
+      mode: 'admin',
+      sessionId: selectedSessionId,
+      onOpen: () => setSocketConnected(true),
+      onClose: () => setSocketConnected(false),
+      onError: () => setSocketConnected(false),
+      onDetail: (detail) => cacheDetail(queryClient, detail)
+    });
+    socketRef.current = socket;
+    return () => {
+      socket?.close();
+      socketRef.current = null;
+      setSocketConnected(false);
+    };
+  }, [selectedSessionId, queryClient]);
 
   const sendMutation = useMutation({
     mutationFn: () => postAdminSupportChatMessage(selectedSessionId as string, message.trim()),
@@ -73,6 +103,11 @@ export function AdminSupportChatSessionsPage() {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSend) return;
+    if (socketRef.current?.sendMessage(message.trim())) {
+      setMessage('');
+      void listQuery.refetch();
+      return;
+    }
     sendMutation.mutate();
   }
 
@@ -104,6 +139,7 @@ export function AdminSupportChatSessionsPage() {
                   <span>티켓 {selectedRoom ? shortId(selectedRoom.asTicketId) : '-'}</span>
                   <span>상태 {selectedRoom?.ticketStatus ?? '-'}</span>
                   <span>안읽음 {selectedRoom?.adminUnreadCount ?? 0}</span>
+                  <span>{socketConnected ? '실시간 연결' : '자동 새로고침'}</span>
                 </div>
               </div>
               <div className="h-[440px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">

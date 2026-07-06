@@ -15,10 +15,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminSupportChatController {
     private final SupportChatService supportChatService;
     private final CurrentUserService currentUserService;
+    private final SupportChatWebSocketHandler supportChatWebSocketHandler;
 
-    public AdminSupportChatController(SupportChatService supportChatService, CurrentUserService currentUserService) {
+    public AdminSupportChatController(
+            SupportChatService supportChatService,
+            CurrentUserService currentUserService,
+            SupportChatWebSocketHandler supportChatWebSocketHandler
+    ) {
         this.supportChatService = supportChatService;
         this.currentUserService = currentUserService;
+        this.supportChatWebSocketHandler = supportChatWebSocketHandler;
     }
 
     @GetMapping
@@ -43,6 +49,8 @@ public class AdminSupportChatController {
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
         CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
-        return supportChatService.postAdminMessage(id, request == null ? Map.of() : request, admin);
+        Map<String, Object> detail = supportChatService.postAdminMessage(id, request == null ? Map.of() : request, admin);
+        supportChatWebSocketHandler.broadcastRoomUpdate(id);
+        return detail;
     }
 }
