@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 class SupportChatMigrationContractTest {
     private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V94__support_chat_rooms_split.sql");
+    private static final Path BACKFILL_MIGRATION = Path.of("src/main/resources/db/migration/V95__support_chat_rooms_backfill_repair.sql");
 
     @Test
     void migrationCreatesDedicatedSupportChatTables() throws Exception {
@@ -62,8 +63,50 @@ class SupportChatMigrationContractTest {
                 .contains("DROP COLUMN IF EXISTS last_message_preview");
     }
 
+    @Test
+    void backfillRepairCreatesMissingSupportChatRoomsForExistingTickets() throws Exception {
+        String sql = normalizedBackfillSql();
+
+        assertThat(sql)
+                .contains("INSERT INTO support_chat_rooms")
+                .contains("FROM as_tickets t")
+                .contains("t.deleted_at IS NULL")
+                .contains("NOT EXISTS")
+                .contains("support_chat_rooms r");
+    }
+
+    @Test
+    void backfillRepairReactivatesLatestArchivedRoomWhenNoActiveRoomExists() throws Exception {
+        String sql = normalizedBackfillSql();
+
+        assertThat(sql)
+                .contains("latest_archived_room")
+                .contains("ROW_NUMBER() OVER")
+                .contains("status = 'ARCHIVED'")
+                .contains("SET status = 'ACTIVE'");
+    }
+
+    @Test
+    void backfillRepairAddsMissingSystemMessagesAndLastMessageMetadata() throws Exception {
+        String sql = normalizedBackfillSql();
+
+        assertThat(sql)
+                .contains("INSERT INTO support_chat_messages")
+                .contains("SYSTEM")
+                .contains(SupportChatService.SYSTEM_OPEN_MESSAGE)
+                .contains("last_message_preview")
+                .contains("last_message_at")
+                .contains("updated_at");
+    }
+
     private static String normalizedSql() throws Exception {
         return Files.readString(MIGRATION)
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private static String normalizedBackfillSql() throws Exception {
+        return Files.readString(BACKFILL_MIGRATION)
                 .replaceAll("\\s+", " ")
                 .trim();
     }
