@@ -466,14 +466,18 @@ test('support intake allows a new ticket when deleted chat is absent from curren
   await page.getByLabel('증상 제목').fill('새 접수');
   await page.getByLabel('증상 상세').fill('삭제 이후 다시 접수합니다.');
   await selectAgentLogFile(page);
-  await page.getByLabel('최근 30분 로그 업로드와 30일 보관 후 삭제 정책에 동의합니다.').check();
+  await page.getByLabel('선택한 구간의 로그 업로드와 30일 보관 후 삭제 정책에 동의합니다.').check();
   await page.getByRole('button', { name: 'AS 접수하기' }).click();
 
   await expect.poll(() => uploadCalls).toBe(1);
-  await expect.poll(() => createTicketPayload).toEqual({
-    symptom: '새 접수\n\n삭제 이후 다시 접수합니다.',
+  await expect.poll(() => createTicketPayload).toEqual(expect.objectContaining({
     logUploadId: '00000000-0000-4000-8000-000000005001'
-  });
+  }));
+  const payload = createTicketPayload as { symptom?: string };
+  expect(payload.symptom).toContain('새 접수\n\n삭제 이후 다시 접수합니다.');
+  expect(payload.symptom).toContain('[증상 유형]');
+  expect(payload.symptom).toContain('[문제 발생 전후 로그]');
+  expect(payload.symptom).toContain('[지원 신청]');
 });
 
 test('support intake shows the existing chat CTA when stale submit receives a conflict', async ({ page }) => {

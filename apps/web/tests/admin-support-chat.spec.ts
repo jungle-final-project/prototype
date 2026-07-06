@@ -77,7 +77,8 @@ test('admin support chat updates the room list from websocket push', async ({ pa
 
   await page.goto('/admin/support-chat-sessions');
   await expect(page.getByRole('cell', { name: '게임 실행 후 온도가 95도까지 올라갑니다.' })).toBeVisible();
-  await expect(page.getByText('재연결 중', { exact: true })).toBeVisible();
+  const roomListPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: '상담방 목록' }) });
+  await expect(roomListPanel.getByText('재연결 중', { exact: true })).toBeVisible();
 
   await page.evaluate(() => {
     const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
