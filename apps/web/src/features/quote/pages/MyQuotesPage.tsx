@@ -1,13 +1,13 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellRing, CheckCircle2, FileText, GitBranch, PencilLine, Save, ShoppingBag, Target, X } from 'lucide-react';
+import { BellRing, Check, CheckCircle2, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
 import type { PartCategory } from '../aiSelection';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
-import { checkBuildPerformance, createQuotePriceAlert, getBuildHistory, getPriceAlerts, resolveBuildGraph, type PriceAlert } from '../quoteApi';
+import { checkBuildPerformance, createQuotePriceAlert, deleteBuild, duplicateBuild, getBuildHistory, getPriceAlerts, renameBuild, resolveBuildGraph, type PriceAlert } from '../quoteApi';
 import type { BuildItem, BuildSummary } from '../types';
 
 type SavedPartOption = {
@@ -93,6 +93,23 @@ export function MyQuotesPage() {
       navigate(variables.destination === 'checkout' ? '/checkout' : '/self-quote');
     }
   });
+  const renameBuildMutation = useMutation({
+    mutationFn: ({ buildId, name }: { buildId: string; name: string }) => renameBuild(buildId, name),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['build-history'] })
+  });
+  const duplicateBuildMutation = useMutation({
+    mutationFn: (buildId: string) => duplicateBuild(buildId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['build-history'] })
+  });
+  const deleteBuildMutation = useMutation({
+    mutationFn: (buildId: string) => deleteBuild(buildId),
+    onSuccess: (_result, buildId) => {
+      if (selectedAlertBuildId === buildId) {
+        setSelectedAlertBuildId('');
+      }
+      void queryClient.invalidateQueries({ queryKey: ['build-history'] });
+    }
+  });
 
   function submitAlert(event: FormEvent) {
     event.preventDefault();
@@ -166,6 +183,12 @@ export function MyQuotesPage() {
                     onCheckout={openCheckoutForBuild}
                     onEditParts={openSelfQuoteForBuild}
                     onOpenGraph={setGraphBuild}
+                    onRename={(name) => renameBuildMutation.mutate({ buildId: build.id, name })}
+                    onDuplicate={() => { if (!duplicateBuildMutation.isPending) duplicateBuildMutation.mutate(build.id); }}
+                    onDelete={() => { if (!deleteBuildMutation.isPending) deleteBuildMutation.mutate(build.id); }}
+                    isRenaming={renameBuildMutation.isPending && renameBuildMutation.variables?.buildId === build.id}
+                    isDuplicating={duplicateBuildMutation.isPending && duplicateBuildMutation.variables === build.id}
+                    isDeleting={deleteBuildMutation.isPending && deleteBuildMutation.variables === build.id}
                   />
                 ))}
                 {applyBuildMutation.isError ? (
@@ -330,7 +353,13 @@ function SavedBuildCard({
   onAlertSelect,
   onCheckout,
   onEditParts,
-  onOpenGraph
+  onOpenGraph,
+  onRename,
+  onDuplicate,
+  onDelete,
+  isRenaming,
+  isDuplicating,
+  isDeleting
 }: {
   build: BuildSummary;
   isPreparingCheckout: boolean;
@@ -339,10 +368,34 @@ function SavedBuildCard({
   onCheckout: (build: BuildSummary) => void;
   onEditParts: (build: BuildSummary) => void;
   onOpenGraph: (build: BuildSummary) => void;
+  onRename: (name: string) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  isRenaming: boolean;
+  isDuplicating: boolean;
+  isDeleting: boolean;
 }) {
   const mainItems = (build.items ?? []).slice(0, 4);
   const hasAlertablePart = Boolean(resolvePartId(build.items?.[0]));
   const hasCheckoutItems = quoteDraftItemsForBuild(build).length > 0;
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(build.name);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  function submitRename() {
+    const trimmed = nameInput.trim();
+    setIsEditingName(false);
+    if (trimmed && trimmed !== build.name) {
+      onRename(trimmed);
+    } else {
+      setNameInput(build.name);
+    }
+  }
+
+  function cancelRename() {
+    setNameInput(build.name);
+    setIsEditingName(false);
+  }
 
   return (
     <article data-testid={`saved-build-card-${build.id}`} className="rounded-md border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:shadow-product">
@@ -360,7 +413,42 @@ function SavedBuildCard({
               견적 관계 그래프 보기
             </button>
           </div>
-          <h2 className="mt-2 text-lg font-black leading-6 text-commerce-ink">{build.name}</h2>
+          {isEditingName ? (
+            <div className="mt-2 flex items-center gap-1.5">
+              <input
+                data-testid={`rename-input-${build.id}`}
+                aria-label="견적 이름"
+                autoFocus
+                value={nameInput}
+                maxLength={120}
+                onChange={(event) => setNameInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') submitRename();
+                  if (event.key === 'Escape') cancelRename();
+                }}
+                className="min-w-0 flex-1 rounded-md border border-brand-blue px-2 py-1 text-lg font-black leading-6 text-commerce-ink focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+              <button type="button" aria-label="이름 저장" data-testid={`rename-save-${build.id}`} onClick={submitRename} className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-brand-blue text-white hover:bg-blue-700">
+                <Check size={15} />
+              </button>
+              <button type="button" aria-label="이름 변경 취소" onClick={cancelRename} className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-slate-300 bg-white text-slate-600 hover:border-commerce-ink">
+                <X size={15} />
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 flex items-center gap-1.5">
+              <h2 className="min-w-0 text-lg font-black leading-6 text-commerce-ink">{isRenaming ? nameInput : build.name}</h2>
+              <button
+                type="button"
+                aria-label={`${build.name} 이름 변경`}
+                data-testid={`rename-${build.id}`}
+                onClick={() => { setNameInput(build.name); setIsEditingName(true); }}
+                className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <Pencil size={14} />
+              </button>
+            </div>
+          )}
           <p className="mt-1 line-clamp-2 break-keep text-sm leading-6 text-slate-600">
             {build.summary ?? '내부 자산과 저장된 현재가 기준으로 구성한 견적입니다.'}
           </p>
@@ -406,6 +494,49 @@ function SavedBuildCard({
         >
           <Target size={14} /> 목표가 등록
         </button>
+        {/* 견적 관리: 복제·삭제(삭제는 인라인 확인). 오른쪽으로 밀어 주요 액션과 구분한다. */}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid={`duplicate-${build.id}`}
+            disabled={isDuplicating}
+            onClick={onDuplicate}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink disabled:cursor-wait disabled:text-slate-400"
+          >
+            <Copy size={14} /> {isDuplicating ? '복제 중' : '복제'}
+          </button>
+          {confirmingDelete ? (
+            <div className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1">
+              <span className="text-[11px] font-black text-red-700">삭제할까요?</span>
+              <button
+                type="button"
+                data-testid={`confirm-delete-${build.id}`}
+                disabled={isDeleting}
+                onClick={() => { setConfirmingDelete(false); onDelete(); }}
+                className="rounded bg-red-600 px-2 py-1 text-[11px] font-black text-white hover:bg-red-700 disabled:bg-red-300"
+              >
+                삭제
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-black text-slate-600 hover:border-commerce-ink"
+              >
+                취소
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              data-testid={`delete-${build.id}`}
+              disabled={isDeleting}
+              onClick={() => setConfirmingDelete(true)}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 text-xs font-black text-commerce-sale hover:bg-red-50 disabled:cursor-wait disabled:text-slate-400"
+            >
+              <Trash2 size={14} /> {isDeleting ? '삭제 중' : '삭제'}
+            </button>
+          )}
+        </div>
       </div>
     </article>
   );

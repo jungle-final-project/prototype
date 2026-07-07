@@ -40,6 +40,25 @@ export function getBuildHistory() {
   return api<{ items: BuildSummary[] }>('/api/builds/history');
 }
 
+export function renameBuild(buildId: string, name: string) {
+  return api<BuildSummary>(`/api/builds/${buildId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name })
+  });
+}
+
+export function duplicateBuild(buildId: string) {
+  return api<BuildSummary>(`/api/builds/${buildId}/duplicate`, {
+    method: 'POST'
+  });
+}
+
+export function deleteBuild(buildId: string) {
+  return api<{ id: string; deleted: boolean }>(`/api/builds/${buildId}`, {
+    method: 'DELETE'
+  });
+}
+
 export type SaveBuildFromChatPayload = {
   sourceBuildId: string;
   lastUserMessage?: string;
