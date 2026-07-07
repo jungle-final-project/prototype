@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -221,5 +223,56 @@ class BuildControllerTest {
                 .andExpect(jsonPath("$.partRecommendation.category").value("GPU"));
 
         verify(buildChatService).chat(anyMap(), eq(USER));
+    }
+
+    @Test
+    void renameBuildDelegatesToService() throws Exception {
+        when(buildQueryService.renameBuild(eq("build-1"), anyMap(), eq(USER)))
+                .thenReturn(Map.of("id", "build-1", "name", "새 견적 이름"));
+
+        mockMvc.perform(patch("/api/builds/build-1")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                { "name": "새 견적 이름" }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("새 견적 이름"));
+
+        verify(buildQueryService).renameBuild(eq("build-1"), anyMap(), eq(USER));
+    }
+
+    @Test
+    void duplicateBuildDelegatesToService() throws Exception {
+        when(buildQueryService.duplicateBuild(eq("build-1"), eq(USER)))
+                .thenReturn(Map.of("id", "build-2", "name", "원본 견적 (사본)"));
+
+        mockMvc.perform(post("/api/builds/build-1/duplicate")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("build-2"))
+                .andExpect(jsonPath("$.name").value("원본 견적 (사본)"));
+
+        verify(buildQueryService).duplicateBuild(eq("build-1"), eq(USER));
+    }
+
+    @Test
+    void deleteBuildDelegatesToServiceAndReturnsFlag() throws Exception {
+        mockMvc.perform(delete("/api/builds/build-1")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("build-1"))
+                .andExpect(jsonPath("$.deleted").value(true));
+
+        verify(buildQueryService).deleteBuild(eq("build-1"), eq(USER));
+    }
+
+    @Test
+    void deleteBuildReturnsUnauthorizedWhenTokenIsMissing() throws Exception {
+        mockMvc.perform(delete("/api/builds/build-1"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(buildQueryService);
     }
 }

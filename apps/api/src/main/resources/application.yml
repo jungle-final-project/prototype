@@ -53,6 +53,10 @@ agent:
   runner:
     mode: ${AGENT_RUNNER_MODE:deterministic}
   log-storage-root: ${AGENT_LOG_STORAGE_ROOT:data/agent-logs}
+  diagnosis-chat:
+    model: ${PC_AGENT_DIAGNOSIS_CHAT_MODEL:gpt-5.4-mini}
+    reasoning-effort: ${PC_AGENT_DIAGNOSIS_CHAT_REASONING_EFFORT:low}
+    max-output-tokens: ${PC_AGENT_DIAGNOSIS_CHAT_MAX_OUTPUT_TOKENS:750}
   # PC Agent 데모 등록용 activation token. 기본 빈값이면 데모 등록이 비활성화된다(프로덕션 안전 기본).
   # 데모/개발 환경에서만 env로 명시적으로 켠다. 실서비스는 DB 발급 토큰 방식으로 대체해야 한다.
   demo-activation-token: ${AGENT_DEMO_ACTIVATION_TOKEN:}

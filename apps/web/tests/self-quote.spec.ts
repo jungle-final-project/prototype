@@ -1077,6 +1077,8 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
   });
 
   await expect(panel.getByText('패스 GPU 후보')).toBeVisible();
+  // 제품명은 상세 페이지(/parts/:id)로 가는 링크다(담기와 구분되는 진입점).
+  await expect(panel.getByRole('link', { name: '패스 GPU 후보', exact: true })).toHaveAttribute('href', '/parts/part-gpu-pass');
   await expect(panel.getByText('간섭 GPU 후보')).toBeVisible();
   await expect(panel.getByText('간섭 주의')).toBeVisible();
   await expect(panel.getByRole('button', { name: '간섭 GPU 후보 담기' })).toBeEnabled();
@@ -1094,6 +1096,152 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
   await expect(page).toHaveURL('/self-quote');
   await expect(page.getByTestId('slot-GPU')).toHaveAttribute('data-selected', 'false');
+});
+
+test('filters candidates by search keyword and offers compatibility-first sort', async ({ page }) => {
+  await loginAsUser(page);
+  const partRequests: Array<{ q: string | null; sort: string | null }> = [];
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get('q');
+    partRequests.push({ q, sort: url.searchParams.get('sort') });
+    // 서버 검색 시뮬레이션: q가 있으면 이름에 포함된 후보만 돌려준다.
+    const all = [
+      candidatePart('part-gpu-5070', 'GPU', 'RTX 5070 게이밍'),
+      candidatePart('part-gpu-5080', 'GPU', 'RTX 5080 울트라', {
+        compatibility: { status: 'FAIL', statusLabel: '안 맞음', summary: '파워 용량이 부족합니다.' }
+      })
+    ];
+    const items = q ? all.filter((part) => part.name.includes(q)) : all;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items, page: 0, size: 20, total: items.length }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText('RTX 5070 게이밍')).toBeVisible();
+  await expect(panel.getByText('RTX 5080 울트라')).toBeVisible();
+
+  // 검색: '5080' 입력 → 디바운스 후 q=5080 요청이 나가고 결과가 좁혀진다.
+  await panel.getByTestId('candidate-search').fill('5080');
+  await expect.poll(() => partRequests.some((request) => request.q === '5080')).toBe(true);
+  await expect(panel.getByText('RTX 5080 울트라')).toBeVisible();
+  await expect(panel.getByText('RTX 5070 게이밍')).toHaveCount(0);
+
+  // 검색어 지우기 → 다시 전체 후보.
+  await panel.getByRole('button', { name: '검색어 지우기' }).click();
+  await expect(panel.getByTestId('candidate-search')).toHaveValue('');
+  await expect(panel.getByText('RTX 5070 게이밍')).toBeVisible();
+
+  // 호환 가능 우선 정렬 → sort=compatibility 요청이 나간다(백엔드가 PASS→WARN→FAIL 순 정렬).
+  await panel.getByLabel('후보 정렬 기준').selectOption('compatibility');
+  await expect.poll(() => partRequests.some((request) => request.sort === 'compatibility')).toBe(true);
+});
+
+test('filters candidates by manufacturer, price range, and hides incompatible', async ({ page }) => {
+  await loginAsUser(page);
+  const partRequests: Array<Record<string, string | null>> = [];
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    partRequests.push({
+      manufacturer: url.searchParams.get('manufacturer'),
+      minPrice: url.searchParams.get('minPrice'),
+      maxPrice: url.searchParams.get('maxPrice')
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          { ...candidatePart('gpu-asus', 'GPU', 'ASUS RTX 5070'), manufacturer: 'ASUS' },
+          {
+            ...candidatePart('gpu-msi', 'GPU', 'MSI RTX 5080', {
+              compatibility: { status: 'FAIL', statusLabel: '안 맞음', summary: '파워 용량이 부족합니다.' }
+            }),
+            manufacturer: 'MSI'
+          }
+        ],
+        page: 0,
+        size: 20,
+        total: 2
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('[data-compat="FAIL"]')).toHaveCount(1);
+
+  // 장착 불가 숨기기(client-side): FAIL 후보만 사라지고, 다시 끄면 돌아온다.
+  await panel.getByTestId('candidate-hide-fail').check();
+  await expect(panel.locator('[data-compat="FAIL"]')).toHaveCount(0);
+  await expect(panel.getByText('ASUS RTX 5070')).toBeVisible();
+  await panel.getByTestId('candidate-hide-fail').uncheck();
+  await expect(panel.locator('[data-compat="FAIL"]')).toHaveCount(1);
+
+  // 제조사 필터: 로드된 후보에서 누적된 옵션을 골라 manufacturer 파라미터를 보낸다.
+  await expect(panel.locator('[data-testid="candidate-manufacturer"] option', { hasText: 'ASUS' })).toHaveCount(1);
+  await panel.getByTestId('candidate-manufacturer').selectOption('ASUS');
+  await expect.poll(() => partRequests.some((request) => request.manufacturer === 'ASUS')).toBe(true);
+
+  // 가격대 필터: 최소/최대 입력 → 디바운스 후 minPrice/maxPrice 파라미터.
+  await panel.getByTestId('candidate-min-price').fill('500000');
+  await panel.getByTestId('candidate-max-price').fill('900000');
+  await expect.poll(() => partRequests.some((request) => request.minPrice === '500000' && request.maxPrice === '900000')).toBe(true);
+});
+
+test('opens candidate quick view and wishlists a candidate', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => localStorage.removeItem('buildgraph.wishlist'));
+
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) }));
+  await page.route('**/api/parts**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      items: [
+        candidatePart('gpu-a', 'GPU', '지포스 RTX 5070', { price: 900000 }),
+        candidatePart('gpu-b', 'GPU', '라데온 RX 9070', { price: 800000 })
+      ],
+      page: 0,
+      size: 20,
+      total: 2
+    })
+  }));
+
+  await page.goto('/self-quote');
+  await page.getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+  const firstCard = panel.locator('article', { hasText: '지포스 RTX 5070' });
+
+  // 빠른보기: 상세 모달이 뜬다.
+  await firstCard.getByTestId('candidate-quick-view').click();
+  const modal = page.getByTestId('part-quick-view');
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole('heading', { name: '지포스 RTX 5070' })).toBeVisible();
+
+  // 모달에서 찜 → 닫으면 카드 하트가 찜 상태로 남는다(로컬 저장).
+  await modal.getByTestId('quick-view-wishlist').click();
+  await modal.getByRole('button', { name: '빠른보기 닫기' }).click();
+  await expect(page.getByTestId('part-quick-view')).toHaveCount(0);
+  await expect(firstCard.getByTestId('candidate-wishlist')).toHaveAttribute('aria-pressed', 'true');
+
+  // '찜만' 필터: 찜한 후보만 남는다.
+  await panel.getByTestId('candidate-only-wishlist').check();
+  await expect(panel.getByText('지포스 RTX 5070')).toBeVisible();
+  await expect(panel.getByText('라데온 RX 9070')).toHaveCount(0);
 });
 
 test('adds a candidate part into an empty slot from the panel', async ({ page }) => {

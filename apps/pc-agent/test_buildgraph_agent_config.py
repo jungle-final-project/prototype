@@ -70,6 +70,14 @@ class AgentConfigTest(unittest.TestCase):
 
         self.assertEqual(config.activation_token, "demo-agent-activation-token")
 
+    def test_ensure_default_config_updates_existing_runtime_version(self) -> None:
+        path = self.write_config(self.valid_config(agentVersion="0.1.0"))
+
+        agent.ensure_default_config(path)
+
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["agentVersion"], agent.DEFAULT_AGENT_VERSION)
+
     def test_missing_required_config_field_fails_with_clear_message(self) -> None:
         data = self.valid_config()
         del data["activationToken"]

@@ -6,6 +6,7 @@ import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
 import com.buildgraph.prototype.support.AsLogRagAnalysisService;
+import com.buildgraph.prototype.ticket.SupportChatRoomProvisioner;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -61,22 +62,29 @@ public class PcAgentAsService {
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTokenHasher tokenHasher;
+    private final SupportChatRoomProvisioner supportChatRoomProvisioner;
     private final Clock clock;
     private final Supplier<String> tokenGenerator;
 
     @Autowired
-    public PcAgentAsService(JdbcTemplate jdbcTemplate, AgentTokenHasher tokenHasher) {
-        this(jdbcTemplate, tokenHasher, Clock.systemUTC(), PcAgentAsService::newAgentToken);
+    public PcAgentAsService(
+            JdbcTemplate jdbcTemplate,
+            AgentTokenHasher tokenHasher,
+            SupportChatRoomProvisioner supportChatRoomProvisioner
+    ) {
+        this(jdbcTemplate, tokenHasher, supportChatRoomProvisioner, Clock.systemUTC(), PcAgentAsService::newAgentToken);
     }
 
     PcAgentAsService(
             JdbcTemplate jdbcTemplate,
             AgentTokenHasher tokenHasher,
+            SupportChatRoomProvisioner supportChatRoomProvisioner,
             Clock clock,
             Supplier<String> tokenGenerator
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.tokenHasher = tokenHasher;
+        this.supportChatRoomProvisioner = supportChatRoomProvisioner;
         this.clock = clock;
         this.tokenGenerator = tokenGenerator;
     }
@@ -784,7 +792,8 @@ public class PcAgentAsService {
                   ?::jsonb,
                   now()
                 )
-                RETURNING public_id::text AS ticket_id,
+                RETURNING id AS ticket_internal_id,
+                          public_id::text AS ticket_id,
                           status,
                           analysis_status,
                           review_status,
@@ -807,11 +816,16 @@ public class PcAgentAsService {
                 safetyAdviceLevel,
                 toJson(safetyNotices)
         );
+        String supportChatRoomId = supportChatRoomProvisioner.ensureRoom(
+                principal.userInternalId(),
+                longValue(ticket, "ticket_internal_id")
+        );
 
         return MockData.map(
                 "uploadJobId", DbValueMapper.string(uploadJob, "upload_job_id"),
                 "logUploadId", DbValueMapper.string(logUpload, "log_upload_id"),
                 "ticketId", DbValueMapper.string(ticket, "ticket_id"),
+                "supportChatRoomId", supportChatRoomId,
                 "status", DbValueMapper.string(ticket, "status"),
                 "analysisStatus", DbValueMapper.string(ticket, "analysis_status"),
                 "reviewStatus", DbValueMapper.string(ticket, "review_status"),
@@ -1068,6 +1082,7 @@ public class PcAgentAsService {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT uj.public_id::text AS upload_job_id,
                        lu.public_id::text AS log_upload_id,
+                       t.id AS ticket_internal_id,
                        t.public_id::text AS ticket_id,
                        t.status,
                        t.analysis_status,
@@ -1109,10 +1124,15 @@ public class PcAgentAsService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency-Key was already used with a different upload request.");
         }
 
+        String supportChatRoomId = supportChatRoomProvisioner.ensureRoom(
+                principal.userInternalId(),
+                longValue(row, "ticket_internal_id")
+        );
         return MockData.map(
                 "uploadJobId", DbValueMapper.string(row, "upload_job_id"),
                 "logUploadId", DbValueMapper.string(row, "log_upload_id"),
                 "ticketId", DbValueMapper.string(row, "ticket_id"),
+                "supportChatRoomId", supportChatRoomId,
                 "status", DbValueMapper.string(row, "status"),
                 "analysisStatus", DbValueMapper.string(row, "analysis_status"),
                 "reviewStatus", DbValueMapper.string(row, "review_status"),

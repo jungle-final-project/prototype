@@ -172,6 +172,7 @@ public class BuildQueryService {
                         FROM builds b
                         JOIN requirements r ON r.id = b.requirement_id
                         WHERE r.user_id = ?
+                          AND b.deleted_at IS NULL
                         ORDER BY b.created_at DESC, b.id DESC
                         LIMIT 30
                         """, user.internalId())
@@ -259,6 +260,60 @@ public class BuildQueryService {
                 "createdAt", summary.get("createdAt"),
                 "toolResults", summary.get("toolResults")
         );
+    }
+
+    // 저장 견적 관리: 소유권은 buildRow(404 if not owned/deleted)로 확인한다.
+    @Transactional
+    public Map<String, Object> renameBuild(String id, Map<String, Object> request, CurrentUserService.CurrentUser user) {
+        buildRow(id, user.internalId());
+        String rawName = text(request == null ? null : request.get("name"));
+        if (rawName == null || rawName.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "견적 이름이 필요합니다.");
+        }
+        String name = rawName.strip();
+        if (name.length() > 120) {
+            name = name.substring(0, 120);
+        }
+        jdbcTemplate.update("UPDATE builds SET name = ? WHERE public_id = ?::uuid", name, id);
+        return buildDetail(id, user);
+    }
+
+    @Transactional
+    public Map<String, Object> duplicateBuild(String id, CurrentUserService.CurrentUser user) {
+        Map<String, Object> source = buildRow(id, user.internalId());
+        String newName = duplicateName(DbValueMapper.string(source, "name"));
+        // 원본의 requirement_id(같은 사용자 소유)를 재사용해 새 build + build_items를 복사한다.
+        Map<String, Object> inserted = jdbcTemplate.queryForMap("""
+                INSERT INTO builds (requirement_id, name, total_price, confidence, warnings, created_at)
+                SELECT requirement_id, ?, total_price, confidence, warnings, now()
+                FROM builds
+                WHERE public_id = ?::uuid
+                RETURNING id, public_id::text AS public_id
+                """, newName, id);
+        Long newInternalId = numberLong(inserted.get("id"));
+        jdbcTemplate.update("""
+                INSERT INTO build_items (build_id, part_id, category, price)
+                SELECT ?, part_id, category, price
+                FROM build_items
+                WHERE build_id = (SELECT id FROM builds WHERE public_id = ?::uuid)
+                """, newInternalId, id);
+        return buildDetail(DbValueMapper.string(inserted, "public_id"), user);
+    }
+
+    @Transactional
+    public void deleteBuild(String id, CurrentUserService.CurrentUser user) {
+        buildRow(id, user.internalId());
+        // 소프트 삭제: builds를 참조하는 학습/에이전트 테이블의 FK·데이터는 보존하고 사용자 목록에서만 감춘다.
+        jdbcTemplate.update("UPDATE builds SET deleted_at = now() WHERE public_id = ?::uuid AND deleted_at IS NULL", id);
+    }
+
+    private static String duplicateName(String name) {
+        String base = name == null || name.isBlank() ? "저장 견적" : name.strip();
+        String candidate = base + " (사본)";
+        if (candidate.length() > 120) {
+            candidate = candidate.substring(0, 120);
+        }
+        return candidate;
     }
 
     public Map<String, Object> changePart(String id, Map<String, Object> request, CurrentUserService.CurrentUser user) {
@@ -551,6 +606,7 @@ public class BuildQueryService {
                         JOIN requirements r ON r.id = b.requirement_id
                         WHERE b.public_id = ?::uuid
                           AND r.user_id = ?
+                          AND b.deleted_at IS NULL
                         """, id, userId)
                 .stream()
                 .findFirst()

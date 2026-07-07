@@ -218,6 +218,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildDto"
+    patch:
+      summary: 저장 견적 이름 변경
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  maxLength: 120
+      responses:
+        "200":
+          description: 이름 변경 후 Build 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDto"
+    delete:
+      summary: 저장 견적 삭제(소프트 삭제 — 목록에서 감춤)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 삭제 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  deleted:
+                    type: boolean
+  /api/builds/{id}/duplicate:
+    post:
+      summary: 저장 견적 복제('(사본)' 이름으로 새 Build 생성)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 복제된 Build 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDto"
   /api/builds/history:
     get:
       summary: 내 Build 이력
@@ -2348,6 +2404,37 @@ paths:
                 $ref: "#/components/schemas/PcAgentLogUploadResponse"
         "400":
           description: consent 누락, gzip/JSONL/envelope/privacy validation 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/diagnosis-chat:
+    post:
+      summary: PC Agent local diagnosis chatbot
+      description: Agent token으로 최근 PC 진단 결과에 대한 대화형 문제 해결 답변을 반환한다. OPENAI_API_KEY가 설정되어 있으면 PC Agent 진단 전용 structured LLM 응답을 사용하고, 키 누락 또는 LLM 실패 시 rule fallback으로 응답한다. 서버 DB에 AS 티켓, 로그 업로드, AS 채팅 세션/메시지를 생성하지 않는다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PcAgentDiagnosisChatRequest"
+      responses:
+        "200":
+          description: Stateless diagnosis chat response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PcAgentDiagnosisChatResponse"
+        "400":
+          description: message 누락 또는 잘못된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: agent token 누락 또는 오류
           content:
             application/json:
               schema:
@@ -6417,7 +6504,7 @@ components:
           nullable: true
     PcAgentLogUploadResponse:
       type: object
-      required: [uploadJobId, logUploadId, ticketId, logSummaryId, status, analysisStatus, reviewStatus, supportDecision, rangeMinutes]
+      required: [uploadJobId, logUploadId, ticketId, supportChatRoomId, logSummaryId, status, analysisStatus, reviewStatus, supportDecision, rangeMinutes]
       properties:
         uploadJobId:
           type: string
@@ -6426,6 +6513,9 @@ components:
           type: string
           format: uuid
         ticketId:
+          type: string
+          format: uuid
+        supportChatRoomId:
           type: string
           format: uuid
         logSummaryId:
@@ -6441,6 +6531,113 @@ components:
           $ref: "#/components/schemas/AsTicketSupportDecision"
         rangeMinutes:
           type: integer
+    PcAgentDiagnosisChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        diagnosis:
+          type: object
+          additionalProperties: true
+          description: Latest local diagnosis record subset produced by PC Agent.
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/PcAgentDiagnosisChatMessage"
+    PcAgentDiagnosisChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          maxLength: 2000
+    PcAgentDiagnosisChatResponse:
+      type: object
+      required: [assistantMessage, causeCandidates, nextActions, escalation, ticketDraft, model]
+      properties:
+        assistantMessage:
+          type: string
+        causeCandidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/PcAgentDiagnosisCauseCandidate"
+        nextActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PcAgentDiagnosisNextAction"
+        escalation:
+          $ref: "#/components/schemas/PcAgentDiagnosisEscalation"
+        ticketDraft:
+          type: object
+          additionalProperties: true
+        model:
+          type: string
+          description: 실제 LLM 응답이면 모델명, fallback이면 buildgraph-agent-diagnosis-rule-v1.
+          example: gpt-5.4-mini
+        evidence:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        toolResults:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    PcAgentDiagnosisCauseCandidate:
+      type: object
+      required: [label, confidence, reason]
+      properties:
+        label:
+          type: string
+        confidence:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        reason:
+          type: string
+        evidenceIds:
+          type: array
+          items:
+            type: string
+        toolInvocationIds:
+          type: array
+          items:
+            type: string
+    PcAgentDiagnosisNextAction:
+      type: object
+      required: [label, priority, instruction]
+      properties:
+        label:
+          type: string
+        priority:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        instruction:
+          type: string
+        evidenceIds:
+          type: array
+          items:
+            type: string
+        toolInvocationIds:
+          type: array
+          items:
+            type: string
+    PcAgentDiagnosisEscalation:
+      type: object
+      required: [required, recommended, reason]
+      properties:
+        required:
+          type: boolean
+        recommended:
+          type: boolean
+        reason:
+          type: string
     AsTicketCreateRequest:
       type: object
       required: [symptom]

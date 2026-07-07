@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.buildgraph.prototype.admin.AdminController;
 import com.buildgraph.prototype.admin.AdminQueryService;
 import com.buildgraph.prototype.agent.AgentQueryService;
+import com.buildgraph.prototype.agent.AgentDiagnosisChatService;
 import com.buildgraph.prototype.agent.PcAgentAsService;
 import com.buildgraph.prototype.agent.PcAgentController;
 import com.buildgraph.prototype.build.BuildGraphLayoutService;
@@ -64,6 +65,9 @@ class PcAgentControllerSecurityTest {
 
     @MockitoBean
     private PcAgentAsService pcAgentAsService;
+
+    @MockitoBean
+    private AgentDiagnosisChatService agentDiagnosisChatService;
 
     @MockitoBean
     private AgentTokenAuthenticationService agentTokenAuthenticationService;
@@ -492,6 +496,51 @@ class PcAgentControllerSecurityTest {
                 .andExpect(jsonPath("$.recommendedDecision").value("REMOTE_POSSIBLE"));
 
         verify(pcAgentAsService).previewAsRag(eq(principal), any(), any(), eq("preview-key"));
+    }
+
+    @Test
+    void diagnosisChatRequiresAgentTokenBeforeService() throws Exception {
+        mockMvc.perform(post("/api/agent/diagnosis-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": "원인이 뭐야?"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(agentDiagnosisChatService);
+        verifyNoInteractions(agentIdempotencyService);
+    }
+
+    @Test
+    void diagnosisChatUsesAgentTokenWithoutIdempotencyOrTicketService() throws Exception {
+        AgentPrincipal principal = authenticateAgent();
+        when(agentDiagnosisChatService.reply(eq(principal), anyMap())).thenReturn(Map.of(
+                "assistantMessage", "드라이버 오류 가능성이 높습니다.",
+                "model", "buildgraph-agent-diagnosis-rule-v1",
+                "escalation", Map.of("required", false)
+        ));
+
+        mockMvc.perform(post("/api/agent/diagnosis-chat")
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": "원인이 뭐야?",
+                                  "diagnosis": {
+                                    "recommendedService": "REMOTE_SUPPORT"
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assistantMessage").value("드라이버 오류 가능성이 높습니다."))
+                .andExpect(jsonPath("$.model").value("buildgraph-agent-diagnosis-rule-v1"));
+
+        verify(agentDiagnosisChatService).reply(eq(principal), anyMap());
+        verifyNoInteractions(agentIdempotencyService);
+        verify(pcAgentAsService, times(0)).uploadLogs(any(), any(), any(), anyString());
     }
 
     @Test
