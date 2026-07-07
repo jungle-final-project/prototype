@@ -6504,7 +6504,7 @@ components:
           nullable: true
     PcAgentLogUploadResponse:
       type: object
-      required: [uploadJobId, logUploadId, ticketId, logSummaryId, status, analysisStatus, reviewStatus, supportDecision, rangeMinutes]
+      required: [uploadJobId, logUploadId, ticketId, supportChatRoomId, logSummaryId, status, analysisStatus, reviewStatus, supportDecision, rangeMinutes]
       properties:
         uploadJobId:
           type: string
@@ -6513,6 +6513,9 @@ components:
           type: string
           format: uuid
         ticketId:
+          type: string
+          format: uuid
+        supportChatRoomId:
           type: string
           format: uuid
         logSummaryId:

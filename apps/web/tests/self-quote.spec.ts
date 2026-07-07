@@ -1946,7 +1946,7 @@ test('self quote chatbot sends current draft and never mutates the draft automat
   await expect(page.getByTestId('checklist-GPU').getByText('RTX 5070 챗봇 테스트')).toBeVisible();
 });
 
-test('opens cooler candidate panel from home category link', async ({ page }) => {
+test('opens cooler candidate panel from self quote nav link', async ({ page }) => {
   await loginAsUser(page);
 
   await page.route('**/api/parts**', async (route) => {
@@ -1989,7 +1989,7 @@ test('opens cooler candidate panel from home category link', async ({ page }) =>
   });
 
   await page.goto('/');
-  await page.getByRole('link', { name: /전체 부품/ }).first().click();
+  await page.getByRole('navigation').getByRole('link', { name: '셀프 견적' }).click();
   await expect(page).toHaveURL('/self-quote');
   await page.getByRole('button', { name: '쿨러 슬롯 열기' }).click();
 
@@ -2002,7 +2002,7 @@ test('opens cooler candidate panel from home category link', async ({ page }) =>
   await expect(page.getByText('77.7')).toHaveCount(0);
 });
 
-test('opens GPU candidate panel from home category link', async ({ page }) => {
+test('opens GPU candidate panel from self quote nav link', async ({ page }) => {
   await loginAsUser(page);
 
   await page.route('**/api/parts**', async (route) => {
@@ -2042,7 +2042,7 @@ test('opens GPU candidate panel from home category link', async ({ page }) => {
   });
 
   await page.goto('/');
-  await page.getByRole('link', { name: /전체 부품/ }).first().click();
+  await page.getByRole('navigation').getByRole('link', { name: '셀프 견적' }).click();
   await expect(page).toHaveURL('/self-quote');
   await page.getByRole('button', { name: 'GPU', exact: true }).click();
 

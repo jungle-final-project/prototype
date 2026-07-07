@@ -764,13 +764,15 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   }
   await expect(main.getByRole('link', { name: /AI로 견적 맞춰보기/ })).toBeVisible();
   await expect(main.getByRole('link', { name: /PC 부품 살펴보기/ })).toBeVisible();
+  await expect(main.getByRole('link', { name: /전체 부품/ }).first()).toHaveAttribute('href', '/self-quote?view=list');
   await expect(main.getByRole('heading', { name: '추천상품' })).toBeVisible();
   await expect(main.getByRole('tab', { name: '인기상품' })).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByRole('tab', { name: 'AI 추천상품' })).toHaveAttribute('aria-selected', 'false');
-  const qhdRecommendationCard = main.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프견적에 담기' });
+  const qhdRecommendationCard = main.getByTestId('home-featured-preview-card-home-featured-qhd-gaming');
   await expect(qhdRecommendationCard).toBeVisible();
   await expect(qhdRecommendationCard.getByText('2,293,000원')).toBeVisible();
   await expect(qhdRecommendationCard.getByRole('img', { name: /Home FRAME 4000D Case/ })).toBeVisible();
+  await expect(qhdRecommendationCard.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프견적에 담기' })).toBeVisible();
   await main.getByRole('tab', { name: 'AI 추천상품' }).click();
   await expect(main.getByText('AI에게 예산이나 부품을 물어보면 추천상품 3개가 여기에 표시됩니다.')).toBeVisible();
   await expect(main.getByRole('heading', { name: '인기 부품 랭킹' })).toBeVisible();
@@ -790,9 +792,9 @@ test('selects a featured recommendation and applies every build part to self quo
   await openHomeAsUser(page);
   const main = page.getByRole('main');
 
-  const qhdRecommendationCard = main.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프견적에 담기' });
+  const qhdRecommendationCard = main.getByTestId('home-featured-preview-card-home-featured-qhd-gaming');
   await expect(qhdRecommendationCard.getByRole('img', { name: /Home FRAME 4000D Case/ })).toBeVisible();
-  await qhdRecommendationCard.click();
+  await qhdRecommendationCard.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프견적에 담기' }).click();
 
   await expect.poll(() => applyRequests.length).toBe(1);
   const request = applyRequests[0] as { buildId?: string; items?: Array<{ partId: string; category: string; quantity: number }> };

@@ -15,12 +15,13 @@ import {
   ShoppingCart,
   type LucideIcon
 } from 'lucide-react';
-import { Screen } from '../../../components/ui';
+import { AppHeader } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT } from '../../../lib/api';
 import { partImageUrl } from '../../parts/partDisplay';
 import { applyAiBuildToQuoteDraft, getPart, listHomeRecommendedParts, listParts, recordRecommendationEvent } from '../../parts/partsApi';
 import type { HomeRecommendedPart, PartRow } from '../../parts/types';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
+import { HomeFeaturedBuildPreview } from '../components/HomeFeaturedBuildPreview';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   clearLegacyAiStorage,
@@ -168,7 +169,7 @@ const homePromoTiles: HomePromoTile[] = [
 
 const heroActions: HeroAction[] = [
   { label: 'PC 견적', detail: '요구사항으로 추천받기', to: '/requirements/new', icon: Bot, accent: 'primary' },
-  { label: '전체 부품', detail: '내부 DB 부품 보기', to: '/self-quote', icon: Boxes, accent: 'blue' },
+  { label: '전체 부품', detail: '내부 DB 부품 보기', to: '/self-quote?view=list', icon: Boxes, accent: 'blue' },
   { label: 'AS 접수', detail: '문제 증상 접수하기', to: '/support/new', icon: LifeBuoy, accent: 'green' },
   { label: '내 견적함', detail: '저장한 견적 확인', to: '/my/quotes', icon: FileText, accent: 'slate' }
 ];
@@ -287,8 +288,10 @@ const featuredBuilds: FeaturedBuild[] = [
 export function HomePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const homeMainRef = useRef<HTMLElement | null>(null);
   const [assistantSession, setAssistantSession] = useState<AiAssistantSession>(() => readAssistantSession());
   const [recommendationTab, setRecommendationTab] = useState<RecommendationTab>(() => readAssistantSession().latestBuilds.length > 0 ? 'ai' : 'popular');
+  const [selectedFeaturedBuildId, setSelectedFeaturedBuildId] = useState<string | null>(null);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [applyingFeaturedBuildId, setApplyingFeaturedBuildId] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -317,6 +320,53 @@ export function HomePage() {
       enabled: recommendationTab === 'popular',
       staleTime: 60_000
     }))
+  });
+  const selectedFeaturedBuildIndex = selectedFeaturedBuildId
+    ? featuredBuilds.findIndex((build) => build.id === selectedFeaturedBuildId)
+    : -1;
+  const selectedFeaturedBuild = selectedFeaturedBuildIndex >= 0 ? featuredBuilds[selectedFeaturedBuildIndex] : null;
+  const selectedFeaturedBuildParts = selectedFeaturedBuildIndex >= 0 ? featuredBuildPartQueries[selectedFeaturedBuildIndex]?.data ?? [] : [];
+  const selectedFeaturedBuildPartCount = selectedFeaturedBuild?.partSearches.length ?? 0;
+  const selectedFeaturedBuildTotalPrice = selectedFeaturedBuildPartCount > 0 && selectedFeaturedBuildParts.length === selectedFeaturedBuildPartCount
+    ? selectedFeaturedBuildParts.reduce((sum, item) => sum + item.part.price, 0)
+    : null;
+  const featuredBuildGraphQuery = useQuery({
+    queryKey: [
+      'build-graph',
+      'home-featured-build-preview',
+      selectedFeaturedBuild?.id ?? 'none',
+      featuredBuildGraphSignature(selectedFeaturedBuildParts)
+    ],
+    queryFn: () => resolveBuildGraph({
+      source: 'AI_BUILD',
+      view: 'FOCUSED',
+      items: selectedFeaturedBuildParts.map(({ search, part }) => ({
+        partId: part.id,
+        category: search.category,
+        quantity: 1
+      })),
+      budgetWon: selectedFeaturedBuildTotalPrice ?? undefined,
+      focus: {
+        mode: 'BUILD_OVERVIEW',
+        tool: 'price'
+      }
+    }),
+    enabled: recommendationTab === 'popular' && Boolean(selectedFeaturedBuild) && selectedFeaturedBuildPartCount > 0 && selectedFeaturedBuildParts.length === selectedFeaturedBuildPartCount,
+    staleTime: 60_000
+  });
+  const featuredPreviewItems = featuredBuilds.map((build, index) => {
+    const buildParts = featuredBuildPartQueries[index]?.data ?? [];
+    const casePart = buildParts.find((item) => item.part.category === 'CASE')?.part;
+    const assetTotalPrice = buildParts.length === build.partSearches.length
+      ? buildParts.reduce((sum, item) => sum + item.part.price, 0)
+      : null;
+
+    return {
+      build,
+      buildParts,
+      casePart,
+      assetTotalPrice
+    };
   });
   const aiBuildCaseQueries = useQueries({
     queries: latestHomeAiBuilds.map((build) => {
@@ -377,6 +427,34 @@ export function HomePage() {
     };
   }, []);
 
+  useEffect(() => {
+    const main = homeMainRef.current;
+    const screen = main?.closest('.screen-shell');
+    if (!main || !screen) return;
+
+    const updateHomeHeaderHeight = () => {
+      const headerHeight = Math.max(0, Math.round(main.getBoundingClientRect().top));
+      main.style.setProperty('--home-header-height', `${headerHeight}px`);
+      const fullpageApi = (window as Window & { fullpage_api?: { reBuild?: () => void } }).fullpage_api;
+      fullpageApi?.reBuild?.();
+    };
+
+    updateHomeHeaderHeight();
+    window.addEventListener('resize', updateHomeHeaderHeight);
+
+    const resizeObserver = new ResizeObserver(updateHomeHeaderHeight);
+    Array.from(screen.children).forEach((child) => {
+      if (child !== main) {
+        resizeObserver.observe(child);
+      }
+    });
+
+    return () => {
+      window.removeEventListener('resize', updateHomeHeaderHeight);
+      resizeObserver.disconnect();
+    };
+  }, []);
+
   async function selectAiBuild(build: AiRecommendedBuild) {
     if (applyingBuildId || applyingFeaturedBuildId) return;
     const normalizedBuild = normalizeAiRecommendedBuild(build);
@@ -433,20 +511,25 @@ export function HomePage() {
   }
 
   return (
-    <Screen>
+    <div className="screen-shell home-screen-shell">
+      <AppHeader />
+      <main ref={homeMainRef} className="home-screen-main mx-auto w-full max-w-[1550px] px-4 sm:px-6 lg:px-8 xl:px-0">
       <div data-testid="home-fullpage-scroll" className="home-fullpage-shell">
         <ReactFullpage
           licenseKey=""
+          anchors={['storefront', 'recommended-builds', 'popular-parts']}
           scrollingSpeed={1000}
           navigation
-          credits={{ enabled: true }}
+          navigationTooltips={['홈', '추천 빌드', '인기 부품']}
+          credits={{ enabled: false }}
           verticalCentered={false}
+          bigSectionsDestination="top"
           fitToSection
           keyboardScrolling
           lockAnchors
           recordHistory={false}
           responsiveWidth={768}
-          scrollOverflow
+          scrollOverflow={false}
           render={() => (
             <ReactFullpage.Wrapper>
               <section className="section home-fullpage-section home-fullpage-section--hero">
@@ -454,7 +537,7 @@ export function HomePage() {
               </section>
 
               <section className="section home-fullpage-section home-fullpage-section--center">
-          <div className="panel p-4 sm:p-5">
+          <div className="panel home-fit-panel home-recommended-panel p-4 sm:p-5">
             <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <div className="text-xs font-black text-brand-blue"></div>
@@ -488,32 +571,23 @@ export function HomePage() {
               </div>
             ) : null}
             {recommendationTab === 'popular' ? (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {featuredBuilds.map((build, index) => {
-                  const buildParts = featuredBuildPartQueries[index]?.data ?? [];
-                  const casePart = buildParts.find((item) => item.part.category === 'CASE')?.part;
-                  const assetTotalPrice = buildParts.length === build.partSearches.length
-                    ? buildParts.reduce((sum, item) => sum + item.part.price, 0)
-                    : null;
-
-                  return (
-                    <FeaturedBuildCard
-                      key={build.id}
-                      build={build}
-                      buildParts={buildParts}
-                      casePart={casePart}
-                      assetTotalPrice={assetTotalPrice}
-                      isApplying={applyingFeaturedBuildId === build.id}
-                      onSelect={selectFeaturedBuild}
-                    />
-                  );
-                })}
-              </div>
+              <HomeFeaturedBuildPreview
+                items={featuredPreviewItems}
+                selectedBuildId={selectedFeaturedBuild?.id ?? null}
+                applyingBuildId={applyingFeaturedBuildId}
+                graph={featuredBuildGraphQuery.data}
+                isGraphLoading={featuredBuildGraphQuery.isLoading}
+                isGraphError={featuredBuildGraphQuery.isError}
+                onSelectBuild={setSelectedFeaturedBuildId}
+                onClearSelection={() => setSelectedFeaturedBuildId(null)}
+                onApplyBuild={selectFeaturedBuild}
+                onImageError={handlePartImageError}
+              />
             ) : (
               <div data-testid="home-ai-recommendations">
                 {latestHomeAiBuilds.length > 0 ? (
                   <>
-                    <div className="grid gap-3 md:grid-cols-3">
+                    <div className="home-ai-build-grid grid gap-3 md:grid-cols-3">
                       {latestHomeAiBuilds.map((build, index) => (
                         <AiRecommendationCard
                           key={build.id}
@@ -524,7 +598,7 @@ export function HomePage() {
                         />
                       ))}
                     </div>
-                    <div className="mt-4">
+                    <div className="home-build-graph-wrap mt-4">
                       <BuildDependencyGraph
                         graph={graphQuery.data}
                         isLoading={graphQuery.isLoading}
@@ -567,7 +641,8 @@ export function HomePage() {
           )}
         />
       </div>
-    </Screen>
+      </main>
+    </div>
   );
 }
 
@@ -586,9 +661,16 @@ function defaultGraphFocus(build: AiRecommendedBuild | null): BuildGraphFocus {
   };
 }
 
+function featuredBuildGraphSignature(buildParts: FeaturedBuildResolvedPart[]) {
+  return buildParts
+    .map(({ search, part }) => `${search.category}:${part.id}:1`)
+    .sort()
+    .join('|');
+}
+
 function HomeStorefront() {
   return (
-    <div className="space-y-6">
+    <div className="home-storefront-fit space-y-6">
       <PromoBanner />
       <HeroActionGrid />
       <HomePromoTileStrip />
@@ -614,7 +696,7 @@ function AiRecommendationCard({
       onClick={() => onSelect(build)}
       disabled={isApplying}
       aria-label={`${build.title} 셀프 견적으로 적용`}
-      className={`group rounded-lg border border-commerce-line bg-gradient-to-br ${aiBuildTone(build)} p-4 text-left transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-70`}
+      className={`home-ai-build-card group rounded-lg border border-commerce-line bg-gradient-to-br ${aiBuildTone(build)} p-4 text-left transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-70`}
     >
       <div className="mb-3 flex min-h-8 items-start justify-between gap-3">
         <h3 className="min-w-0 truncate text-base font-black text-commerce-ink">{build.title}</h3>
@@ -635,10 +717,10 @@ function AiRecommendationCard({
             src={partImageUrl(casePart)}
             alt={`${casePart.name} 제품 사진`}
             onError={handlePartImageError}
-            className="aspect-[4/3] w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02]"
+            className="home-ai-build-image aspect-[4/3] w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02]"
           />
         ) : (
-          <div className="grid aspect-[4/3] place-items-center bg-slate-50 text-xs font-black text-slate-400">
+          <div className="home-ai-build-image grid aspect-[4/3] place-items-center bg-slate-50 text-xs font-black text-slate-400">
             케이스 사진 준비 중
           </div>
         )}
@@ -676,7 +758,7 @@ function PromoBanner() {
 
   return (
     <section className="relative" aria-label="홈 광고 배너">
-      <div className="relative h-[430px] overflow-hidden sm:h-[500px] lg:h-[560px] xl:h-[600px]">
+      <div className="home-promo-stage relative h-[430px] overflow-hidden sm:h-[500px] lg:h-[560px] xl:h-[600px]">
         {promoSlides.map((slide, index) => {
           const offset = carouselOffset(index, activeIndex, promoSlides.length);
           const isActive = activeIndex === index;
@@ -769,7 +851,7 @@ function carouselOffset(index: number, activeIndex: number, slideCount: number) 
 
 function HeroActionGrid() {
   return (
-    <div className="flex flex-wrap justify-center gap-7 sm:gap-10">
+    <div className="home-action-grid flex flex-wrap justify-center gap-7 sm:gap-10">
       {heroActions.map((item) => {
         const tone = heroActionTone(item.accent);
         return (
@@ -777,9 +859,9 @@ function HeroActionGrid() {
             key={item.label}
             aria-label={`${item.label}: ${item.detail}`}
             to={item.to}
-            className="group flex w-[92px] flex-col items-center gap-2.5 rounded-md text-center transition hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-blue-100 sm:w-[106px]"
+            className="home-action-link group flex w-[92px] flex-col items-center gap-2.5 rounded-md text-center transition hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-blue-100 sm:w-[106px]"
           >
-            <div className={`grid h-16 w-16 place-items-center rounded-2xl transition group-hover:shadow-product ${tone.icon}`}>
+            <div className={`home-action-icon grid h-16 w-16 place-items-center rounded-2xl transition group-hover:shadow-product ${tone.icon}`}>
               <item.icon size={29} strokeWidth={2.3} />
             </div>
             <span className="w-full truncate text-sm font-black text-commerce-ink">{item.label}</span>
@@ -792,19 +874,19 @@ function HeroActionGrid() {
 
 function HomePromoTileStrip() {
   return (
-    <div className="mx-auto grid w-full max-w-[1120px] gap-4 md:grid-cols-2">
+    <div className="home-promo-tile-strip mx-auto grid w-full max-w-[1120px] gap-4 md:grid-cols-2">
       {homePromoTiles.map((tile) => (
         <Link
           key={tile.title}
           to={tile.to}
-          className={`group relative min-h-[118px] overflow-hidden rounded-xl px-7 py-6 shadow-product transition hover:-translate-y-0.5 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-100 ${tile.tone}`}
+          className={`home-promo-tile group relative min-h-[118px] overflow-hidden rounded-xl px-7 py-6 shadow-product transition hover:-translate-y-0.5 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-100 ${tile.tone}`}
         >
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-lg font-black">{tile.title}</div>
               <div className="mt-2 max-w-[360px] break-keep text-sm font-semibold opacity-75">{tile.body}</div>
             </div>
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-white/60 transition group-hover:scale-[1.03]">
+            <div className="home-promo-tile-icon grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-white/60 transition group-hover:scale-[1.03]">
               <tile.icon size={26} strokeWidth={2.2} />
             </div>
           </div>
@@ -830,66 +912,6 @@ function heroActionTone(accent: HeroAction['accent']) {
     }
   };
   return tones[accent];
-}
-
-function FeaturedBuildCard({
-  build,
-  buildParts,
-  casePart,
-  assetTotalPrice,
-  isApplying,
-  onSelect
-}: {
-  build: FeaturedBuild;
-  buildParts: FeaturedBuildResolvedPart[];
-  casePart?: PartRow;
-  assetTotalPrice: number | null;
-  isApplying: boolean;
-  onSelect: (build: FeaturedBuild, buildParts: FeaturedBuildResolvedPart[]) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(build, buildParts)}
-      disabled={isApplying}
-      aria-label={`${build.name} 셀프견적에 담기`}
-      className={`group rounded-lg border border-commerce-line bg-gradient-to-br ${build.tone} p-4 text-left transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-70`}
-    >
-      <div className="mb-3 flex min-h-8 items-start justify-between gap-3">
-        <h3 className="min-w-0 truncate text-base font-black text-commerce-ink">{build.name}</h3>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="rounded bg-commerce-sale px-2 py-1 text-[11px] font-black text-white">{build.tag}</span>
-          <Heart size={17} className="text-slate-400 group-hover:text-commerce-sale" />
-        </div>
-      </div>
-      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-50">
-        {casePart ? (
-          <img
-            src={partImageUrl(casePart)}
-            alt={`${casePart.name} 제품 사진`}
-            onError={handlePartImageError}
-            className="h-48 w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02] sm:h-56"
-          />
-        ) : (
-          <div className="grid h-48 place-items-center bg-slate-50 text-xs font-black text-slate-400 sm:h-56">
-            케이스 사진 준비 중
-          </div>
-        )}
-      </div>
-      <p className="truncate text-xs font-bold text-slate-600">{build.spec}</p>
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        {assetTotalPrice !== null ? (
-          <span className="text-xl font-black tracking-tight text-commerce-sale">{assetTotalPrice.toLocaleString()}원</span>
-        ) : (
-          <span className="text-sm font-black text-slate-400">가격 계산 중</span>
-        )}
-      </div>
-      <div className="mt-3 flex items-center gap-2 text-xs font-black text-brand-blue">
-        <ShoppingCart size={15} />
-        {isApplying ? '견적 담는 중' : '셀프 견적에 담기'}
-      </div>
-    </button>
-  );
 }
 
 function aiBuildTone(build: AiRecommendedBuild) {
@@ -960,7 +982,7 @@ function PopularPartsSection() {
   }
 
   return (
-    <section className="panel p-5 sm:p-6">
+    <section className="panel home-fit-panel home-parts-panel p-5 sm:p-6">
       <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="text-xs font-black text-brand-blue">Part ranking</div>
@@ -969,7 +991,7 @@ function PopularPartsSection() {
         </div>
         <Link to="/self-quote" aria-label="셀프 견적 전체 보기" className="text-sm font-black text-brand-blue hover:underline">셀프 견적 전체 보기</Link>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="home-parts-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {displayItems.map((item, index) => {
           const matchedPart = item?.part ?? null;
           const partDetailPath = matchedPart && item ? homeRecommendedPartPath(item) : '.';
@@ -987,7 +1009,7 @@ function PopularPartsSection() {
                   recordClick(item);
                 }
               }}
-              className={`group rounded-lg border border-commerce-line bg-white p-3 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 ${matchedPart ? '' : 'pointer-events-none animate-pulse cursor-wait opacity-70'}`}
+              className={`home-part-card group rounded-lg border border-commerce-line bg-white p-3 transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 ${matchedPart ? '' : 'pointer-events-none animate-pulse cursor-wait opacity-70'}`}
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-commerce-ink text-xs font-black text-white">{index + 1}</span>
@@ -999,19 +1021,19 @@ function PopularPartsSection() {
                     src={partImageUrl(matchedPart)}
                     alt={`${matchedPart.name} 제품 사진`}
                     onError={handlePartImageError}
-                    className="h-40 w-full object-contain p-3 sm:h-44 xl:h-40"
+                    className="home-part-image h-40 w-full object-contain p-3 sm:h-44 xl:h-40"
                   />
                 ) : (
-                  <div className="grid h-40 place-items-center sm:h-44 xl:h-40">
+                  <div className="home-part-image grid h-40 place-items-center sm:h-44 xl:h-40">
                     <PackageCheck size={30} />
                   </div>
                 )}
               </div>
               <div className="mt-3 text-xs font-black text-brand-blue">{matchedPart?.category ?? '추천'}</div>
               <h3 className="mt-1 min-h-10 text-sm font-black leading-5 text-commerce-ink">{matchedPart?.name ?? '추천 부품을 불러오는 중'}</h3>
-              <p className="mt-1 text-xs text-slate-500">{matchedPart ? homePartDetail(matchedPart) : '내부 자산 랭킹 계산 중입니다.'}</p>
+              <p className="home-part-detail mt-1 text-xs text-slate-500">{matchedPart ? homePartDetail(matchedPart) : '내부 자산 랭킹 계산 중입니다.'}</p>
               {reasonLabels.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-1.5">
+                <div className="home-part-tags mt-3 flex flex-wrap gap-1.5">
                   {reasonLabels.slice(0, 3).map((label) => (
                     <span key={label} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">
                       {label}
