@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, LayoutGrid, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
@@ -24,7 +24,6 @@ import {
 } from '../../quote/aiSelection';
 import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
-import { LegacySelfQuoteListSections } from '../components/slot-board/LegacySelfQuoteListSections';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
 import { UpgradeAdvisorPanel } from '../components/slot-board/UpgradeAdvisorPanel';
 import { SlotBoard } from '../components/slot-board/SlotBoard';
@@ -41,14 +40,17 @@ export function SelfQuotePage() {
   const [searchParams] = useSearchParams();
 
   if (searchParams.get('view') === 'list') {
-    return (
-      <Screen>
-        <LegacySelfQuoteListSections />
-      </Screen>
-    );
+    return <Navigate to={allPartsRedirectTarget(searchParams)} replace />;
   }
 
   return <SelfQuoteSlotBoardPage />;
+}
+
+function allPartsRedirectTarget(searchParams: URLSearchParams) {
+  const nextParams = new URLSearchParams(searchParams);
+  nextParams.delete('view');
+  const query = nextParams.toString();
+  return `/parts${query ? `?${query}` : ''}`;
 }
 
 function SelfQuoteSlotBoardPage() {
