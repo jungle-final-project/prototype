@@ -1199,6 +1199,49 @@ test('filters candidates by manufacturer, price range, and hides incompatible', 
   await expect.poll(() => partRequests.some((request) => request.minPrice === '500000' && request.maxPrice === '900000')).toBe(true);
 });
 
+test('opens candidate quick view and wishlists a candidate', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => localStorage.removeItem('buildgraph.wishlist'));
+
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) }));
+  await page.route('**/api/parts**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      items: [
+        candidatePart('gpu-a', 'GPU', '지포스 RTX 5070', { price: 900000 }),
+        candidatePart('gpu-b', 'GPU', '라데온 RX 9070', { price: 800000 })
+      ],
+      page: 0,
+      size: 20,
+      total: 2
+    })
+  }));
+
+  await page.goto('/self-quote');
+  await page.getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+  const firstCard = panel.locator('article', { hasText: '지포스 RTX 5070' });
+
+  // 빠른보기: 상세 모달이 뜬다.
+  await firstCard.getByTestId('candidate-quick-view').click();
+  const modal = page.getByTestId('part-quick-view');
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole('heading', { name: '지포스 RTX 5070' })).toBeVisible();
+
+  // 모달에서 찜 → 닫으면 카드 하트가 찜 상태로 남는다(로컬 저장).
+  await modal.getByTestId('quick-view-wishlist').click();
+  await modal.getByRole('button', { name: '빠른보기 닫기' }).click();
+  await expect(page.getByTestId('part-quick-view')).toHaveCount(0);
+  await expect(firstCard.getByTestId('candidate-wishlist')).toHaveAttribute('aria-pressed', 'true');
+
+  // '찜만' 필터: 찜한 후보만 남는다.
+  await panel.getByTestId('candidate-only-wishlist').check();
+  await expect(panel.getByText('지포스 RTX 5070')).toBeVisible();
+  await expect(panel.getByText('라데온 RX 9070')).toHaveCount(0);
+});
+
 test('adds a candidate part into an empty slot from the panel', async ({ page }) => {
   await loginAsUser(page);
   const putRequests: Array<{ partId: string; quantity: number }> = [];

@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Search, X } from 'lucide-react';
+import { Eye, Heart, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { partImageUrl, partShortSpec, specRows } from '../../partDisplay';
 import { listParts } from '../../partsApi';
@@ -44,7 +44,23 @@ export function SlotCandidatePanel({
   const [minPrice, setMinPrice] = useState<number | undefined>(undefined);
   const [maxPrice, setMaxPrice] = useState<number | undefined>(undefined);
   const [hideFail, setHideFail] = useState(false);
+  const [onlyWishlist, setOnlyWishlist] = useState(false);
+  const [wishlist, setWishlist] = useState<Set<string>>(() => readWishlist());
+  const [quickViewPart, setQuickViewPart] = useState<PartRow | null>(null);
   const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
+
+  function toggleWishlist(partId: string) {
+    setWishlist((prev) => {
+      const next = new Set(prev);
+      if (next.has(partId)) {
+        next.delete(partId);
+      } else {
+        next.add(partId);
+      }
+      writeWishlist(next);
+      return next;
+    });
+  }
 
   // 검색어 디바운스(입력마다 요청하지 않는다) — 300ms 후 확정 검색어(q)를 갱신한다.
   useEffect(() => {
@@ -76,6 +92,8 @@ export function SlotCandidatePanel({
     setMinPrice(undefined);
     setMaxPrice(undefined);
     setHideFail(false);
+    setOnlyWishlist(false);
+    setQuickViewPart(null);
   }, [slot.category]);
   const isMulti = isMultiItemCategory(slot.category);
   const selectedPartIds = new Set(draftItems.map((item) => item.partId));
@@ -127,11 +145,15 @@ export function SlotCandidatePanel({
     });
   }, [visibleParts]);
 
-  // '장착 불가 숨기기' 토글: 기본은 전부 표시(멘토 룰), 켜면 FAIL만 client-side로 감춘다.
-  const renderedParts = useMemo(
-    () => (hideFail ? visibleParts.filter((part) => part.compatibility?.status !== 'FAIL') : visibleParts),
-    [visibleParts, hideFail]
-  );
+  // 표시 필터(client-side): '장착 불가 숨기기'(FAIL 제외)와 '찜만 보기'(찜한 부품만).
+  // 기본은 전부 표시(멘토 룰). 서버 검색·정렬·필터는 그대로 두고 렌더 단계에서만 좁힌다.
+  const renderedParts = useMemo(() => {
+    let list = hideFail ? visibleParts.filter((part) => part.compatibility?.status !== 'FAIL') : visibleParts;
+    if (onlyWishlist) {
+      list = list.filter((part) => wishlist.has(part.id));
+    }
+    return list;
+  }, [visibleParts, hideFail, onlyWishlist, wishlist]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -274,6 +296,16 @@ export function SlotCandidatePanel({
           <label className="ml-auto flex cursor-pointer select-none items-center gap-1.5 text-xs font-bold text-slate-600">
             <input
               type="checkbox"
+              data-testid="candidate-only-wishlist"
+              checked={onlyWishlist}
+              onChange={(event) => setOnlyWishlist(event.target.checked)}
+              className="h-3.5 w-3.5 accent-rose-500"
+            />
+            찜만
+          </label>
+          <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-bold text-slate-600">
+            <input
+              type="checkbox"
               data-testid="candidate-hide-fail"
               checked={hideFail}
               onChange={(event) => setHideFail(event.target.checked)}
@@ -358,6 +390,7 @@ export function SlotCandidatePanel({
         <div className="space-y-2">
           {renderedParts.map((part) => {
             const isSelected = selectedPartIds.has(part.id);
+            const isWishlisted = wishlist.has(part.id);
             const isFail = part.compatibility?.status === 'FAIL';
             const failReason = isFail
               ? part.compatibility?.summary || part.compatibility?.statusLabel || '현재 견적과 호환되지 않습니다'
@@ -404,6 +437,30 @@ export function SlotCandidatePanel({
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col items-stretch gap-1.5">
+                  {/* 빠른보기(상세 스펙 모달) + 찜(로컬 저장) */}
+                  <div className="flex items-center justify-end gap-1">
+                    <button
+                      type="button"
+                      aria-label={`${part.name} 빠른보기`}
+                      data-testid="candidate-quick-view"
+                      onClick={() => setQuickViewPart(part)}
+                      className="grid h-7 w-7 place-items-center rounded-md border border-commerce-line bg-white text-slate-500 hover:border-commerce-ink hover:text-commerce-ink"
+                    >
+                      <Eye size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={isWishlisted ? `${part.name} 찜 해제` : `${part.name} 찜하기`}
+                      aria-pressed={isWishlisted}
+                      data-testid="candidate-wishlist"
+                      onClick={() => toggleWishlist(part.id)}
+                      className={`grid h-7 w-7 place-items-center rounded-md border bg-white transition ${
+                        isWishlisted ? 'border-rose-200 text-rose-500' : 'border-commerce-line text-slate-400 hover:text-rose-500'
+                      }`}
+                    >
+                      <Heart size={14} className={isWishlisted ? 'fill-rose-500' : ''} />
+                    </button>
+                  </div>
                   {/* 비호환(FAIL)도 담을 수 있다 — 왜 안 되는지 보드에서 빨강으로 보고 교체하는 UX(구매는 여전히 차단). */}
                   <button
                     type="button"
@@ -445,9 +502,11 @@ export function SlotCandidatePanel({
           <div className="mt-2 rounded-md border border-dashed border-slate-300 p-4 text-center text-xs font-bold text-slate-500">
             {q
               ? `'${q}' 검색 결과가 없습니다.`
-              : hideFail && visibleParts.length > 0
-                ? '장착 가능한 후보가 없습니다. 필터를 조정해 보세요.'
-                : '표시할 후보가 없습니다.'}
+              : onlyWishlist
+                ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
+                : hideFail && visibleParts.length > 0
+                  ? '장착 가능한 후보가 없습니다. 필터를 조정해 보세요.'
+                  : '표시할 후보가 없습니다.'}
           </div>
         ) : null}
 
@@ -464,7 +523,131 @@ export function SlotCandidatePanel({
         ) : null}
       </div>
       </section>
+      {quickViewPart ? (
+        <PartQuickView
+          part={quickViewPart}
+          isWishlisted={wishlist.has(quickViewPart.id)}
+          onToggleWishlist={() => toggleWishlist(quickViewPart.id)}
+          onClose={() => setQuickViewPart(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+const WISHLIST_KEY = 'buildgraph.wishlist';
+
+function readWishlist(): Set<string> {
+  try {
+    const raw = localStorage.getItem(WISHLIST_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeWishlist(set: Set<string>) {
+  try {
+    localStorage.setItem(WISHLIST_KEY, JSON.stringify([...set]));
+  } catch {
+    // localStorage 접근 불가(프라이빗 모드 등)면 무시한다.
+  }
+}
+
+// 부품 빠른보기: 로드된 후보 데이터로 상세 스펙·가격·구매처를 모달로 즉시 보여준다(추가 요청 없음).
+function PartQuickView({
+  part,
+  isWishlisted,
+  onToggleWishlist,
+  onClose
+}: {
+  part: PartRow;
+  isWishlisted: boolean;
+  onToggleWishlist: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const rows = specRows(part);
+  const status = part.compatibility?.status;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-label={`${part.name} 상세`}
+        data-testid="part-quick-view"
+        onClick={(event) => event.stopPropagation()}
+        className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-xl bg-white p-4 shadow-2xl sm:rounded-xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="text-base font-black leading-5 text-commerce-ink">{part.name}</h3>
+          <button type="button" aria-label="빠른보기 닫기" onClick={onClose} className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-commerce-line bg-white text-slate-600 hover:border-commerce-ink">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="mt-3 flex gap-3">
+          <img src={partImageUrl(part)} alt={`${part.name} 제품 사진`} className="h-20 w-20 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover" />
+          <div className="min-w-0 flex-1 text-xs">
+            <div className="text-[11px] font-bold text-slate-500">{part.manufacturer ?? '-'}</div>
+            <div className="mt-1 text-lg font-black text-commerce-ink">{part.price.toLocaleString()}원</div>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              {status === 'PASS' ? <span className="rounded border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-black text-emerald-700">호환 가능</span> : null}
+              {status === 'WARN' ? <span className="rounded border border-amber-100 bg-amber-50 px-1.5 py-0.5 text-[10px] font-black text-amber-700">간섭 주의</span> : null}
+              {status === 'FAIL' ? <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-black text-red-700">장착 불가</span> : null}
+            </div>
+            {part.compatibility?.summary ? (
+              <div className="mt-1 text-[11px] leading-4 text-slate-500">{part.compatibility.summary}</div>
+            ) : null}
+          </div>
+        </div>
+        {rows.length > 0 ? (
+          <dl className="mt-3 grid grid-cols-2 gap-1.5">
+            {rows.map((row) => (
+              <div key={row.label} className="rounded-md border border-commerce-line bg-slate-50 px-2 py-1.5">
+                <dt className="text-[10px] font-bold text-slate-400">{row.label}</dt>
+                <dd className="text-[11px] font-black text-commerce-ink">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="mt-3 rounded-md border border-dashed border-slate-200 p-3 text-center text-[11px] font-bold text-slate-400">등록된 상세 스펙이 없습니다.</p>
+        )}
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="quick-view-wishlist"
+            aria-pressed={isWishlisted}
+            onClick={onToggleWishlist}
+            className={`inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-md border px-3 text-xs font-black transition ${
+              isWishlisted ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-commerce-line bg-white text-slate-700 hover:text-rose-500'
+            }`}
+          >
+            <Heart size={14} className={isWishlisted ? 'fill-rose-500 text-rose-500' : ''} /> {isWishlisted ? '찜 해제' : '찜하기'}
+          </button>
+          {part.externalOffer?.offerUrl ? (
+            <a
+              href={part.externalOffer.offerUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-md bg-commerce-ink px-3 text-xs font-black text-white hover:bg-slate-700"
+            >
+              구매처에서 보기
+            </a>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
