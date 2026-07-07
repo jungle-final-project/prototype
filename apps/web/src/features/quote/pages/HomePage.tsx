@@ -9,18 +9,17 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
-  Heart,
   LifeBuoy,
   PackageCheck,
-  ShoppingCart,
   type LucideIcon
 } from 'lucide-react';
 import { AppHeader } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT } from '../../../lib/api';
+import { openAiAssistant } from '../../../lib/events';
 import { partImageUrl } from '../../parts/partDisplay';
 import { applyAiBuildToQuoteDraft, getPart, listHomeRecommendedParts, listParts, recordRecommendationEvent } from '../../parts/partsApi';
 import type { HomeRecommendedPart, PartRow } from '../../parts/types';
-import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
+import { HomeAiBuildPreview } from '../components/HomeAiBuildPreview';
 import { HomeFeaturedBuildPreview } from '../components/HomeFeaturedBuildPreview';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -31,7 +30,6 @@ import {
   saveSelectedAiBuild,
   type AiAssistantSession,
   type AiRecommendedBuild,
-  type BuildGraphFocus,
   type PartCategory
 } from '../aiSelection';
 import { resolveBuildGraph } from '../quoteApi';
@@ -233,17 +231,17 @@ const featuredBuilds: FeaturedBuild[] = [
     id: 'home-featured-fps-value',
     name: 'FPS 입문 추천팩',
     tag: 'FPS',
-    spec: 'RTX 5070 · Ryzen 7 · NVMe 1TB',
+    spec: 'RTX 5060 Ti · Ryzen 5 · NVMe 1TB',
     summary: '빠른 반응속도와 안정적인 프레임을 우선한 게이밍 조합입니다.',
     tone: 'from-amber-50 via-white to-white',
     partSearches: [
-      { category: 'CPU', searchQuery: 'Ryzen 7' },
-      { category: 'MOTHERBOARD', searchQuery: 'B850' },
-      { category: 'RAM', searchQuery: 'DDR5 32GB' },
-      { category: 'GPU', searchQuery: 'RTX 5070' },
+      { category: 'CPU', searchQuery: '9600X' },
+      { category: 'MOTHERBOARD', searchQuery: 'TUF' },
+      { category: 'RAM', searchQuery: 'G.SKILL' },
+      { category: 'GPU', searchQuery: 'RTX 5060 Ti' },
       { category: 'STORAGE', searchQuery: 'NVMe 1TB' },
-      { category: 'PSU', searchQuery: '850W' },
-      { category: 'CASE', searchQuery: 'FRAME 4000D' },
+      { category: 'PSU', searchQuery: 'RM750e' },
+      { category: 'CASE', searchQuery: 'Meshify 3 XL' },
       { category: 'COOLER', searchQuery: 'Phantom Spirit' }
     ]
   },
@@ -251,36 +249,36 @@ const featuredBuilds: FeaturedBuild[] = [
     id: 'home-featured-creator',
     name: '크리에이터 작업팩',
     tag: '작업',
-    spec: 'Ryzen 9 · DDR5 64GB · 2TB SSD',
+    spec: 'Ryzen 9 · RTX 5090 · PCIe 5.0 SSD',
     summary: '영상 편집과 렌더링, AI 실습을 함께 고려한 고성능 조합입니다.',
     tone: 'from-violet-50 via-white to-white',
     partSearches: [
-      { category: 'CPU', searchQuery: 'Ryzen 9' },
-      { category: 'MOTHERBOARD', searchQuery: 'X870E' },
-      { category: 'RAM', searchQuery: 'DDR5 64GB' },
-      { category: 'GPU', searchQuery: 'RTX 5070 Ti' },
-      { category: 'STORAGE', searchQuery: 'NVMe 2TB' },
-      { category: 'PSU', searchQuery: '1000W' },
-      { category: 'CASE', searchQuery: 'H9 Flow' },
-      { category: 'COOLER', searchQuery: 'Liquid Freezer III' }
+      { category: 'CPU', searchQuery: '9900X3D' },
+      { category: 'MOTHERBOARD', searchQuery: 'STRIX X870E-A' },
+      { category: 'RAM', searchQuery: 'T-CREATE' },
+      { category: 'GPU', searchQuery: 'RTX 5090' },
+      { category: 'STORAGE', searchQuery: 'Platinum P51' },
+      { category: 'PSU', searchQuery: 'VERTEX GX-1200' },
+      { category: 'CASE', searchQuery: 'H9 Flow 2025' },
+      { category: 'COOLER', searchQuery: 'Kraken Elite 360' }
     ]
   },
   {
     id: 'home-featured-white-tuning',
     name: '화이트 튜닝 추천팩',
     tag: '튜닝',
-    spec: 'LIGHT BASE 900 · DDR5 32GB · RTX 5070',
+    spec: 'LIGHT BASE 900 · White RAM · RTX 5080',
     summary: '내부가 잘 보이는 케이스와 안정적인 부품 구성을 맞춘 조합입니다.',
     tone: 'from-slate-50 via-white to-white',
     partSearches: [
-      { category: 'CPU', searchQuery: 'Ryzen 7' },
-      { category: 'MOTHERBOARD', searchQuery: 'B850' },
-      { category: 'RAM', searchQuery: 'DDR5 32GB' },
-      { category: 'GPU', searchQuery: 'RTX 5070' },
-      { category: 'STORAGE', searchQuery: 'NVMe 2TB' },
-      { category: 'PSU', searchQuery: '850W' },
+      { category: 'CPU', searchQuery: '9800X3D' },
+      { category: 'MOTHERBOARD', searchQuery: 'B850I' },
+      { category: 'RAM', searchQuery: 'Crucial DDR5-6000' },
+      { category: 'GPU', searchQuery: 'RTX 5080 WHITE' },
+      { category: 'STORAGE', searchQuery: 'WD BLACK SN8100' },
+      { category: 'PSU', searchQuery: 'HX1200i' },
       { category: 'CASE', searchQuery: 'LIGHT BASE 900' },
-      { category: 'COOLER', searchQuery: 'Dark Rock Pro 5' }
+      { category: 'COOLER', searchQuery: 'ARCTIC Liquid Freezer III PRO' }
     ]
   }
 ];
@@ -292,10 +290,14 @@ export function HomePage() {
   const [assistantSession, setAssistantSession] = useState<AiAssistantSession>(() => readAssistantSession());
   const [recommendationTab, setRecommendationTab] = useState<RecommendationTab>(() => readAssistantSession().latestBuilds.length > 0 ? 'ai' : 'popular');
   const [selectedFeaturedBuildId, setSelectedFeaturedBuildId] = useState<string | null>(null);
+  const [selectedAiBuildId, setSelectedAiBuildId] = useState<string | null>(null);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [applyingFeaturedBuildId, setApplyingFeaturedBuildId] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const latestHomeAiBuilds = recentBuildsForChatContext(assistantSession);
+  const selectedAiBuild = selectedAiBuildId
+    ? latestHomeAiBuilds.find((build) => build.id === selectedAiBuildId) ?? null
+    : null;
   const featuredBuildPartQueries = useQueries({
     queries: featuredBuilds.map((build) => ({
       queryKey: ['parts', 'home-featured-build', build.id],
@@ -368,41 +370,44 @@ export function HomePage() {
       assetTotalPrice
     };
   });
-  const aiBuildCaseQueries = useQueries({
+  const aiBuildImagePartQueries = useQueries({
     queries: latestHomeAiBuilds.map((build) => {
-      const caseItem = build.items.find((item) => item.category === 'CASE');
+      const imageItem = aiBuildPreviewImageItem(build, latestHomeAiBuilds);
       return {
-        queryKey: ['parts', 'home-ai-build-case', build.id, caseItem?.partId],
-        queryFn: () => caseItem ? getPart(caseItem.partId) : Promise.resolve(null),
-        enabled: Boolean(caseItem),
+        queryKey: ['parts', 'home-ai-build-image-part', build.id, imageItem?.partId],
+        queryFn: () => imageItem ? getPart(imageItem.partId) : Promise.resolve(null),
+        enabled: Boolean(imageItem),
         staleTime: 60_000
       };
     })
   });
-  const activeAiBuild = activeGraphBuild(assistantSession, latestHomeAiBuilds);
-  const activeGraphFocus = assistantSession.latestGraphFocus ?? defaultGraphFocus(activeAiBuild);
+  const aiPreviewItems = latestHomeAiBuilds.map((build, index) => ({
+    build,
+    imagePart: aiBuildImagePartQueries[index]?.data ?? null
+  }));
   const graphQuery = useQuery({
     queryKey: [
       'build-graph',
       'home-ai-build',
-      activeAiBuild?.id,
-      activeGraphFocus.mode,
-      activeGraphFocus.category,
-      activeGraphFocus.tool,
-      activeAiBuild?.items.map((item) => item.partId).join(',')
+      selectedAiBuild?.id,
+      selectedAiBuild?.items.map((item) => item.partId).join(',')
     ],
     queryFn: () => resolveBuildGraph({
       source: 'AI_BUILD',
       view: 'FOCUSED',
-      items: activeAiBuild?.items.map((item) => ({
+      items: selectedAiBuild?.items.map((item) => ({
         partId: item.partId,
         category: item.category,
         quantity: item.quantity
       })),
-      budgetWon: activeAiBuild?.budgetWon,
-      focus: activeGraphFocus
+      budgetWon: selectedAiBuild?.budgetWon,
+      focus: {
+        mode: 'BUILD_OVERVIEW',
+        tool: 'price'
+      }
     }),
-    enabled: Boolean(activeAiBuild)
+    enabled: recommendationTab === 'ai' && Boolean(selectedAiBuild),
+    staleTime: 60_000
   });
 
   useEffect(() => {
@@ -414,6 +419,7 @@ export function HomePage() {
         setRecommendationTab('ai');
       } else {
         setRecommendationTab('popular');
+        setSelectedAiBuildId(null);
       }
     };
     syncAssistantSession();
@@ -426,6 +432,12 @@ export function HomePage() {
       window.removeEventListener('storage', syncAssistantSession);
     };
   }, []);
+
+  useEffect(() => {
+    if (selectedAiBuildId && !latestHomeAiBuilds.some((build) => build.id === selectedAiBuildId)) {
+      setSelectedAiBuildId(null);
+    }
+  }, [latestHomeAiBuilds, selectedAiBuildId]);
 
   useEffect(() => {
     const main = homeMainRef.current;
@@ -584,40 +596,20 @@ export function HomePage() {
                 onImageError={handlePartImageError}
               />
             ) : (
-              <div data-testid="home-ai-recommendations">
+              <div data-testid="home-ai-recommendations" className="home-ai-recommendations">
                 {latestHomeAiBuilds.length > 0 ? (
-                  <>
-                    <div className="home-ai-build-grid grid gap-3 md:grid-cols-3">
-                      {latestHomeAiBuilds.map((build, index) => (
-                        <AiRecommendationCard
-                          key={build.id}
-                          build={build}
-                          casePart={aiBuildCaseQueries[index]?.data ?? undefined}
-                          isApplying={applyingBuildId === build.id}
-                          onSelect={selectAiBuild}
-                        />
-                      ))}
-                    </div>
-                    <div className="home-build-graph-wrap mt-4">
-                      <BuildDependencyGraph
-                        graph={graphQuery.data}
-                        isLoading={graphQuery.isLoading}
-                        isError={graphQuery.isError}
-                        totalPrice={activeAiBuild?.totalPrice}
-                        title="견적 관계도"
-                        subtitle="최신 AI 추천 조합에서 영향을 받는 부품과 제약을 먼저 보여줍니다."
-                        candidateContext={activeAiBuild ? {
-                          source: 'AI_BUILD',
-                          items: activeAiBuild.items.map((item) => ({
-                            partId: item.partId,
-                            category: item.category,
-                            quantity: item.quantity
-                          })),
-                          readOnly: true
-                        } : undefined}
-                      />
-                    </div>
-                  </>
+                  <HomeAiBuildPreview
+                    items={aiPreviewItems}
+                    selectedBuildId={selectedAiBuild?.id ?? null}
+                    applyingBuildId={applyingBuildId}
+                    graph={graphQuery.data}
+                    isGraphLoading={graphQuery.isLoading}
+                    isGraphError={graphQuery.isError}
+                    onSelectBuild={setSelectedAiBuildId}
+                    onClearSelection={() => setSelectedAiBuildId(null)}
+                    onApplyBuild={selectAiBuild}
+                    onImageError={handlePartImageError}
+                  />
                 ) : (
                   <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/60 p-6 text-center">
                     <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-white text-brand-blue shadow-product">
@@ -646,26 +638,35 @@ export function HomePage() {
   );
 }
 
-function activeGraphBuild(session: AiAssistantSession, displayBuilds: AiRecommendedBuild[]) {
-  if (displayBuilds.length === 0) {
-    return null;
-  }
-  const storedActiveBuild = displayBuilds.find((build) => build.id === session.latestActiveBuildId);
-  return storedActiveBuild ?? displayBuilds.find((build) => build.tier === 'balanced') ?? displayBuilds[0];
-}
-
-function defaultGraphFocus(build: AiRecommendedBuild | null): BuildGraphFocus {
-  return {
-    mode: build ? 'BUILD_OVERVIEW' : 'ISSUE_PATH',
-    tool: 'price'
-  };
-}
-
 function featuredBuildGraphSignature(buildParts: FeaturedBuildResolvedPart[]) {
   return buildParts
     .map(({ search, part }) => `${search.category}:${part.id}:1`)
     .sort()
     .join('|');
+}
+
+function aiBuildPreviewImageItem(
+  build: AiRecommendedBuild,
+  allBuilds: AiRecommendedBuild[]
+): AiRecommendedBuild['items'][number] | undefined {
+  const categoryPriority: PartCategory[] = ['GPU', 'CASE', 'CPU', 'COOLER', 'MOTHERBOARD', 'RAM', 'STORAGE', 'PSU'];
+  const variedCategory = categoryPriority.find((category) => {
+    const partIds = allBuilds
+      .map((candidate) => candidate.items.find((item) => item.category === category)?.partId)
+      .filter((partId): partId is string => Boolean(partId));
+    return partIds.length > 0 && new Set(partIds).size > 1 && build.items.some((item) => item.category === category);
+  });
+  const displayPriority = variedCategory
+    ? [variedCategory, ...categoryPriority.filter((category) => category !== variedCategory)]
+    : categoryPriority;
+
+  for (const category of displayPriority) {
+    const item = build.items.find((part) => part.category === category);
+    if (item) {
+      return item;
+    }
+  }
+  return build.items[0];
 }
 
 function HomeStorefront() {
@@ -675,65 +676,6 @@ function HomeStorefront() {
       <HeroActionGrid />
       <HomePromoTileStrip />
     </div>
-  );
-}
-
-function AiRecommendationCard({
-  build,
-  casePart,
-  isApplying,
-  onSelect
-}: {
-  build: AiRecommendedBuild;
-  casePart?: PartRow | null;
-  isApplying: boolean;
-  onSelect: (build: AiRecommendedBuild) => void;
-}) {
-  const hasWarnings = Boolean(build.warnings && build.warnings.length > 0);
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(build)}
-      disabled={isApplying}
-      aria-label={`${build.title} 셀프 견적으로 적용`}
-      className={`home-ai-build-card group rounded-lg border border-commerce-line bg-gradient-to-br ${aiBuildTone(build)} p-4 text-left transition hover:-translate-y-0.5 hover:border-commerce-ink hover:shadow-product focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-70`}
-    >
-      <div className="mb-3 flex min-h-8 items-start justify-between gap-3">
-        <h3 className="min-w-0 truncate text-base font-black text-commerce-ink">{build.title}</h3>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className={`rounded px-2 py-1 text-[11px] font-black ${hasWarnings ? 'bg-amber-100 text-amber-700' : 'bg-commerce-sale text-white'}`}>
-            {isApplying ? '적용 중' : hasWarnings ? '검증 확인' : 'AI 추천'}
-          </span>
-          {isApplying ? (
-            <ShoppingCart size={17} className="text-commerce-sale" />
-          ) : (
-            <Heart size={17} className="text-slate-400 group-hover:text-commerce-sale" />
-          )}
-        </div>
-      </div>
-      <div className="mb-4 overflow-hidden rounded-md border border-commerce-line bg-slate-50">
-        {casePart ? (
-          <img
-            src={partImageUrl(casePart)}
-            alt={`${casePart.name} 제품 사진`}
-            onError={handlePartImageError}
-            className="home-ai-build-image aspect-[4/3] w-full object-contain p-3 transition duration-300 group-hover:scale-[1.02]"
-          />
-        ) : (
-          <div className="home-ai-build-image grid aspect-[4/3] place-items-center bg-slate-50 text-xs font-black text-slate-400">
-            케이스 사진 준비 중
-          </div>
-        )}
-      </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <span className="text-xl font-black tracking-tight text-commerce-sale">{build.totalPrice.toLocaleString()}원</span>
-        <span className="text-xs font-bold text-slate-400">{build.budgetLabel ?? build.tierLabel}</span>
-      </div>
-      <div className={`mt-3 flex items-center gap-2 text-xs font-black ${hasWarnings ? 'text-amber-600' : 'text-commerce-green'}`}>
-        <PackageCheck size={15} />
-        {isApplying ? '셀프 견적 적용 중' : hasWarnings ? 'Tool 확인 필요' : '호환성 통과'}
-      </div>
-    </button>
   );
 }
 
@@ -875,12 +817,9 @@ function HeroActionGrid() {
 function HomePromoTileStrip() {
   return (
     <div className="home-promo-tile-strip mx-auto grid w-full max-w-[1120px] gap-4 md:grid-cols-2">
-      {homePromoTiles.map((tile) => (
-        <Link
-          key={tile.title}
-          to={tile.to}
-          className={`home-promo-tile group relative min-h-[118px] overflow-hidden rounded-xl px-7 py-6 shadow-product transition hover:-translate-y-0.5 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-100 ${tile.tone}`}
-        >
+      {homePromoTiles.map((tile) => {
+        const className = `home-promo-tile group relative min-h-[118px] overflow-hidden rounded-xl px-7 py-6 text-left shadow-product transition hover:-translate-y-0.5 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-100 ${tile.tone}`;
+        const content = (
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-lg font-black">{tile.title}</div>
@@ -890,8 +829,31 @@ function HomePromoTileStrip() {
               <tile.icon size={26} strokeWidth={2.2} />
             </div>
           </div>
-        </Link>
-      ))}
+        );
+
+        if (tile.to === '/requirements/new') {
+          return (
+            <button
+              key={tile.title}
+              type="button"
+              onClick={() => openAiAssistant()}
+              className={className}
+            >
+              {content}
+            </button>
+          );
+        }
+
+        return (
+          <Link
+            key={tile.title}
+            to={tile.to}
+            className={className}
+          >
+            {content}
+          </Link>
+        );
+      })}
     </div>
   );
 }
@@ -912,19 +874,6 @@ function heroActionTone(accent: HeroAction['accent']) {
     }
   };
   return tones[accent];
-}
-
-function aiBuildTone(build: AiRecommendedBuild) {
-  if (build.warnings && build.warnings.length > 0) {
-    return 'from-amber-50 via-white to-white';
-  }
-  if (build.tier === 'performance') {
-    return 'from-indigo-50 via-white to-white';
-  }
-  if (build.tier === 'budget') {
-    return 'from-emerald-50 via-white to-white';
-  }
-  return 'from-blue-50 via-white to-white';
 }
 
 function PopularPartsSection() {
