@@ -180,24 +180,25 @@ function BoardSlot({
   const borderClass = isSelected
     ? 'border-2 border-brand-blue ring-2 ring-blue-100 shadow-lg'
     : slotStatus === 'FAIL'
-      ? 'border-2 border-red-500 ring-2 ring-red-50'
+      ? 'border-2 border-red-500 ring-2 ring-red-300'
       : slotStatus === 'WARN'
-        ? 'border-2 border-amber-400 ring-2 ring-amber-50'
+        ? 'border-2 border-amber-400 ring-2 ring-amber-300'
         : filled
-          ? 'border border-emerald-200 hover:border-emerald-400 shadow-sm'
+          ? 'border-2 border-emerald-400 ring-2 ring-emerald-300 hover:border-emerald-500'
           : isNext
             ? `border-2 border-brand-blue bg-blue-50/40 hover:border-blue-600${isBoardMount ? ' lg:bg-blue-50/25' : ''}`
             : isBoardMount
               // 데스크톱 실장 지점: 아트의 빈 소켓/슬롯이 보이도록 투명 — hover에만 윤곽을 드러낸다.
               ? 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue lg:border-transparent lg:bg-transparent lg:hover:border-brand-blue/60 lg:hover:bg-blue-50/20'
               : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
-  // 장착된 박스는 상태색으로 칠한다 — 정상=초록, 간섭 주의=주황, 장착 불가=빨강 (은은한 틴트라 상품 이미지·칩은 그대로 보인다).
+  // 장착된 박스는 상태색으로 칠한다 — 정상=초록, 간섭 주의=주황, 장착 불가=빨강.
+  // 어두운 트레이 위에서도 색이 확실히 읽히도록 틴트를 진하게(-100) 준다. 상품 이미지는 중앙을 덮어 그대로 보인다.
   const surfaceClass = filled
     ? slotStatus === 'FAIL'
-      ? 'bg-red-50/95'
+      ? 'bg-red-100'
       : slotStatus === 'WARN'
-        ? 'bg-amber-50/95'
-        : 'bg-emerald-50/95'
+        ? 'bg-amber-100'
+        : 'bg-emerald-100'
     : isBoardMount
       ? 'bg-white/95 lg:bg-transparent lg:backdrop-blur-0'
       : 'bg-white/95';

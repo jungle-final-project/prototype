@@ -164,33 +164,35 @@ background:
   animation: slot-empty-pulse 2.4s ease-in-out infinite;
 }
 
-/* 상태색 히어로 펄스: 파란 "다음 선택" 펄스처럼, 장착된 슬롯을 상태색 링으로 숨쉬게 한다.
-   정상=은은한 초록(느림), 간섭 주의=주황(보통), 장착 불가=빨강(강하고 빠름 — 시선을 끈다). */
+/* 상태색 히어로 펄스: 장착된 슬롯을 상태색 링으로 숨쉬게 한다.
+   쉬는 구간(0%/100%)에도 상시 보이는 실선 링 + 소프트 글로우를 유지하고, 50%에 바깥으로 퍼진다
+   — 어두운 트레이 위에서도 색이 확실히 읽히도록 시인성을 높였다.
+   정상=초록, 간섭 주의=주황(더 강함), 장착 불가=빨강(가장 강하고 빠름 — 시선을 끈다). */
 @keyframes slot-pass-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.28);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.75), 0 0 12px 2px rgba(16, 185, 129, 0.45);
   }
   50% {
-    box-shadow: 0 0 0 7px rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0), 0 0 16px 4px rgba(16, 185, 129, 0.2);
   }
 }
 @keyframes slot-warn-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.85), 0 0 14px 2px rgba(245, 158, 11, 0.5);
   }
   50% {
-    box-shadow: 0 0 0 9px rgba(245, 158, 11, 0);
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0), 0 0 18px 5px rgba(245, 158, 11, 0.22);
   }
 }
 @keyframes slot-fail-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.9), 0 0 16px 3px rgba(239, 68, 68, 0.55);
   }
   50% {
-    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+    box-shadow: 0 0 0 9px rgba(239, 68, 68, 0), 0 0 22px 6px rgba(239, 68, 68, 0.24);
   }
 }
 .slot-pass-pulse {
