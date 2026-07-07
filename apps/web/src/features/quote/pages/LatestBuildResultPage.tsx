@@ -14,6 +14,7 @@ import '@xyflow/react/dist/style.css';
 import { X } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
+import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { BENCHMARK_REFERENCE_NOTICE } from '../../../lib/disclaimers';
 import { latestUserMessage, temporaryBuildToBuildSummary } from '../components/BuildDetailSections';
 import {
@@ -68,6 +69,8 @@ const compactCategoryPositions: Record<string, { x: number; y: number }> = {
 };
 
 export function LatestBuildResultPage() {
+  useHiddenPageScrollbar();
+
   const navigate = useNavigate();
   const assistantSession = readAssistantSession();
   const builds = assistantSession.latestBuilds;
@@ -805,6 +808,7 @@ function CompactBuildGraph({
   return (
     <div className={`${heightClassName} bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] ${isCardLink ? 'compact-build-graph--card-link' : ''}`}>
       <ReactFlow
+        className="buildgraph-scroll-pass-through"
         nodes={flowElements.nodes}
         edges={flowElements.edges}
         nodeTypes={compactGraphNodeTypes}
@@ -812,8 +816,10 @@ function CompactBuildGraph({
         fitViewOptions={{ padding: 0.12 }}
         minZoom={0.18}
         maxZoom={1.1}
+        preventScrolling={false}
         zoomOnScroll={false}
         zoomOnPinch={false}
+        panOnScroll={false}
         panOnDrag={false}
         nodesDraggable={false}
         nodesConnectable={false}

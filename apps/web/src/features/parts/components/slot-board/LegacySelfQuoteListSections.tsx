@@ -7,8 +7,8 @@ import { getToken } from '../../../../lib/api';
 import { saveBuildFromChat } from '../../../quote/quoteApi';
 import { partImageUrl, partShortSpec } from '../../partDisplay';
 import { deleteQuoteDraftItem, getCurrentQuoteDraft, getPartPriceHistory, listParts, patchQuoteDraftItem, putQuoteDraftItem } from '../../partsApi';
+import { quoteDraftToRecommendedBuild, selfQuoteBuildId } from '../../selfQuoteBuild';
 import type { PartRow, PartSearchParams, QuoteDraft, QuoteDraftItem } from '../../types';
-import { quoteDraftToRecommendedBuild, selfQuoteBuildId } from '../../pages/SelfQuotePage';
 
 // 슬롯 보드 전환 이전의 PC 카테고리 / 전체 부품 목록 / 견적 장바구니 3영역 UI 보존본.
 // /self-quote에서는 렌더링하지 않는다.
