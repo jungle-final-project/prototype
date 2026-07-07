@@ -92,7 +92,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 
 | 항목 | 내용 |
 |---|---|
-| 담당 화면 route | `/self-quote`, `/admin/parts`, `/admin/price-jobs`, `/my/quotes`의 가격 알림 영역 |
+| 담당 화면 route | `/self-quote`, `/parts`, `/admin/parts`, `/admin/price-jobs`, `/my/quotes`의 가격 알림 영역 |
 | frontend files | `features/parts/**`, `features/admin/pages/AdminPartsPage.tsx`, `features/admin/pages/AdminPriceJobsPage.tsx` |
 | backend packages | `part`, `price`, `tool`, `quote` |
 | DB tables | `parts`, `price_snapshots`, `part_external_offers`, `part_catalog_refresh_jobs`, `part_catalog_candidates`, `manufacturer_sources`, `manufacturer_posts`, `quote_drafts`, `quote_draft_items`, `price_alerts`, `price_jobs`, `pipeline_job_runs`, `compatibility_rules`, `benchmark_summaries` |
@@ -166,6 +166,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `/builds/:buildId/change-part` | 1번 | 2번 | `POST /api/builds/{id}/change-part`, `GET /api/parts` |
 | `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts` |
 | `/self-quote` | 2번 | 1번, 5번 | `GET /api/parts`(후보 패널은 `compatibilitySource=QUOTE_DRAFT_CURRENT`), `POST /api/parts/compatible-candidates`(슬롯보드 개편 후 이 route에서 미사용 — 홈/빌드 상세 그래프 전용), `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat`, `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, 5개 Tool API |
+| `/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/quote-drafts/current`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/parts/{id}/price-history` |
 | `/checkout` | 2번 | 1번, 5번 | `GET /api/quote-drafts/current` |
 | `/checkout/complete` | 2번 | 1번, 5번 | 프론트 `sessionStorage` 데모 상태 |
 | `/parts/:partId` | 2번 | 5번 | `GET /api/parts/{id}`, `PUT /api/quote-drafts/current/items/{partId}`, `POST /api/recommendation-events` |
