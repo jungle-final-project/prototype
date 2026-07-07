@@ -146,6 +146,8 @@ function FeaturedPreviewCard({
     <article
       role="button"
       tabIndex={0}
+      data-testid={`home-featured-preview-card-${item.build.id}`}
+      aria-label={`${item.build.name} 관계도 미리보기`}
       aria-pressed={isSelected}
       onClick={onSelect}
       onKeyDown={handleKeyDown}
@@ -190,6 +192,7 @@ function FeaturedPreviewCard({
 
           <button
             type="button"
+            aria-label={`${item.build.name} 셀프견적에 담기`}
             onClick={(event) => {
               event.stopPropagation();
               onApply();
