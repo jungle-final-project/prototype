@@ -763,8 +763,8 @@ test('renders a single shopping home without the old hero prompt flow', async ({
     await expect(main.getByRole('link', { name: new RegExp(label) }).first()).toBeVisible();
   }
   await expect(main.getByRole('link', { name: /AI 추천 견적/ })).toBeVisible();
-  await expect(main.getByRole('link', { name: /내부 DB 부품 가격/ })).toBeVisible();
-  await expect(main.getByRole('link', { name: /전체 부품/ }).first()).toHaveAttribute('href', '/self-quote?view=list');
+  await expect(main.getByRole('link', { name: /내부 DB 부품 가격/ })).toHaveAttribute('href', '/self-quote');
+  await expect(main.getByRole('link', { name: /전체 부품/ }).first()).toHaveAttribute('href', '/parts');
   await expect(main.getByRole('heading', { name: '추천상품' })).toBeVisible();
   await expect(main.getByRole('tab', { name: '인기상품' })).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByRole('tab', { name: 'AI 추천상품' })).toHaveAttribute('aria-selected', 'false');
@@ -1258,6 +1258,7 @@ test('keeps shared header and navigation destinations unchanged', async ({ page 
   await expect(header.getByRole('link', { name: 'AS 접수' })).toHaveAttribute('href', '/support/new');
   await expect(nav.getByRole('link', { name: '홈' })).toHaveAttribute('href', '/');
   await expect(nav.getByRole('link', { name: '셀프 견적' })).toHaveAttribute('href', '/self-quote');
+  await expect(nav.getByRole('link', { name: '전체 부품' })).toHaveAttribute('href', '/parts');
   await expect(nav.getByRole('link', { name: '추천 결과' })).toHaveAttribute('href', '/builds/latest');
   await expect(nav.getByRole('link', { name: '관리자' })).toHaveCount(0);
 });

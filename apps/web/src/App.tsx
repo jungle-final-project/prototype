@@ -2,7 +2,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { LoginPage, SignupPage } from './features/auth/AuthPages';
 import { RequireAdmin } from './features/auth/RequireAdmin';
 import { RequireUser } from './features/auth/RequireUser';
-import { CheckoutCompletePage, CheckoutPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
+import { AllPartsPage, CheckoutCompletePage, CheckoutPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, LatestBuildResultPage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
 import { AsChatPage, SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
 import { SupportChatWidget } from './features/support/SupportChatWidget';
@@ -20,6 +20,7 @@ export default function App() {
         <Route path="/self-quote" element={<RequireUser><SelfQuotePage /></RequireUser>} />
         <Route path="/checkout" element={<RequireUser><CheckoutPage /></RequireUser>} />
         <Route path="/checkout/complete" element={<RequireUser><CheckoutCompletePage /></RequireUser>} />
+        <Route path="/parts" element={<RequireUser><AllPartsPage /></RequireUser>} />
         <Route path="/parts/:partId" element={<RequireUser><PartDetailPage /></RequireUser>} />
         <Route path="/builds/:buildId/change-part" element={<RequireUser><ChangePartPage /></RequireUser>} />
         <Route path="/my/quotes" element={<RequireUser><MyQuotesPage /></RequireUser>} />

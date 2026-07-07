@@ -5,6 +5,7 @@ export function PrimaryNav({ isAdmin = false }: { isAdmin?: boolean }) {
     ['/', '홈'],
     // ['/requirements/new', 'AI 견적'],
     ['/self-quote', '셀프 견적'],
+    ['/parts', '전체 부품'],
     ['/builds/latest', '추천 결과'],
     ['/my/quotes', '목표가 알림'],
     ['/support/new', 'AS 접수'],

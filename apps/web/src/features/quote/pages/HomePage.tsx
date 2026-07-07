@@ -169,7 +169,7 @@ const homePromoTiles: HomePromoTile[] = [
 
 const heroActions: HeroAction[] = [
   { label: 'PC 견적', detail: '요구사항으로 추천받기', to: '/requirements/new', icon: Bot, accent: 'primary' },
-  { label: '전체 부품', detail: '내부 DB 부품 보기', to: '/self-quote?view=list', icon: Boxes, accent: 'blue' },
+  { label: '전체 부품', detail: '내부 DB 부품 보기', to: '/parts', icon: Boxes, accent: 'blue' },
   { label: 'AS 접수', detail: '문제 증상 접수하기', to: '/support/new', icon: LifeBuoy, accent: 'green' },
   { label: '내 견적함', detail: '저장한 견적 확인', to: '/my/quotes', icon: FileText, accent: 'slate' }
 ];
