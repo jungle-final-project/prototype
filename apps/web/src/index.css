@@ -456,7 +456,8 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
 .home-featured-preview-layout {
   display: grid;
   flex: 1 1 auto;
-  min-height: 0;
+  height: 100%;
+  min-height: clamp(420px, calc(var(--home-page-height) - 200px), 640px);
   grid-template-columns: minmax(270px, 3fr) minmax(0, 7fr);
   align-items: stretch;
   gap: clamp(10px, 1.4dvh, 16px);
@@ -845,6 +846,8 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
 
   .home-featured-preview-layout {
     display: flex;
+    height: auto;
+    min-height: 0;
     flex-direction: column;
   }
 
