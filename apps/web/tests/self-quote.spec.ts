@@ -930,11 +930,11 @@ test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', as
   // 문제 슬롯 강조: FAIL은 숨기지 않고 표시한다. 장착된 박스는 상태색으로 칠해진다(빨강/주황).
   const gpuSlot = page.getByTestId('slot-GPU');
   await expect(gpuSlot).toHaveAttribute('data-status', 'FAIL');
-  await expect(gpuSlot).toHaveClass(/bg-red-50/);
+  await expect(gpuSlot).toHaveClass(/bg-red-100/);
   await expect(gpuSlot.getByText('안 맞음')).toBeVisible();
   const psuSlot = page.getByTestId('slot-PSU');
   await expect(psuSlot).toHaveAttribute('data-status', 'WARN');
-  await expect(psuSlot).toHaveClass(/bg-amber-50/);
+  await expect(psuSlot).toHaveClass(/bg-amber-100/);
   await expect(psuSlot.getByText('간섭 주의')).toBeVisible();
 
   // 문제 관계선 강조
