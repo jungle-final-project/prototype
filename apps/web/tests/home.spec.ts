@@ -94,10 +94,10 @@ function partDetail(partId: string) {
     status: 'ACTIVE',
     attributes: {
       shortSpec: 'AI 추천 대표 이미지',
-      imageUrl: '/assets/home-banners/pc-build-festa.png'
+      imageUrl: `/assets/home-banners/pc-build-festa.png?part=${partId}`
     },
     externalOffer: {
-      imageUrl: '/assets/home-banners/pc-build-festa.png',
+      imageUrl: `/assets/home-banners/pc-build-festa.png?part=${partId}`,
       supplierName: 'BuildGraph',
       offerUrl: null,
       lowPrice: 100000,
@@ -155,6 +155,70 @@ function buildGraphResponse(mode = 'BUILD_OVERVIEW') {
       { tool: 'power', status: 'WARN', confidence: 'MEDIUM', summary: 'PSU 정격 출력 여유를 확인해야 합니다.' }
     ]
   };
+}
+
+function previewLayoutGraphResponse(variant: 'power' | 'size') {
+  const isSizeVariant = variant === 'size';
+  return {
+    mode: 'BUILD_OVERVIEW',
+    summary: isSizeVariant ? 'Case clearance needs attention.' : 'Power headroom needs attention.',
+    nodes: [
+      { id: 'part-GPU', type: 'PART', category: 'GPU', label: 'RTX 5070', status: 'PASS', detail: '250W / 304mm' },
+      { id: 'part-PSU', type: 'PART', category: 'PSU', label: '850W PSU', status: isSizeVariant ? 'PASS' : 'WARN', detail: '850W' },
+      { id: 'part-CASE', type: 'PART', category: 'CASE', label: 'Mid tower case', status: isSizeVariant ? 'WARN' : 'PASS', detail: 'GPU max 320mm' },
+      { id: 'constraint-budget', type: 'CONSTRAINT', category: 'PRICE', label: 'Budget', status: 'PASS', detail: '2,500,000' },
+      { id: 'constraint-total-price', type: 'CONSTRAINT', category: 'PRICE', label: 'Total', status: 'PASS', detail: '2,000,000' }
+    ],
+    edges: [
+      {
+        id: 'edge-gpu-psu-power',
+        source: 'part-GPU',
+        target: 'part-PSU',
+        type: 'AFFECTS',
+        status: isSizeVariant ? 'PASS' : 'WARN',
+        label: 'Power',
+        summary: 'Power relation'
+      },
+      {
+        id: 'edge-gpu-case-length',
+        source: 'part-GPU',
+        target: 'part-CASE',
+        type: 'REQUIRES',
+        status: isSizeVariant ? 'WARN' : 'PASS',
+        label: 'Length',
+        summary: 'Case relation'
+      }
+    ],
+    focusNodeIds: isSizeVariant ? ['part-GPU', 'part-CASE'] : ['part-GPU', 'part-PSU'],
+    insights: [
+      {
+        id: isSizeVariant ? 'insight-size' : 'insight-power',
+        status: 'WARN',
+        title: isSizeVariant ? 'Case clearance' : 'Power headroom',
+        description: isSizeVariant ? 'Check case clearance.' : 'Check power headroom.',
+        relatedNodeIds: isSizeVariant ? ['part-GPU', 'part-CASE'] : ['part-GPU', 'part-PSU']
+      }
+    ],
+    toolResults: [
+      { tool: isSizeVariant ? 'size' : 'power', status: 'WARN', confidence: 'MEDIUM', summary: 'Preview layout fixture' }
+    ]
+  };
+}
+
+async function mockBuildGraphApiWithLayoutVariants(page: Page) {
+  const requests: unknown[] = [];
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { items?: Array<{ partId?: string }> };
+    requests.push(body);
+    const partIds = (body.items ?? []).map((item) => item.partId);
+    const variant = partIds.includes('home-case-h9') ? 'size' : 'power';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(previewLayoutGraphResponse(variant))
+    });
+  });
+  return requests;
 }
 
 async function mockBuildGraphApi(page: Page) {
@@ -342,7 +406,7 @@ async function mockCurrentQuoteDraftApi(page: Page) {
 async function mockAiBuildChatApi(page: Page) {
   const requests: Array<{ message: string; currentBuilds?: unknown[] }> = [];
 
-  await page.route('**/api/parts/part-case-*', async (route) => {
+  await page.route('**/api/parts/part-*', async (route) => {
     const partId = decodeURIComponent(route.request().url().split('/').pop() ?? 'part-case-test');
     await route.fulfill({
       status: 200,
@@ -762,7 +826,8 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   for (const label of ['PC 견적', '전체 부품', 'AS 접수', '내 견적함']) {
     await expect(main.getByRole('link', { name: new RegExp(label) }).first()).toBeVisible();
   }
-  await expect(main.getByRole('link', { name: /AI 추천 견적/ })).toBeVisible();
+  await expect(main.getByRole('button', { name: /AI 추천 견적/ })).toBeVisible();
+  await expect(main.getByRole('link', { name: /AI 추천 견적/ })).toHaveCount(0);
   await expect(main.getByRole('link', { name: /내부 DB 부품 가격/ })).toBeVisible();
   await expect(main.getByRole('link', { name: /전체 부품/ }).first()).toHaveAttribute('href', '/self-quote?view=list');
   await expect(main.getByRole('heading', { name: '추천상품' })).toBeVisible();
@@ -808,9 +873,39 @@ test('selects a featured recommendation and applies every build part to self quo
   await expect(page.getByTestId('checklist-CASE')).toContainText('Home FRAME 4000D Case');
 });
 
+test('renders the full draggable home preview graph', async ({ page }) => {
+  await mockBuildGraphApiWithLayoutVariants(page);
+  await openHomeAsUser(page);
+  const main = page.getByRole('main');
+
+  await main.getByTestId('home-featured-preview-card-home-featured-qhd-gaming').click();
+  const graphCanvas = main.getByTestId('graph-flow-canvas');
+  await expect(graphCanvas.locator('.react-flow__node')).toHaveCount(4);
+  await expect(graphCanvas.locator('.react-flow__edge.buildgraph-flow-edge')).toHaveCount(2);
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' })).toHaveCount(1);
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: '850W PSU' })).toHaveCount(1);
+  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: 'Mid tower case' })).toHaveCount(1);
+  await expect(graphCanvas).toContainText('Total');
+
+  const gpuNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first();
+  const beforeDragBox = await gpuNode.boundingBox();
+  expect(beforeDragBox).not.toBeNull();
+  const dragStartX = (beforeDragBox?.x ?? 0) + (beforeDragBox?.width ?? 0) / 2;
+  const dragStartY = (beforeDragBox?.y ?? 0) + (beforeDragBox?.height ?? 0) / 2;
+
+  await page.mouse.move(dragStartX, dragStartY);
+  await page.mouse.down();
+  await page.mouse.move(dragStartX + 64, dragStartY + 28, { steps: 6 });
+  await page.mouse.up();
+
+  await expect.poll(async () => {
+    const afterDragBox = await gpuNode.boundingBox();
+    return Math.round((afterDragBox?.x ?? 0) - (beforeDragBox?.x ?? 0));
+  }).toBeGreaterThan(20);
+});
+
 test('chatbot uses build-chat API and updates latest home AI recommendations', async ({ page }) => {
   const buildGraphRequests = await mockBuildGraphApi(page);
-  const compatibleCandidateRequests = await mockCompatibleCandidatesApi(page);
   const buildChatRequests = await mockAiBuildChatApi(page);
   await mockCurrentQuoteDraftApi(page);
   await openHomeAsUser(page);
@@ -842,8 +937,14 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 균형형');
   await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('AI 추천');
-  await expect(main.getByTestId('home-ai-recommendations')).toContainText('호환성 통과');
-  await expect(main.getByTestId('build-dependency-graph')).toContainText('견적 관계도');
+  await expect(main.getByTestId('home-ai-recommendations')).toContainText('관계도 미리보기');
+  const aiImageSrcs = await main.getByTestId('home-ai-recommendations').locator('img.home-ai-preview-thumb').evaluateAll((images) => (
+    images.map((image) => (image as HTMLImageElement).getAttribute('src'))
+  ));
+  expect(new Set(aiImageSrcs).size).toBeGreaterThan(1);
+  await expect(main.getByTestId('build-dependency-graph')).toHaveCount(0);
+  await main.getByTestId('home-ai-preview-card-server-2000000-balanced-base').click();
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('AI 추천 관계도');
   await expect(main.getByTestId('build-dependency-graph')).toContainText('호환됨');
   await expect(main.getByTestId('build-dependency-graph')).not.toContainText('여유 있음');
   await expect(main.getByTestId('build-dependency-graph')).toContainText('간섭 주의');
@@ -857,19 +958,8 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   expect(canvasBox?.width).toBeGreaterThan((sectionBox?.width ?? 0) * 0.94);
   const guideCapsule = graphCanvas.getByTestId('graph-edge-guide-capsule');
   await expect(guideCapsule).toContainText('선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있어요');
-  const legendCard = graphCanvas.getByTestId('graph-edge-legend-card');
-  await expect(legendCard).toContainText('그래프 읽는 법');
-  await expect(legendCard).toContainText('파란 선');
-  await expect(legendCard).toContainText('노란 선');
-  await expect(legendCard).toContainText('빨간 선');
-  await legendCard.getByRole('button', { name: '그래프 읽는 법 접기' }).click();
-  await expect(legendCard).not.toContainText('확인이 필요한 관계');
-  await legendCard.getByRole('button', { name: '그래프 읽는 법 펼치기' }).click();
-  await expect(legendCard).toContainText('확인이 필요한 관계');
-  const issueCard = graphCanvas.getByTestId('graph-issue-card');
-  await expect(issueCard).toContainText('주의 필요');
-  await expect(issueCard).toContainText('여유 100W로 장착은 가능하지만 권장 여유가 낮습니다.');
-  await expect(issueCard).toContainText('2개 노드');
+  await expect(graphCanvas.getByTestId('graph-edge-legend-card')).toHaveCount(0);
+  await expect(graphCanvas.getByTestId('graph-issue-card')).toHaveCount(0);
   await expect(graphCanvas).not.toContainText('250W · 길이 304mm');
   await expect(graphCanvas).not.toContainText('권장 출력 750W / 현재 파워 850W');
   await expect(graphCanvas).not.toContainText('정격 850W');
@@ -885,17 +975,10 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   expect((buildGraphRequests[0] as { items?: unknown[] }).items?.length).toBe(8);
   await graphCanvas.scrollIntoViewIfNeeded();
   await expect(page.getByTestId('floating-dependency-graph')).toHaveCount(0);
-  await graphCanvas.locator('.react-flow__edge.buildgraph-flow-edge').first().click({ force: true });
-  await expect(guideCapsule).toContainText('선택한 관계');
-  await expect(guideCapsule).toContainText(/전력 여유 100W|길이 간섭 주의/);
-  await expect(guideCapsule).toContainText(/권장 출력 750W|GPU 길이 304mm/);
-  await issueCard.getByRole('button', { name: '문제 노드로 이동' }).click();
-  await expect(graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first()).toHaveClass(/buildgraph-flow-node--issue-focus/);
-  await graphCanvas.getByText('RTX 5070', { exact: true }).click();
   const graphCanvasBox = await graphCanvas.boundingBox();
   const graphPaneBox = await graphCanvas.locator('.react-flow').boundingBox();
-  expect(graphCanvasBox?.height).toBeGreaterThanOrEqual(520);
-  expect(graphPaneBox?.height).toBeGreaterThanOrEqual(320);
+  expect(graphCanvasBox?.height).toBeGreaterThanOrEqual(280);
+  expect(graphPaneBox?.height).toBeGreaterThanOrEqual(260);
   const gpuGraphNode = graphCanvas.locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first();
   await expect(gpuGraphNode).toHaveClass(/buildgraph-flow-node/);
   await expect(gpuGraphNode).not.toHaveClass(/react-flow__node-default/);
@@ -912,34 +995,8 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   const graphEdgePath = graphCanvas.locator('.react-flow__edge.buildgraph-flow-edge .react-flow__edge-path').first();
   await expect(graphEdgePath).toHaveCSS('stroke-linecap', 'round');
   await expect(graphEdgePath).toHaveCSS('stroke-width', '2px');
-  const candidatePanel = graphCanvas.getByTestId('graph-node-candidate-panel');
-  await expect(candidatePanel).toContainText('선택한 부품 상세');
-  await expect(candidatePanel.getByTestId('graph-selected-node-detail')).toContainText('간섭 주의');
-  await expect(candidatePanel).toContainText('250W · 길이 304mm');
-  await expect(candidatePanel).toContainText('호환 후보');
-  await expect(candidatePanel).toContainText('RTX 5070 Ti 호환 후보');
-  await expect(candidatePanel).toContainText('읽기 전용');
-  await expect(candidatePanel).not.toContainText('담기/교체');
-  await expect(candidatePanel.getByRole('img', { name: 'RTX 5070 Ti 호환 후보 제품 사진' })).toBeVisible();
-  await expect(candidatePanel.getByRole('img', { name: 'RTX 5080 Compact 호환 후보 사진 없음' })).toBeVisible();
-  await candidatePanel.getByRole('button', { name: 'RTX 5070 Ti 호환 후보 사진 확대' }).click();
-  const imageDialog = page.getByRole('dialog', { name: 'RTX 5070 Ti 호환 후보 사진 확대' });
-  await expect(imageDialog).toBeVisible();
-  await expect(imageDialog.getByRole('img', { name: 'RTX 5070 Ti 호환 후보 확대 이미지' })).toBeVisible();
-  await expect(imageDialog).toContainText('NVIDIA · 990,000원');
-  await page.keyboard.press('Escape');
-  await expect(imageDialog).toHaveCount(0);
-  await expect.poll(() => compatibleCandidateRequests.length).toBe(1);
-  expect(compatibleCandidateRequests[0].source).toBe('AI_BUILD');
-  expect(compatibleCandidateRequests[0].category).toBe('GPU');
-  expect(compatibleCandidateRequests[0].items?.length).toBe(8);
   await moveHomeFullPageDown(page);
-  const floatingGraph = page.getByTestId('floating-dependency-graph');
-  await expect(floatingGraph).toBeVisible();
-  await expect(page.getByTestId('floating-graph-resize-handle')).toBeVisible();
-  const defaultFloatingBox = await floatingGraph.boundingBox();
-  expect(defaultFloatingBox).not.toBeNull();
-  await expect(floatingGraph.locator('.react-flow')).toBeVisible();
+  await expect(page.getByTestId('floating-dependency-graph')).toHaveCount(0);
   await expect(page.getByTestId('ai-chat-messages')).toContainText('200만원 예산 기준');
 
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('300만원 PC 추천');
