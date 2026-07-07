@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { AlertTriangle, CheckCircle2, GitBranch, Info, Maximize2, X } from 'lucide-react';
+import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import {
   PART_CATEGORY_LABELS,
   type BuildGraphNode,
@@ -30,6 +31,7 @@ type BuildDependencyGraphProps = {
   isLoading?: boolean;
   isRefreshing?: boolean;
   isError?: boolean;
+  variant?: 'default' | 'preview';
   totalPrice?: number;
   title?: string;
   subtitle?: string;
@@ -87,12 +89,15 @@ export function BuildDependencyGraph({
   isLoading,
   isRefreshing = false,
   isError,
+  variant = 'default',
   totalPrice,
   title = '견적 관계도',
   subtitle = '선택한 부품이 전력, 규격, 호환성에 주는 영향을 시각화합니다.',
   onCategorySelect,
   candidateContext
 }: BuildDependencyGraphProps) {
+  useHiddenPageScrollbar();
+
   const [activeEdge, setActiveEdge] = useState<BuildGraphEdge | null>(null);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [isEdgeGuideVisible, setIsEdgeGuideVisible] = useState(true);
@@ -107,6 +112,7 @@ export function BuildDependencyGraph({
   const displayGraph = useMemo(() => withDisplayTotalPrice(graph, totalPrice), [graph, totalPrice]);
   const graphModel = useMemo(() => buildGraphDisplayModel(displayGraph), [displayGraph]);
   const issueInsight = useMemo(() => selectRepresentativeIssue(displayGraph), [displayGraph]);
+  const isPreviewVariant = variant === 'preview';
   const activeNode = graphModel.nodes.find((node) => node.id === activeNodeId) ?? null;
   const activeNodeCategory = activeNode && typeof activeNode.category === 'string' && isPartCategory(activeNode.category)
     ? activeNode.category
@@ -143,7 +149,8 @@ export function BuildDependencyGraph({
     };
   }), [flowElements.nodes, issueFocusNodeIds]);
   const edges = flowElements.edges;
-  const canShowFloatingGraph = Boolean(displayGraph && graphModel.nodes.length > 0 && !isLoading && !isError);
+  const canShowFloatingGraph = !isPreviewVariant && Boolean(displayGraph && graphModel.nodes.length > 0 && !isLoading && !isError);
+  const canShowGraphOverlays = !isPreviewVariant;
 
   useEffect(() => {
     return () => {
@@ -227,8 +234,8 @@ export function BuildDependencyGraph({
   };
 
   return (
-    <section data-testid="build-dependency-graph" className="panel overflow-hidden">
-      <div className="flex flex-col gap-4 border-b border-commerce-line bg-white px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
+    <section data-testid="build-dependency-graph" className={`panel overflow-hidden ${isPreviewVariant ? 'buildgraph-preview-mode' : ''}`}>
+      <div className="buildgraph-header flex flex-col gap-4 border-b border-commerce-line bg-white px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs font-black text-brand-blue">
             <GitBranch size={15} />
@@ -237,7 +244,7 @@ export function BuildDependencyGraph({
           <h2 className="mt-1 text-xl font-black text-commerce-ink">{title}</h2>
           <p className="mt-1 max-w-3xl break-keep text-sm leading-6 text-slate-500">{displayGraph?.summary ?? subtitle}</p>
         </div>
-        <div className="grid grid-cols-3 gap-2 text-center text-xs sm:min-w-[260px]">
+        <div className="buildgraph-stat-grid grid grid-cols-3 gap-2 text-center text-xs sm:min-w-[260px]">
           <GraphStat label="노드" value={displayGraph ? graphModel.nodes.length : 0} />
           <GraphStat label="관계" value={displayGraph ? graphModel.edges.length : 0} />
           <GraphStat label="주의" value={displayGraph?.insights.filter((insight) => insight.status !== 'PASS').length ?? 0} tone="warn" />
@@ -263,12 +270,12 @@ export function BuildDependencyGraph({
           </p>
         </div>
       ) : (
-        <div>
+        <div className="buildgraph-content">
           <div
             ref={graphCanvasRef}
             data-testid="graph-flow-canvas"
             data-active-edge-id={activeEdge?.id}
-            className="relative min-w-0 border-b border-commerce-line bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] lg:border-b-0"
+            className="buildgraph-canvas relative min-w-0 border-b border-commerce-line bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] lg:border-b-0"
           >
             {isEdgeGuideVisible && !activeNode ? (
               <GraphEdgeGuideCapsule
@@ -277,16 +284,17 @@ export function BuildDependencyGraph({
               />
             ) : null}
 
-            {issueInsight ? (
+            {canShowGraphOverlays && issueInsight ? (
               <GraphIssueCard
                 insight={issueInsight}
                 onFocusIssue={focusIssueNodes}
               />
             ) : null}
 
-            <div className={`h-[520px] ${issueInsight ? 'pt-0 lg:pt-[184px]' : 'pt-[96px] lg:pt-[88px]'} lg:h-[calc(100vh-180px)] xl:h-[calc(100vh-160px)]`}>
+            <div className={`buildgraph-flow-area ${isPreviewVariant ? 'h-full min-h-0 p-0' : `h-[520px] ${issueInsight ? 'pt-0 lg:pt-[184px]' : 'pt-[96px] lg:pt-[88px]'} lg:h-[calc(100vh-180px)] xl:h-[calc(100vh-160px)]`}`}>
               <div className="h-full">
                 <ReactFlow
+                  className={isPreviewVariant ? 'buildgraph-preview-flow' : 'buildgraph-scroll-pass-through'}
                   nodes={nodes}
                   edges={edges}
                   nodeTypes={graphNodeTypes}
@@ -294,9 +302,11 @@ export function BuildDependencyGraph({
                   fitViewOptions={{ padding: 0.06 }}
                   minZoom={0.45}
                   maxZoom={1.35}
-                  zoomOnScroll
-                  zoomOnPinch
-                  panOnDrag
+                  preventScrolling={isPreviewVariant}
+                  zoomOnScroll={isPreviewVariant}
+                  zoomOnPinch={isPreviewVariant}
+                  panOnScroll={false}
+                  panOnDrag={isPreviewVariant}
                   nodesDraggable={false}
                   nodesConnectable={false}
                   proOptions={{ hideAttribution: true }}
@@ -323,7 +333,7 @@ export function BuildDependencyGraph({
               </div>
             ) : null}
 
-            {!activeNode ? (
+            {canShowGraphOverlays && !activeNode ? (
               <GraphEdgeLegendCard
                 isExpanded={isLegendExpanded}
                 onToggle={() => setIsLegendExpanded((current) => !current)}
@@ -516,14 +526,17 @@ function FloatingDependencyGraph({
           style={{ height: size.graphHeight }}
         >
           <ReactFlow
+            className="buildgraph-scroll-pass-through"
             nodes={floatingNodes}
             edges={edges}
             nodeTypes={graphNodeTypes}
             minZoom={0.18}
             maxZoom={1.15}
-            zoomOnScroll
-            zoomOnPinch
-            panOnDrag
+            preventScrolling={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            panOnScroll={false}
+            panOnDrag={false}
             nodesDraggable={false}
             nodesConnectable={false}
             proOptions={{ hideAttribution: true }}

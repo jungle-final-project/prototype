@@ -202,7 +202,7 @@ export function SlotCandidatePanel({
 
       {/* 후보 목록만 스크롤 영역: 데스크톱은 카드 약 6개 분량 높이로 제한한다. 데이터는 20개 페이지 로드를 유지. */}
       {/* lg: 패널이 h-0+min-h-full로 보드(구성 관계도) 높이를 따라가므로 목록도 그 안에서 스크롤된다. */}
-      <div data-testid="slot-candidate-list" className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div data-testid="slot-candidate-list" className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto p-4">
         {isLoading ? (
           <div className="rounded-md border border-commerce-line p-4 text-sm text-slate-500">후보 목록을 불러오는 중입니다.</div>
         ) : null}

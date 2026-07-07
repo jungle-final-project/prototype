@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { Bell, LayoutGrid, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
 import { openAiAssistant } from '../../../lib/events';
@@ -33,6 +34,8 @@ import { applyAiBuildToQuoteDraft, deleteQuoteDraftItem, getCurrentQuoteDraft, p
 import type { PartRow, QuoteDraft, QuoteDraftItem } from '../types';
 
 export function SelfQuotePage() {
+  useHiddenPageScrollbar();
+
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
