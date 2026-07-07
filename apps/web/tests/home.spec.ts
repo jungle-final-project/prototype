@@ -1262,7 +1262,7 @@ test('selects a home AI recommendation through batch API and shows applied cart 
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('GPU 추천해줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
-  await main.getByTestId('home-ai-recommendations').getByRole('button', { name: /200만원 균형형 셀프 견적으로 적용/ }).click();
+  await main.getByTestId('home-ai-recommendations').getByRole('button', { name: /200만원 균형형 셀프 견적에 담기/ }).click();
 
   await expect.poll(() => applyRequests.length).toBe(1);
   const expectedTotal = budgetBuilds(2_000_000, ['GPU'])[1].totalPrice.toLocaleString();
@@ -1978,8 +1978,15 @@ test('keeps the unified home usable on mobile width', async ({ page }) => {
   await expect(page.getByTestId('ai-chatbot-panel')).toBeVisible();
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('200만원 PC 추천');
   await page.getByRole('button', { name: '질문 보내기' }).click();
-  await expect(main.getByTestId('build-dependency-graph')).toContainText('견적 관계도');
-  await main.getByTestId('build-dependency-graph').getByText('RTX 5070', { exact: true }).click();
+  await expect(main.getByTestId('build-dependency-graph')).toHaveCount(0);
+  await page.getByRole('button', { name: 'AI 견적 챗봇 닫기' }).click();
+  await expect(page.getByTestId('ai-chatbot-panel')).toHaveCount(0);
+  await main.getByTestId('home-ai-preview-card-server-2000000-balanced-base').click();
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('AI 추천 관계도');
+  await main.getByTestId('build-dependency-graph').getByRole('button', { name: '관계 안내 닫기' }).click();
+  const mobileGpuNode = main.getByTestId('graph-flow-canvas').locator('.react-flow__node').filter({ hasText: 'RTX 5070' }).first();
+  await expect(mobileGpuNode).toBeVisible();
+  await mobileGpuNode.dispatchEvent('click');
   await expect(main.getByTestId('graph-flow-canvas').getByTestId('graph-node-candidate-panel')).toContainText('호환 후보');
   await moveHomeFullPageDown(page);
   await expect(page.getByTestId('floating-dependency-graph')).toHaveCount(0);
