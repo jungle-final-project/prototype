@@ -975,6 +975,47 @@ class AgentGoal1112Test(unittest.TestCase):
             with self.assertRaises(agent.UploadError):
                 agent.preview_as_rag(config, preview_file, "preview-key", window)
 
+    def test_send_diagnosis_chat_posts_json_without_idempotency_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="token",
+                log_dir=Path(directory),
+                agent_version="test-agent",
+                policy_version="test-policy",
+            )
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = b'{"assistantMessage":"check the driver"}'
+            response.__exit__.return_value = None
+
+            with patch("buildgraph_agent.urllib.request.urlopen", return_value=response) as urlopen:
+                result = agent.send_diagnosis_chat(
+                    config,
+                    {
+                        "id": "diagnosis-1",
+                        "summaryText": "Display driver reset repeated",
+                        "recommendedService": "REMOTE_SUPPORT",
+                        "supportDecision": "REMOTE_POSSIBLE",
+                        "confidence": "HIGH",
+                    },
+                    [{"role": "user", "content": "game crashes"}],
+                    "what should I do?",
+                )
+
+            request = urlopen.call_args.args[0]
+            body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(result["assistantMessage"], "check the driver")
+            self.assertEqual(request.full_url, "http://localhost:8080/api/agent/diagnosis-chat")
+            self.assertEqual(request.headers["Authorization"], "Bearer token")
+            self.assertNotIn("Idempotency-key", request.headers)
+            self.assertEqual(body["message"], "what should I do?")
+            self.assertEqual(body["diagnosis"]["diagnosisId"], "diagnosis-1")
+            self.assertEqual(body["diagnosis"]["recommendedService"], "REMOTE_SUPPORT")
+            self.assertEqual(body["messages"][0]["role"], "user")
+
     def test_format_as_rag_preview_uses_korean_service_label(self) -> None:
         text = agent.format_as_rag_preview(
             {
@@ -1062,6 +1103,28 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(rows[0]["summaryText"], "두 번째 진단")
             self.assertEqual(rows[1]["summaryText"], "첫 번째 진단")
             self.assertIn("최근 진단:", agent.compact_home_diagnosis_text(rows[0]))
+
+    def test_diagnosis_chat_history_is_scoped_to_diagnosis_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="raw-agent-token",
+                log_dir=Path(directory) / "logs",
+                agent_version="test-agent",
+                policy_version="test-policy",
+            )
+
+            agent.append_diagnosis_chat_message(config, "diagnosis-a", "user", "first question")
+            agent.append_diagnosis_chat_message(config, "diagnosis-a", "assistant", "first answer")
+            agent.append_diagnosis_chat_message(config, "diagnosis-b", "user", "other question")
+
+            rows = agent.read_diagnosis_chat_history(config, "diagnosis-a")
+
+            self.assertEqual([row["role"] for row in rows], ["user", "assistant"])
+            self.assertEqual([row["content"] for row in rows], ["first question", "first answer"])
 
     def test_compact_home_diagnosis_text_explains_diagnosis_only_reason(self) -> None:
         text = agent.compact_home_diagnosis_text(
@@ -1170,7 +1233,11 @@ class AgentGoal1112Test(unittest.TestCase):
     def test_log_readers_include_non_system_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent-metrics.jsonl"
-            now = datetime.now(agent.KST)
+            base = datetime.now(agent.KST)
+            if base.minute < 10:
+                now = (base - timedelta(hours=1)).replace(minute=55, second=0, microsecond=0)
+            else:
+                now = base.replace(minute=10, second=0, microsecond=0)
             demo_at = now - timedelta(minutes=5)
             system_at = now - timedelta(minutes=4)
             rows = [
@@ -1644,6 +1711,165 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), b"pca-agent-exe")
             self.assertEqual(startup_path.name, f"{agent.APP_NAME}.cmd")
             self.assertIn(f'"{installed}" run-background', startup_path.read_text(encoding="utf-8"))
+
+    def test_register_startup_removes_legacy_startup_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            appdata = root / "AppData" / "Roaming"
+            startup = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup.mkdir(parents=True)
+            legacy = startup / "BuildGraphAgent.cmd"
+            legacy.write_text('@echo off\nstart "" "C:\\Users\\me\\Downloads\\BuildGraphAgent-token.exe" run-background\n', encoding="utf-8")
+            spaced_legacy = startup / "PC Agent.cmd"
+            spaced_legacy.write_text("@echo off\n", encoding="utf-8")
+            unrelated = startup / "Unrelated.cmd"
+            unrelated.write_text("@echo off\n", encoding="utf-8")
+
+            with patch.dict("os.environ", {"APPDATA": str(appdata)}):
+                startup_path = agent.register_startup()
+
+            self.assertEqual(startup_path, startup / "PCAgent.cmd")
+            self.assertFalse(legacy.exists())
+            self.assertFalse(spaced_legacy.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(startup_path.exists())
+
+    def test_compare_versions_uses_numeric_parts(self) -> None:
+        self.assertGreater(agent.compare_versions("0.10.0", "0.2.0"), 0)
+        self.assertEqual(agent.compare_versions("1.0.0", "1.0"), 0)
+        self.assertLess(agent.compare_versions("1.0.0", "1.0.1"), 0)
+
+    def test_parse_update_manifest_resolves_relative_download_url(self) -> None:
+        info = agent.parse_agent_update_manifest(
+            {
+                "version": "0.2.0",
+                "downloadUrl": "agent.exe",
+                "sha256": "a" * 64,
+                "fileName": "PCAgent.exe",
+            },
+            "http://localhost:5173/downloads/pc-agent/latest.json",
+        )
+
+        self.assertEqual(info.version, "0.2.0")
+        self.assertEqual(info.download_url, "http://localhost:5173/downloads/pc-agent/agent.exe")
+        self.assertEqual(info.sha256, "a" * 64)
+
+    def test_prepare_agent_update_stages_verified_exe_for_frozen_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            localappdata = root / "LocalAppData"
+            payload = b"new-pcagent-exe"
+            digest = agent.hashlib.sha256(payload).hexdigest()
+            calls: list[str] = []
+
+            class Response:
+                def __init__(self, body: bytes) -> None:
+                    self.body = body
+
+                def __enter__(self) -> "Response":
+                    return self
+
+                def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+                    return None
+
+                def read(self) -> bytes:
+                    return self.body
+
+            def opener(request: object, timeout: int = 0) -> Response:
+                url = request.full_url
+                calls.append(url)
+                if url.endswith("latest.json"):
+                    return Response(
+                        json.dumps(
+                            {
+                                "version": "0.2.0",
+                                "downloadUrl": "agent.exe",
+                                "sha256": digest,
+                            }
+                        ).encode("utf-8")
+                    )
+                return Response(payload)
+
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="raw-agent-token",
+                log_dir=root / "logs",
+                agent_version="0.1.0",
+                policy_version="test-policy",
+                web_base_url="http://localhost:5173",
+            )
+
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(localappdata)}), \
+                    patch.object(agent.sys, "frozen", True, create=True):
+                result = agent.prepare_agent_update(config, opener=opener)
+
+            staged = Path(str(result["stagedPath"]))
+            script = Path(str(result["scriptPath"]))
+            self.assertEqual(result["status"], "READY")
+            self.assertEqual(calls, [
+                "http://localhost:5173/downloads/pc-agent/latest.json",
+                "http://localhost:5173/downloads/pc-agent/agent.exe",
+            ])
+            self.assertEqual(staged.read_bytes(), payload)
+            script_text = script.read_text(encoding="utf-8")
+            self.assertIn("PCAgent.exe", script_text)
+            self.assertIn("taskkill /PID", script_text)
+            self.assertIn("Get-CimInstance Win32_Process", script_text)
+            self.assertIn("Name -eq 'PCAgent.exe'", script_text)
+            self.assertIn("ExecutablePath", script_text)
+            self.assertIn("agentVersion", script_text)
+            self.assertIn("0.2.0", script_text)
+
+    def test_prepare_agent_update_rejects_bad_sha256(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = b"tampered"
+
+            class Response:
+                def __init__(self, body: bytes) -> None:
+                    self.body = body
+
+                def __enter__(self) -> "Response":
+                    return self
+
+                def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+                    return None
+
+                def read(self) -> bytes:
+                    return self.body
+
+            def opener(request: object, timeout: int = 0) -> Response:
+                if request.full_url.endswith("latest.json"):
+                    return Response(
+                        json.dumps(
+                            {
+                                "version": "0.2.0",
+                                "downloadUrl": "agent.exe",
+                                "sha256": "b" * 64,
+                            }
+                        ).encode("utf-8")
+                    )
+                return Response(payload)
+
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_token="raw-agent-token",
+                log_dir=root / "logs",
+                agent_version="0.1.0",
+                policy_version="test-policy",
+                web_base_url="http://localhost:5173",
+            )
+
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(root / "LocalAppData")}), \
+                    patch.object(agent.sys, "frozen", True, create=True):
+                with self.assertRaisesRegex(agent.AgentError, "sha256"):
+                    agent.prepare_agent_update(config, opener=opener)
 
     def test_status_home_model_marks_recent_memory_pressure_as_warning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

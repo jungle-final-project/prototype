@@ -48,10 +48,13 @@ docker compose up --build
 
 | 환경변수 | 필수 여부 | 쓰는 곳 | 비고 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | AS Chat 실제 답변 테스트 시 필요 | `/support/ai-chat`, Agent LLM mode, AS Chat benchmark | 없으면 AS Chat 답변 생성은 `428 PRECONDITION_REQUIRED`로 실패하며, 화면은 키 필요 안내를 보여줍니다. |
+| `OPENAI_API_KEY` | AS Chat/PC Agent AI 진단 실제 LLM 답변 테스트 시 필요 | `/support/ai-chat`, PCAgent AI 진단, Agent LLM mode, AS Chat benchmark | 없으면 AS Chat 답변 생성은 `428 PRECONDITION_REQUIRED`로 실패합니다. PCAgent AI 진단은 rule fallback 답변으로 계속 동작합니다. |
 | `NAVER_SEARCH_CLIENT_ID` | 가격/상품 갱신 시 필요 | 관리자 부품 offer 갱신, 내부 자산 후보 수집 | 없으면 seed에 저장된 내부 자산과 가격만 표시됩니다. |
 | `NAVER_SEARCH_CLIENT_SECRET` | 가격/상품 갱신 시 필요 | 관리자 부품 offer 갱신, 내부 자산 후보 수집 | 네이버 검색 API secret입니다. 커밋 금지입니다. |
 | `AGENT_RUNNER_MODE` | 선택 | Agent 실행 방식 | 기본값은 `deterministic`입니다. 실제 LLM summary를 보려면 `llm`으로 바꿉니다. |
+| `PC_AGENT_DIAGNOSIS_CHAT_MODEL` | 선택 | PCAgent AI 진단 탭 | 기본값은 `gpt-5.4-mini`입니다. `OPENAI_API_KEY`가 있을 때만 사용하고, 실패 시 rule fallback으로 우회합니다. |
+| `PC_AGENT_DIAGNOSIS_CHAT_REASONING_EFFORT` | 선택 | PCAgent AI 진단 탭 | 기본값은 `low`입니다. |
+| `PC_AGENT_DIAGNOSIS_CHAT_MAX_OUTPUT_TOKENS` | 선택 | PCAgent AI 진단 탭 | 기본값은 `750`입니다. |
 | `AS_CHAT_DEFAULT_PROFILE` | 선택 | AS Chat 기본 profile | 기본값은 실측 benchmark 기준 `AS_CHAT_54_MINI_FAST`입니다. |
 | `BUILD_CHAT_DEFAULT_PROFILE` | 선택 | Build Chat 기본 profile | 기본값은 실측 benchmark 기준 `BUILD_CHAT_54_MINI_FAST`입니다. |
 | `BUILD_CHAT_CACHE_ENABLED` | 선택 | Build Chat Redis cache | 기본값은 `true`입니다. Redis 장애 시 자동 우회하며 응답 body에는 cache 상태를 노출하지 않습니다. |
@@ -254,6 +257,9 @@ AGENT_RUNNER_MODE=llm
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.5
 OPENAI_REASONING_EFFORT=medium
+PC_AGENT_DIAGNOSIS_CHAT_MODEL=gpt-5.4-mini
+PC_AGENT_DIAGNOSIS_CHAT_REASONING_EFFORT=low
+PC_AGENT_DIAGNOSIS_CHAT_MAX_OUTPUT_TOKENS=750
 AS_CHAT_DEFAULT_PROFILE=AS_CHAT_54_MINI_FAST
 AS_CHAT_FAST_MODEL=gpt-5.5
 AS_CHAT_FAST_REASONING_EFFORT=low

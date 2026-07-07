@@ -21,6 +21,11 @@ type ZipEntryInput = {
   name: string;
   data: Uint8Array<ArrayBuffer>;
 };
+type AgentDownloadManifest = {
+  version: string;
+  downloadUrl: string;
+  sha256?: string;
+};
 
 const crc32Table = createCrc32Table();
 
@@ -1102,11 +1107,8 @@ function toSupportRequestKind(value?: string | null): SupportRequestKind {
 }
 
 async function downloadAgentPackage(activationToken: string) {
-  const response = await fetch('/downloads/pc-agent/agent.exe');
-  if (!response.ok) {
-    throw new Error('Agent exe download failed.');
-  }
-  const exe = new Uint8Array(await response.arrayBuffer());
+  const manifest = await fetchAgentDownloadManifest();
+  const exe = await fetchAgentExecutable(manifest);
   const config = {
     apiBaseUrl: resolveAgentApiBaseUrl(),
     webBaseUrl: window.location.origin,
@@ -1122,6 +1124,51 @@ async function downloadAgentPackage(activationToken: string) {
   const url = URL.createObjectURL(zip);
   downloadUrl(url, 'PCAgent.zip');
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function fetchAgentDownloadManifest(): Promise<AgentDownloadManifest> {
+  const response = await fetch('/downloads/pc-agent/latest.json', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error('Agent manifest download failed.');
+  }
+  const body: unknown = await response.json();
+  if (!isAgentDownloadManifest(body)) {
+    throw new Error('Agent manifest is invalid.');
+  }
+  return body;
+}
+
+function isAgentDownloadManifest(value: unknown): value is AgentDownloadManifest {
+  if (typeof value !== 'object' || value == null) {
+    return false;
+  }
+  const manifest = value as Partial<AgentDownloadManifest>;
+  return typeof manifest.version === 'string'
+    && typeof manifest.downloadUrl === 'string'
+    && (manifest.sha256 == null || typeof manifest.sha256 === 'string');
+}
+
+async function fetchAgentExecutable(manifest: AgentDownloadManifest): Promise<Uint8Array<ArrayBuffer>> {
+  const manifestUrl = new URL('/downloads/pc-agent/latest.json', window.location.origin);
+  const executableUrl = new URL(manifest.downloadUrl, manifestUrl);
+  executableUrl.searchParams.set('v', manifest.version);
+  const response = await fetch(executableUrl, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error('Agent exe download failed.');
+  }
+  const exe = new Uint8Array(await response.arrayBuffer());
+  if (manifest.sha256 && globalThis.crypto?.subtle) {
+    const actualHash = await sha256Hex(exe);
+    if (actualHash !== manifest.sha256.toLowerCase()) {
+      throw new Error('Agent exe checksum mismatch.');
+    }
+  }
+  return exe;
+}
+
+async function sha256Hex(data: Uint8Array<ArrayBuffer>) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function createAgentPackageReadme() {
