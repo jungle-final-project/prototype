@@ -218,6 +218,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildDto"
+    patch:
+      summary: 저장 견적 이름 변경
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  maxLength: 120
+      responses:
+        "200":
+          description: 이름 변경 후 Build 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDto"
+    delete:
+      summary: 저장 견적 삭제(소프트 삭제 — 목록에서 감춤)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 삭제 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  deleted:
+                    type: boolean
+  /api/builds/{id}/duplicate:
+    post:
+      summary: 저장 견적 복제('(사본)' 이름으로 새 Build 생성)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 복제된 Build 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDto"
   /api/builds/history:
     get:
       summary: 내 Build 이력

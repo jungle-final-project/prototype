@@ -360,3 +360,72 @@ test('opens a read-only dependency graph popup for each saved quote', async ({ p
   await dialog.getByRole('button', { name: '관계 그래프 닫기' }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test('renames, duplicates, and soft-deletes a saved quote', async ({ page }) => {
+  const patchRequests: Array<{ id: string; name: string }> = [];
+  const duplicateRequests: string[] = [];
+  const deleteRequests: string[] = [];
+  let builds = savedBuilds.map((build) => ({ ...build }));
+
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-1004', email: 'user@example.com', name: '테스트 사용자', role: 'USER' }));
+  });
+  await page.route('**/api/auth/me', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'user-1004', email: 'user@example.com', name: '테스트 사용자', role: 'USER' }) }));
+  await page.route('**/api/price-alerts**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) }));
+  await page.route('**/api/tools/performance/check', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '', details: { cpuBenchmarkScore: 70, gpuBenchmarkScore: 75, gameFpsEvidence: [] } }) }));
+  await page.route('**/api/builds/**', async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    const json = (body: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+
+    if (path.endsWith('/history')) {
+      return json({ items: builds });
+    }
+    const dupMatch = path.match(/\/api\/builds\/([^/]+)\/duplicate$/);
+    if (method === 'POST' && dupMatch) {
+      const source = builds.find((build) => build.id === dupMatch[1]) ?? builds[0];
+      const copy = { ...source, id: `${source.id}-copy`, name: `${source.name} (사본)` };
+      builds = [copy, ...builds];
+      duplicateRequests.push(dupMatch[1]);
+      return json(copy);
+    }
+    const idMatch = path.match(/\/api\/builds\/([^/]+)$/);
+    if (method === 'PATCH' && idMatch) {
+      const body = JSON.parse(request.postData() ?? '{}') as { name: string };
+      builds = builds.map((build) => (build.id === idMatch[1] ? { ...build, name: body.name } : build));
+      patchRequests.push({ id: idMatch[1], name: body.name });
+      return json(builds.find((build) => build.id === idMatch[1]));
+    }
+    if (method === 'DELETE' && idMatch) {
+      builds = builds.filter((build) => build.id !== idMatch[1]);
+      deleteRequests.push(idMatch[1]);
+      return json({ id: idMatch[1], deleted: true });
+    }
+    return json({});
+  });
+
+  await page.goto('/my/quotes');
+  const firstCard = page.getByTestId('saved-build-card-build-qhd-balanced');
+  await expect(firstCard).toBeVisible();
+
+  // 이름 변경(인라인 편집)
+  await firstCard.getByTestId('rename-build-qhd-balanced').click();
+  await firstCard.getByTestId('rename-input-build-qhd-balanced').fill('내 메인 견적');
+  await firstCard.getByTestId('rename-save-build-qhd-balanced').click();
+  await expect.poll(() => patchRequests.some((request) => request.name === '내 메인 견적')).toBe(true);
+  await expect(firstCard.getByRole('heading', { name: '내 메인 견적' })).toBeVisible();
+
+  // 복제 → 사본 카드가 생긴다
+  await firstCard.getByTestId('duplicate-build-qhd-balanced').click();
+  await expect.poll(() => duplicateRequests.length).toBe(1);
+  await expect(page.getByTestId('saved-build-card-build-qhd-balanced-copy')).toBeVisible();
+
+  // 삭제(인라인 확인) → 카드가 사라진다
+  const workstationCard = page.getByTestId('saved-build-card-build-workstation');
+  await workstationCard.getByTestId('delete-build-workstation').click();
+  await workstationCard.getByTestId('confirm-delete-build-workstation').click();
+  await expect.poll(() => deleteRequests).toContain('build-workstation');
+  await expect(page.getByTestId('saved-build-card-build-workstation')).toHaveCount(0);
+});

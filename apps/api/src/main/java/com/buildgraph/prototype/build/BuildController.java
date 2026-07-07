@@ -2,7 +2,9 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.Map;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -73,6 +75,35 @@ public class BuildController {
     ) {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
         return buildQueryService.changePart(id, request == null ? Map.of() : request, user);
+    }
+
+    @PatchMapping("/builds/{id}")
+    Map<String, Object> renameBuild(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return buildQueryService.renameBuild(id, request == null ? Map.of() : request, user);
+    }
+
+    @PostMapping("/builds/{id}/duplicate")
+    Map<String, Object> duplicateBuild(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return buildQueryService.duplicateBuild(id, user);
+    }
+
+    @DeleteMapping("/builds/{id}")
+    Map<String, Object> deleteBuild(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        buildQueryService.deleteBuild(id, user);
+        return Map.of("id", id, "deleted", true);
     }
 
     @PostMapping("/ai/build-chat")
