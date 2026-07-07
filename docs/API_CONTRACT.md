@@ -850,7 +850,7 @@ PC Agent 등록/인증 규칙:
 
 ### PC Agent/AS/Admin DTO
 
-PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/log-uploads`다. 이 API는 일반 사용자 JWT가 아니라 agent token Bearer 인증을 사용하며, multipart `file`에는 gzip JSONL incident window를 담는다. 서버는 gzip, JSONL envelope(`schemaVersion`, `collectedAt`, `agentId`, `sequence`, `kind`, `payload`, `privacyFlags`)와 privacy flag를 검증한다. `privacyFlags.containsRawPath=true`인데 `masked=true`가 아니면 `400 FILE_VALIDATION_ERROR`를 반환하고 DB row와 파일을 남기지 않는다. 성공 시 `agent_log_uploads`, `agent_log_bundles`, `as_tickets`, `agent_log_summaries`를 생성하고 `{ uploadJobId, logUploadId, ticketId, logSummaryId, ... }`를 반환한다.
+PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/log-uploads`다. 이 API는 일반 사용자 JWT가 아니라 agent token Bearer 인증을 사용하며, multipart `file`에는 gzip JSONL incident window를 담는다. 서버는 gzip, JSONL envelope(`schemaVersion`, `collectedAt`, `agentId`, `sequence`, `kind`, `payload`, `privacyFlags`)와 privacy flag를 검증한다. `privacyFlags.containsRawPath=true`인데 `masked=true`가 아니면 `400 FILE_VALIDATION_ERROR`를 반환하고 DB row와 파일을 남기지 않는다. 성공 시 `agent_log_uploads`, `agent_log_bundles`, `as_tickets`, `support_chat_rooms`, `support_chat_messages`, `agent_log_summaries`를 생성하고 `{ uploadJobId, logUploadId, ticketId, supportChatRoomId, logSummaryId, ... }`를 반환한다.
 
 `agent_log_summaries.feature_payload`에는 XGBoost 학습에 사용할 수 있는 정량 피처만 저장한다. 예: `maxDiskUsage`, `avgMemoryUsage`, `maxGpuTemp`, `gpuMetricAvailable`, `unavailableReasonCounts`, `thermalRisk`, `storagePressureRisk` 등이다. raw gzip과 전체 JSONL line은 재처리/감사용 보존 대상이며 학습 dataset row로 복사하지 않는다.
 

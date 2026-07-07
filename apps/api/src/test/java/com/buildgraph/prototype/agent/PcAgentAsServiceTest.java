@@ -15,6 +15,7 @@ import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.buildgraph.prototype.config.security.AgentTokenHasher;
+import com.buildgraph.prototype.ticket.SupportChatRoomProvisioner;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -41,10 +42,13 @@ class PcAgentAsServiceTest {
     private static final String VALID_ACTIVATION_TOKEN = "valid-agent-activation-token";
 
     private final JdbcTemplate jdbcTemplate = org.mockito.Mockito.mock(JdbcTemplate.class);
+    private final SupportChatRoomProvisioner supportChatRoomProvisioner =
+            org.mockito.Mockito.mock(SupportChatRoomProvisioner.class);
     private final AgentTokenHasher tokenHasher = new AgentTokenHasher();
     private final PcAgentAsService service = new PcAgentAsService(
             jdbcTemplate,
             tokenHasher,
+            supportChatRoomProvisioner,
             CLOCK,
             () -> "raw-agent-token"
     );
@@ -54,6 +58,7 @@ class PcAgentAsServiceTest {
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.registerBean(JdbcTemplate.class, () -> jdbcTemplate);
             context.registerBean(AgentTokenHasher.class, () -> tokenHasher);
+            context.registerBean(SupportChatRoomProvisioner.class, () -> supportChatRoomProvisioner);
             context.register(PcAgentAsService.class);
             context.refresh();
 
@@ -173,6 +178,7 @@ class PcAgentAsServiceTest {
         PcAgentAsService guardedService = new PcAgentAsService(
                 jdbcTemplate,
                 tokenHasher,
+                supportChatRoomProvisioner,
                 CLOCK,
                 () -> {
                     throw new AssertionError("token must not be generated when activationToken is missing");
@@ -276,6 +282,7 @@ class PcAgentAsServiceTest {
         PcAgentAsService guardedService = new PcAgentAsService(
                 jdbcTemplate,
                 tokenHasher,
+                supportChatRoomProvisioner,
                 CLOCK,
                 () -> {
                     throw new AssertionError("token must not be generated for used activation token");
@@ -584,6 +591,7 @@ class PcAgentAsServiceTest {
                 eq("NONE"),
                 any(String.class)
         )).thenReturn(MockData.map(
+                "ticket_internal_id", 300L,
                 "ticket_id", "ticket-public-id",
                 "status", "OPEN",
                 "analysis_status", "RULE_READY",
@@ -591,6 +599,8 @@ class PcAgentAsServiceTest {
                 "support_decision", "REMOTE_POSSIBLE",
                 "risk_level", "MEDIUM"
         ));
+        when(supportChatRoomProvisioner.ensureRoom(eq(20L), eq(300L)))
+                .thenReturn("support-room-public-id");
 
         Map<String, Object> response = service.uploadLogs(
                 AGENT,
@@ -602,6 +612,7 @@ class PcAgentAsServiceTest {
         assertThat(response.get("uploadJobId")).isEqualTo("upload-job-public-id");
         assertThat(response.get("logUploadId")).isEqualTo("log-upload-public-id");
         assertThat(response.get("ticketId")).isEqualTo("ticket-public-id");
+        assertThat(response.get("supportChatRoomId")).isEqualTo("support-room-public-id");
         assertThat(response.get("analysisStatus")).isEqualTo("RULE_READY");
         assertThat(response.get("reviewStatus")).isEqualTo("REQUIRED");
         assertThat(response.get("supportDecision")).isEqualTo("REMOTE_POSSIBLE");
@@ -643,6 +654,7 @@ class PcAgentAsServiceTest {
                 eq("NONE"),
                 any(String.class)
         );
+        verify(supportChatRoomProvisioner).ensureRoom(20L, 300L);
     }
 
     @Test
