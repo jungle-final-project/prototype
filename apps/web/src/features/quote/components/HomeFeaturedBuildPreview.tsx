@@ -168,7 +168,7 @@ function FeaturedPreviewCard({
           />
         ) : (
           <div className="home-featured-preview-thumb home-featured-preview-thumb--empty">
-            준비중
+            준비 중
           </div>
         )}
       </div>
@@ -197,7 +197,7 @@ function FeaturedPreviewCard({
 
           <button
             type="button"
-            aria-label={`${item.build.name} 셀프견적에 담기`}
+            aria-label={`${item.build.name} 셀프 견적에 담기`}
             onClick={(event) => {
               event.stopPropagation();
               onApply();

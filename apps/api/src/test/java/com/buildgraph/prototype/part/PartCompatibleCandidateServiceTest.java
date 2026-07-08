@@ -164,9 +164,9 @@ class PartCompatibleCandidateServiceTest {
 
         assertThat(items).hasSize(3);
         assertThat(compatibility(items.get(0)).get("status")).isEqualTo("FAIL");
-        assertThat(compatibility(items.get(0)).get("statusLabel")).isEqualTo("안 맞음");
+        assertThat(compatibility(items.get(0)).get("statusLabel")).isEqualTo("장착 불가");
         assertThat(compatibility(items.get(1)).get("status")).isEqualTo("PASS");
-        assertThat(compatibility(items.get(1)).get("statusLabel")).isEqualTo("호환됨");
+        assertThat(compatibility(items.get(1)).get("statusLabel")).isEqualTo("호환 가능");
         assertThat(compatibility(items.get(2)).get("status")).isEqualTo("WARN");
         assertThat(compatibility(items.get(2)).get("statusLabel")).isEqualTo("간섭 주의");
     }

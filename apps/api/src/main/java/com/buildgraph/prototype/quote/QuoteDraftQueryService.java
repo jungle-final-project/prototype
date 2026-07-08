@@ -17,7 +17,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class QuoteDraftQueryService {
-    private static final Set<String> MULTI_ITEM_CATEGORIES = Set.of("RAM", "STORAGE");
+    // 견적에 같은 카테고리 상품을 여러 개 담을 수 있는 카테고리. 드래프트와 저장 견적(from-chat)이 같은 규칙을 공유한다.
+    public static final Set<String> MULTI_ITEM_CATEGORIES = Set.of("RAM", "STORAGE");
 
     private final JdbcTemplate jdbcTemplate;
     private final CurrentUserService currentUserService;
@@ -83,7 +84,8 @@ public class QuoteDraftQueryService {
     public Map<String, Object> patchItem(String authorization, String partId, Map<String, Object> request) {
         Long userId = currentUserId(authorization);
         Map<String, Object> draft = requireActiveDraft(userId);
-        Map<String, Object> part = part(partId);
+        // 담긴 뒤 단종/비활성된 부품도 수량 변경·정리는 가능해야 한다 — 상태 무관 조회(신규 담기만 ACTIVE 요구).
+        Map<String, Object> part = partAnyStatus(partId);
         int quantity = quantity(request.get("quantity"), DbValueMapper.string(part, "category"));
         int updated = jdbcTemplate.update("""
                 UPDATE quote_draft_items
@@ -106,7 +108,8 @@ public class QuoteDraftQueryService {
         if (draft == null) {
             return emptyDraft();
         }
-        Map<String, Object> part = part(partId);
+        // 삭제는 부품의 판매 상태와 무관해야 한다 — 비활성 부품이 견적에 남아 지울 수 없는 잠금 방지.
+        Map<String, Object> part = partAnyStatus(partId);
         jdbcTemplate.update("""
                 UPDATE quote_draft_items
                 SET deleted_at = now(),
@@ -177,6 +180,26 @@ public class QuoteDraftQueryService {
                 // 비활성/삭제된 부품이면 어떤 부품이 실패했는지 프론트가 알 수 있도록 partId를 메시지에 포함한다
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "부품을 찾을 수 없습니다. (비활성 또는 삭제된 부품일 수 있습니다. partId=" + publicId + ")"));
+    }
+
+    // 삭제/수량 변경 경로 전용: 판매 상태(ACTIVE 여부)와 무관하게 이미 담긴 부품을 해석한다.
+    private Map<String, Object> partAnyStatus(String publicId) {
+        return jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               category,
+                               name,
+                               manufacturer,
+                               price,
+                               attributes
+                        FROM parts
+                        WHERE public_id = ?::uuid
+                          AND deleted_at IS NULL
+                        """, publicId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "부품을 찾을 수 없습니다. (partId=" + publicId + ")"));
     }
 
     private List<ResolvedAiItem> resolveAiItems(Object value) {

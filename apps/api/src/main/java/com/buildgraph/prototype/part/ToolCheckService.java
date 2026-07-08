@@ -139,9 +139,9 @@ public class ToolCheckService {
                 : !coolerTdpMatched
                         ? "쿨러 TDP 대응(" + coolerTdpW + "W)이 CPU TDP(" + cpuTdpW + "W)에 못 미쳐 냉각이 부족합니다."
                         : !ramFormFactorMatched
-                                ? "데스크탑 보드에 장착할 수 없는 램 폼팩터(" + String.join(", ", ramBadFormFactors) + ")입니다."
+                                ? "데스크탑 보드에 장착할 수 없는 RAM 폼팩터(" + String.join(", ", ramBadFormFactors) + ")입니다."
                                 : !ramSlotsMatched
-                                        ? "램 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
+                                        ? "RAM 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
                                         : !m2SlotsMatched
                                                 ? "M.2 SSD 수(" + m2StorageTotal + "개)가 메인보드 M.2 슬롯(" + m2Slots + "개)을 초과합니다."
                                                 : "소켓 또는 메모리 호환성 확인이 필요합니다.";

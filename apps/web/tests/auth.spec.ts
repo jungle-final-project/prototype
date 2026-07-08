@@ -57,13 +57,13 @@ test('updates header from login response before auth me finishes', async ({ page
     });
   });
 
-  await page.goto('/login?redirect=%2Fparts%2Fpart-gpu-detail-test');
+  await page.goto('/login');
   await page.getByLabel('이메일').fill('fast@example.com');
   await page.getByLabel('비밀번호').fill('passw0rd!');
   await page.getByRole('button', { name: '로그인' }).click();
 
   await expect(page).toHaveURL('/');
-  await expect(page.getByText('로그인됨 · fast@example.com · USER')).toBeVisible({ timeout: 2_000 });
+  await expect(page.getByText('로그인됨 · fast@example.com · 사용자')).toBeVisible({ timeout: 2_000 });
   await expect(page.getByText('Fast User')).toBeVisible({ timeout: 2_000 });
   await expect(page.getByRole('navigation').getByRole('link', { name: '관리자' })).toHaveCount(0);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('buildgraph.authUser') ?? '{}'))).toMatchObject({
@@ -98,7 +98,7 @@ test('shows admin navigation only for ADMIN role', async ({ page }) => {
 
   await page.goto('/login');
 
-  await expect(page.getByText('로그인됨 · admin@example.com · ADMIN')).toBeVisible();
+  await expect(page.getByText('로그인됨 · admin@example.com · 관리자')).toBeVisible();
   await expect(page.getByRole('navigation').getByRole('link', { name: '관리자' })).toHaveAttribute('href', '/admin');
 });
 

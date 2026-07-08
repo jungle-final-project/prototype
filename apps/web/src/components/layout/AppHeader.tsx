@@ -1,15 +1,27 @@
-import { ReactNode, useEffect, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Cpu, FileText, LifeBuoy, LogIn, LogOut, Search, ShieldCheck, Sparkles, UserRound } from 'lucide-react';
 import { getCurrentUser, logout as logoutApi, type CurrentUser } from '../../features/auth/authApi';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getCachedAuthUser, getRefreshToken, getToken } from '../../lib/api';
-import { AI_BUILD_ASSISTANT_TOGGLE_EVENT } from '../../lib/events';
+import { AI_BUILD_ASSISTANT_TOGGLE_EVENT, openAiAssistant } from '../../lib/events';
 import { PrimaryNav } from './PrimaryNav';
 
 export function AppHeader() {
   const navigate = useNavigate();
   const [user, setUser] = useState<CurrentUser | null>(() => readCachedCurrentUser());
   const [checkingUser, setCheckingUser] = useState(() => Boolean(getToken() && !readCachedCurrentUser()));
+  const [searchInput, setSearchInput] = useState('');
+
+  // 검색창 placeholder가 AI 프롬프트 예시("QHD 게임용 200만원 PC")다 — 제출하면 AI 챗봇에 그대로 묻는다.
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const prompt = searchInput.trim();
+    if (!prompt) {
+      return;
+    }
+    openAiAssistant({ prefill: prompt, autoSubmit: true });
+    setSearchInput('');
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +91,7 @@ export function AppHeader() {
       <div className="border-b border-neutral-900 bg-neutral-950 text-xs text-white">
         <div className="mx-auto flex min-h-[32px] w-full max-w-[1320px] flex-col gap-1 px-4 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8 xl:px-0">
           <span className="font-semibold">오늘의 PC 견적 특가 · 내부 자산 기준 가격/호환성 검증</span>
-          <span className="font-normal text-white/60">{user ? `로그인됨 · ${user.email} · ${user.role}` : checkingUser ? '로그인 상태 확인 중' : '로그인 필요 · 회원가입 · PCAgent'}</span>
+          <span className="font-normal text-white/60">{user ? `로그인됨 · ${user.email} · ${user.role === 'ADMIN' ? '관리자' : '사용자'}` : checkingUser ? '로그인 상태 확인 중' : '로그인 필요 · 회원가입 · PCAgent'}</span>
         </div>
       </div>
       <header className="border-b border-commerce-line bg-white">
@@ -93,11 +105,17 @@ export function AppHeader() {
               <div className="text-xs font-semibold text-slate-500">당신만을 위한 PC 견적 플랫폼</div>
             </div>
           </Link>
-          <div className="col-span-2 row-start-2 flex h-12 w-full min-w-0 items-center rounded-md border border-commerce-ink bg-white px-3 shadow-sm xl:col-span-1 xl:col-start-2 xl:row-start-1">
+          <form onSubmit={submitSearch} className="col-span-2 row-start-2 flex h-12 w-full min-w-0 items-center rounded-md border border-commerce-ink bg-white px-3 shadow-sm xl:col-span-1 xl:col-start-2 xl:row-start-1">
             <Search size={18} className="text-slate-500" />
-            <input className="ml-2 min-w-0 flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-slate-400" placeholder="예: QHD 게임용 200만원 PC" />
-            <button className="rounded bg-commerce-ink px-4 py-2 text-xs font-black text-white hover:bg-slate-700">검색</button>
-          </div>
+            <input
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              aria-label="AI에게 견적 질문하기"
+              className="ml-2 min-w-0 flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-slate-400"
+              placeholder="예: QHD 게임용 200만원 PC"
+            />
+            <button type="submit" className="rounded bg-commerce-ink px-4 py-2 text-xs font-black text-white hover:bg-slate-700">검색</button>
+          </form>
           <div className="col-start-2 row-start-1 flex flex-wrap items-center justify-end gap-2 xl:col-start-3 xl:flex-nowrap">
             <HeaderButton to="/my/quotes" icon={<FileText size={15} />} label="내 견적함" dark />
             <HeaderButton to="/support/new" icon={<LifeBuoy size={15} />} label="AS 접수" quiet />

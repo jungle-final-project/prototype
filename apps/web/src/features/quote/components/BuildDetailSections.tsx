@@ -54,7 +54,7 @@ export function BuildDetailSections({
             }))} />
           </div>
         </Panel>
-        <Panel title="Tool 검증 결과">
+        <Panel title="검증 결과">
           {toolResults.length > 0 ? (
             <div className={`mb-3 rounded-md border px-4 py-3 text-sm font-black ${passCount === toolResults.length ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-amber-100 bg-amber-50 text-amber-700'}`}>
               {passCount === toolResults.length

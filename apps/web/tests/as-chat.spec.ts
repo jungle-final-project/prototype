@@ -154,6 +154,6 @@ test('loads AS AI chat ticket id from query string', async ({ page }) => {
 
   await page.goto(`/support/ai-chat?asTicketId=${queryTicketId}`);
 
-  await expect(page.getByLabel('AS ticket id')).toHaveValue(queryTicketId);
+  await expect(page.getByLabel('AS 티켓 번호')).toHaveValue(queryTicketId);
   await expect(page.getByText('GPU 온도 상승')).toBeVisible();
 });

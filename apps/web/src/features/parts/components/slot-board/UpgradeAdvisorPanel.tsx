@@ -5,6 +5,7 @@ import { openAiAssistant } from '../../../../lib/events';
 import { PART_CATEGORY_LABELS, type PartCategory } from '../../../quote/aiSelection';
 import { listParts } from '../../partsApi';
 import type { PartRow, QuoteDraftItem } from '../../types';
+import { withObjectParticle, withSubjectParticle } from './koreanParticle';
 
 // 멘토 피드백 R1: "요즘 게임이 잘 안 돌아가요" 같은 증상에서 출발하는 업그레이드 흐름.
 // 챗봇 의도는 넓히지 않는다(팀 결정: 3기능 축소 유지) — 증상을 병목 카테고리로 좁히고,
@@ -24,16 +25,6 @@ const SYMPTOMS: Symptom[] = [
   { key: 'multitask', label: '멀티태스킹이 버벅여요', category: 'RAM', hint: '메모리 용량·속도를 올려보세요' },
   { key: 'space', label: '저장 공간이 부족해요', category: 'STORAGE', hint: '더 큰 SSD로 교체하거나 추가하세요' }
 ];
-
-// 시뮬레이션 질문의 조사(로/으로) — 받침 유무로 고른다. 영문/숫자로 끝나면 '로'.
-function replaceParticle(name: string) {
-  const lastChar = name.trim().slice(-1);
-  const code = lastChar.charCodeAt(0);
-  if (code >= 0xac00 && code <= 0xd7a3) {
-    return (code - 0xac00) % 28 !== 0 ? '으로' : '로';
-  }
-  return lastChar === 'ㄹ' ? '로' : '로';
-}
 
 async function upgradeCandidates(category: PartCategory, currentPrice: number) {
   const [minimal, performance] = await Promise.all([
@@ -68,8 +59,9 @@ export function UpgradeAdvisorPanel({
   });
 
   const askSimulation = (part: PartRow) => {
-    // 기존 교체 시뮬레이션 의도("…로 바꾸면?")로 변환해 챗봇에 자동 전송한다.
-    openAiAssistant({ prefill: `${part.name}${replaceParticle(part.name)} 바꾸면 어때?`, autoSubmit: true });
+    // 기존 교체 시뮬레이션 의도("…(으)로 바꾸면?")로 변환해 챗봇에 자동 전송한다.
+    // 상품명은 영문·숫자로 끝나는 경우가 많아 받침 판정이 어렵다 — 후보 패널의 '(으)로' 병기 관례를 따른다.
+    openAiAssistant({ prefill: `${part.name}(으)로 바꾸면 어때?`, autoSubmit: true });
   };
 
   const optionCard = (title: string, description: string, part: PartRow | null, testId: string) => {
@@ -139,7 +131,7 @@ export function UpgradeAdvisorPanel({
           {!currentItem ? (
             <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-600">
               <span>
-                진단하려면 먼저 {PART_CATEGORY_LABELS[symptom.category]}를 견적에 담아 주세요 — 현재 부품 기준으로 상위 후보를 찾아드려요.
+                진단하려면 먼저 {withObjectParticle(PART_CATEGORY_LABELS[symptom.category])} 견적에 담아 주세요 — 현재 부품 기준으로 상위 후보를 찾아드려요.
               </span>
               <button
                 type="button"
@@ -152,6 +144,8 @@ export function UpgradeAdvisorPanel({
             </div>
           ) : candidatesQuery.isLoading ? (
             <div className="text-xs font-bold text-slate-400">상위 후보를 찾는 중…</div>
+          ) : candidatesQuery.isError ? (
+            <div className="text-xs font-bold text-orange-700">상위 후보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</div>
           ) : (
             <>
               <div className="mb-2 text-[11px] font-bold text-slate-500">
@@ -162,11 +156,11 @@ export function UpgradeAdvisorPanel({
                   {optionCard('최소 변경', '가격 부담을 줄이면서 한 단계 올립니다 — 누르면 AI가 성능 변화를 비교해요', candidatesQuery.data?.minimalPart ?? null, 'upgrade-option-minimal')}
                   {optionCard('고성능', '확실한 체감을 원할 때 — 누르면 AI가 성능 변화를 비교해요', candidatesQuery.data?.performancePart ?? null, 'upgrade-option-performance')}
                 </div>
-              ) : (
+              ) : candidatesQuery.data ? (
                 <div className="text-xs font-bold text-slate-500">
-                  현재 {PART_CATEGORY_LABELS[symptom.category]}가 이미 최상위권이에요 — 다른 증상을 골라 보세요.
+                  현재 {withSubjectParticle(PART_CATEGORY_LABELS[symptom.category])} 이미 최상위권이에요 — 다른 증상을 골라 보세요.
                 </div>
-              )}
+              ) : null}
             </>
           )}
         </div>

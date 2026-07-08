@@ -30,6 +30,7 @@ export function MyQuotesPage() {
   const [selectedSavedPartId, setSelectedSavedPartId] = useState('');
   const [graphBuild, setGraphBuild] = useState<BuildSummary | null>(null);
   const [targetPrice, setTargetPrice] = useState('850000');
+  const [alertInputError, setAlertInputError] = useState('');
   const alertFormRef = useRef<HTMLDivElement | null>(null);
 
   const buildsQuery = useQuery({ queryKey: ['build-history'], queryFn: getBuildHistory });
@@ -113,9 +114,12 @@ export function MyQuotesPage() {
 
   function submitAlert(event: FormEvent) {
     event.preventDefault();
-    if (!selectedPartIdForSubmit || !targetPriceNumber) {
+    // 음수·0이 서버까지 가면 DB 제약 위반(500)에 엉뚱한 실패 사유가 표시된다 — 여기서 차단.
+    if (!selectedPartIdForSubmit || !Number.isFinite(targetPriceNumber) || targetPriceNumber < 1) {
+      setAlertInputError('목표가는 1원 이상의 숫자로 입력해 주세요.');
       return;
     }
+    setAlertInputError('');
     createAlertMutation.mutate();
   }
 
@@ -248,8 +252,12 @@ export function MyQuotesPage() {
                     className="h-11 w-full rounded-md border border-slate-300 px-3 text-sm font-bold text-commerce-ink focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
                     inputMode="numeric"
                     value={targetPrice}
-                    onChange={(event) => setTargetPrice(event.target.value)}
+                    onChange={(event) => {
+                      setTargetPrice(event.target.value);
+                      setAlertInputError('');
+                    }}
                   />
+                  {alertInputError ? <p className="mt-1 text-xs font-bold text-red-600">{alertInputError}</p> : null}
                 </div>
 
                 <button
@@ -341,7 +349,7 @@ function AlertStatusPill({ alert }: { alert: PriceAlert }) {
         : 'border-blue-200 bg-blue-50 text-brand-blue'
     }`}
     >
-      {achieved ? '목표 도달' : '추적 중'}
+      {achieved ? '목표 달성' : '추적 중'}
     </span>
   );
 }

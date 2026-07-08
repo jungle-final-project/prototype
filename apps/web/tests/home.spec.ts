@@ -837,7 +837,7 @@ test('renders a single shopping home without the old hero prompt flow', async ({
   await expect(qhdRecommendationCard).toBeVisible();
   await expect(qhdRecommendationCard.getByText('2,293,000원')).toBeVisible();
   await expect(qhdRecommendationCard.getByRole('img', { name: /Home FRAME 4000D Case/ })).toBeVisible();
-  await expect(qhdRecommendationCard.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프견적에 담기' })).toBeVisible();
+  await expect(qhdRecommendationCard.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프 견적에 담기' })).toBeVisible();
   await main.getByRole('tab', { name: 'AI 추천상품' }).click();
   await expect(main.getByText('AI에게 예산이나 부품을 물어보면 추천상품 3개가 여기에 표시됩니다.')).toBeVisible();
   await expect(main.getByRole('heading', { name: '인기 부품 랭킹' })).toBeVisible();
@@ -859,7 +859,7 @@ test('selects a featured recommendation and applies every build part to self quo
 
   const qhdRecommendationCard = main.getByTestId('home-featured-preview-card-home-featured-qhd-gaming');
   await expect(qhdRecommendationCard.getByRole('img', { name: /Home FRAME 4000D Case/ })).toBeVisible();
-  await qhdRecommendationCard.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프견적에 담기' }).click();
+  await qhdRecommendationCard.getByRole('button', { name: 'QHD 게이밍 추천팩 셀프 견적에 담기' }).click();
 
   await expect.poll(() => applyRequests.length).toBe(1);
   const request = applyRequests[0] as { buildId?: string; items?: Array<{ partId: string; category: string; quantity: number }> };
@@ -931,7 +931,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect.poll(() => buildChatRequests.length).toBe(1);
   expect(buildChatRequests[0].message).toBe('200만원 PC 추천');
   await expect(chatbotPanel).toContainText('AI 견적 어시스턴트');
-  await expect(chatbotPanel).toContainText('가격 호환');
+  await expect(chatbotPanel).toContainText('가격 통과');
   await expect(main.getByRole('tab', { name: 'AI 추천상품' })).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 실속형');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 균형형');
@@ -945,7 +945,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(main.getByTestId('build-dependency-graph')).toHaveCount(0);
   await main.getByTestId('home-ai-preview-card-server-2000000-balanced-base').click();
   await expect(main.getByTestId('build-dependency-graph')).toContainText('AI 추천 관계도');
-  await expect(main.getByTestId('build-dependency-graph')).toContainText('호환됨');
+  await expect(main.getByTestId('build-dependency-graph')).toContainText('호환 가능');
   await expect(main.getByTestId('build-dependency-graph')).not.toContainText('여유 있음');
   await expect(main.getByTestId('build-dependency-graph')).toContainText('간섭 주의');
   const graphCanvas = main.getByTestId('graph-flow-canvas');
@@ -957,7 +957,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   expect(canvasBox).not.toBeNull();
   expect(canvasBox?.width).toBeGreaterThan((sectionBox?.width ?? 0) * 0.94);
   const guideCapsule = graphCanvas.getByTestId('graph-edge-guide-capsule');
-  await expect(guideCapsule).toContainText('선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있어요');
+  await expect(guideCapsule).toContainText('선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있습니다');
   await expect(graphCanvas.getByTestId('graph-edge-legend-card')).toHaveCount(0);
   await expect(graphCanvas.getByTestId('graph-issue-card')).toHaveCount(0);
   await expect(graphCanvas).not.toContainText('250W · 길이 304mm');
@@ -1480,7 +1480,8 @@ test('shows chatbot guide empty state when there are no temporary recommendation
   await expect(page).toHaveURL('/builds/latest');
   await expect(page.getByRole('heading', { name: '추천 결과' })).toBeVisible();
   await expect(page.getByText('AI 챗봇에게 먼저 추천을 받아보세요')).toBeVisible();
-  await expect(page.getByRole('link', { name: '홈에서 AI 챗봇 열기' })).toHaveAttribute('href', '/');
+  // 홈 이동만 하는 것이 아니라 '?assistant=open'으로 챗봇까지 실제로 연다(흐름 수선).
+  await expect(page.getByRole('link', { name: '홈에서 AI 챗봇 열기' })).toHaveAttribute('href', '/?assistant=open');
   expect(historyRequests).toHaveLength(0);
 });
 
@@ -1530,7 +1531,7 @@ test('renders a temporary chatbot build detail and saves it to a persisted build
   }, { session });
   await page.goto(`/builds/${temporaryBuild.id}`);
 
-  await expect(page.getByRole('heading', { name: `추천 Build 결과 / ${temporaryBuild.title}` })).toBeVisible();
+  await expect(page.getByRole('heading', { name: `추천 견적 결과 / ${temporaryBuild.title}` })).toBeVisible();
   await expect(page.getByText('저장 전 AI 챗봇 추천')).toBeVisible();
   await expect(page.getByRole('link', { name: temporaryBuild.items[0].name })).toBeVisible();
   await page.getByRole('button', { name: '견적 저장' }).click();
@@ -1585,7 +1586,7 @@ test('opens chatbot build details in a side drawer and saves in place', async ({
   await expect(drawer).toHaveAttribute('aria-modal', 'false');
   await expect(drawer.getByRole('heading', { name: `선택한 추천 조합 / ${temporaryBuild.title}` })).toBeVisible();
   await expect(drawer.getByRole('heading', { name: '구성 부품' })).toBeVisible();
-  await expect(drawer.getByRole('heading', { name: 'Tool 검증 결과' })).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: '검증 결과' })).toBeVisible();
   await expect(drawer.getByRole('heading', { name: '견적 요약 / 액션' })).toBeVisible();
   await expect(drawer.getByRole('link', { name: temporaryBuild.items[0].name })).toBeVisible();
 
@@ -1808,9 +1809,9 @@ test('shows a read-only build graph preview on recommendation card hover and reu
   await expect(preview).toContainText('부품 8개');
   await expect(preview).toContainText('경고 2건');
   await expect(preview).toContainText('주의 필요 2건');
-  await expect(preview.getByText('Tool 검증 요약')).toHaveCount(0);
+  await expect(preview.getByText('검증 요약')).toHaveCount(0);
   await expect(preview.getByText('추천 저장 전 상세 drawer에서 Tool 검증 결과를 확인하세요.')).toHaveCount(0);
-  await expect(preview.locator('.react-flow__node').filter({ hasText: 'GPU' }).filter({ hasText: '호환됨' })).toBeVisible();
+  await expect(preview.locator('.react-flow__node').filter({ hasText: 'GPU' }).filter({ hasText: '호환 가능' })).toBeVisible();
   await expect(preview.locator('.react-flow__node').filter({ hasText: '파워' }).filter({ hasText: '주의' })).toBeVisible();
   await expect(preview.locator('.react-flow__node').filter({ hasText: 'RTX 5070' })).toBeVisible();
   await expect(preview.locator('.react-flow__node').filter({ hasText: '총액' })).toHaveCount(0);
@@ -1958,7 +1959,7 @@ test('redirects a previously saved temporary chatbot build to its persisted buil
   await page.goto(`/builds/${temporaryBuild.id}`);
 
   await expect(page).toHaveURL('/builds/saved-chat-build-redirect');
-  await expect(page.getByRole('heading', { name: `추천 Build 결과 / ${temporaryBuild.title}` })).toBeVisible();
+  await expect(page.getByRole('heading', { name: `추천 견적 결과 / ${temporaryBuild.title}` })).toBeVisible();
 });
 
 test('keeps the unified home usable on mobile width', async ({ page }) => {

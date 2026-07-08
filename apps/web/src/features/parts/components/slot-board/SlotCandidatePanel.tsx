@@ -2,7 +2,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Eye, Heart, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { partImageUrl, specRows } from '../../partDisplay';
+import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay';
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
@@ -69,14 +69,18 @@ export function SlotCandidatePanel({
   }, [searchInput]);
 
   // 가격 범위 디바운스 — 숫자만 추출해 300ms 후 확정한다.
+  // 최소가가 최대가보다 크면(입력 실수) 두 값을 서로 바꿔 확정해, 서버 오류 대신 의도한 범위로 조회한다.
   useEffect(() => {
     const timer = setTimeout(() => {
       const parse = (value: string) => {
         const digits = value.replace(/[^0-9]/g, '');
         return digits ? Number(digits) : undefined;
       };
-      setMinPrice(parse(minPriceInput));
-      setMaxPrice(parse(maxPriceInput));
+      const parsedMin = parse(minPriceInput);
+      const parsedMax = parse(maxPriceInput);
+      const shouldSwap = parsedMin !== undefined && parsedMax !== undefined && parsedMin > parsedMax;
+      setMinPrice(shouldSwap ? parsedMax : parsedMin);
+      setMaxPrice(shouldSwap ? parsedMin : parsedMax);
     }, 300);
     return () => clearTimeout(timer);
   }, [minPriceInput, maxPriceInput]);
@@ -201,7 +205,7 @@ export function SlotCandidatePanel({
       <div className="flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-base font-black text-commerce-ink">{slot.label} 부품 목록</h2>
-          <p className="mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 안 맞는 후보도 담아서 사유를 확인할 수 있어요</p>
+          <p className="mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 장착 불가 후보도 담아서 사유를 확인할 수 있어요</p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center rounded-md border border-commerce-line bg-white px-2 py-1">
@@ -373,7 +377,7 @@ export function SlotCandidatePanel({
           <div className="rounded-md border border-commerce-line p-4 text-sm text-slate-500">후보 목록을 불러오는 중입니다.</div>
         ) : null}
         {isError && pages.length === 0 ? (
-          <div className="rounded-md border border-orange-200 bg-orange-50 p-4 text-sm text-orange-700">후보 목록 API를 불러오지 못했습니다.</div>
+          <div className="rounded-md border border-orange-200 bg-orange-50 p-4 text-sm text-orange-700">후보 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</div>
         ) : null}
 
         <div className="space-y-2">
@@ -403,6 +407,7 @@ export function SlotCandidatePanel({
                   <img
                     src={partImageUrl(part)}
                     alt={`${part.name} 제품 사진`}
+                    onError={(event) => handlePartImageError(event, part.category)}
                     className="h-12 w-12 rounded-md border border-commerce-line bg-slate-100 object-cover transition hover:opacity-90"
                   />
                 </Link>
@@ -591,7 +596,7 @@ function PartQuickView({
           </button>
         </div>
         <div className="mt-3 flex gap-3">
-          <img src={partImageUrl(part)} alt={`${part.name} 제품 사진`} className="h-20 w-20 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover" />
+          <img src={partImageUrl(part)} alt={`${part.name} 제품 사진`} onError={(event) => handlePartImageError(event, part.category)} className="h-20 w-20 shrink-0 rounded-md border border-commerce-line bg-slate-100 object-cover" />
           <div className="min-w-0 flex-1 text-xs">
             <div className="text-[11px] font-bold text-slate-500">{part.manufacturer ?? '-'}</div>
             <div className="mt-1 text-lg font-black text-commerce-ink">{part.price.toLocaleString()}원</div>

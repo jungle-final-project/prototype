@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import ReactFullpage from '@fullpage/react-fullpage';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import 'fullpage.js/dist/fullpage.min.css';
 import {
   Bot,
@@ -142,7 +142,7 @@ const promoSlides: PromoSlide[] = [
     src: '/assets/home-banners/lostark-build.png',
     alt: '로스트아크 조립 PC 광고',
     title: '로스트아크 추천 PC',
-    subtitle: '대한민국 최고의 MMORPG에 걸맞는 최적의 사양!',
+    subtitle: '대한민국 최고의 MMORPG에 걸맞은 최적의 사양!',
     badge: 'MMORPG 추천',
     tone: 'from-blue-950 via-slate-950 to-black'
   }
@@ -286,6 +286,7 @@ const featuredBuilds: FeaturedBuild[] = [
 export function HomePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const homeMainRef = useRef<HTMLElement | null>(null);
   const [assistantSession, setAssistantSession] = useState<AiAssistantSession>(() => readAssistantSession());
   const [recommendationTab, setRecommendationTab] = useState<RecommendationTab>(() => readAssistantSession().latestBuilds.length > 0 ? 'ai' : 'popular');
@@ -410,6 +411,18 @@ export function HomePage() {
     staleTime: 60_000
   });
 
+  // '/?assistant=open' 진입(추천 결과 빈 상태 CTA 등) 시 챗봇을 바로 연다.
+  // 전역 챗봇 리스너가 늦게 마운트되는 첫 진입에도 이벤트가 유실되지 않도록 한 틱 늦춰 발사하고,
+  // 뒤로 가기 시 재실행되지 않게 파라미터는 즉시 제거한다.
+  useEffect(() => {
+    if (searchParams.get('assistant') !== 'open') return;
+    const timer = window.setTimeout(() => openAiAssistant(), 0);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('assistant');
+    setSearchParams(nextParams, { replace: true });
+    return () => window.clearTimeout(timer);
+  }, [searchParams, setSearchParams]);
+
   useEffect(() => {
     const syncAssistantSession = () => {
       clearLegacyAiStorage();
@@ -497,7 +510,7 @@ export function HomePage() {
     if (applyingFeaturedBuildId || applyingBuildId) return;
     setApplyError(null);
     if (buildParts.length < build.partSearches.length) {
-      setApplyError('추천상품 견적 정보를 아직 모두 불러오고 있습니다. 잠시 후 다시 선택해 주세요.');
+      setApplyError('추천상품 견적 정보를 아직 불러오는 중입니다. 잠시 후 다시 선택해 주세요.');
       return;
     }
 
@@ -532,7 +545,7 @@ export function HomePage() {
           anchors={['storefront', 'recommended-builds', 'popular-parts']}
           scrollingSpeed={1000}
           navigation
-          navigationTooltips={['홈', '추천 빌드', '인기 부품']}
+          navigationTooltips={['홈', '추천상품', '인기 부품']}
           credits={{ enabled: false }}
           verticalCentered={false}
           bigSectionsDestination="top"
@@ -554,7 +567,7 @@ export function HomePage() {
               <div>
                 <div className="text-xs font-black text-brand-blue"></div>
                 <h2 className="mt-1 text-xl font-black text-commerce-ink">추천상품</h2>
-                <p className="mt-1 text-sm text-slate-500">우측 토클을 클릭하여 인기상품과 AI 추천을 함께 살펴보세요.</p>
+                <p className="mt-1 text-sm text-slate-500">우측 토글을 클릭하여 인기상품과 AI 추천을 함께 살펴보세요.</p>
               </div>
               <div role="tablist" aria-label="홈 추천상품 탭" className="inline-flex rounded-lg border border-commerce-line bg-slate-50 p-1">
                 <button

@@ -372,7 +372,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
           ))}
           {isSending ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-500 shadow-sm">
-              서버 DB에서 추천 조합을 계산하는 중입니다.
+              서버에서 추천 조합을 계산하는 중입니다.
             </div>
           ) : null}
           <div ref={messagesEndRef} />
@@ -419,7 +419,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
           </div>
           <div className="mt-2 flex items-center gap-2 text-[11px] font-bold text-slate-500">
             <CheckCircle2 size={14} className="text-commerce-green" />
-            추천은 서버 DB/룰 기반이며 대화 히스토리는 브라우저 세션에만 저장합니다.
+            추천은 서버의 부품 데이터 기준으로 계산되며 대화 기록은 브라우저에만 임시 저장됩니다(창을 닫으면 사라집니다).
           </div>
         </form>
       </div>
@@ -690,7 +690,7 @@ function CompactBuildCard({
         </div>
       </div>
       {build.toolResults?.length ? (
-        <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Tool 검증 결과">
+        <div className="mt-3 flex flex-wrap gap-1.5" aria-label="검증 결과">
           {build.toolResults.map((result) => (
             <span
               key={`${result.tool}-${result.status}`}
@@ -735,9 +735,9 @@ function toolDisplayLabel(tool: AiToolResult['tool']) {
 }
 
 function toolStatusLabel(status: AiToolResult['status']) {
-  if (status === 'PASS') return '호환';
-  if (status === 'WARN') return '간섭 주의';
-  return '안 맞음';
+  if (status === 'PASS') return '통과';
+  if (status === 'WARN') return '주의';
+  return '불가';
 }
 
 function toolStatusChipClass(status: AiToolResult['status']) {

@@ -201,7 +201,7 @@ class PartControllerTest {
                         "attributes", Map.of(),
                         "compatibility", Map.of(
                                 "status", "PASS",
-                                "statusLabel", "호환됨",
+                                "statusLabel", "호환 가능",
                                 "summary", "현재 조합 기준 호환 가능합니다.",
                                 "checkedTools", java.util.List.of("power", "size", "performance")
                         )
@@ -219,7 +219,7 @@ class PartControllerTest {
                         .param("compatibilityMode", "ADD"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].compatibility.status").value("PASS"))
-                .andExpect(jsonPath("$.items[0].compatibility.statusLabel").value("호환됨"));
+                .andExpect(jsonPath("$.items[0].compatibility.statusLabel").value("호환 가능"));
 
         verify(currentUserService).requireUser(USER_TOKEN);
         // compatibilityMode/replaceTargetPartId도 쿼리 파라미터에서 그대로 위임되는지 함께 확인한다.

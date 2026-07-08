@@ -3,6 +3,8 @@ package com.buildgraph.prototype.build;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -11,6 +13,7 @@ import com.buildgraph.prototype.agent.OpenAiEmbeddingClient;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class BuildChatSemanticCacheServiceTest {
@@ -68,6 +71,25 @@ class BuildChatSemanticCacheServiceTest {
         assertThat(service.lookup(Map.of("message", "300만원 견적 추천해줘"), null,
                 decision(BuildChatIntent.BUILD_RECOMMEND, "BUILD_RECOMMEND|budget=TARGET:3000000"))).isEmpty();
         verifyNoInteractions(jdbcTemplate);
+    }
+
+    @Test
+    void storePrunesExpiredRowsOpportunisticallyBeforeInsert() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        OpenAiEmbeddingClient embeddingClient = mock(OpenAiEmbeddingClient.class);
+        when(embeddingClient.isConfigured()).thenReturn(true);
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+        when(jdbcTemplate.queryForMap(anyString())).thenReturn(versions());
+        BuildChatSemanticCacheService service = new BuildChatSemanticCacheService(jdbcTemplate, embeddingClient, null, true, 0.94, 600);
+
+        service.store(Map.of("message", "300만원 견적 추천해줘"), null,
+                decision(BuildChatIntent.BUILD_RECOMMEND, "BUILD_RECOMMEND|budget=TARGET:3000000"),
+                Map.of("message", "stored"));
+
+        // 스케줄러 없이 insert 경로에서 만료 행을 기회적으로 삭제해 무한 누적을 막는다
+        InOrder order = inOrder(jdbcTemplate);
+        order.verify(jdbcTemplate).update(contains("DELETE FROM build_chat_semantic_cache"));
+        order.verify(jdbcTemplate).update(contains("INSERT INTO build_chat_semantic_cache"), any(Object[].class));
     }
 
     private static BuildChatIntentDecision decision(BuildChatIntent intent, String signature) {

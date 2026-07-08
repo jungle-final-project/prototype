@@ -23,6 +23,7 @@ import {
   type AiSelectedBuild
 } from '../../quote/aiSelection';
 import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
+import { withObjectParticle } from '../components/slot-board/koreanParticle';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
 import { UpgradeAdvisorPanel } from '../components/slot-board/UpgradeAdvisorPanel';
@@ -257,6 +258,7 @@ function SelfQuoteSlotBoardPage() {
           unmetConditionCount={unmetConditionCount}
           storageItems={draftItems.filter((item) => item.category === 'STORAGE')}
           graphLoading={graphQuery.isLoading}
+          graphError={graphQuery.isError}
         />
 
         {/* 시작 안내: 빈 견적이면 AI/직접 시작을 명시하고, 진행 중이면 다음 선택을 안내한다 */}
@@ -268,7 +270,7 @@ function SelfQuoteSlotBoardPage() {
             <div className="min-w-0">
               <div className="text-sm font-black text-commerce-ink">뭘 골라야 할지 모르겠다면, AI에게 예산과 용도만 알려주세요</div>
               <div className="mt-1 text-xs text-slate-500">
-                예: &quot;게이밍 200만원&quot; — AI가 완성된 조합을 추천하고, 선택하면 이 화면에 그대로 채워집니다
+                예: &quot;게이밍 200만원&quot; — AI가 완성된 조합을 추천하고, 선택하면 이 화면에 그대로 채워져요
               </div>
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
@@ -296,7 +298,7 @@ function SelfQuoteSlotBoardPage() {
             className="flex flex-wrap items-center gap-2 rounded-md border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs font-black text-brand-blue"
           >
             <span>
-              다음: {RECOMMENDED_SLOT_ORDER.indexOf(nextCategory) + 1}. {PART_CATEGORY_LABELS[nextCategory]}를 선택해 주세요
+              다음: {RECOMMENDED_SLOT_ORDER.indexOf(nextCategory) + 1}. {withObjectParticle(PART_CATEGORY_LABELS[nextCategory])} 선택해 주세요
             </span>
             <button
               type="button"
@@ -331,7 +333,7 @@ function SelfQuoteSlotBoardPage() {
         {recentBuilds.length >= 2 && !compareOpen ? (
           <div className="panel flex flex-wrap items-center justify-between gap-2 border-blue-100 px-4 py-2.5">
             <span className="text-xs font-bold text-slate-600">
-              AI가 추천한 {recentBuilds.length}안(가성비·균형·고성능)을 나란히 비교할 수 있어요
+              AI가 추천한 {recentBuilds.length}안을 나란히 비교할 수 있어요
             </span>
             <button
               type="button"
@@ -603,7 +605,7 @@ function AiSelectedBuildPanel({
           </div>
           <button
             type="button"
-            aria-label="AI 선택 조합 비우기"
+            aria-label="AI 선택 조합 표시 닫기"
             onClick={onClear}
             className="grid h-10 w-10 place-items-center rounded-md border border-commerce-line bg-white text-slate-600 hover:border-commerce-sale hover:text-commerce-sale"
           >
@@ -818,7 +820,8 @@ function QuoteSummaryBar({
   failCount,
   unmetConditionCount,
   storageItems,
-  graphLoading
+  graphLoading,
+  graphError
 }: {
   totalPrice: number;
   filledCount: number;
@@ -828,27 +831,33 @@ function QuoteSummaryBar({
   unmetConditionCount: number;
   storageItems: QuoteDraftItem[];
   graphLoading: boolean;
+  graphError: boolean;
 }) {
   // '조건 미충족' = 빨간 부품 노드는 없지만 검사(예: 파워 용량)가 FAIL — 구매 차단과 표기를 일치시킨다.
-  const hasRedState = failCount > 0 || unmetConditionCount > 0;
+  // 검증 자체가 실패하면(미검증) 정상으로 오인하지 않도록 회색 '검증 확인 불가'로 구분한다.
+  const hasRedState = !graphError && (failCount > 0 || unmetConditionCount > 0);
   const compatibilityText = graphLoading
     ? '확인 중'
-    : failCount > 0
-      ? `안 맞음 ${failCount}개`
-      : unmetConditionCount > 0
-        ? '조건 미충족'
-        : warnCount > 0
-          ? `주의 ${warnCount}개`
-          : filledCount === 0
-            ? '부품 없음'
-            : '이상 없음';
+    : graphError
+      ? '검증 확인 불가'
+      : failCount > 0
+        ? `장착 불가 ${failCount}개`
+        : unmetConditionCount > 0
+          ? '조건 미충족'
+          : warnCount > 0
+            ? `주의 ${warnCount}개`
+            : filledCount === 0
+              ? '부품 없음'
+              : '이상 없음';
   const compatibilityColor = hasRedState
     ? 'text-red-600'
-    : warnCount > 0
-      ? 'text-amber-600'
-      : filledCount === 0
-        ? 'text-slate-400'
-        : 'text-emerald-600';
+    : graphError
+      ? 'text-slate-400'
+      : warnCount > 0
+        ? 'text-amber-600'
+        : filledCount === 0
+          ? 'text-slate-400'
+          : 'text-emerald-600';
   const storageCount = storageItems.reduce((sum, item) => sum + item.quantity, 0);
 
   return (
@@ -873,8 +882,8 @@ function QuoteSummaryBar({
         </div>
       </div>
       <div className="panel flex items-center gap-3 px-4 py-3">
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${hasRedState ? 'bg-red-50' : warnCount > 0 ? 'bg-amber-50' : 'bg-emerald-50'}`}>
-          <svg viewBox="0 0 20 20" className={`h-5 w-5 ${hasRedState ? 'text-red-500' : warnCount > 0 ? 'text-amber-500' : 'text-emerald-500'}`} fill="none" stroke="currentColor" strokeWidth="2">
+        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${hasRedState ? 'bg-red-50' : graphError ? 'bg-slate-100' : warnCount > 0 ? 'bg-amber-50' : 'bg-emerald-50'}`}>
+          <svg viewBox="0 0 20 20" className={`h-5 w-5 ${hasRedState ? 'text-red-500' : graphError ? 'text-slate-400' : warnCount > 0 ? 'text-amber-500' : 'text-emerald-500'}`} fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 5v4m0 2.5v.5" strokeLinecap="round" />
           </svg>
         </span>
@@ -890,8 +899,8 @@ function QuoteSummaryBar({
           </svg>
         </span>
         <div className="min-w-0">
-          <div className="text-[11px] font-bold text-slate-500">스토리지</div>
-          <div className="text-sm font-black text-commerce-ink">{storageCount > 0 ? `SSD ${storageCount}개` : 'SSD 없음'}</div>
+          <div className="text-[11px] font-bold text-slate-500">SSD</div>
+          <div className="text-sm font-black text-commerce-ink">{storageCount > 0 ? `${storageCount}개` : '없음'}</div>
         </div>
       </div>
     </div>

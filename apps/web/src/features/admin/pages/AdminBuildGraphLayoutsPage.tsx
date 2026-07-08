@@ -172,7 +172,7 @@ export function AdminBuildGraphLayoutsPage() {
             </p>
             <h1 className="mt-1 text-xl font-black text-brand-navy">견적 슬롯 보드 배치</h1>
             <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-slate-600">
-              운영자가 표준 슬롯 카드를 드래그해 저장하면 `/self-quote` 슬롯 보드에서 같은 category 기준 위치가 적용됩니다.
+              운영자가 표준 슬롯 카드를 드래그해 저장하면 /self-quote 슬롯 보드에서 같은 category 기준 위치가 적용됩니다.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -195,7 +195,7 @@ export function AdminBuildGraphLayoutsPage() {
               className="inline-flex items-center gap-2 rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
             >
               <Save size={15} />
-              {saveMutation.isPending ? '고정 중' : '고정하기'}
+              {saveMutation.isPending ? '저장 중' : '저장하기'}
             </button>
           </div>
         </header>
@@ -214,7 +214,7 @@ export function AdminBuildGraphLayoutsPage() {
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <div>
               <h2 className="text-sm font-black text-brand-navy">슬롯 보드 미리보기</h2>
-              <p className="mt-1 text-xs text-slate-500">슬롯을 끌어서 위치를 바꾼 뒤 고정하기를 누르세요. 방향키로 1칸, Shift+방향키로 5칸 이동합니다.</p>
+              <p className="mt-1 text-xs text-slate-500">슬롯을 끌어서 위치를 바꾼 뒤 저장하기를 누르세요. 방향키로 1칸, Shift+방향키로 5칸 이동합니다.</p>
             </div>
             <div className="text-xs font-bold text-slate-500">{layoutSourceLabel}</div>
           </div>

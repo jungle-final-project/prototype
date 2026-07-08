@@ -250,7 +250,7 @@ public class PartCompatibleCandidateService {
         List<ToolBuildPart> nextParts;
         if ("ADD".equals(mode)) {
             // 담기 평가: 기존 구성을 유지한 채 후보를 더한 상태로 검사한다 — RAM 만석에서 후보 킷이
-            // '호환됨'으로 보였다가 담는 순간 FAIL로 반전되는 오탐을 막는다. 이미 담긴 부품이 후보로
+            // '호환 가능'으로 보였다가 담는 순간 FAIL로 반전되는 오탐을 막는다. 이미 담긴 부품이 후보로
             // 오면(GET 경로는 장착 부품을 제외하지 않음) 추가 없이 현재 구성 그대로 평가한다.
             boolean alreadyInBuild = baseParts.stream()
                     .anyMatch(part -> category.equals(part.category()) && candidate.toolPart().publicId() != null
@@ -421,12 +421,12 @@ public class PartCompatibleCandidateService {
 
     private static String partListStatusLabel(String status) {
         if ("FAIL".equals(status)) {
-            return "안 맞음";
+            return "장착 불가";
         }
         if ("WARN".equals(status)) {
             return "간섭 주의";
         }
-        return "호환됨";
+        return "호환 가능";
     }
 
     private static Long longValue(Object value) {

@@ -168,7 +168,7 @@ class BuildGraphServiceTest {
             assertThat(edge.get("id")).isEqualTo("edge-board-ram-memory");
             assertThat(edge.get("status")).isEqualTo("FAIL");
             assertThat(edge.get("label")).isEqualTo("메모리 슬롯");
-            assertThat((String) edge.get("summary")).contains("램 스틱 4개").contains("메모리 슬롯 2개");
+            assertThat((String) edge.get("summary")).contains("RAM 스틱 4개").contains("메모리 슬롯 2개");
         });
         List<Map<String, Object>> nodes = castList(graph.get("nodes"));
         assertThat(nodes).anySatisfy(node -> {
