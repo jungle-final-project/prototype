@@ -127,7 +127,7 @@ public class AsChatService {
                     .map(draft -> agentTraceService.recordToolInvocation(agentSessionId, draft))
                     .toList();
             agentTraceService.advanceStatus(agentSessionId, AgentStatus.TOOLS_CALLED, "SYSTEM", "AS chat Tool checks completed");
-            progress.emit("TOOLS_READY", progressPayload("TOOLS_READY", "Tool 검증 결과를 정리했습니다.", MockData.map("toolCount", toolInvocationIds.size())));
+            progress.emit("TOOLS_READY", progressPayload("TOOLS_READY", "검증 결과를 정리했습니다.", MockData.map("toolCount", toolInvocationIds.size())));
             stageTimings.mark("toolsReadyMs");
 
             List<Map<String, Object>> evidence = evidenceItems(evidenceIds, evidenceDrafts);

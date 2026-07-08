@@ -35,7 +35,7 @@ class ToolCheckServiceRamFormFactorTest {
         ));
 
         assertThat(result.get("status")).isEqualTo("FAIL");
-        assertThat(String.valueOf(result.get("summary"))).contains("장착할 수 없는 램 폼팩터(SODIMM)");
+        assertThat(String.valueOf(result.get("summary"))).contains("장착할 수 없는 RAM 폼팩터(SODIMM)");
         assertThat(details(result).get("ramFormFactorChecked")).isEqualTo(true);
         assertThat(details(result).get("ramFormFactorMatched")).isEqualTo(false);
         assertThat(details(result).get("ramBadFormFactors")).isEqualTo(List.of("SODIMM"));
@@ -88,7 +88,7 @@ class ToolCheckServiceRamFormFactorTest {
         ));
 
         assertThat(result.get("status")).isEqualTo("FAIL");
-        assertThat(String.valueOf(result.get("summary"))).contains("장착할 수 없는 램 폼팩터(SODIMM)");
+        assertThat(String.valueOf(result.get("summary"))).contains("장착할 수 없는 RAM 폼팩터(SODIMM)");
         assertThat(details(result).get("ramFormFactorMatched")).isEqualTo(false);
         assertThat(details(result).get("ramBadFormFactors")).isEqualTo(List.of("SODIMM"));
     }

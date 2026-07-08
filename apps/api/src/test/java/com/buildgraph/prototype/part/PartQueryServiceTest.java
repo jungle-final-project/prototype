@@ -28,8 +28,8 @@ class PartQueryServiceTest {
         );
         List<Map<String, Object>> evaluatedRows = List.of(
                 withCompatibility(rawRows.get(0), "WARN", "간섭 주의"),
-                withCompatibility(rawRows.get(1), "FAIL", "안 맞음"),
-                withCompatibility(rawRows.get(2), "PASS", "호환됨")
+                withCompatibility(rawRows.get(1), "FAIL", "장착 불가"),
+                withCompatibility(rawRows.get(2), "PASS", "호환 가능")
         );
         CurrentUserService.CurrentUser user = user();
         when(jdbcTemplate.queryForList(anyString(), eq("GPU"))).thenReturn(rawRows);

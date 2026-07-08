@@ -39,8 +39,8 @@ export function BuildResultPage() {
   if (!temporaryBuild && isLoading) {
     return (
       <Screen>
-        <Panel title="추천 Build 결과">
-          <StateMessage type="info" title="Build 로딩 중" body="추천 build 상세와 Tool 검증 결과를 불러오고 있습니다." />
+        <Panel title="추천 견적 결과">
+          <StateMessage type="info" title="견적 로딩 중" body="추천 견적 상세와 검증 결과를 불러오고 있습니다." />
         </Panel>
       </Screen>
     );
@@ -49,8 +49,8 @@ export function BuildResultPage() {
   if (!displayBuild || (!temporaryBuild && isError)) {
     return (
       <Screen>
-        <Panel title="추천 Build 결과">
-          <StateMessage type="warn" title="Build 조회 실패" body="선택한 추천 build를 불러오지 못했습니다." />
+        <Panel title="추천 견적 결과">
+          <StateMessage type="warn" title="견적 조회 실패" body="선택한 추천 견적을 불러오지 못했습니다." />
         </Panel>
       </Screen>
     );
@@ -59,7 +59,7 @@ export function BuildResultPage() {
   return (
     <Screen>
       <div className="space-y-5">
-        <Panel title={`추천 Build 결과 / ${displayBuild.name}`} subtitle={isTemporaryBuild ? `임시 추천 ID ${displayBuild.id.slice(0, 8)}` : `견적 ID ${displayBuild.id.slice(0, 8)}`}>
+        <Panel title={`추천 견적 결과 / ${displayBuild.name}`} subtitle={isTemporaryBuild ? `임시 추천 ID ${displayBuild.id.slice(0, 8)}` : `견적 ID ${displayBuild.id.slice(0, 8)}`}>
           {isTemporaryBuild ? (
             <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-brand-blue">
               저장 전 AI 챗봇 추천
@@ -71,7 +71,7 @@ export function BuildResultPage() {
         </Panel>
         <BuildDetailSections
           displayBuild={displayBuild}
-          conditionBody={isTemporaryBuild ? '저장 버튼을 누르면 서버에서 다시 Tool 검증 후 견적으로 저장합니다.' : '현재 구성은 저장된 내부 자산 기준 Tool 검증을 통과했습니다.'}
+          conditionBody={isTemporaryBuild ? '저장 버튼을 누르면 서버에서 다시 검증한 뒤 견적으로 저장합니다.' : '현재 구성은 저장된 내부 자산 기준 자동 검증을 통과했습니다.'}
           summaryActions={isTemporaryBuild && temporaryBuild ? (
             <>
               <button

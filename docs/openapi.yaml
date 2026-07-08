@@ -4879,7 +4879,7 @@ components:
           $ref: "#/components/schemas/ToolStatus"
         statusLabel:
           type: string
-          enum: [호환됨, 간섭 주의, 안 맞음]
+          enum: [호환 가능, 간섭 주의, 장착 불가]
         summary:
           type: string
         checkedTools:

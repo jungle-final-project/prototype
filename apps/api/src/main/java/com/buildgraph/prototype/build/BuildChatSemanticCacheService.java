@@ -122,6 +122,9 @@ public class BuildChatSemanticCacheService {
             String vector = RagEmbeddingService.vectorLiteral(embeddingClient.embed(message));
             String profile = effectiveProfile(requestedAiProfile);
             String dataVersionHash = dataVersionHash();
+            // 별도 스케줄러 없이 저장 시점마다 만료 행을 기회적으로 정리해 테이블·HNSW 인덱스의 무한 누적을 막는다.
+            // (데이터 버전 회전으로 도달 불가가 된 행도 TTL이 지나면 이 조건에 걸린다.)
+            jdbcTemplate.update("DELETE FROM build_chat_semantic_cache WHERE expires_at < now()");
             jdbcTemplate.update("""
                     INSERT INTO build_chat_semantic_cache (
                       profile, intent, constraint_signature, message, embedding,

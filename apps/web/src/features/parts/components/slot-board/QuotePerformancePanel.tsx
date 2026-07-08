@@ -188,12 +188,12 @@ function GameFpsSection({ partIds }: { partIds: string[] }) {
           </div>
           <div className="mt-1.5 flex items-baseline gap-1.5">
             <span data-testid="fps-avg" className="text-2xl font-black text-commerce-ink">{Math.round(avg)}</span>
-            <span className="text-[11px] font-bold text-slate-500">fps 평균 (참고)</span>
+            <span className="text-[11px] font-bold text-slate-500">FPS 평균 (참고)</span>
           </div>
           <FpsGauge avg={avg} low={hasLow ? low : undefined} />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 text-[10px]">
             <span className="font-bold text-slate-500">
-              {hasLow ? `최저 약 ${Math.round(low)} fps (1% low)` : '최저값 자료 없음'}
+              {hasLow ? `최저 약 ${Math.round(low)} FPS (하위 1% 평균)` : '최저값 자료 없음'}
             </span>
             <span className="font-bold text-slate-400">
               {exactnessLabel(evidence?.match?.evidenceExactness)}

@@ -111,7 +111,7 @@ function candidatePart(id: string, category: string, name: string, options: Mock
       source: 'NAVER_SHOPPING_SEARCH'
     },
     compatibility: options.compatibility === undefined
-      ? { status: 'PASS', statusLabel: '호환됨', summary: '현재 견적과 호환됩니다.', checkedTools: ['compatibility'] }
+      ? { status: 'PASS', statusLabel: '호환 가능', summary: '현재 견적과 호환됩니다.', checkedTools: ['compatibility'] }
       : options.compatibility
   };
 }
@@ -453,7 +453,7 @@ test('renders the quote checklist with progress, next-slot guide, and total', as
   await expect(checklist.getByTestId('checklist-RAM')).toHaveAttribute('data-next', 'true');
   await expect(checklist.getByTestId('checklist-RAM')).toContainText('다음 선택');
   await expect(page.getByTestId('slot-RAM')).toHaveAttribute('data-next', 'true');
-  await expect(page.getByTestId('quote-next-guide')).toContainText('다음: 3. RAM를 선택해 주세요');
+  await expect(page.getByTestId('quote-next-guide')).toContainText('다음: 3. RAM을 선택해 주세요');
 
   // 담은 부품 견적 테이블 — 체크리스트 아래 별도 박스에 상품별 행(부품/수량/금액)으로 나온다.
   const itemsTable = page.getByTestId('quote-items-table');
@@ -820,11 +820,11 @@ test('shows game FPS reference in the performance panel with game and resolution
 
   const fps = page.getByTestId('quote-fps-section');
   await expect(fps).toBeVisible();
-  // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 1% low.
+  // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 하위 1% 평균(1% low).
   await expect(fps.getByTestId('fps-avg')).toHaveText('130');
   await expect(fps.getByTestId('fps-result')).toContainText('매우 부드러움');
   await expect(fps.getByTestId('fps-result')).toContainText('중간 옵션');
-  await expect(fps.getByTestId('fps-result')).toContainText('최저 약 91 fps');
+  await expect(fps.getByTestId('fps-result')).toContainText('최저 약 91 FPS');
   // 정책 문구.
   await expect(fps).toContainText('공개 자료 기준 참고 범위');
 
@@ -931,7 +931,7 @@ test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', as
   const gpuSlot = page.getByTestId('slot-GPU');
   await expect(gpuSlot).toHaveAttribute('data-status', 'FAIL');
   await expect(gpuSlot).toHaveClass(/bg-red-100/);
-  await expect(gpuSlot.getByText('안 맞음')).toBeVisible();
+  await expect(gpuSlot.getByText('장착 불가')).toBeVisible();
   const psuSlot = page.getByTestId('slot-PSU');
   await expect(psuSlot).toHaveAttribute('data-status', 'WARN');
   await expect(psuSlot).toHaveClass(/bg-amber-100/);
@@ -1049,7 +1049,7 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
             compatibility: { status: 'WARN', statusLabel: '간섭 주의', summary: '케이스 장착 길이가 빠듯합니다.' }
           }),
           candidatePart('part-gpu-fail', 'GPU', '실패 GPU 후보', {
-            compatibility: { status: 'FAIL', statusLabel: '안 맞음', summary: '파워 용량이 부족합니다.' }
+            compatibility: { status: 'FAIL', statusLabel: '장착 불가', summary: '파워 용량이 부족합니다.' }
           })
         ],
         page: 0,
@@ -1090,7 +1090,7 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
   await expect(failCard.getByText('파워 용량이 부족합니다.')).toBeVisible();
   // 담기 버튼은 활성 — 비호환도 담아서 왜 안 되는지 보드에서 확인하는 UX.
   await expect(panel.getByRole('button', { name: /실패 GPU 후보 담기/ })).toBeEnabled();
-  await expect(panel.getByText('안 맞는 후보도 담아서 사유를 확인할 수 있어요')).toBeVisible();
+  await expect(panel.getByText('장착 불가 후보도 담아서 사유를 확인할 수 있어요')).toBeVisible();
 
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
@@ -1113,7 +1113,7 @@ test('filters candidates by search keyword and offers compatibility-first sort',
     const all = [
       candidatePart('part-gpu-5070', 'GPU', 'RTX 5070 게이밍'),
       candidatePart('part-gpu-5080', 'GPU', 'RTX 5080 울트라', {
-        compatibility: { status: 'FAIL', statusLabel: '안 맞음', summary: '파워 용량이 부족합니다.' }
+        compatibility: { status: 'FAIL', statusLabel: '장착 불가', summary: '파워 용량이 부족합니다.' }
       })
     ];
     const items = q ? all.filter((part) => part.name.includes(q)) : all;
@@ -1165,7 +1165,7 @@ test('filters candidates by manufacturer, price range, and hides incompatible', 
           { ...candidatePart('gpu-asus', 'GPU', 'ASUS RTX 5070'), manufacturer: 'ASUS' },
           {
             ...candidatePart('gpu-msi', 'GPU', 'MSI RTX 5080', {
-              compatibility: { status: 'FAIL', statusLabel: '안 맞음', summary: '파워 용량이 부족합니다.' }
+              compatibility: { status: 'FAIL', statusLabel: '장착 불가', summary: '파워 용량이 부족합니다.' }
             }),
             manufacturer: 'MSI'
           }
@@ -1199,6 +1199,11 @@ test('filters candidates by manufacturer, price range, and hides incompatible', 
   await panel.getByTestId('candidate-min-price').fill('500000');
   await panel.getByTestId('candidate-max-price').fill('900000');
   await expect.poll(() => partRequests.some((request) => request.minPrice === '500000' && request.maxPrice === '900000')).toBe(true);
+
+  // 최소가 > 최대가 입력 실수 → 두 값을 서로 바꿔 요청한다(서버 오류 없이 의도한 범위로 조회).
+  await panel.getByTestId('candidate-min-price').fill('900000');
+  await panel.getByTestId('candidate-max-price').fill('300000');
+  await expect.poll(() => partRequests.some((request) => request.minPrice === '300000' && request.maxPrice === '900000')).toBe(true);
 });
 
 test('opens candidate quick view and wishlists a candidate', async ({ page }) => {
@@ -1295,7 +1300,7 @@ test('shows a whole FAIL page greyed out with reasons instead of auto-fetching t
     requestedPages.push(pageParam);
     const items = pageParam === '0'
       ? Array.from({ length: 20 }, (_, index) => candidatePart(`part-psu-fail-${index}`, 'PSU', `실패 파워 ${index + 1}`, {
-          compatibility: { status: 'FAIL', statusLabel: '안 맞음', summary: '용량 부족' }
+          compatibility: { status: 'FAIL', statusLabel: '장착 불가', summary: '용량 부족' }
         }))
       : [candidatePart('part-psu-pass', 'PSU', '통과 파워 후보')];
     await route.fulfill({
@@ -2225,7 +2230,7 @@ test('upgrade advisor turns a symptom into a replacement simulation question', a
   // 후보 클릭 → 챗봇이 열리고 교체 시뮬레이션 질문이 자동 전송된다.
   await page.getByTestId('upgrade-option-minimal').click();
   await expect(page.getByTestId('ai-chatbot-panel')).toBeVisible();
-  await expect.poll(() => chatMessages).toEqual(['한 단계 위 GPU로 바꾸면 어때?']);
+  await expect.poll(() => chatMessages).toEqual(['한 단계 위 GPU(으)로 바꾸면 어때?']);
 });
 
 test('upgrade advisor guides to mount the category first when it is missing', async ({ page }) => {
@@ -2708,7 +2713,8 @@ test('shows price trend chart on product detail page', async ({ page }) => {
             { price: 1030000, source: 'NAVER_SHOPPING_SEARCH', collectedAt: '2026-06-05T00:00:00Z' },
             { price: 1020000, source: 'DANAWA_PRICE_TREND', collectedAt: '2026-06-01T00:00:00Z' },
             { price: 990000, source: 'DANAWA_PRICE_TREND', collectedAt: '2026-06-20T00:00:00Z' },
-            { price: 950000, source: 'DANAWA_PRICE_TREND', collectedAt: '2026-07-01T00:00:00Z' }
+            // 서버가 KST 7월 월초 자정을 UTC로 직렬화한 형태 — 브라우저 타임존과 무관하게 26.07로 버킷돼야 한다.
+            { price: 950000, source: 'DANAWA_PRICE_TREND', collectedAt: '2026-06-30T15:00:00Z' }
           ],
           summary: {
             sampleCount: 4,
@@ -2772,7 +2778,7 @@ test('shows price trend chart on product detail page', async ({ page }) => {
   await expect(page.getByText('전체 내부 스펙')).toHaveCount(0);
 });
 
-test('goes home after login from product detail redirect', async ({ page }) => {
+test('returns to the product detail page after login from its redirect', async ({ page }) => {
   let savedToDraft = false;
 
   await page.route('**/api/parts/part-gpu-detail-test', async (route) => {
@@ -2869,11 +2875,11 @@ test('goes home after login from product detail redirect', async ({ page }) => {
   await page.getByLabel('비밀번호').fill('passw0rd!');
   await page.getByRole('button', { name: '로그인' }).click();
 
-  await expect(page).toHaveURL('/');
+  // 로그인 전 보던 상세 페이지로 복귀한다(가드가 보존한 redirect 파라미터).
+  await expect(page).toHaveURL('/parts/part-gpu-detail-test');
+  await expect(page.getByRole('heading', { name: '상세 담기 RTX 테스트' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('buildgraph.refreshToken'))).toBe('demo-refresh-user');
-  await expect(page.getByText('로그인됨 · user@example.com · USER')).toBeVisible();
-  await expect(page.getByText('Demo User')).toBeVisible();
-  await expect(page.getByRole('button', { name: '로그아웃' })).toBeVisible();
+  await expect(page.getByText('로그인됨 · user@example.com · 사용자')).toBeVisible();
 
   expect(savedToDraft).toBe(false);
 });

@@ -59,7 +59,7 @@ const symptomTypeOptions = [
   ['VISIT_DISK_FAILURE', '디스크 장애 의심'],
   ['VISIT_WHEA_BSOD', 'WHEA/블루스크린 반복'],
   ['VISIT_POWER_SHUTDOWN', '부하 시 전원 꺼짐'],
-  ['VISIT_FAN_THERMAL', '팬/과열/thermal shutdown']
+  ['VISIT_FAN_THERMAL', '팬/과열/열로 인한 강제 종료']
 ];
 
 export function AsChatPage() {
@@ -72,9 +72,17 @@ export function AsChatPage() {
   const [progressMessage, setProgressMessage] = useState('');
   const [progressSteps, setProgressSteps] = useState<string[]>([]);
 
+  // 티켓 번호를 타이핑하는 글자마다 조회가 나가지 않도록, 입력이 멈춘 뒤(300ms) 확정값으로만 조회한다.
+  const [committedTicketId, setCommittedTicketId] = useState(initialTicketId);
+  useEffect(() => {
+    const timer = setTimeout(() => setCommittedTicketId(ticketId.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [ticketId]);
+
   const chatQuery = useQuery({
-    queryKey: ['as-chat', ticketId],
-    queryFn: () => getAsChat(ticketId)
+    queryKey: ['as-chat', committedTicketId],
+    queryFn: () => getAsChat(committedTicketId),
+    enabled: committedTicketId.length > 0
   });
 
   const sendMutation = useMutation({
@@ -109,7 +117,7 @@ export function AsChatPage() {
     onError: (cause) => {
       setProgressMessage('');
       if (cause instanceof ApiError && cause.status === 428) {
-        setError('서버에 OPENAI_API_KEY가 필요합니다. API 컨테이너 환경 변수 설정 후 다시 실행해 주세요.');
+        setError('AI 상담 기능이 아직 준비되지 않았습니다. 잠시 후 다시 시도하거나 담당자에게 문의해 주세요.');
         return;
       }
       if (cause instanceof ApiError && cause.status === 404) {
@@ -145,19 +153,19 @@ export function AsChatPage() {
   return (
     <Screen>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
-        <Panel title="AS AI 챗봇" subtitle="AS 접수 후 티켓 증상, RAG 근거, Tool 결과를 사용해 1차 상담 답변을 생성합니다.">
+        <Panel title="AS AI 챗봇" subtitle="AS 접수 후 티켓 증상과 검증 근거를 사용해 1차 상담 답변을 생성합니다.">
           <form onSubmit={submitTicket} className="mb-4 flex gap-3">
             <input
               className="h-11 flex-1 rounded border border-slate-300 px-3 text-sm"
               value={ticketId}
               onChange={(event) => setTicketId(event.target.value)}
-              aria-label="AS ticket id"
+              aria-label="AS 티켓 번호"
             />
             <button className="rounded border border-slate-300 px-4 py-2 text-sm font-bold">티켓 불러오기</button>
           </form>
 
           {chatQuery.isLoading ? <StateMessage type="info" title="챗봇 세션 조회 중" body="AS 티켓과 기존 대화 이력을 불러오고 있습니다." /> : null}
-          {chatQuery.isError ? <StateMessage type="warn" title="챗봇 세션 조회 실패" body="GET /api/ai/as-chat 응답을 불러오지 못했습니다." /> : null}
+          {chatQuery.isError ? <StateMessage type="warn" title="챗봇 세션 조회 실패" body="대화 이력을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." /> : null}
           {error ? <div className="mb-4"><StateMessage type="warn" title="AS AI 확인 필요" body={error} /></div> : null}
 
           <div className="h-[560px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
@@ -179,7 +187,7 @@ export function AsChatPage() {
             )}
             {isBusy ? (
               <div className="mt-3 rounded border border-blue-100 bg-blue-50 p-3 text-sm text-brand-blue">
-                <div className="font-bold">{progressMessage || 'AI가 RAG 근거와 Tool 결과를 확인하고 있습니다...'}</div>
+                <div className="font-bold">{progressMessage || 'AI가 근거 자료와 검증 결과를 확인하고 있습니다...'}</div>
                 {progressSteps.length ? (
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
                     {progressSteps.map((step, index) => (
@@ -218,7 +226,7 @@ export function AsChatPage() {
             </div>
           </Panel>
 
-          <Panel title="LLM 구조화 결과">
+          <Panel title="AI 분석 결과">
             {chat?.assistantMessage ? (
               <div className="space-y-4">
                 <div>
@@ -232,19 +240,19 @@ export function AsChatPage() {
                 <StateMessage
                   type={chat.escalation?.required ? 'warn' : 'info'}
                   title={chat.escalation?.required ? '상담원 연결 필요' : 'AI 1차 조치 가능'}
-                  body={chat.escalation?.reason ?? 'LLM escalation 결과가 아직 없습니다.'}
+                  body={chat.escalation?.reason ?? '상담원 연결 판단 결과가 아직 없습니다.'}
                 />
               </div>
             ) : (
-              <StateMessage type="info" title="답변 대기" body="메시지를 보내면 LLM 구조화 결과가 여기에 표시됩니다." />
+              <StateMessage type="info" title="답변 대기" body="메시지를 보내면 AI 분석 결과가 여기에 표시됩니다." />
             )}
           </Panel>
 
-          <Panel title="Tool 결과">
-            <DataTable columns={['Tool', '판정', '요약']} rows={toolRows(chat?.toolResults ?? [])} />
+          <Panel title="검증 결과">
+            <DataTable columns={['검증 항목', '판정', '요약']} rows={toolRows(chat?.toolResults ?? [])} />
           </Panel>
 
-          <Panel title="RAG 근거">
+          <Panel title="근거 자료">
             <DataTable columns={['근거', '점수', '요약']} rows={evidenceRows(chat?.evidence ?? [])} />
           </Panel>
         </div>
@@ -256,7 +264,7 @@ export function AsChatPage() {
 function progressLabel(eventName: string) {
   if (eventName === 'STARTED') return 'AS 티켓과 사용자 세션을 확인하고 있습니다.';
   if (eventName === 'RAG_READY') return '관련 AS 근거를 찾았습니다.';
-  if (eventName === 'TOOLS_READY') return 'Tool 검증 결과를 정리했습니다.';
+  if (eventName === 'TOOLS_READY') return '검증 결과를 정리했습니다.';
   if (eventName === 'LLM_RUNNING') return 'AI 답변을 생성하고 있습니다.';
   return 'AS AI 처리를 진행하고 있습니다.';
 }
@@ -996,7 +1004,7 @@ function isActiveRemoteSupportStatus(status?: string | null) {
 
 function safetyAdviceMessage(level?: string | null) {
   if (level === 'STOP_USE_UNTIL_REVIEW') {
-    return '담당자 검토 전까지 해당 PC 사용을 중지하거나 중요한 작업을 피해주세요.';
+    return '담당자 검토 전까지 해당 PC 사용을 중지하거나 중요한 작업을 피해 주세요.';
   }
   if (level === 'CAUTION') {
     return '하드웨어 오류 가능성이 있어 추가 조치 전 상태를 주의 깊게 확인해 주세요.';
@@ -1338,7 +1346,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 function causeRowsForChat(chat: AsChatResponse) {
   const candidates = chat.causeCandidates ?? [];
   if (!candidates.length) {
-    return [{ 원인: '원인 후보 없음', 신뢰도: <StatusBadge status="LOW" />, 근거: 'LLM 응답에 원인 후보가 없습니다.' }];
+    return [{ 원인: '원인 후보 없음', 신뢰도: <StatusBadge status="LOW" />, 근거: 'AI 응답에 원인 후보가 없습니다.' }];
   }
   return candidates.map((candidate) => ({
     원인: candidate.label ?? '원인 후보',
@@ -1350,7 +1358,7 @@ function causeRowsForChat(chat: AsChatResponse) {
 function actionRowsForChat(chat: AsChatResponse) {
   const actions = chat.nextActions ?? [];
   if (!actions.length) {
-    return [{ 조치: '추가 조치 없음', 우선순위: <StatusBadge status="LOW" />, 안내: 'LLM 응답에 다음 조치가 없습니다.' }];
+    return [{ 조치: '추가 조치 없음', 우선순위: <StatusBadge status="LOW" />, 안내: 'AI 응답에 다음 조치가 없습니다.' }];
   }
   return actions.map((action) => ({
     조치: action.label ?? '다음 조치',
@@ -1359,12 +1367,20 @@ function actionRowsForChat(chat: AsChatResponse) {
   }));
 }
 
+const TOOL_NAME_LABELS: Record<string, string> = {
+  compatibility: '호환성',
+  power: '전력',
+  size: '규격',
+  performance: '성능',
+  price: '가격'
+};
+
 function toolRows(toolResults: AsChatToolResult[]) {
   if (!toolResults.length) {
-    return [{ Tool: '대기', 판정: <StatusBadge status="LOW" />, 요약: '메시지 전송 후 Tool 결과가 표시됩니다.' }];
+    return [{ '검증 항목': '대기', 판정: <StatusBadge status="LOW" />, 요약: '메시지 전송 후 검증 결과가 표시됩니다.' }];
   }
   return toolResults.map((tool) => ({
-    Tool: tool.toolName,
+    '검증 항목': TOOL_NAME_LABELS[tool.toolName] ?? tool.toolName,
     판정: <StatusBadge status={tool.status} />,
     요약: tool.summary
   }));
@@ -1372,7 +1388,7 @@ function toolRows(toolResults: AsChatToolResult[]) {
 
 function evidenceRows(evidence: AsChatEvidence[]) {
   if (!evidence.length) {
-    return [{ 근거: '대기', 점수: '-', 요약: '메시지 전송 후 RAG 근거가 표시됩니다.' }];
+    return [{ 근거: '대기', 점수: '-', 요약: '메시지 전송 후 근거 자료가 표시됩니다.' }];
   }
   return evidence.map((item) => ({
     근거: item.sourceId,

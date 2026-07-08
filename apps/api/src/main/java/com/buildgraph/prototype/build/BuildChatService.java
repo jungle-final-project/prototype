@@ -207,7 +207,7 @@ public class BuildChatService {
             Map<String, Object> response = fastResponse(
                     "GENERAL",
                     "이 어시스턴트는 예산 견적 추천, 현재 견적 완성, 부품 교체 성능 비교를 도와드립니다. "
-                            + "부품 탐색이나 견적 담기/빼기는 셀프 견적 그래프에서 직접 할 수 있어요. "
+                            + "부품 탐색이나 견적 담기/빼기는 셀프 견적 그래프에서 직접 할 수 있습니다. "
                             + "예: \"200만원 게이밍 PC 추천\", \"CPU를 9700X로 바꾸면?\"",
                     List.of("UNSUPPORTED_INTENT")
             );
@@ -235,7 +235,7 @@ public class BuildChatService {
                 BuildChatTierSnapshotStore.TierSnapshot snapshot = tierSnapshot.get();
                 Map<String, Object> response = fastResponse(
                         "BUDGET",
-                        "내부 자산과 Tool 검증 기준으로 미리 계산한 추천 조합을 바로 가져왔습니다.",
+                        "내부 자산과 자동 검증 기준으로 미리 계산한 추천 조합을 바로 가져왔습니다.",
                         snapshot.builds(),
                         snapshot.warnings()
                 );
@@ -1098,7 +1098,7 @@ public class BuildChatService {
         boolean resolutionHint = reasons != null && reasons.contains("RESOLUTION_CONTEXT");
         String question = resolutionHint
                 ? "어떤 해상도 기준으로 맞출까요? 해상도에 따라 필요한 그래픽카드 급이 크게 달라져요. 예산까지 알려주시면 바로 추천해드릴게요."
-                : "용도와 예산을 알려주시면 정확하게 맞춰드릴 수 있어요. 아래에서 골라도 되고, 직접 입력해도 됩니다.";
+                : "용도와 예산을 알려주시면 정확하게 맞춰드릴 수 있어요. 아래에서 골라도 되고, 직접 입력해도 돼요.";
         List<String> quickReplies = resolutionHint
                 ? List.of("FHD 게이밍 150만원", "QHD 게이밍 250만원", "4K 게이밍 400만원")
                 : List.of("사무용 100만원", "게이밍 200만원", "게이밍 300만원", "영상편집 400만원");
@@ -1165,7 +1165,7 @@ public class BuildChatService {
         Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
 
         if (missingCategories.isEmpty()) {
-            List<Map<String, Object>> toolResults = toolResults(fixedParts, budget == null ? fixedTotal : budget, warnings);
+            List<Map<String, Object>> toolResults = toolResults(fixedParts, fixedQuantities, budget == null ? fixedTotal : budget, warnings);
             warnings.addAll(toolWarnings(toolResults));
             Map<String, Object> build = completionBuildMap(TIERS.get(1), fixedParts, fixedQuantities, List.of(), budget, toolResults, warnings);
             return Optional.of(fastResponse("BUDGET", "이미 모든 카테고리가 채워져 있어 현재 구성 그대로 검증했습니다.", List.of(build), warnings));
@@ -1199,7 +1199,7 @@ public class BuildChatService {
             previewParts.addAll(picked);
             List<String> localWarnings = new ArrayList<>();
             int totalPrice = fixedTotal + picked.stream().mapToInt(BuildChatService::completionCandidatePrice).sum();
-            List<Map<String, Object>> toolResults = toolResults(previewParts, budget == null ? totalPrice : budget, localWarnings);
+            List<Map<String, Object>> toolResults = toolResults(previewParts, fixedQuantities, budget == null ? totalPrice : budget, localWarnings);
             if (hasBlockingToolFailure(toolResults)) {
                 continue;
             }
@@ -1214,7 +1214,7 @@ public class BuildChatService {
         relabelCompletionBuilds(builds);
         return Optional.of(fastResponse(
                 "BUDGET",
-                "현재 견적에 담긴 부품은 유지하고 나머지 카테고리를 내부 자산과 Tool 검증 기준으로 채웠습니다.",
+                "현재 견적에 담긴 부품은 유지하고 나머지 카테고리를 내부 자산과 자동 검증 기준으로 채웠습니다.",
                 builds,
                 warnings
         ));
@@ -1290,7 +1290,7 @@ public class BuildChatService {
                 "label", tier.label(),
                 "title", tier.title() + " 견적 완성 조합",
                 "summary", "현재 견적의 부품은 그대로 두고 빈 카테고리만 내부 자산으로 채웠습니다.",
-                "recommendedFor", List.of("견적 완성", "내부 자산", "Tool 검증"),
+                "recommendedFor", List.of("견적 완성", "내부 자산", "자동 검증"),
                 "totalPrice", totalPrice,
                 "badges", List.of(tier.title(), "DRAFT_COMPLETION"),
                 "budgetWon", budget == null ? totalPrice : budget,
@@ -1341,7 +1341,7 @@ public class BuildChatService {
                             TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false), 1,
                             greedy.toolResults(), greedy.warnings(), List.of());
                     build.put("title", "가능한 최소 구성");
-                    build.put("summary", "내부 ACTIVE 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
+                    build.put("summary", "현재 판매 중인 내부 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
                     return Optional.of(fastResponse("BUDGET", guidance, List.of(build), warnings));
                 }
                 return Optional.of(fastResponse("GENERAL", guidance, warnings));
@@ -1349,7 +1349,7 @@ public class BuildChatService {
         }
         if (isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
             AiChatEngineResponse engineResponse = new AiChatEngineResponse(
-                    "내부 자산과 Tool 검증 기준으로 바로 추천 조합을 구성했습니다.",
+                    "내부 자산과 자동 검증 기준으로 바로 추천 조합을 구성했습니다.",
                     AiChatIntent.FULL_BUILD_RECOMMEND,
                     List.of(),
                     List.of(),
@@ -1367,7 +1367,7 @@ public class BuildChatService {
             if (!builds.isEmpty()) {
                 return Optional.of(fastResponse(
                         "BUDGET",
-                        "내부 자산과 Tool 검증 기준으로 추천 조합 3개를 바로 구성했습니다.",
+                        "내부 자산과 자동 검증 기준으로 추천 조합 3개를 바로 구성했습니다.",
                         builds,
                         warnings
                 ));
@@ -1409,7 +1409,7 @@ public class BuildChatService {
             result.add(openBudgetFallbackBuildMap(tier, parts, toolResults, localWarnings));
         }
         if (!result.isEmpty()) {
-            warnings.add("빠른 응답을 위해 내부 자산과 Tool 검증 기준으로 추천 조합을 즉시 구성했습니다.");
+            warnings.add("빠른 응답을 위해 내부 자산과 자동 검증 기준으로 추천 조합을 즉시 구성했습니다.");
         }
         return result;
     }
@@ -1429,8 +1429,8 @@ public class BuildChatService {
                 "tier", tier.id(),
                 "label", tier.label(),
                 "title", tier.title() + " 빠른 추천 조합",
-                "summary", "내부 ACTIVE 자산과 Tool 검증을 기준으로 빠르게 구성했습니다.",
-                "recommendedFor", List.of("빠른 추천", "내부 자산", "Tool 검증"),
+                "summary", "현재 판매 중인 내부 자산과 자동 검증을 기준으로 빠르게 구성했습니다.",
+                "recommendedFor", List.of("빠른 추천", "내부 자산", "자동 검증"),
                 "totalPrice", totalPrice,
                 "badges", List.of(tier.title(), "OPEN_BUDGET", "FAST"),
                 "budgetWon", totalPrice,
@@ -1460,7 +1460,7 @@ public class BuildChatService {
             Map<String, Object> build = engineBuildMap(recommendations.get(index), index, engineResponse, rawBudgetIntent, warnings);
             if (hasBlockingToolFailure(objectMaps(build.get("toolResults")))) {
                 guardStats.blockingFailDropped += 1;
-                warnings.add("Tool 검증에서 장착/호환/전력 불가로 판정된 추천 조합을 제외했습니다.");
+                warnings.add("자동 검증에서 장착/호환/전력 불가로 판정된 추천 조합을 제외했습니다.");
                 continue;
             }
             if (!withinBudgetGuard(build, engineResponse.parsedContext(), rawBudgetIntent)) {
@@ -1876,8 +1876,8 @@ public class BuildChatService {
                 "tier", tier.id(),
                 "label", tier.label(),
                 "title", tier.title() + " 예산 맞춤 조합",
-                "summary", "명시 예산 범위를 우선해 내부 ACTIVE 자산과 Tool 검증 기준으로 재구성했습니다.",
-                "recommendedFor", List.of("명시 예산", "내부 자산", "Tool 검증"),
+                "summary", "명시 예산 범위를 우선해 현재 판매 중인 내부 자산과 자동 검증 기준으로 재구성했습니다.",
+                "recommendedFor", List.of("명시 예산", "내부 자산", "자동 검증"),
                 "totalPrice", totalPrice,
                 "badges", List.of(tier.title(), rawBudgetIntent.mode(), "BUDGET_GUARD"),
                 "budgetWon", rawBudgetIntent.budget(),
@@ -2041,10 +2041,22 @@ public class BuildChatService {
     }
 
     private List<Map<String, Object>> toolResults(List<PartCandidate> parts, int budgetWon, List<String> warnings) {
+        return toolResults(parts, Map.of(), budgetWon, warnings);
+    }
+
+    // 드래프트 기반 경로는 수량이 실재하므로 검증에도 반영한다(예: RAM 스틱 수·전력 합산).
+    // quantities는 publicId(없으면 name) → 수량 맵이며, 없는 항목은 1로 평가한다(기존 동작 유지).
+    private List<Map<String, Object>> toolResults(List<PartCandidate> parts, Map<String, Integer> quantities, int budgetWon, List<String> warnings) {
         try {
-            return toolCheckService.checkBuild(parts.stream().map(BuildChatService::toolPart).toList(), budgetWon);
+            return toolCheckService.checkBuild(
+                    parts.stream()
+                            .map(part -> toolPart(part, quantities.get(part.publicId() == null ? part.name() : part.publicId())))
+                            .toList(),
+                    budgetWon
+            );
         } catch (RuntimeException error) {
-            warnings.add("Tool 검증을 완료하지 못했습니다: " + error.getMessage());
+            log.warn("Tool check failed while preparing build chat recommendation", error);
+            warnings.add("자동 검증을 완료하지 못해 검증 결과 없이 추천을 표시합니다.");
             return List.of();
         }
     }
@@ -2293,7 +2305,7 @@ public class BuildChatService {
         );
     }
 
-    private static ToolBuildPart toolPart(PartCandidate part) {
+    private static ToolBuildPart toolPart(PartCandidate part, Integer quantity) {
         return new ToolBuildPart(
                 part.internalId(),
                 part.publicId(),
@@ -2301,7 +2313,8 @@ public class BuildChatService {
                 part.name(),
                 part.manufacturer(),
                 part.price(),
-                part.attributes()
+                part.attributes(),
+                quantity == null || quantity < 1 ? 1 : quantity
         );
     }
 

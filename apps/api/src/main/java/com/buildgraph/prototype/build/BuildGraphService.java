@@ -234,7 +234,7 @@ public class BuildGraphService {
 
         List<Map<String, Object>> edges = new ArrayList<>();
         addEdgeIfPossible(edges, byCategory, "CPU", "MOTHERBOARD", "edge-cpu-board-socket", "REQUIRES", socketStatus, socketLabel(socketStatus), socketSummary(byCategory, socketStatus));
-        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, ramFormFactorBad ? "램 폼팩터" : ramSlotsExceeded ? "메모리 슬롯" : "DDR 규격", memorySummary(byCategory, compatibilityDetails, memoryStatus));
+        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, ramFormFactorBad ? "RAM 폼팩터" : ramSlotsExceeded ? "메모리 슬롯" : "DDR 규격", memorySummary(byCategory, compatibilityDetails, memoryStatus));
         addEdgeIfPossible(edges, byCategory, "CPU", "COOLER", "edge-cpu-cooler-socket", "REQUIRES", coolerStatus, coolerLabel(compatibilityDetails), coolerSummary(byCategory, compatibilityDetails, coolerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "PSU", "edge-gpu-psu-power", "AFFECTS", powerStatus, powerLabel(powerDetails, powerStatus), powerSummary(toolByName, powerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "CASE", "edge-gpu-case-length", "REQUIRES", gpuLengthStatus, gpuLengthLabel(sizeDetails, gpuLengthStatus), gpuLengthSummary(toolByName, gpuLengthStatus));
@@ -505,12 +505,12 @@ public class BuildGraphService {
             String badText = bad instanceof List<?> list && !list.isEmpty()
                     ? String.join(", ", list.stream().map(String::valueOf).toList())
                     : "SODIMM/RDIMM";
-            return "노트북/서버용 램 폼팩터(" + badText + ")는 데스크탑 메인보드에 장착할 수 없습니다.";
+            return "노트북/서버용 RAM 폼팩터(" + badText + ")는 데스크탑 메인보드에 장착할 수 없습니다.";
         }
         if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramSlotsMatched")))) {
             Object sticks = compatibilityDetails.get("ramSticksTotal");
             Object slots = compatibilityDetails.get("memorySlots");
-            return "램 스틱 " + sticks + "개가 메인보드 메모리 슬롯 " + slots + "개를 초과합니다. 수량 또는 구성(단품/2개들이 킷)을 조정해 주세요.";
+            return "RAM 스틱 " + sticks + "개가 메인보드 메모리 슬롯 " + slots + "개를 초과합니다. 수량 또는 구성(단품/2개들이 킷)을 조정해 주세요.";
         }
         String ramType = attr(byCategory.get("RAM"), "memoryType");
         String boardType = attr(byCategory.get("MOTHERBOARD"), "memoryType");

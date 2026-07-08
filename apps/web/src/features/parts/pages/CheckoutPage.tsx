@@ -3,7 +3,7 @@ import { ArrowLeft, Bell, CheckCircle2, CreditCard, ExternalLink, PackageCheck, 
 import type React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
-import { partImageUrl, partShortSpec } from '../partDisplay';
+import { handlePartImageError, partImageUrl, partShortSpec } from '../partDisplay';
 import { getCurrentQuoteDraft } from '../partsApi';
 import type { QuoteDraft, QuoteDraftItem } from '../types';
 
@@ -60,7 +60,7 @@ export function CheckoutPage() {
   if (isError || !quoteDraft) {
     return (
       <Screen>
-        <StateMessage type="warn" title="구매 확인 정보 조회 실패" body="현재 견적 장바구니를 불러오지 못했습니다. 잠시 후 다시 시도해주세요." />
+        <StateMessage type="warn" title="구매 확인 정보 조회 실패" body="현재 견적 장바구니를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." />
       </Screen>
     );
   }
@@ -110,7 +110,7 @@ export function CheckoutPage() {
           </Panel>
           <Panel title="유의사항" subtitle="이번 화면은 프론트 데모 결제 흐름입니다.">
             <div className="grid gap-3 md:grid-cols-3">
-              <NoticeItem icon={<ShieldCheck size={18} />} title="서버 주문 저장 없음" body="데모 결제는 quote draft 상태를 ORDERED로 바꾸지 않습니다." />
+              <NoticeItem icon={<ShieldCheck size={18} />} title="서버 주문 저장 없음" body="데모 결제를 진행해도 담아 둔 견적은 주문으로 바뀌지 않고 그대로 유지됩니다." />
               <NoticeItem icon={<ExternalLink size={18} />} title="외부 구매처 기준" body="실제 구매 가능 여부, 배송비, 할인은 이동한 구매처에서 확인합니다." />
               <NoticeItem icon={<Bell size={18} />} title="가격 알림 유지" body="목표가 알림은 기존 내 견적함 흐름으로 이어집니다." />
             </div>
@@ -169,7 +169,7 @@ export function CheckoutCompletePage() {
           </div>
           <h1 className="mt-4 text-2xl font-black text-commerce-ink">완료된 데모 결제 정보가 없습니다</h1>
           <p className="mx-auto mt-2 max-w-xl break-keep text-sm leading-6 text-slate-600">
-            현재 브라우저 세션에 저장된 checkout snapshot이 없습니다. 셀프 견적에서 부품을 담은 뒤 다시 진행해주세요.
+            저장된 데모 결제 내역이 없습니다. 셀프 견적에서 부품을 담은 뒤 다시 진행해 주세요.
           </p>
           <Link to="/self-quote" className="mt-5 inline-flex min-h-11 items-center justify-center rounded-md bg-commerce-ink px-5 text-sm font-black text-white hover:bg-slate-700">
             셀프 견적으로 돌아가기
@@ -282,7 +282,7 @@ function CheckoutItemCard({ item }: { item: QuoteDraftItem }) {
   const supplierName = item.externalOffer?.supplierName ?? '저장된 구매처 없음';
   return (
     <article className="grid gap-3 rounded-lg border border-commerce-line bg-white p-3 sm:grid-cols-[88px_minmax(0,1fr)]">
-      <img src={partImageUrl(item)} alt={`${item.name} 제품 사진`} className="h-24 w-full rounded-md border border-commerce-line bg-slate-50 object-contain sm:w-24" />
+      <img src={partImageUrl(item)} alt={`${item.name} 제품 사진`} onError={(event) => handlePartImageError(event, item.category)} className="h-24 w-full rounded-md border border-commerce-line bg-slate-50 object-contain sm:w-24" />
       <div className="min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">

@@ -333,7 +333,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return response(
                 parts.isEmpty()
                         ? categoryLabel(category) + " 조건에 맞는 내부 자산 후보를 찾지 못했습니다. 조건을 조금 넓혀 다시 요청해 주세요."
-                        : categoryLabel(category) + " 후보를 내부 자산 기준으로 골랐습니다. 담기 버튼은 기존 셀프 견적 장바구니 API로 연결하면 됩니다.",
+                        : categoryLabel(category) + " 후보를 내부 자산 기준으로 골랐습니다. 마음에 드는 후보는 담기 버튼으로 셀프 견적에 추가해 주세요.",
                 AiChatIntent.PART_RECOMMEND,
                 actions,
                 List.of(),
@@ -432,7 +432,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
 
     private AiChatEngineResponse explainResponse(String message) {
         return response(
-                "추천 근거는 예산, 내부 자산 현재가, 주요 부품 스펙, RAG 근거, Tool 검증 결과를 기준으로 설명합니다.",
+                "추천 근거는 예산, 내부 자산 현재가, 주요 부품 스펙, 근거 자료, 검증 결과를 기준으로 설명합니다.",
                 AiChatIntent.EXPLAIN,
                 List.of(new AiChatAction(AiChatActionType.OPEN_SELF_QUOTE, "견적에서 근거 보기", Map.of("route", "/self-quote"))),
                 List.of(),

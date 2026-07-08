@@ -13,6 +13,7 @@ import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.part.ToolBuildPart;
 import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.quote.QuoteDraftQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
@@ -44,19 +45,19 @@ public class BuildQueryService {
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
     );
     private static final List<BuildPlan> DEFAULT_BUILD_PLANS = List.of(
-            new BuildPlan("가성비형 추천 Build", "예산 안에서 핵심 성능을 먼저 확보", 0, 0.78, "MEDIUM"),
-            new BuildPlan("균형형 추천 Build", "게임, 개발, 안정성을 균형 있게 반영", 1, 0.96, "HIGH"),
-            new BuildPlan("고성능형 추천 Build", "성능 우선 조건과 업그레이드 여유 확보", 2, 1.14, "MEDIUM")
+            new BuildPlan("가성비형 추천 견적", "예산 안에서 핵심 성능을 먼저 확보", 0, 0.78, "MEDIUM"),
+            new BuildPlan("균형형 추천 견적", "게임, 개발, 안정성을 균형 있게 반영", 1, 0.96, "HIGH"),
+            new BuildPlan("고성능형 추천 견적", "성능 우선 조건과 업그레이드 여유 확보", 2, 1.14, "MEDIUM")
     );
     private static final List<BuildPlan> MINIMUM_BUDGET_BUILD_PLANS = List.of(
-            new BuildPlan("기준 이상 추천 Build", "요청 금액 이상에서 성능 기준을 맞춤", 1, 1.35, "HIGH"),
-            new BuildPlan("상위 균형 Build", "요청 금액보다 여유 있게 성능과 안정성을 확보", 2, 1.50, "HIGH"),
-            new BuildPlan("프리미엄 확장 Build", "요청 금액 이상에서 업그레이드 여유까지 확보", 3, 1.70, "MEDIUM")
+            new BuildPlan("기준 이상 추천 견적", "요청 금액 이상에서 성능 기준을 맞춤", 1, 1.35, "HIGH"),
+            new BuildPlan("상위 균형 견적", "요청 금액보다 여유 있게 성능과 안정성을 확보", 2, 1.50, "HIGH"),
+            new BuildPlan("프리미엄 확장 견적", "요청 금액 이상에서 업그레이드 여유까지 확보", 3, 1.70, "MEDIUM")
     );
     private static final List<BuildPlan> ENTHUSIAST_BUILD_PLANS = List.of(
-            new BuildPlan("끝판왕 추천 Build", "예산 제한 없이 내부 자산의 최상위 성능을 우선", 3, 1.14, "HIGH"),
-            new BuildPlan("하이엔드 균형 Build", "플래그십 성능과 구성 안정성을 균형 있게 확보", 2, 0.96, "HIGH"),
-            new BuildPlan("프리미엄 안정 Build", "과한 지출을 줄이되 하이엔드 체급을 유지", 1, 0.78, "MEDIUM")
+            new BuildPlan("끝판왕 추천 견적", "예산 제한 없이 내부 자산의 최상위 성능을 우선", 3, 1.14, "HIGH"),
+            new BuildPlan("하이엔드 균형 견적", "플래그십 성능과 구성 안정성을 균형 있게 확보", 2, 0.96, "HIGH"),
+            new BuildPlan("프리미엄 안정 견적", "과한 지출을 줄이되 하이엔드 체급을 유지", 1, 0.78, "MEDIUM")
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -133,6 +134,8 @@ public class BuildQueryService {
         );
     }
 
+    // 견적 3개(builds + build_items 다건 INSERT)를 생성하므로 중간 실패 시 부분 생성이 남지 않게 묶는다.
+    @Transactional
     public Map<String, Object> recommendations(Map<String, Object> request, CurrentUserService.CurrentUser user) {
         String requirementId = text(request == null ? null : request.get("requirementId"));
         if (requirementId == null) {
@@ -196,6 +199,7 @@ public class BuildQueryService {
 
         List<PartCandidate> displayPriceParts = new ArrayList<>();
         Set<String> categories = new LinkedHashSet<>();
+        Set<String> partIds = new LinkedHashSet<>();
         for (Map<String, Object> item : itemRows) {
             String partId = text(item.get("partId"));
             String rawCategory = text(item.get("category"));
@@ -203,11 +207,15 @@ public class BuildQueryService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "저장할 부품 카테고리가 필요합니다.");
             }
             String category = normalizeCategory(rawCategory);
-            if (!categories.add(category)) {
+            // RAM/SSD는 드래프트처럼 같은 카테고리 상품을 여러 개 담을 수 있다 — 셀프견적 멀티 슬롯 저장 경로.
+            if (!categories.add(category) && !QuoteDraftQueryService.MULTI_ITEM_CATEGORIES.contains(category)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "같은 카테고리 부품을 중복 저장할 수 없습니다.");
             }
             if (partId == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "저장할 부품 식별자가 필요합니다.");
+            }
+            if (!partIds.add(partId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "같은 부품을 중복 저장할 수 없습니다.");
             }
             PartCandidate part = partByPublicId(partId);
             if (!category.equals(part.category())) {
@@ -220,7 +228,7 @@ public class BuildQueryService {
 
         int displayTotal = positiveOrDefault(numberValue(build.get("totalPrice")), total(displayPriceParts));
         Integer budget = numberValue(build.get("budgetWon"));
-        String title = firstText(text(build.get("title")), firstText(text(build.get("name")), "AI 챗봇 추천 Build"));
+        String title = firstText(text(build.get("title")), firstText(text(build.get("name")), "AI 챗봇 추천 견적"));
         String summary = firstText(text(build.get("summary")), "AI 챗봇 대화에서 생성한 추천 조합입니다.");
         String confidence = normalizeConfidence(text(build.get("confidence")));
         String rawMessage = firstText(text(body.get("lastUserMessage")), summary);
@@ -610,7 +618,7 @@ public class BuildQueryService {
                         """, id, userId)
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Build를 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "견적을 찾을 수 없습니다."));
     }
 
     private String runAgent(AgentSessionRoot root, Long userId) {
@@ -853,7 +861,7 @@ public class BuildQueryService {
         return List.of(
                 MockData.map("label", category, "before", before == null ? "-" : before.name(), "after", after == null ? "-" : after.name(), "diff", priceDiff((after == null ? 0 : after.price()) - (before == null ? 0 : before.price())), "status", "PASS"),
                 MockData.map("label", "총액", "before", price(beforeTotal), "after", price(afterTotal), "diff", priceDiff(afterTotal - beforeTotal), "status", afterTotal >= beforeTotal ? "WARN" : "PASS"),
-                MockData.map("label", "예상 성능", "before", before == null ? "-" : shortSpec(before), "after", after == null ? "-" : shortSpec(after), "diff", "Tool 재검증", "status", "PASS")
+                MockData.map("label", "예상 성능", "before", before == null ? "-" : shortSpec(before), "after", after == null ? "-" : shortSpec(after), "diff", "재검증 완료", "status", "PASS")
         );
     }
 

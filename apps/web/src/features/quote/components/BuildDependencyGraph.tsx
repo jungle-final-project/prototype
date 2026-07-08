@@ -289,7 +289,7 @@ export function BuildDependencyGraph({
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs font-black text-brand-blue">
             <GitBranch size={15} />
-            Dependency graph
+            호환 관계
           </div>
           <h2 className="mt-1 text-xl font-black text-commerce-ink">{title}</h2>
           <p className="mt-1 max-w-3xl break-keep text-sm leading-6 text-slate-500">{displayGraph?.summary ?? subtitle}</p>
@@ -561,7 +561,7 @@ function FloatingDependencyGraph({
         </button>
         <div className="flex items-center justify-between gap-3 border-b border-commerce-line px-3 py-2 pr-11">
           <div className="min-w-0">
-            <div className="text-[11px] font-black text-brand-blue">Dependency graph</div>
+            <div className="text-[11px] font-black text-brand-blue">호환 관계</div>
             <div className="truncate text-xs font-black text-commerce-ink">미니 관계도</div>
           </div>
           <button
@@ -691,7 +691,7 @@ function GraphEdgeGuideCapsule({
             </>
           ) : (
             <p className="mt-0.5 break-keep text-xs font-bold leading-5 text-slate-600">
-              선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있어요
+              선을 누르면 두 부품 사이의 제약과 판단 근거를 확인할 수 있습니다
             </p>
           )}
         </div>
@@ -1290,7 +1290,7 @@ function CompatibleCandidatesPanel({
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-black text-commerce-ink">호환 후보</div>
-          <div className="mt-1 text-[11px] font-bold text-slate-500">서버 Tool 검증 기준</div>
+          <div className="mt-1 text-[11px] font-bold text-slate-500">서버 검증 기준</div>
         </div>
         {rejectedCount > 0 ? (
           <span className="rounded bg-red-50 px-2 py-1 text-[11px] font-black text-red-700">제외 {rejectedCount}</span>
@@ -1324,7 +1324,7 @@ function CompatibleCandidatesPanel({
                   </div>
                   <p className="mt-2 break-keep text-[11px] leading-5 text-slate-600">{candidate.summary}</p>
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">{candidate.checkedTools.join(' · ') || 'ACTIVE'}</span>
+                    <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">{candidate.checkedTools.map((tool) => TOOL_LABELS[tool] ?? tool).join(' · ') || '검증 항목 없음'}</span>
                     {readOnly ? (
                       <span className="rounded bg-slate-200 px-2 py-1 text-[11px] font-black text-slate-600">읽기 전용</span>
                     ) : (
@@ -1463,8 +1463,16 @@ function statusBadgeTone(status: BuildGraphStatus) {
 function statusLabel(status: BuildGraphStatus) {
   if (status === 'FAIL') return '장착 불가';
   if (status === 'WARN') return '간섭 주의';
-  return '호환됨';
+  return '호환 가능';
 }
+
+const TOOL_LABELS: Record<string, string> = {
+  compatibility: '호환성',
+  power: '전력',
+  size: '규격',
+  performance: '성능',
+  price: '가격'
+};
 
 function isPartCategory(value: string): value is PartCategory {
   return Object.keys(PART_CATEGORY_LABELS).includes(value);

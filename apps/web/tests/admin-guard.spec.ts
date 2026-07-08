@@ -1015,7 +1015,7 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
   await page.mouse.up();
 
   await expect(page.getByText('저장되지 않은 변경')).toBeVisible();
-  await page.getByRole('button', { name: '고정하기' }).click();
+  await page.getByRole('button', { name: '저장하기' }).click();
   await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 0).toBeGreaterThan(41);
   // 클램프 상한 = 100 - 카드 폭. 허브 방사형 좌표에서 GPU 카드 폭이 21%라 상한은 79다.
   await expect.poll(() => savedPayload?.positions?.GPU?.x ?? 999).toBeLessThanOrEqual(60);
@@ -1128,7 +1128,7 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
   await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
   await expect(page.locator('main')).toContainText('진행 중 Agent');
   await expect(page.locator('main')).toContainText('미해결 AS');
-  await expect(page.locator('main')).toContainText('실행 중 Price Job');
+  await expect(page.locator('main')).toContainText('실행 중 가격 작업');
   await expect(page.locator('main')).toContainText('운영 상태');
   await expect(page.locator('main')).toContainText('1건');
   await expect(page.locator('main')).toContainText('3건');
@@ -1159,7 +1159,7 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
   await expect(page.locator('main')).toContainText('as_tickets');
   await expect(page.locator('main')).toContainText('4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a');
   await expect(page.locator('main')).toContainText('2026-06-29T10:45:00Z');
-  await expect(page.locator('main')).toContainText('가격 Job');
+  await expect(page.locator('main')).toContainText('가격 작업');
   await expect(page.locator('main')).toContainText('Mailpit');
   await expect(page.locator('main')).toContainText('Mock Worker');
   await expect(page.locator('main')).toContainText('k6 Smoke');

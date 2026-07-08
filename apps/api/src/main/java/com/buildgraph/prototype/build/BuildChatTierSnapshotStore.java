@@ -1,5 +1,6 @@
 package com.buildgraph.prototype.build;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class BuildChatTierSnapshotStore {
+    /** 재계산이 반복 실패해도 낡은 스냅샷을 무기한 서빙하지 않도록 하는 나이 상한. 초과 시 빈 값으로 폴백한다. */
+    static final Duration MAX_SNAPSHOT_AGE = Duration.ofHours(24);
+
     public record TierSnapshot(
             int tierBudgetWon,
             List<Map<String, Object>> builds,
@@ -40,6 +44,7 @@ public class BuildChatTierSnapshotStore {
      * MIN(이상) 모드는 티어 총액이 요청 하한을 보장하지 못하므로 지원하지 않는다.
      * 요청 예산과 티어의 차이가 예산의 tolerancePct%를 넘으면 빈 값을 반환해
      * 기존 deterministic/LLM 경로로 폴백하게 한다.
+     * 재계산이 반복 실패해 computedAt이 {@link #MAX_SNAPSHOT_AGE}를 넘은 스냅샷도 빈 값으로 폴백한다.
      */
     public Optional<TierSnapshot> bestFor(Integer budgetWon, String mode, double tolerancePct) {
         if (budgetWon == null || budgetWon <= 0 || "MIN".equals(mode)) {
@@ -53,6 +58,11 @@ public class BuildChatTierSnapshotStore {
         if (diff > budgetWon * (tolerancePct / 100.0)) {
             return Optional.empty();
         }
-        return Optional.of(floor.getValue());
+        TierSnapshot snapshot = floor.getValue();
+        if (snapshot.computedAt() == null
+                || snapshot.computedAt().isBefore(Instant.now().minus(MAX_SNAPSHOT_AGE))) {
+            return Optional.empty();
+        }
+        return Optional.of(snapshot);
     }
 }

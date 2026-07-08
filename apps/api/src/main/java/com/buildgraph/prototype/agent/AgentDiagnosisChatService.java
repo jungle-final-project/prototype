@@ -189,7 +189,7 @@ public class AgentDiagnosisChatService {
         if (recentMessageCount > 0) {
             builder.append("이전 대화와 최근 진단 결과를 같이 참고했습니다. ");
         }
-        builder.append("이 상담은 티켓을 만들지 않으며, AS 접수는 사용자가 별도로 누를 때만 진행됩니다.");
+        builder.append("이 상담은 티켓을 만들지 않으며, AS 접수는 접수 버튼을 직접 누를 때만 진행됩니다.");
         return builder.toString();
     }
 

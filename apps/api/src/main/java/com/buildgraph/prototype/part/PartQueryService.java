@@ -51,7 +51,7 @@ public class PartQueryService {
             return partsWithCompatibility(user, search, normalizedCompatibilitySource, compatibilityMode, replaceTargetPartId);
         }
         return MockData.map(
-                "items", partRows(search),
+                "items", partRows(search).stream().map(this::stripInternalFields).toList(),
                 "page", search.page(),
                 "size", search.size(),
                 "total", countParts(search)
@@ -386,6 +386,8 @@ public class PartQueryService {
 
     private Map<String, Object> partMap(Map<String, Object> row) {
         return MockData.map(
+                // 호환 평가(performance 벤치마크 조회)가 internal_id를 쓴다 — 응답 직전 stripInternalFields로 제거된다.
+                "internal_id", row.get("internal_id"),
                 "id", DbValueMapper.string(row, "id"),
                 "category", DbValueMapper.string(row, "category"),
                 "name", DbValueMapper.string(row, "name"),
@@ -491,22 +493,27 @@ public class PartQueryService {
         if (search.status() != null) {
             clauses.add("p.status = ?");
             params.add(search.status());
+        } else {
+            // 사용자용 목록 기본값: 인테이크가 INACTIVE로 만든 미공개 부품이 후보에 노출되면
+            // 담기(PUT)가 404로 실패한다 — status 미지정 시 판매 중 부품만 보여준다.
+            clauses.add("p.status = 'ACTIVE'");
         }
         if (search.manufacturer() != null) {
-            clauses.add("lower(p.manufacturer) LIKE lower(concat('%', ?, '%'))");
-            params.add(search.manufacturer());
+            clauses.add("lower(p.manufacturer) LIKE lower(concat('%', ?, '%')) ESCAPE '\\'");
+            params.add(escapeLike(search.manufacturer()));
         }
         if (search.query() != null) {
             clauses.add("""
                     (
-                      lower(p.name) LIKE lower(concat('%', ?, '%'))
-                      OR lower(coalesce(p.manufacturer, '')) LIKE lower(concat('%', ?, '%'))
-                      OR lower(coalesce(p.attributes::text, '')) LIKE lower(concat('%', ?, '%'))
+                      lower(p.name) LIKE lower(concat('%', ?, '%')) ESCAPE '\\'
+                      OR lower(coalesce(p.manufacturer, '')) LIKE lower(concat('%', ?, '%')) ESCAPE '\\'
+                      OR lower(coalesce(p.attributes::text, '')) LIKE lower(concat('%', ?, '%')) ESCAPE '\\'
                     )
                     """);
-            params.add(search.query());
-            params.add(search.query());
-            params.add(search.query());
+            String escapedQuery = escapeLike(search.query());
+            params.add(escapedQuery);
+            params.add(escapedQuery);
+            params.add(escapedQuery);
         }
         if (search.minPrice() != null) {
             clauses.add("p.price >= ?");
@@ -517,6 +524,11 @@ public class PartQueryService {
             params.add(search.maxPrice());
         }
         return new SqlWhere("WHERE " + String.join(" AND ", clauses), params);
+    }
+
+    // 검색어의 %·_가 LIKE 와일드카드로 동작해 필터가 무력화되는 것을 막는다(리터럴 매칭).
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     private static String orderBy(String sort) {

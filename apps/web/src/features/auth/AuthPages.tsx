@@ -1,11 +1,17 @@
 import { FormEvent, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Screen, StateMessage } from '../../components/ui';
 import { ApiError, saveAuthTokens } from '../../lib/api';
 import { login, signup } from './authApi';
 
+// 가드가 보존한 원래 목적지(?redirect=)로 복귀한다. 외부 URL 유입을 막기 위해 내부 경로만 허용.
+function safeRedirectPath(raw: string | null) {
+  return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -19,9 +25,9 @@ export function LoginPage() {
       const password = String(form.get('password') ?? '');
       const response = await login(email, password);
       saveAuthTokens(response.accessToken, response.refreshToken, response.user);
-      navigate('/');
+      navigate(safeRedirectPath(searchParams.get('redirect')));
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'API 연결 전에는 Docker compose로 백엔드를 먼저 실행해 주세요.');
+      setError(cause instanceof ApiError ? cause.message : '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요. (데모 계정: user@example.com / passw0rd!)');
     } finally {
       setSubmitting(false);
     }
@@ -31,7 +37,7 @@ export function LoginPage() {
     <Screen>
       <div className="mx-auto mt-24 w-[420px] panel p-8">
         <h1 className="text-xl font-bold text-brand-navy">로그인</h1>
-        <p className="mt-1 text-sm text-slate-500">JWT 기반 프로토타입 인증</p>
+        <p className="mt-1 text-sm text-slate-500">이메일과 비밀번호로 로그인하세요.</p>
         {error ? <div className="mt-4"><StateMessage type="warn" title="로그인 실패" body={error} /></div> : null}
         <form onSubmit={submit} className="mt-6 space-y-4">
           <label className="block text-sm font-semibold text-slate-700">
@@ -95,7 +101,7 @@ export function SignupPage() {
       await signup({ name, email, password, termsAccepted, marketingAccepted });
       navigate('/login');
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'API 연결 전에는 Docker compose로 백엔드를 먼저 실행해 주세요.');
+      setError(cause instanceof ApiError ? cause.message : '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setSubmitting(false);
     }
@@ -105,7 +111,7 @@ export function SignupPage() {
     <Screen>
       <div className="mx-auto mt-16 w-[520px] panel p-8">
         <h1 className="text-xl font-bold text-brand-navy">회원가입</h1>
-        <p className="mt-1 text-sm text-slate-500">이메일 로그인용 User/Auth 공통 모듈</p>
+        <p className="mt-1 text-sm text-slate-500">이메일로 간편하게 가입할 수 있습니다.</p>
         {error ? <div className="mt-4"><StateMessage type="warn" title="회원가입 실패" body={error} /></div> : null}
         <form onSubmit={submit} className="mt-6 grid grid-cols-2 gap-4">
           <label className="block text-sm font-semibold text-slate-700">

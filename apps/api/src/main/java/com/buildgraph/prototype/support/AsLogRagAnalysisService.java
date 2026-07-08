@@ -129,7 +129,7 @@ public class AsLogRagAnalysisService {
                     "code", "INSUFFICIENT_EVIDENCE",
                     "label", "추가 로그 확인 필요",
                     "confidence", "LOW",
-                    "reason", "AS 전용 RAG에서 명확한 반복 신호를 찾지 못했습니다.",
+                    "reason", "AS 사례 근거에서 명확한 반복 신호를 찾지 못했습니다.",
                     "evidenceIds", List.of()
             ));
         }
@@ -138,9 +138,9 @@ public class AsLogRagAnalysisService {
                 .map(item -> orderedCopy((Map<?, ?>) item))
                 .map(item -> MockData.map(
                         "code", string(item, "reasonCode", "AS_RAG_MATCH"),
-                        "label", string(item, "summary", "AS RAG 근거"),
+                        "label", string(item, "summary", "AS 사례 근거"),
                         "confidence", string(analysis, "confidence", "MEDIUM"),
-                        "reason", string(item, "title", string(item, "summary", "AS RAG 근거와 로그가 일치합니다.")),
+                        "reason", string(item, "title", string(item, "summary", "AS 사례 근거와 로그가 일치합니다.")),
                         "evidenceIds", List.of(string(item, "id", string(item, "sourceId", "as-rag-evidence")))
                 ))
                 .toList();
@@ -166,7 +166,7 @@ public class AsLogRagAnalysisService {
                 "anomalies", causeCandidates(analysis),
                 "correlations", List.of(MockData.map(
                         "type", "AS_RAG_MATCH",
-                        "summary", string(analysis, "summaryText", "AS 전용 RAG 분석 결과가 없습니다.")
+                        "summary", string(analysis, "summaryText", "AS 사례 분석 결과가 없습니다.")
                 )),
                 "ruleSignals", List.of(),
                 "dataQuality", MockData.map(
@@ -175,7 +175,7 @@ public class AsLogRagAnalysisService {
                 ),
                 "evidenceRefs", evidenceRefs(analysis),
                 "rawSamples", rawSamples(analysis),
-                "summaryText", string(analysis, "summaryText", "AS 전용 RAG 분석 결과가 없습니다.")
+                "summaryText", string(analysis, "summaryText", "AS 사례 분석 결과가 없습니다.")
         );
     }
 
@@ -256,7 +256,7 @@ public class AsLogRagAnalysisService {
                 .map(item -> MockData.map(
                         "id", string(item, "id", string(item, "sourceId", "as-rag-evidence")),
                         "sourceId", string(item, "sourceId", "as-rag-evidence"),
-                        "summary", string(item, "summary", "AS RAG 근거"),
+                        "summary", string(item, "summary", "AS 사례 근거"),
                         "score", item.get("score")
                 ))
                 .toList();
