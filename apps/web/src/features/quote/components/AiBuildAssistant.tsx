@@ -724,7 +724,10 @@ function needsDraftContext(prompt: string) {
   const normalized = prompt.toLowerCase().replace(/\s+/g, '');
   const completionLike = /지금|현재|이견적|그래프|나머지|마저|채워|완성/.test(normalized);
   const simulationLike = /바꾸면|바꿨|교체하면|교체시|넣으면|달면|끼우면|끼면|박으면|올리면|올렸|내리면|내려|낮추면|늘리면|줄이면|갈아|넘어가면|업그레이드하면|다운그레이드하면|프레임|fps|성능|체감|비교/.test(normalized);
-  return completionLike || simulationLike;
+  // 변경 명령("그래픽카드 더 싼걸로", "램 빼줘")은 서버가 드래프트 기준 미리보기를 만들므로
+  // 낡은 캐시본이 아닌 최신 드래프트를 실어 보낸다.
+  const modifyLike = /바꿔|교체|싼|저렴|올려|빼|제거|삭제|넣어|담아|추가|수량|늘려|줄여/.test(normalized);
+  return completionLike || simulationLike || modifyLike;
 }
 
 function messageKind(answerType: 'BUDGET' | 'PART' | 'GENERAL'): AiChatMessage['kind'] {
@@ -963,7 +966,11 @@ function CompactBuildCard({
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
 }) {
-  const primaryItems = build.items.slice(0, 5);
+  // 변경 미리보기 카드는 전체 견적이 아니라 바뀐 부품만 보여준다(전체 8부품 나열은 무엇이 바뀌는지 흐린다).
+  // 적용은 여전히 build 전체(items 전량)로 하므로 나머지 부품이 삭제되지 않는다.
+  const isEditPreview = build.label === '변경 미리보기' && build.appliedPartCategories.length > 0;
+  const changedItems = build.items.filter((item) => build.appliedPartCategories.includes(item.category));
+  const primaryItems = isEditPreview && changedItems.length > 0 ? changedItems : build.items.slice(0, 5);
   const isLarge = size === 'large';
   // 이 카드가 적용 중이면 로딩 표시, 다른 카드가 적용 중이면 클릭이 조용히 무시되지 않도록 함께 비활성화한다.
   const isApplyingThis = applyingBuildId === build.id;
@@ -986,7 +993,9 @@ function CompactBuildCard({
         </div>
         <div className="shrink-0 text-left sm:text-right">
           <div className={`${isLarge ? 'text-[22px] leading-8' : 'text-base'} font-black text-brand-blue`}>{build.totalPrice.toLocaleString()}원</div>
-          <div className={`${isLarge ? 'text-[15px]' : 'text-[11px]'} font-bold text-slate-500`}>{build.items.length}개 부품</div>
+          <div className={`${isLarge ? 'text-[15px]' : 'text-[11px]'} font-bold text-slate-500`}>
+            {isEditPreview ? `변경 ${primaryItems.length}건` : `${build.items.length}개 부품`}
+          </div>
         </div>
       </div>
       {build.toolResults?.length ? (

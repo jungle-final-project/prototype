@@ -78,7 +78,8 @@ class BuildChatIntentRouterTest {
                 c("아무거나 좋은 걸로", BuildChatIntent.ASK_CLARIFICATION),
                 c("뭐 사면 돼?", BuildChatIntent.ASK_CLARIFICATION),
                 c("추천 부탁드립니다", BuildChatIntent.ASK_CLARIFICATION),
-                c("싸고 좋은 거 없나", BuildChatIntent.ASK_CLARIFICATION),
+                // 경계 어휘("싸고좋은")는 즉답 되묻기에서 제외 — UNSUPPORTED로 흘려 LLM 강등이 맥락에 맞게 답한다
+                c("싸고 좋은 거 없나", BuildChatIntent.UNSUPPORTED),
                 c("요즘 뭐가 잘 나가요?", BuildChatIntent.ASK_CLARIFICATION),
                 c("조립컴 처음인데 뭐부터 봐야 하나요", BuildChatIntent.ASK_CLARIFICATION),
                 c("뭘 사야 할지 모르겠어요", BuildChatIntent.ASK_CLARIFICATION),
@@ -107,6 +108,8 @@ class BuildChatIntentRouterTest {
                 c("SSD 추천해줘", BuildChatIntent.UNSUPPORTED),
                 // 장바구니 조작 대화 — 제거된 기능. "바꿔줘"는 시뮬레이션이 아니다
                 draft("GPU 빼줘", BuildChatIntent.UNSUPPORTED),
+                // "나머지 빼줘"는 완성 요청이 아니라 제거 요청 — 완성 분기가 '나머지'만으로 가로채지 않는다
+                draft("이 견적 나머지는 다 빼줘", BuildChatIntent.UNSUPPORTED),
                 draft("그래픽카드 삭제", BuildChatIntent.UNSUPPORTED),
                 draft("RAM 64GB로 바꿔줘", BuildChatIntent.UNSUPPORTED),
                 draft("램 수량 2개로 변경", BuildChatIntent.UNSUPPORTED),
@@ -149,6 +152,19 @@ class BuildChatIntentRouterTest {
         assertThat(mutation.isSemanticCacheEligible()).isFalse();
         assertThat(simulation.isSemanticCacheEligible()).isFalse();
         assertThat(draftCompletion.isSemanticCacheEligible()).isFalse();
+    }
+
+    @Test
+    void removalRequestIsNotTreatedAsDraftCompletion() {
+        // "나머지"라는 명사가 들어 있어도 삭제 동사("빼줘")가 있으면 견적 완성(빈 카테고리 채우기)이
+        // 아니라 변경(mutation) 요청으로 라우팅되어야 한다.
+        BuildChatIntentDecision removal = router.decide(draftRequest("이 견적 나머지는 다 빼줘"), "이 견적 나머지는 다 빼줘");
+        assertThat(removal.intent()).isEqualTo(BuildChatIntent.UNSUPPORTED);
+        assertThat(removal.intent()).isNotEqualTo(BuildChatIntent.BUILD_RECOMMEND);
+
+        // 회귀 방어: 순수 완성 요청("나머지 채워줘")은 그대로 BUILD_RECOMMEND로 유지된다.
+        BuildChatIntentDecision completion = router.decide(draftRequest("지금 견적 나머지 채워줘"), "지금 견적 나머지 채워줘");
+        assertThat(completion.intent()).isEqualTo(BuildChatIntent.BUILD_RECOMMEND);
     }
 
     private static Case c(String message, BuildChatIntent intent) {
