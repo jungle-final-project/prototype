@@ -30,6 +30,7 @@ import { buildChat } from '../quoteApi';
 
 type AiBuildAssistantProps = {
   surface?: 'home' | 'self-quote';
+  variant?: 'floating' | 'embedded';
 };
 
 type AiChatMessageSize = 'default' | 'large';
@@ -55,15 +56,17 @@ const CENTER_SCROLLBAR_TRACK_BOTTOM = 12;
 const CENTER_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
 const CENTER_SCROLLBAR_HIDE_DELAY_MS = 700;
 
-export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
+export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiBuildAssistantProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const centerMessagesScrollRef = useRef<HTMLDivElement | null>(null);
   const centerScrollbarHideTimerRef = useRef<number | null>(null);
   const centerScrollbarVisibleRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const isEmbedded = variant === 'embedded';
+  const [open, setOpen] = useState(isEmbedded);
   const [placement, setPlacement] = useState<NonNullable<AiAssistantOpenDetail['placement']>>('side');
+  const isPanelOpen = isEmbedded || open;
   const [isDesktopAssistant, setIsDesktopAssistant] = useState(() => (
     typeof window === 'undefined' ? true : window.matchMedia(ASSISTANT_DESKTOP_QUERY).matches
   ));
@@ -91,7 +94,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const quoteDraftQuery = useQuery({
     queryKey: ['quote-draft', 'current'],
     queryFn: getCurrentQuoteDraft,
-    enabled: hasToken && open
+    enabled: hasToken && isPanelOpen
   });
 
   useEffect(() => {
@@ -147,7 +150,11 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       }
       return nextOpen;
     });
-    const closeAssistant = () => setOpen(false);
+    const closeAssistant = () => {
+      if (!isEmbedded) {
+        setOpen(false);
+      }
+    };
     const closeForSupportChat = () => {
       if (!isDesktopAssistant) {
         setOpen(false);
@@ -163,19 +170,19 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       window.removeEventListener(AI_BUILD_ASSISTANT_CLOSE_EVENT, closeAssistant);
       window.removeEventListener(SUPPORT_CHAT_OPEN_EVENT, closeForSupportChat);
     };
-  }, [isDesktopAssistant]);
+  }, [isDesktopAssistant, isEmbedded]);
 
   useEffect(() => {
-    const shouldReserveSpace = open && isDesktopAssistant && placement === 'side';
+    const shouldReserveSpace = !isEmbedded && open && isDesktopAssistant && placement === 'side';
     document.documentElement.classList.toggle('ai-assistant-open', shouldReserveSpace);
     return () => {
       document.documentElement.classList.remove('ai-assistant-open');
     };
-  }, [open, isDesktopAssistant, placement]);
+  }, [open, isDesktopAssistant, placement, isEmbedded]);
 
   useEffect(() => {
-    setAiAssistantOpen(open);
-  }, [open]);
+    setAiAssistantOpen(!isEmbedded && open);
+  }, [open, isEmbedded]);
 
   useEffect(() => {
     return () => setAiAssistantOpen(false);
@@ -198,9 +205,9 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!isPanelOpen) return;
     messagesEndRef.current?.scrollIntoView({ block: 'end' });
-  }, [open, session.messages.length]);
+  }, [isPanelOpen, session.messages.length]);
 
   const updateCenterScrollbar = useCallback((visible: boolean) => {
     centerScrollbarVisibleRef.current = visible;
@@ -400,7 +407,9 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       saveSelectedAiBuild(normalizedBuild);
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
       void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
-      setOpen(false);
+      if (!isEmbedded) {
+        setOpen(false);
+      }
       navigate('/self-quote');
     } catch {
       setFailedBuild(normalizedBuild);
@@ -410,11 +419,11 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     }
   }, [applyingBuildId, queryClient, navigate]);
 
-  if (!open && isDesktopAssistant) {
+  if (!isPanelOpen && isDesktopAssistant) {
     return null;
   }
 
-  if (!open) {
+  if (!isPanelOpen) {
     return (
       <button
         type="button"
@@ -431,7 +440,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     );
   }
 
-  const isCenteredAssistant = placement === 'center';
+  const isCenteredAssistant = !isEmbedded && placement === 'center';
   if (isCenteredAssistant) {
     const centeredMessages = session.messages.filter((message) => message.id !== 'ai-intro');
     const hasMessages = centeredMessages.length > 0;
@@ -587,10 +596,12 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     );
   }
 
-  const panelClassName = isDesktopAssistant
+  const panelClassName = isEmbedded
+    ? 'panel flex h-full min-h-[720px] flex-col overflow-hidden bg-[#f8fbff]'
+    : isDesktopAssistant
     ? 'fixed inset-y-0 right-0 z-50 flex h-dvh w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#f8fbff] shadow-2xl'
     : 'fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-2xl border border-slate-200 bg-[#f8fbff] shadow-2xl';
-  const bodyClassName = `${isDesktopAssistant ? 'min-h-0 flex-1' : 'max-h-[78vh]'} flex flex-col`;
+  const bodyClassName = `${isEmbedded || isDesktopAssistant ? 'min-h-0 flex-1' : 'max-h-[78vh]'} flex flex-col`;
 
   const panel = (
     <section
@@ -608,14 +619,16 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
               <p className="truncate text-xs font-bold text-slate-500">{surface === 'home' ? '내부 견적 자산 기준 · 호환성 자동 체크' : '현재 견적 기준 · 부품 교체 자동 적용'}</p>
             </div>
           </div>
-          <button
-            type="button"
-            aria-label="AI 견적 챗봇 닫기"
-            onClick={() => setOpen(false)}
-            className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
-          >
-            <X size={17} />
-          </button>
+          {!isEmbedded ? (
+            <button
+              type="button"
+              aria-label="AI 견적 챗봇 닫기"
+              onClick={() => setOpen(false)}
+              className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
+            >
+              <X size={17} />
+            </button>
+          ) : null}
         </div>
       </div>
 
