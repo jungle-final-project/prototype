@@ -2,8 +2,9 @@ import { type FormEvent, memo, useCallback, useEffect, useRef, useState } from '
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
+import { useLockedPageScroll } from '../../../hooks/useHiddenPageScrollbar';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib/api';
-import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, type AiAssistantOpenDetail } from '../../../lib/events';
+import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -16,6 +17,7 @@ import {
   normalizeAiRecommendedBuild,
   readAssistantSession,
   recentBuildsForChatContext,
+  resetAssistantConversation,
   saveAssistantSession,
   saveSelectedAiBuild,
   type AiChatMessage,
@@ -30,6 +32,13 @@ type AiBuildAssistantProps = {
   surface?: 'home' | 'self-quote';
 };
 
+type CenterScrollbarState = {
+  canScroll: boolean;
+  visible: boolean;
+  thumbHeight: number;
+  thumbTop: number;
+};
+
 const LOGIN_REQUIRED_MESSAGE = '로그인이 필요합니다. 다시 로그인해 주세요.';
 const GENERIC_SUBMIT_ERROR_MESSAGE = 'AI 추천 API 호출에 실패했습니다. 잠시 후 다시 시도해 주세요.';
 const COMMON_QUICK_PROMPTS = [
@@ -39,12 +48,20 @@ const COMMON_QUICK_PROMPTS = [
 ];
 
 const ASSISTANT_DESKTOP_QUERY = '(min-width: 768px)';
+const CENTER_SCROLLBAR_TRACK_TOP = 8;
+const CENTER_SCROLLBAR_TRACK_BOTTOM = 12;
+const CENTER_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
+const CENTER_SCROLLBAR_HIDE_DELAY_MS = 900;
 
 export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const centerMessagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const centerScrollbarHideTimerRef = useRef<number | null>(null);
+  const centerScrollbarVisibleRef = useRef(false);
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<NonNullable<AiAssistantOpenDetail['placement']>>('side');
   const [isDesktopAssistant, setIsDesktopAssistant] = useState(() => (
     typeof window === 'undefined' ? true : window.matchMedia(ASSISTANT_DESKTOP_QUERY).matches
   ));
@@ -56,9 +73,16 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   const [failedBuild, setFailedBuild] = useState<AiRecommendedBuild | null>(null);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [pendingSubmit, setPendingSubmit] = useState<string | null>(null);
+  const [centerScrollbar, setCenterScrollbar] = useState<CenterScrollbarState>({
+    canScroll: false,
+    visible: false,
+    thumbHeight: CENTER_SCROLLBAR_MIN_THUMB_HEIGHT,
+    thumbTop: 0
+  });
   // 직전 응답이 되묻기였다면 다음 전송에 원 요청을 에코해 서버가 두 문장을 합성하게 한다(1회 왕복).
   const [pendingClarification, setPendingClarification] = useState<{ originalMessage: string } | null>(null);
   const hasToken = Boolean(getToken());
+  useLockedPageScroll(open && placement === 'center');
   // 패널을 실제로 연 뒤에만 현재 견적(드래프트)을 미리 받는다. 전역 렌더라 로그인만으로
   // 모든 페이지에서 draft API가 선행되던 것을 없앤다. 완성/시뮬레이션 요청은 패널 open 시점에
   // 이미 prefetch돼 있어 체감 저하가 없고, 예산/미지원/명확화는 draft 없이 즉시 전송된다.
@@ -80,8 +104,22 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   }, []);
 
   useEffect(() => {
+    function startFreshConversation() {
+      const ownerKey = getAiStorageOwnerKey();
+      const nextSession = resetAssistantConversation(ownerKey);
+      setSession(nextSession);
+      setPrompt('');
+      setSubmitError(null);
+      setApplyError(null);
+      setFailedBuild(null);
+      setPendingClarification(null);
+      setCenterScrollbar((current) => ({ ...current, canScroll: false, visible: false, thumbTop: 0 }));
+    }
+
     const openAssistant = (event: Event) => {
       const detail = (event as CustomEvent<AiAssistantOpenDetail>).detail;
+      startFreshConversation();
+      setPlacement(detail?.placement ?? 'side');
       if (!isDesktopAssistant) {
         window.dispatchEvent(new Event(SUPPORT_CHAT_CLOSE_EVENT));
       }
@@ -96,6 +134,10 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     };
     const toggleAssistant = () => setOpen((current) => {
       const nextOpen = !current;
+      if (nextOpen) {
+        startFreshConversation();
+        setPlacement('side');
+      }
       if (nextOpen && !isDesktopAssistant) {
         window.dispatchEvent(new Event(SUPPORT_CHAT_CLOSE_EVENT));
       }
@@ -120,12 +162,20 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
   }, [isDesktopAssistant]);
 
   useEffect(() => {
-    const shouldReserveSpace = open && isDesktopAssistant;
+    const shouldReserveSpace = open && isDesktopAssistant && placement === 'side';
     document.documentElement.classList.toggle('ai-assistant-open', shouldReserveSpace);
     return () => {
       document.documentElement.classList.remove('ai-assistant-open');
     };
-  }, [open, isDesktopAssistant]);
+  }, [open, isDesktopAssistant, placement]);
+
+  useEffect(() => {
+    setAiAssistantOpen(open);
+  }, [open]);
+
+  useEffect(() => {
+    return () => setAiAssistantOpen(false);
+  }, []);
 
   useEffect(() => {
     const syncSession = () => {
@@ -147,6 +197,71 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     if (!open) return;
     messagesEndRef.current?.scrollIntoView({ block: 'end' });
   }, [open, session.messages.length]);
+
+  const updateCenterScrollbar = useCallback((visible: boolean) => {
+    centerScrollbarVisibleRef.current = visible;
+    const element = centerMessagesScrollRef.current;
+    if (!element) {
+      centerScrollbarVisibleRef.current = false;
+      setCenterScrollbar((current) => ({ ...current, canScroll: false, visible: false }));
+      return;
+    }
+
+    const scrollableHeight = element.scrollHeight - element.clientHeight;
+    if (scrollableHeight <= 1) {
+      centerScrollbarVisibleRef.current = false;
+      setCenterScrollbar((current) => ({ ...current, canScroll: false, visible: false, thumbTop: 0 }));
+      return;
+    }
+
+    const trackHeight = Math.max(
+      CENTER_SCROLLBAR_MIN_THUMB_HEIGHT,
+      element.clientHeight - CENTER_SCROLLBAR_TRACK_TOP - CENTER_SCROLLBAR_TRACK_BOTTOM
+    );
+    const thumbHeight = Math.max(
+      CENTER_SCROLLBAR_MIN_THUMB_HEIGHT,
+      Math.round((element.clientHeight / element.scrollHeight) * trackHeight)
+    );
+    const availableTravel = Math.max(0, trackHeight - thumbHeight);
+    const thumbTop = Math.round((element.scrollTop / scrollableHeight) * availableTravel);
+
+    setCenterScrollbar({
+      canScroll: true,
+      visible,
+      thumbHeight,
+      thumbTop
+    });
+  }, []);
+
+  const revealCenterScrollbar = useCallback(() => {
+    updateCenterScrollbar(true);
+    if (centerScrollbarHideTimerRef.current !== null) {
+      window.clearTimeout(centerScrollbarHideTimerRef.current);
+    }
+    centerScrollbarHideTimerRef.current = window.setTimeout(() => {
+      updateCenterScrollbar(false);
+      centerScrollbarHideTimerRef.current = null;
+    }, CENTER_SCROLLBAR_HIDE_DELAY_MS);
+  }, [updateCenterScrollbar]);
+
+  useEffect(() => {
+    return () => {
+      if (centerScrollbarHideTimerRef.current !== null) {
+        window.clearTimeout(centerScrollbarHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open || placement !== 'center') {
+      centerScrollbarVisibleRef.current = false;
+      setCenterScrollbar((current) => ({ ...current, visible: false }));
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => updateCenterScrollbar(false));
+    return () => window.cancelAnimationFrame(frameId);
+  }, [open, placement, session.messages.length, updateCenterScrollbar]);
 
   useEffect(() => {
     if (!pendingSubmit || isSending) return;
@@ -312,11 +427,164 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
     );
   }
 
+  const isCenteredAssistant = placement === 'center';
+  if (isCenteredAssistant) {
+    const centeredMessages = session.messages.filter((message) => message.id !== 'ai-intro');
+    const hasMessages = centeredMessages.length > 0;
+    const centeredPromptForm = (
+      <form onSubmit={submitPrompt} className="mx-auto w-full max-w-[640px]">
+        {submitError ? (
+          <div role="alert" className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+            {submitError}
+          </div>
+        ) : null}
+        {applyError ? (
+          <div role="alert" className="mb-2 flex flex-col gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 sm:flex-row sm:items-center sm:justify-between">
+            <span>{applyError}</span>
+            <button
+              type="button"
+              onClick={() => failedBuild && selectBuild(failedBuild)}
+              disabled={!failedBuild || Boolean(applyingBuildId)}
+              className="min-h-8 rounded bg-red-600 px-3 text-white disabled:bg-red-200"
+            >
+              재시도
+            </button>
+          </div>
+        ) : null}
+        <label className="sr-only" htmlFor="ai-build-chat-input">AI에게 PC 견적 질문</label>
+        <div className="flex min-h-14 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-[0_18px_55px_rgba(15,23,42,0.12)] focus-within:border-slate-400 focus-within:ring-4 focus-within:ring-slate-100">
+          <input
+            id="ai-build-chat-input"
+            aria-label="AI에게 PC 견적 질문"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            disabled={isSending}
+            placeholder="예산, 용도, 원하는 게임을 입력해 주세요"
+            className="min-w-0 flex-1 bg-transparent px-2 text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
+          />
+          <button
+            type="submit"
+            aria-label="질문 보내기"
+            disabled={!prompt.trim() || isSending}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-commerce-ink text-white transition hover:bg-slate-700 disabled:bg-slate-300"
+          >
+            <Send size={17} />
+          </button>
+        </div>
+      </form>
+    );
+    const centeredCloseButton = (
+      <button
+        type="button"
+        data-testid="ai-chat-close-button"
+        aria-label="AI 견적 어시스턴트 닫기"
+        onClick={() => setOpen(false)}
+        className="absolute right-0 -top-14 z-10 grid h-10 w-10 place-items-center rounded-full bg-white text-slate-600 shadow-lg transition hover:bg-slate-100 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100 sm:-right-12 sm:top-0"
+      >
+        <X size={18} />
+      </button>
+    );
+
+    return (
+      <section
+        data-testid="ai-chatbot-modal"
+        className="fixed inset-0 z-50 flex min-h-dvh bg-slate-950/60 px-4 py-6"
+        role="dialog"
+        aria-modal="true"
+        aria-label="AI 견적 어시스턴트"
+        onWheel={(event) => event.stopPropagation()}
+        onTouchMove={(event) => event.stopPropagation()}
+      >
+        <div data-testid="ai-chatbot-panel" className="relative mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[760px] flex-col">
+          {hasMessages ? (
+            <div className="flex h-full min-h-0 items-center justify-center">
+              <div className="relative flex max-h-full min-h-0 w-full max-w-[640px] flex-col">
+                {centeredCloseButton}
+                <div className="relative min-h-0">
+                  <div
+                    ref={centerMessagesScrollRef}
+                    data-testid="ai-chat-messages"
+                    className="scrollbar-hidden max-h-[calc(100dvh-10rem)] space-y-4 overflow-y-auto pb-3 pt-2"
+                    onWheel={(event) => {
+                      event.stopPropagation();
+                      revealCenterScrollbar();
+                    }}
+                    onScroll={() => updateCenterScrollbar(centerScrollbarVisibleRef.current)}
+                    onTouchMove={(event) => {
+                      event.stopPropagation();
+                      revealCenterScrollbar();
+                    }}
+                  >
+                    {centeredMessages.map((message) => (
+                      <ChatMessage
+                        key={message.id}
+                        message={message}
+                        onSelectBuild={selectBuild}
+                        onQuickReply={handleQuickReply}
+                        applyingBuildId={applyingBuildId}
+                      />
+                    ))}
+                    {isSending ? (
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-500">
+                        서버에서 추천 조합을 계산하는 중입니다.
+                      </div>
+                    ) : null}
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  {centerScrollbar.canScroll ? (
+                    <div
+                      aria-hidden="true"
+                      data-testid="ai-chat-custom-scrollbar"
+                      className={`pointer-events-none absolute -right-4 w-1.5 rounded-full bg-white/10 opacity-0 transition-opacity ease-out motion-reduce:transition-none ${centerScrollbar.visible ? 'opacity-100 duration-150' : 'duration-700'}`}
+                      style={{
+                        bottom: CENTER_SCROLLBAR_TRACK_BOTTOM,
+                        top: CENTER_SCROLLBAR_TRACK_TOP
+                      }}
+                    >
+                      <div
+                        data-testid="ai-chat-custom-scrollbar-thumb"
+                        className="w-full rounded-full bg-white/70 shadow-[0_0_10px_rgba(255,255,255,0.18)]"
+                        style={{
+                          height: centerScrollbar.thumbHeight,
+                          transform: `translateY(${centerScrollbar.thumbTop}px)`
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <div className="mt-3 shrink-0">
+                  {centeredPromptForm}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center px-0 py-12 text-center">
+              <div className="relative mx-auto flex w-full max-w-[640px] -translate-y-3 flex-col items-center">
+                {centeredCloseButton}
+                <h2 className="text-2xl font-black leading-8 text-white sm:text-3xl">
+                  어떤 PC를 맞춰볼까요?
+                </h2>
+                <p className="mt-2 max-w-[520px] break-keep text-sm font-semibold leading-6 text-white/75">
+                  예산, 주로 하는 게임이나 작업, 선호 브랜드를 편하게 입력해 주세요.
+                </p>
+                <div className="mt-5 w-full">
+                  {centeredPromptForm}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   const panelClassName = isDesktopAssistant
     ? 'fixed inset-y-0 right-0 z-50 flex h-dvh w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#f8fbff] shadow-2xl'
     : 'fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-2xl border border-slate-200 bg-[#f8fbff] shadow-2xl';
+  const bodyClassName = `${isDesktopAssistant ? 'min-h-0 flex-1' : 'max-h-[78vh]'} flex flex-col`;
 
-  return (
+  const panel = (
     <section
       data-testid="ai-chatbot-panel"
       className={panelClassName}
@@ -343,7 +611,7 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
         </div>
       </div>
 
-      <div className={`${isDesktopAssistant ? 'min-h-0 flex-1' : 'max-h-[78vh]'} flex flex-col`}>
+      <div className={bodyClassName}>
         <div className="border-b border-slate-100 bg-[#f8fbff] px-4 py-3">
           <div className="mb-2 text-[11px] font-black text-slate-400">이렇게 물어보세요</div>
           <div className="flex flex-wrap gap-2">
@@ -425,6 +693,8 @@ export function AiBuildAssistant({ surface = 'home' }: AiBuildAssistantProps) {
       </div>
     </section>
   );
+
+  return panel;
 }
 
 // 서버가 현재 견적(드래프트) 문맥을 실제로 쓰는 요청만 draft를 먼저 확보한다.
