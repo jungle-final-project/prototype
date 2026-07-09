@@ -1800,7 +1800,7 @@ public class BuildChatService {
                 "budgetWon", afterTotal,
                 "budgetLabel", formatBudgetLabel(afterTotal),
                 "tierLabel", "변경 미리보기",
-                "appliedPartCategories", List.of(),
+                "appliedPartCategories", List.of(category),
                 "items", items,
                 "toolResults", previewToolResults,
                 "warnings", distinct(previewWarnings),

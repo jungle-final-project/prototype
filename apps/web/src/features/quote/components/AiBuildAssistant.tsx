@@ -667,7 +667,11 @@ function CompactBuildCard({
   onSelectBuild: (build: AiRecommendedBuild) => void;
   applyingBuildId: string | null;
 }) {
-  const primaryItems = build.items.slice(0, 5);
+  // 변경 미리보기 카드는 전체 견적이 아니라 바뀐 부품만 보여준다(전체 8부품 나열은 무엇이 바뀌는지 흐린다).
+  // 적용은 여전히 build 전체(items 전량)로 하므로 나머지 부품이 삭제되지 않는다.
+  const isEditPreview = build.label === '변경 미리보기' && build.appliedPartCategories.length > 0;
+  const changedItems = build.items.filter((item) => build.appliedPartCategories.includes(item.category));
+  const primaryItems = isEditPreview && changedItems.length > 0 ? changedItems : build.items.slice(0, 5);
   // 이 카드가 적용 중이면 로딩 표시, 다른 카드가 적용 중이면 클릭이 조용히 무시되지 않도록 함께 비활성화한다.
   const isApplyingThis = applyingBuildId === build.id;
   const isApplyDisabled = Boolean(applyingBuildId);
@@ -689,7 +693,9 @@ function CompactBuildCard({
         </div>
         <div className="shrink-0 text-left sm:text-right">
           <div className="text-base font-black text-brand-blue">{build.totalPrice.toLocaleString()}원</div>
-          <div className="text-[11px] font-bold text-slate-500">{build.items.length}개 부품</div>
+          <div className="text-[11px] font-bold text-slate-500">
+            {isEditPreview ? `변경 ${primaryItems.length}건` : `${build.items.length}개 부품`}
+          </div>
         </div>
       </div>
       {build.toolResults?.length ? (
