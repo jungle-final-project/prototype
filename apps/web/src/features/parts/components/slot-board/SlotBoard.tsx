@@ -72,7 +72,7 @@ export function SlotBoard({
   }, [isIsometric, overlaysVisible]);
 
   return (
-    <div className="panel slot-board-panel overflow-hidden">
+    <div className="panel slot-board-panel flex h-full min-h-0 flex-col overflow-hidden">
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
       <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
         <div className="flex items-center justify-between gap-2">
@@ -245,7 +245,7 @@ function MotherboardSlotBoardBody({
     <div
       data-testid="slot-board"
       data-visual-mode="motherboard"
-      className="slot-board-tray relative flex flex-col gap-2 p-3 lg:block lg:aspect-[16/10] lg:overflow-hidden lg:p-0"
+      className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
     >
       <BoardPlanArt />
       <SlotBoardEdges
@@ -350,7 +350,7 @@ function IsometricSlotBoardBody({
           onClearSelection?.();
         }
       }}
-      className="relative flex flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:aspect-[16/8.4] lg:overflow-hidden lg:bg-[#f6fbff] lg:p-4"
+      className="relative min-h-0 flex-1 flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:overflow-hidden lg:bg-[#f6fbff] lg:p-4"
     >
       <div
         data-testid="slot-board-motherboard-art"
