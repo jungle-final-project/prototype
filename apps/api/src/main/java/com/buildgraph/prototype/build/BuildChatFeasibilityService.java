@@ -67,6 +67,11 @@ public class BuildChatFeasibilityService {
             if (quantity != null && quantity >= 1) {
                 return quantity;
             }
+            // 총용량 제약("32GB 램")은 킷 상품 1개로 충족하는 게 자연스럽다 — RAM 기본 2개(스틱 관례)를
+            // 적용하면 "32GB Kit 2개(64GB)"로 과대 계산된다. 용량 명시 시 기본 수량은 1.
+            if (minCapacityGb != null) {
+                return 1;
+            }
             return "RAM".equals(category) ? 2 : 1;
         }
 

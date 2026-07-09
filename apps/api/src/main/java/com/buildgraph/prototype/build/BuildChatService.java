@@ -1307,6 +1307,26 @@ public class BuildChatService {
         ));
     }
 
+    // 결정경로용 경량 용도 추정 — 라우팅에 쓰지 않고, 이미 선택된 응답의 최소 구성가 계산을 정확하게
+    // 만드는 데만 쓴다(오인 시에도 GPU 포함 방향의 보수적 안내라 해가 없음).
+    private static List<String> inferUsageTags(String message) {
+        String normalized = normalizeCommand(message);
+        List<String> tags = new ArrayList<>();
+        if (containsAnyNormalized(normalized, "ai", "cuda", "학습", "머신러닝", "딥러닝", "llm", "인공지능")) {
+            tags.add("AI_DEV");
+        }
+        if (containsAnyNormalized(normalized, "영상", "편집", "프리미어", "렌더", "블렌더", "3d")) {
+            tags.add("VIDEO_EDIT");
+        }
+        if (containsAnyNormalized(normalized, "게임", "게이밍", "배그", "발로란트", "오버워치", "로스트아크", "롤", "디아블로", "fps")) {
+            tags.add("GAMING");
+        }
+        if (containsAnyNormalized(normalized, "개발", "코딩", "도커", "docker", "ide")) {
+            tags.add("DEVELOPMENT");
+        }
+        return tags;
+    }
+
     private static String usageLabel(List<String> tags) {
         if (tags.contains("AI_DEV")) {
             return "AI 학습용";
@@ -1612,16 +1632,26 @@ public class BuildChatService {
         Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
         // 견적 초안 유무는 map 비었는지가 아니라 items 존재로 판정(빈 items 배열을 "초안 있음"으로 오인하지 않도록 표준화)
         if (budget != null && objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty()) {
-            int minimumTotal = minimumBuildTotal();
+            // 용도 인지 최소가: "70만원 AI용"처럼 GPU가 필수인 용도는 GPU 포함 최소 구성가로 계산한다.
+            // (라우팅이 아니라 이미 선택된 응답의 숫자를 정확하게 만드는 보정 — 키워드 오인 시에도 방향은 보수적)
+            List<String> inferredUsage = inferUsageTags(message);
+            boolean gpuRequired = BuildChatFeasibilityService.requiresGpu(inferredUsage);
+            int minimumTotal = gpuRequired ? feasibilityService.usageMinimumTotal(inferredUsage) : minimumBuildTotal();
             if (minimumTotal > 0 && budget < minimumTotal) {
                 // 요청 예산으로는 구성이 어려우므로 "가능한 최소 구성" 카드를 실제로 만들어 함께 제공한다
                 List<String> warnings = new ArrayList<>();
-                warnings.add("BUDGET_BELOW_MINIMUM");
+                warnings.add(gpuRequired ? "BUDGET_BELOW_USAGE_MINIMUM" : "BUDGET_BELOW_MINIMUM");
                 Optional<GreedyBuild> minimumBuild = greedyTargetBuild(
-                        (int) Math.round(minimumTotal * 1.25), (int) Math.round(minimumTotal * 1.25), false);
-                String guidance = "요청 예산(" + formatBudgetLabel(budget) + ")으로는 내부 자산 기준 완전한 구성이 어렵습니다. "
-                        + "가능한 최소 구성은 약 " + formatBudgetLabel(minimumTotal) + "부터이며, 약 "
-                        + formatBudgetLabel(Math.max(0, minimumTotal - budget)) + "을(를) 더 준비하시면 됩니다.";
+                        (int) Math.round(minimumTotal * 1.25), (int) Math.round(minimumTotal * 1.25), gpuRequired);
+                String guidance = gpuRequired
+                        ? usageLabel(inferredUsage) + " PC는 그래픽카드가 필요해 내부 자산 기준 최소 약 "
+                                + formatBudgetLabel(minimumTotal) + "부터 가능합니다. 요청 예산("
+                                + formatBudgetLabel(budget) + ")과는 약 "
+                                + formatBudgetLabel(Math.max(0, minimumTotal - budget)) + " 차이가 납니다."
+                        : "요청 예산(" + formatBudgetLabel(budget) + ")으로는 내부 자산 기준 완전한 구성이 어렵습니다. "
+                                + "가능한 최소 구성은 약 " + formatBudgetLabel(minimumTotal) + "부터이며, 약 "
+                                + formatBudgetLabel(Math.max(0, minimumTotal - budget)) + "을(를) 더 준비하시면 됩니다.";
+                Map<String, Object> response;
                 if (minimumBuild.isPresent()) {
                     GreedyBuild greedy = minimumBuild.get();
                     warnings.addAll(greedy.warnings());
@@ -1629,10 +1659,21 @@ public class BuildChatService {
                             TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false), 1,
                             greedy.toolResults(), greedy.warnings(), List.of());
                     build.put("title", "가능한 최소 구성");
-                    build.put("summary", "현재 판매 중인 내부 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
-                    return Optional.of(fastResponse("BUDGET", guidance, List.of(build), warnings));
+                    build.put("summary", gpuRequired
+                            ? "현재 판매 중인 내부 자산으로 구성 가능한 가장 저렴한 조합입니다. 용도에 필요한 그래픽카드를 포함했습니다."
+                            : "현재 판매 중인 내부 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
+                    response = fastResponse("BUDGET", guidance, List.of(build), warnings);
+                } else {
+                    response = fastResponse("GENERAL", guidance, warnings);
                 }
-                return Optional.of(fastResponse("GENERAL", guidance, warnings));
+                if (gpuRequired) {
+                    int suggested = ((minimumTotal + 99_999) / 100_000) * 100_000;
+                    response.put("quickReplies", List.of(
+                            formatBudgetLabel(suggested) + " " + usageLabel(inferredUsage) + " PC 추천해줘",
+                            formatBudgetLabel(budget) + " 사무용 PC 추천해줘"
+                    ));
+                }
+                return Optional.of(response);
             }
         }
         if (isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
