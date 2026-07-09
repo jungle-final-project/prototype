@@ -230,6 +230,28 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void buildChatDropsOverBudgetBuildWhenLlmMarksExplicitGpuSoft() {
+        // LLM이 명시 5090을 소프트 선호(hardConstraintPolicy=NONE)로 판단하면, 원문 정규식이 5090을 잡아도
+        // 예산 완화 차단을 풀어 과예산 조합을 제외한다(하드 강제 시 유지되는 것과 대비되는 새 계약).
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(overBudgetSoftExplicitGpuResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of(Map.of(
+                "tool", "price",
+                "status", "WARN",
+                "confidence", "HIGH",
+                "summary", "예산을 초과했습니다."
+        )));
+
+        Map<String, Object> response = service.chat(Map.of("message", "300만원 이하 RTX 5090 PC 추천해줘"));
+
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("warnings")).asList().contains("명시 예산 범위를 벗어난 추천 조합을 제외했습니다.");
+    }
+
+    @Test
     void buildChatRoutesFormerUnsupportedMessagesToLlmAndFallsBackToGracefulRefusalWithChips() {
         // 라우터가 UNSUPPORTED로 보던 문장("바꿔/빼줘/알림" 류)은 이제 dead-end가 아니라 LLM 제약 파서로
         // 흘러간다. LLM까지 불가한 환경에서는 기능 안내 + 바로 눌러볼 칩으로 우아하게 거절한다.
@@ -1270,6 +1292,38 @@ class BuildChatServiceTest {
                                 "budgetPolicy", "USER_BUDGET",
                                 "hardConstraintPolicy", "NONE"
                         ),
+                List.of("evidence-1"),
+                List.of(),
+                null
+        );
+    }
+
+    private static AiChatEngineResponse overBudgetSoftExplicitGpuResponse() {
+        return new AiChatEngineResponse(
+                "조건을 분석해 추천 조합을 만들었습니다.",
+                AiChatIntent.FULL_BUILD_RECOMMEND,
+                List.<AiChatAction>of(),
+                List.of(new AiChatEngineResponse.BuildRecommendation(
+                        "고가 추천 조합",
+                        "예산 기준",
+                        "과예산 조합입니다.",
+                        12_000_000,
+                        "MEDIUM",
+                        List.of(
+                                part("CPU", "cpu-expensive", 1_500_000),
+                                part("RAM", "ram-expensive", 1_000_000),
+                                part("GPU", "gpu-expensive", 8_500_000)
+                        )
+                )),
+                List.of(),
+                Map.of(
+                        "budget", 3_000_000,
+                        "budgetMode", "MAX",
+                        "budgetPolicy", "USER_BUDGET",
+                        "hardConstraintPolicy", "NONE",
+                        "requiredGpuClasses", List.of("RTX_5090"),
+                        "requiredPartKeywords", List.of("RTX 5090")
+                ),
                 List.of("evidence-1"),
                 List.of(),
                 null

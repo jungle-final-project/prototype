@@ -1414,6 +1414,118 @@ class DefaultAiChatEngineTest {
         verifyNoJdbcWrites();
     }
 
+    @Test
+    void llmRequiredDraftEditCategoryPrefersLlmSourceOverMessageKeyword() {
+        // "이 CPU에 맞는 메인보드로 바꿔줘"는 메시지에서 CPU 키워드가 먼저 잡히지만, 사용자 UI 명시가 없을 때는
+        // LLM이 판단한 draftEdit.category(MOTHERBOARD)를 메시지 키워드보다 우선해야 한다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "BUILD_MODIFY",
+                  "assistantMessage": "메인보드를 바꿔드릴게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "REPLACE",
+                    "category": "MOTHERBOARD",
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": "메인보드 교체 요청"
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "이 CPU에 맞는 메인보드로 바꿔줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                "draft-1",
+                Map.of("currentQuoteDraft", Map.of("items", List.of(
+                        Map.of("partId", "cpu-1", "category", "CPU", "name", "Ryzen 7", "currentPrice", 400_000, "quantity", 1),
+                        Map.of("partId", "mb-1", "category", "MOTHERBOARD", "name", "Current Board", "currentPrice", 300_000, "quantity", 1)
+                ))),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.BUILD_MODIFY);
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.REPLACE_DRAFT_PART)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload()).containsEntry("category", "MOTHERBOARD"));
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredKeepsExplicitGpuSoftWhenLlmMarksHardConstraintNone() {
+        // LLM이 "RTX 5090"을 감지(requiredGpuClasses)하되 소프트 선호(hardConstraintPolicy=NONE)로 판단하면,
+        // 서버가 MUST_INCLUDE로 되덮지 않고, 예산에 맞춰 5090이 아닌 GPU로 대체할 수 있어야 한다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "FULL_BUILD_RECOMMEND",
+                  "assistantMessage": "30만원 예산에 맞춰 조합을 만들어볼게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": 300000,
+                    "usageTags": ["GAMING"],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "USER_BUDGET",
+                    "mustHave": [],
+                    "requiredGpuClasses": ["RTX_5090"],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "RTX 5090 넣은 30만원짜리 게임용 PC 추천해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        // LLM 소프트 판단을 서버가 하드로 되덮지 않는다.
+        assertThat(response.parsedContext()).containsEntry("hardConstraintPolicy", "NONE");
+        assertThat(response.parsedContext().get("requiredGpuClasses")).asList().contains("RTX_5090");
+        // 소프트이므로 5090 하드 강제가 풀려, 30만원 예산 근처의 GPU가 선택된다(5090 강제 아님).
+        assertThat(response.recommendations()).isNotEmpty();
+        assertThat(response.recommendations())
+                .allSatisfy(recommendation -> assertThat(recommendation.items())
+                        .filteredOn(part -> "GPU".equals(part.category()))
+                        .allSatisfy(part -> assertThat(String.valueOf(part.attributes().get("gpuClass")))
+                                .isNotEqualTo("RTX_5090")));
+        verifyNoJdbcWrites();
+    }
+
     private void verifyNoJdbcWrites() {
         verify(jdbcTemplate, never()).update(anyString(), (Object[]) any());
     }

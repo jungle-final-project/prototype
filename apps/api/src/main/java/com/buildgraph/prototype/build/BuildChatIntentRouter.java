@@ -214,10 +214,12 @@ public class BuildChatIntentRouter {
 
     // 구매 의향은 있지만 예산/용도가 없는 모호한 요청 — 차단이 아니라 되묻기로 대화를 잇는다
     private static boolean isLowInfoPurchaseIntent(String normalized) {
+        // 명백 저정보(무엇을 살지 모르는 신호)만 즉답 되묻기로 남긴다. 경계 어휘(고민/필요해/필요한데/추천좀/
+        // 추천부탁/알아보/괜찮은거/적당한걸로/싸고좋은 등)는 되묻기로 가두지 않고 UNSUPPORTED로 흘려
+        // LLM 강등(respondLlmRequired)이 맥락에 맞게 답하게 한다.
         return containsAny(normalized,
-                "사고싶", "사려", "사야", "살까", "뭐사", "뭘사", "장만", "알아보", "필요한데", "필요함", "필요해",
-                "바꿀때", "추천좀", "추천부탁", "뭐부터", "뭐가잘나가", "싸고좋은", "적당한걸로", "괜찮은거",
-                "고민", "컴맹", "뭐가좋");
+                "사고싶", "사려", "사야", "살까", "뭐사", "뭘사", "장만",
+                "바꿀때", "뭐부터", "뭐가잘나가", "컴맹", "뭐가좋");
     }
 
     private static boolean isMissingMonitorContext(String normalized) {

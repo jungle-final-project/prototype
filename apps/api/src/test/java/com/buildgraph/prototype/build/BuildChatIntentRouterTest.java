@@ -78,7 +78,8 @@ class BuildChatIntentRouterTest {
                 c("아무거나 좋은 걸로", BuildChatIntent.ASK_CLARIFICATION),
                 c("뭐 사면 돼?", BuildChatIntent.ASK_CLARIFICATION),
                 c("추천 부탁드립니다", BuildChatIntent.ASK_CLARIFICATION),
-                c("싸고 좋은 거 없나", BuildChatIntent.ASK_CLARIFICATION),
+                // 경계 어휘("싸고좋은")는 즉답 되묻기에서 제외 — UNSUPPORTED로 흘려 LLM 강등이 맥락에 맞게 답한다
+                c("싸고 좋은 거 없나", BuildChatIntent.UNSUPPORTED),
                 c("요즘 뭐가 잘 나가요?", BuildChatIntent.ASK_CLARIFICATION),
                 c("조립컴 처음인데 뭐부터 봐야 하나요", BuildChatIntent.ASK_CLARIFICATION),
                 c("뭘 사야 할지 모르겠어요", BuildChatIntent.ASK_CLARIFICATION),

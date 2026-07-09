@@ -3207,7 +3207,22 @@ public class BuildChatService {
     }
 
     private static boolean hasEffectiveHardConstraint(Map<String, Object> parsedContext, BudgetIntent rawBudgetIntent) {
+        // LLM이 명시 GPU 모델을 소프트 선호(hardConstraintPolicy=NONE)로 판단했으면, 원문 정규식이 잡은
+        // explicitHardConstraint나 requiredGpuClasses/파생 키워드만으로 하드제약을 강제하지 않는다 —
+        // 예산완화 폴백이 살아나 대체 조합/역제안이 가능해진다. LLM이 하드(MUST_INCLUDE)로 판단한 경우는 그대로 유지된다.
+        if (isLlmSoftenedExplicitModel(parsedContext)) {
+            return false;
+        }
         return hasHardConstraint(parsedContext) || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint());
+    }
+
+    // 명시 GPU 모델(requiredGpuClasses)이 있는데 LLM이 하드제약을 NONE으로 명시적으로 낮춘 상태.
+    // DefaultAiChatEngine이 LLM의 명시 NONE만 그대로 보존하므로(미지정 시엔 MUST_INCLUDE로 승격),
+    // 이 조합은 "LLM이 소프트로 판단함"을 뜻한다.
+    private static boolean isLlmSoftenedExplicitModel(Map<String, Object> parsedContext) {
+        return parsedContext != null
+                && !stringList(parsedContext.get("requiredGpuClasses")).isEmpty()
+                && "NONE".equals(text(parsedContext.get("hardConstraintPolicy")));
     }
 
     private static Integer effectiveBudget(Map<String, Object> parsedContext, BudgetIntent rawBudgetIntent) {

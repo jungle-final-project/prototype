@@ -290,6 +290,12 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private AiChatEngineResponse fullBuildResponse(String message, Map<String, Object> parsedContext) {
         Map<String, Object> effectiveContext = new LinkedHashMap<>(parsedContext == null ? Map.of() : parsedContext);
         Map<String, PartQueryConstraints> constraintsByCategory = fullBuildPartConstraints(message);
+        // LLM이 명시 GPU 모델을 소프트 선호(hardConstraintPolicy=NONE)로 판단했으면, 원문에서 재파생한 GPU 하드
+        // 제약을 강제하지 않는다 — 예산에 맞춰 다른 GPU로 대체·역제안할 수 있게 한다. 명시 MUST_INCLUDE는 그대로 강제된다.
+        if (isLlmSoftenedExplicitGpu(effectiveContext) && constraintsByCategory.containsKey("GPU")) {
+            constraintsByCategory = new LinkedHashMap<>(constraintsByCategory);
+            constraintsByCategory.remove("GPU");
+        }
         applyFullBuildConstraints(effectiveContext, constraintsByCategory);
         List<AiChatEngineResponse.BuildRecommendation> recommendations = buildRecommendations(message, effectiveContext, constraintsByCategory);
         List<AiChatAction> actions = new ArrayList<>();
@@ -953,7 +959,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
                     .min((left, right) -> Integer.compare(Math.abs(left.price() - targetPrice), Math.abs(right.price() - targetPrice)))
                     .orElse(matching.get(0));
         }
-        if ("GPU".equals(category)) {
+        if ("GPU".equals(category) && !isLlmSoftenedExplicitGpu(parsedContext)) {
             List<String> requiredGpuClasses = normalizeGpuClasses(stringList(parsedContext.get("requiredGpuClasses")));
             if (!requiredGpuClasses.isEmpty()) {
                 List<AiChatEngineResponse.PartRecommendation> matching = parts.stream()
@@ -969,7 +975,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         }
         if ("GPU".equals(category) && isPremiumGpuIntent(parsedContext, message)) {
             List<AiChatEngineResponse.PartRecommendation> highGpuParts = parts.stream()
-                    .filter(part -> gpuRank(part) >= 5070)
+                    .filter(DefaultAiChatEngine::isPremiumGpuCandidate)
                     .toList();
             if (!highGpuParts.isEmpty()) {
                 parts = highGpuParts;
@@ -1994,9 +2000,15 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (requiredPartKeywords.isEmpty()) {
             requiredPartKeywords = normalizeKeywords(stringList(fallback.get("requiredPartKeywords")));
         }
-        String hardConstraintPolicy = normalizeHardConstraintPolicy(firstText(text(source.get("hardConstraintPolicy")), text(fallback.get("hardConstraintPolicy"))));
+        String llmHardConstraintPolicy = text(source.get("hardConstraintPolicy"));
+        String hardConstraintPolicy = normalizeHardConstraintPolicy(firstText(llmHardConstraintPolicy, text(fallback.get("hardConstraintPolicy"))));
         if (!requiredGpuClasses.isEmpty()) {
-            hardConstraintPolicy = "MUST_INCLUDE";
+            // LLM이 hardConstraintPolicy를 명시했으면 그 판단(소프트=NONE 포함)을 우선한다.
+            // LLM이 값을 주지 않았을 때(빈/누락)만 명시 GPU 모델 존재를 근거로 MUST_INCLUDE로 승격한다 —
+            // "이 5090은 소프트 선호"라는 LLM 판단을 서버가 하드로 되덮지 않게 한다.
+            if (llmHardConstraintPolicy == null) {
+                hardConstraintPolicy = "MUST_INCLUDE";
+            }
             if (budget == null && "UNSPECIFIED".equals(budgetPolicy)) {
                 budgetPolicy = "OPEN_BUDGET";
             }
@@ -2038,7 +2050,12 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String operation = !"NONE".equals(llmOperation)
                 ? llmOperation
                 : inferDraftOperation(message);
-        String category = firstText(categoryFrom(firstText(selectedCategory, message)), categoryFrom(text(source.get("category"))));
+        // 카테고리 결정 우선순위: 사용자 UI 명시(selectedCategory) → LLM 판단(source.category) → 메시지 키워드 폴백.
+        // "이 CPU에 맞는 메인보드로 바꿔줘"에서 메시지 키워드를 LLM보다 앞세우면 CPU로 오판되므로,
+        // 자동 추정 구간에서는 LLM을 키워드보다 앞에 둔다(draftEdit operation/priceDirection 반전과 동일 철학).
+        String category = firstText(
+                categoryFrom(selectedCategory),
+                firstText(categoryFrom(text(source.get("category"))), categoryFrom(message)));
         if (category == null) {
             category = categoryFrom(text(mostExpensiveDraftItem(context).get("category")));
         }
@@ -2380,6 +2397,43 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return 0;
     }
 
+    // 프리미엄 GPU 임계(벤치마크 점수 기준). GPU 카테고리 내 0~100 정규화 점수에서 80은 기존
+    // gpuRank>=5070 필터와 등가다: RTX 5070(약 81.5)·5070 Ti·5080·5090은 통과, RTX 5060 Ti(약 72)·
+    // 5060은 배제. 모델번호 리터럴(5070) 대신 데이터(benchmark_summaries.score)로 등급을 판정한다.
+    private static final double PREMIUM_GPU_BENCHMARK_MIN = 80.0;
+
+    // 명시 예산 없이 고사양을 원할 때 후보를 상위 등급으로 좁히는 필터.
+    // 벤치마크 점수가 있으면 그것으로 판정하고, 벤치가 없는 GPU만 모델번호 등급(gpuRank)으로 폴백한다.
+    private static boolean isPremiumGpuCandidate(AiChatEngineResponse.PartRecommendation part) {
+        double benchmark = gpuBenchmarkScore(part);
+        if (benchmark > 0) {
+            return benchmark >= PREMIUM_GPU_BENCHMARK_MIN;
+        }
+        return gpuRank(part) >= 5070;
+    }
+
+    private static double gpuBenchmarkScore(AiChatEngineResponse.PartRecommendation part) {
+        if (part == null || part.attributes() == null) {
+            return 0;
+        }
+        Map<String, Object> attributes = part.attributes();
+        for (String key : List.of("_benchmarkScore", "benchmarkScore", "score")) {
+            Object value = attributes.get(key);
+            if (value instanceof Number number) {
+                return number.doubleValue();
+            }
+            String parsed = text(value);
+            if (parsed != null) {
+                try {
+                    return Double.parseDouble(parsed.replace(",", ""));
+                } catch (NumberFormatException ignored) {
+                    // 파싱 불가하면 다음 키로 폴백
+                }
+            }
+        }
+        return 0;
+    }
+
     private static int defaultQuantity(String category) {
         return "RAM".equals(category) || "STORAGE".equals(category) ? 2 : 1;
     }
@@ -2454,6 +2508,15 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return "MUST_INCLUDE".equals(text(parsedContext.get("hardConstraintPolicy")))
                 || !normalizeGpuClasses(stringList(parsedContext.get("requiredGpuClasses"))).isEmpty()
                 || !normalizeKeywords(stringList(parsedContext.get("requiredPartKeywords"))).isEmpty();
+    }
+
+    // LLM이 명시 GPU 모델(requiredGpuClasses)을 하드제약 NONE으로 명시적으로 낮춘 상태.
+    // normalizeParsedContext가 LLM의 명시 NONE만 보존하므로(미지정 시 MUST_INCLUDE로 승격) 이 조합은
+    // "LLM이 소프트로 판단함"을 뜻한다. 이때 서버는 명시 모델을 하드로 되강제하지 않는다.
+    private static boolean isLlmSoftenedExplicitGpu(Map<String, Object> parsedContext) {
+        return parsedContext != null
+                && !normalizeGpuClasses(stringList(parsedContext.get("requiredGpuClasses"))).isEmpty()
+                && "NONE".equals(text(parsedContext.get("hardConstraintPolicy")));
     }
 
     private static boolean isPerformanceTarget(Map<String, Object> parsedContext) {
