@@ -27,7 +27,7 @@ import { withObjectParticle } from '../components/slot-board/koreanParticle';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
 import { UpgradeAdvisorPanel } from '../components/slot-board/UpgradeAdvisorPanel';
-import { SlotBoard } from '../components/slot-board/SlotBoard';
+import { SlotBoard, type SlotBoardVisualMode } from '../components/slot-board/SlotBoard';
 import { SlotCandidatePanel } from '../components/slot-board/SlotCandidatePanel';
 import { SlotStatusBar } from '../components/slot-board/SlotStatusBar';
 import { SLOT_CONFIGS, SLOT_COUNT, isSlotCategory, slotConfigFor } from '../components/slot-board/slotBoardConfig';
@@ -69,6 +69,7 @@ function SelfQuoteSlotBoardPage() {
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const { effectiveVisualMode, setVisualMode } = useSlotBoardVisualMode();
   const hasToken = Boolean(getToken());
   const loginHref = `/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
 
@@ -123,7 +124,8 @@ function SelfQuoteSlotBoardPage() {
       focus: graphFocus
     }),
     placeholderData: keepPreviousData,
-    enabled: hasToken && !isQuoteDraftLoading
+    enabled: hasToken && !isQuoteDraftLoading,
+    retry: false
   });
 
   useEffect(() => {
@@ -391,6 +393,9 @@ function SelfQuoteSlotBoardPage() {
             items={draftItems}
             selectedCategory={selectedCategory}
             nextCategory={nextCategory}
+            visualMode={effectiveVisualMode}
+            onVisualModeChange={setVisualMode}
+            onClearSelection={closePanel}
             onSlotSelect={selectSlot}
             onRemoveItem={removeItem}
             isRemovePending={deleteMutation.isPending}
@@ -435,6 +440,63 @@ function SelfQuoteSlotBoardPage() {
       </div>
     </Screen>
   );
+}
+
+const SLOT_BOARD_VISUAL_MODE_STORAGE_KEY = 'buildgraph.selfQuote.slotBoardVisualMode';
+
+function useSlotBoardVisualMode() {
+  const [visualMode, setVisualModeState] = useState<SlotBoardVisualMode>(readSlotBoardVisualMode);
+  const [isDesktop, setIsDesktop] = useState(isDesktopSlotBoardViewport);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const media = window.matchMedia('(min-width: 1024px)');
+    const sync = () => setIsDesktop(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  const setVisualMode = useCallback((mode: SlotBoardVisualMode) => {
+    setVisualModeState(mode);
+    writeSlotBoardVisualMode(mode);
+  }, []);
+
+  return {
+    effectiveVisualMode: isDesktop ? visualMode : 'motherboard',
+    setVisualMode
+  };
+}
+
+function isDesktopSlotBoardViewport() {
+  return typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(min-width: 1024px)').matches;
+}
+
+function readSlotBoardVisualMode(): SlotBoardVisualMode {
+  if (typeof window === 'undefined') {
+    return 'motherboard';
+  }
+  try {
+    const storedValue = window.localStorage.getItem(SLOT_BOARD_VISUAL_MODE_STORAGE_KEY);
+    return storedValue === 'isometric' ? 'isometric' : 'motherboard';
+  } catch {
+    return 'motherboard';
+  }
+}
+
+function writeSlotBoardVisualMode(mode: SlotBoardVisualMode) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(SLOT_BOARD_VISUAL_MODE_STORAGE_KEY, mode);
+  } catch {
+    // localStorage가 차단된 환경에서는 현재 세션 상태만 유지한다.
+  }
 }
 
 // 멘토 피드백: "무엇을 사야 하는지, 어디까지 했는지"의 품목 지도. 권장 선택 순서이며 강제가 아니다.
