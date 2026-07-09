@@ -61,8 +61,8 @@ function GlobalSupportChatWidget() {
 
 function GlobalAiBuildAssistant() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname.startsWith('/admin')) {
+  if (pathname === '/login' || pathname === '/signup' || pathname.startsWith('/admin') || pathname === '/self-quote') {
     return null;
   }
-  return <AiBuildAssistant surface={pathname === '/self-quote' ? 'self-quote' : 'home'} />;
+  return <AiBuildAssistant surface="home" />;
 }
