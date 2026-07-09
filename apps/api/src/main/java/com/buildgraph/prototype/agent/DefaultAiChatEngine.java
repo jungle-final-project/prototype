@@ -2035,18 +2035,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
             Map<String, Object> context
     ) {
         Map<String, Object> result = new LinkedHashMap<>();
-        String inferredOperation = inferDraftOperation(message);
-        String operation = !"NONE".equals(inferredOperation)
-                ? inferredOperation
-                : normalizeDraftOperation(text(source.get("operation")));
+        // LLM 판단을 우선하고, 키워드 추론은 LLM이 값을 주지 않은 빈 곳(NONE/ANY)만 채운다.
+        // 키워드가 LLM을 덮어쓰면 "가격은 유지하고 성능만 올려" 같은 요청이 '성능' 키워드로
+        // MORE_EXPENSIVE로 오라우팅돼, 가격 근접 상위 후보(ranker.similar)를 놓친다.
+        String llmOperation = normalizeDraftOperation(text(source.get("operation")));
+        String operation = !"NONE".equals(llmOperation)
+                ? llmOperation
+                : inferDraftOperation(message);
         String category = firstText(categoryFrom(firstText(selectedCategory, message)), categoryFrom(text(source.get("category"))));
         if (category == null) {
             category = categoryFrom(text(mostExpensiveDraftItem(context).get("category")));
         }
-        String inferredPriceDirection = inferPriceDirection(message);
-        String priceDirection = !"ANY".equals(inferredPriceDirection)
-                ? inferredPriceDirection
-                : normalizePriceDirection(text(source.get("priceDirection")));
+        String llmPriceDirection = normalizePriceDirection(text(source.get("priceDirection")));
+        String priceDirection = !"ANY".equals(llmPriceDirection)
+                ? llmPriceDirection
+                : inferPriceDirection(message);
         Integer targetMaxPrice = firstNumber(source.get("targetMaxPrice"), inferBudget(message));
         Integer targetQuantity = numberValue(source.get("targetQuantity"));
         result.put("operation", operation);
