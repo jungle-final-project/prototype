@@ -80,6 +80,20 @@ test('admin support chat updates the room list from websocket push', async ({ pa
   const roomListPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: '상담방 목록' }) });
   await expect(roomListPanel.getByText('재연결 중', { exact: true })).toBeVisible();
 
+  // The detail (`/ws/support-chat`) socket is created only after the auto-selected room
+  // resolves its ws-ticket, so it may not be registered yet. Wait for it (mirroring the
+  // queue tests) before dispatching, otherwise `sockets[-1]` is undefined and the
+  // CHAT_UPDATED dispatch silently no-ops and `실시간 연결` never appears.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const sockets = (window as unknown as { __supportChatSockets?: Array<EventTarget & { readyState?: number }> }).__supportChatSockets ?? [];
+        const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
+        return urls.some((url, i) => url.includes('/ws/support-chat') && sockets[i]?.readyState === 1);
+      })
+    )
+    .toBe(true);
+
   await page.evaluate(() => {
     const sockets = (window as unknown as { __supportChatSockets?: EventTarget[] }).__supportChatSockets ?? [];
     const urls = (window as unknown as { __supportChatSocketUrls?: string[] }).__supportChatSocketUrls ?? [];
@@ -91,7 +105,10 @@ test('admin support chat updates the room list from websocket push', async ({ pa
       }
     }
     const socket = sockets[index];
-    socket?.dispatchEvent(new MessageEvent('message', {
+    if (!socket) {
+      throw new Error('support-chat detail socket was not registered before CHAT_UPDATED dispatch');
+    }
+    socket.dispatchEvent(new MessageEvent('message', {
       data: JSON.stringify({
         type: 'CHAT_UPDATED',
         detail: {
