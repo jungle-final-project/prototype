@@ -10,7 +10,6 @@ import {
   SLOT_CONFIGS,
   SLOT_ISO_ART,
   isMultiItemCategory,
-  relatedCategories,
   slotConfigFor,
   slotIsoCalloutLayout,
   type SlotConfig,
@@ -359,16 +358,6 @@ function IsometricSlotBoardBody({
         onSlotSelect={onSlotSelect}
         onProblemOpen={openProblemDetail}
       />
-      {overlaysVisible ? (
-        <SlotBoardEdges
-          items={items}
-          graph={graph}
-          selectedCategory={selectedCategory}
-          hoveredCategory={hoveredCategory}
-          flashingCategories={flashingCategories}
-          visualMode="isometric"
-        />
-      ) : null}
       {SLOT_CONFIGS.map((slot) => (
         <IsometricSlotCard
           key={slot.category}
@@ -639,11 +628,10 @@ function IsoPartLayer({
   onSlotSelect: (category: PartCategory) => void;
   onProblemOpen: (category: PartCategory) => void;
 }) {
-  const focusRelated = focusCategory ? relatedCategories(focusCategory, SLOT_BOARD_ISO_EDGES) : null;
   return (
     <div className="pointer-events-none absolute inset-2 z-[5] hidden lg:block">
       {SLOT_CONFIGS.map((slot) => {
-        const isSpotlighted = focusRelated ? focusRelated.has(slot.category) : false;
+        const isSpotlighted = focusCategory ? slot.category === focusCategory : false;
         return (
           <IsoPart
             key={slot.category}
@@ -652,7 +640,7 @@ function IsoPartLayer({
             isMounting={flashingCategories.has(slot.category)}
             status={statusByCategory.get(slot.category)}
             isHovered={hoveredCategory === slot.category}
-            isDimmed={focusRelated ? !isSpotlighted : false}
+            isDimmed={focusCategory ? !isSpotlighted : false}
             isSpotlighted={isSpotlighted}
             isSelected={selectedCategory === slot.category}
             problemDetail={problemDetailsByCategory.get(slot.category)}

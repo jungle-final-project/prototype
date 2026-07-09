@@ -478,7 +478,7 @@ test('toggles the slot board into 3D UI view and persists the selected mode', as
   await expect.poll(() => page.evaluate(() => localStorage.getItem('buildgraph.selfQuote.slotBoardVisualMode'))).toBe('motherboard');
 });
 
-test('cross-highlights 3D parts from slot card hover and dims unrelated mounted parts', async ({ page }) => {
+test('spotlights only the focused 3D part from slot card hover and dims the rest', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
@@ -501,10 +501,10 @@ test('cross-highlights 3D parts from slot card hover and dims unrelated mounted 
   await expect(gpuSlot).toHaveAttribute('data-hovered', 'true');
   await expect(gpuIso).toHaveAttribute('data-hovered', 'true');
   await expect(gpuIso).toHaveAttribute('data-spotlight', 'true');
-  await expect(psuIso).toHaveAttribute('data-spotlight', 'true');
+  await expect(psuIso).toHaveAttribute('data-spotlight', 'false');
   await expect(ramIso).toHaveAttribute('data-spotlight', 'false');
   await expect(ramIso).toHaveAttribute('data-dimmed', 'true');
-  await expect(psuIso).toHaveAttribute('data-dimmed', 'false');
+  await expect(psuIso).toHaveAttribute('data-dimmed', 'true');
 
   await page.getByText('구성 관계도 — 부품 간 호환 상태').hover();
   await expect(gpuIso).toHaveAttribute('data-hovered', 'false');
@@ -529,8 +529,6 @@ test('shows 3D problem markers, problem reasons, and overlay preference', async 
   const gpuSlot = page.getByTestId('slot-GPU');
   await expect(gpuSlot).toHaveAttribute('data-status', 'FAIL');
   await expect(gpuSlot.getByText('장착 불가')).toBeVisible();
-  await expect(page.getByTestId('slot-edge-GPU-PSU')).toHaveAttribute('data-status', 'FAIL');
-  await expect(page.getByTestId('slot-edge-GPU-PSU')).toHaveText('전력 150W 부족');
   await expect(page.getByTestId('iso-part-GPU')).toHaveAttribute('data-status', 'FAIL');
   await expect(page.getByTestId('iso-part-marker-GPU')).toBeVisible();
   await expect(page.getByTestId('iso-part-PSU')).toHaveAttribute('data-status', 'WARN');
@@ -873,7 +871,7 @@ test('keeps fallback topology edges when the graph api fails', async ({ page }) 
   await page.getByRole('switch', { name: '3D UI 보기' }).click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
   await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
-  await expect(page.getByTestId('slot-edge-GPU-PSU')).toHaveAttribute('data-status', 'BASE');
+  await expect(page.getByTestId('slot-board-edges')).toHaveCount(0);
   await expect(page.getByTestId('quote-summary-bar')).toContainText('검증 확인 불가');
 });
 
