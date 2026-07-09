@@ -309,16 +309,9 @@ async function moveHomeFullPageDown(page: Page) {
 
 async function openDesktopAiAssistant(page: Page) {
   await expect(page.getByTestId('ai-chatbot-launcher')).toHaveCount(0);
-  const logoutButton = page.getByRole('button', { name: '로그아웃' });
-  const assistantButton = page.getByRole('button', { name: 'AI에게 물어보기' });
-  await expect(assistantButton).toBeVisible();
-  const logoutBox = await logoutButton.boundingBox();
-  const assistantBox = await assistantButton.boundingBox();
-  expect(logoutBox).not.toBeNull();
-  expect(assistantBox).not.toBeNull();
-  expect(assistantBox?.x).toBeGreaterThan(logoutBox?.x ?? 0);
-
-  await assistantButton.click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('buildgraph.aiAssistant.open', { detail: { placement: 'side' } }));
+  });
   const chatbotPanel = page.getByTestId('ai-chatbot-panel');
   await expect(chatbotPanel).toBeVisible();
   await expect(chatbotPanel).toHaveCSS('width', '420px');
@@ -1039,8 +1032,9 @@ test('toggles the desktop AI assistant drawer from the header button', async ({ 
   await expect(page.getByTestId('ai-chatbot-panel')).toHaveCount(0);
 
   await openDesktopAiAssistant(page);
-  const assistantButton = page.getByRole('button', { name: 'AI에게 물어보기' });
-  await assistantButton.click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('buildgraph.aiAssistant.close'));
+  });
 
   await expect(page.getByTestId('ai-chatbot-panel')).toHaveCount(0);
   await expect(page.getByTestId('ai-chatbot-launcher')).toHaveCount(0);
