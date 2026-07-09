@@ -139,6 +139,45 @@ export type BuildGraphInsight = {
   relatedNodeIds: string[];
 };
 
+export type BuildCompositeScoreComponent = {
+  key: 'performance' | 'compatibility' | 'balance' | 'upgrade' | 'evidence' | string;
+  label: string;
+  score: number;
+  maxScore: number;
+  percent: number;
+  summary: string;
+};
+
+export type BuildCompositeScoreCap = {
+  code: string;
+  maxScore: number;
+  reason: string;
+};
+
+export type BuildCompositeRequestFit = {
+  status: 'PASS' | 'WARN' | 'OVER_BUDGET' | 'UNSPECIFIED' | string;
+  score: number;
+  budgetWon?: number;
+  totalPrice?: number;
+  priceDiff?: number;
+  summary: string;
+};
+
+export type BuildCompositeScore = {
+  policyVersion: string;
+  score: number;
+  rawScore: number;
+  maxScore: number;
+  grade: string;
+  label: string;
+  summary: string;
+  components: BuildCompositeScoreComponent[];
+  caps: BuildCompositeScoreCap[];
+  requestFit?: BuildCompositeRequestFit;
+  curve?: { marker: number; label: string }[];
+  missingCategories?: string[];
+};
+
 export type BuildGraphResolveRequest = {
   source: BuildGraphSource;
   view?: BuildGraphView;
@@ -154,6 +193,7 @@ export type BuildGraphResolveResponse = {
   edges: BuildGraphEdge[];
   focusNodeIds: string[];
   insights: BuildGraphInsight[];
+  compositeScore?: BuildCompositeScore;
   toolResults: AiToolResult[];
 };
 
