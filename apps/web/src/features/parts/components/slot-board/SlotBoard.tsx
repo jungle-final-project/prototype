@@ -67,13 +67,15 @@ export function SlotBoard({
   return (
     <div className="panel slot-board-panel overflow-hidden">
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
-        <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
-        <div className="flex items-center gap-3 text-[10px] font-bold text-slate-500">
+      <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
           <SlotBoardModeSwitch
             checked={isIsometric}
             onToggle={() => onVisualModeChange?.(isIsometric ? 'motherboard' : 'isometric')}
           />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-3 text-[10px] font-bold text-slate-500">
           {isIsometric ? (
             <SlotBoardDisplaySwitch
               label="보드 정보 표시"

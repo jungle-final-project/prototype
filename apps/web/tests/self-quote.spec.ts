@@ -443,6 +443,10 @@ test('toggles the slot board into 3D UI view and persists the selected mode', as
   const modeToggle = page.getByRole('switch', { name: '3D UI 보기' });
   await expect(board).toHaveAttribute('data-visual-mode', 'motherboard');
   await expect(page.getByTestId('slot-board-motherboard-art')).toHaveCount(0);
+  const motherboardToggleBox = await modeToggle.boundingBox();
+  if (!motherboardToggleBox) {
+    throw new Error('3D UI 보기 토글 위치를 확인할 수 없습니다.');
+  }
 
   await modeToggle.click();
   await expect(modeToggle).toHaveAttribute('aria-checked', 'true');
@@ -450,6 +454,12 @@ test('toggles the slot board into 3D UI view and persists the selected mode', as
   await expect(board).toHaveAttribute('data-visual-mode', 'isometric');
   await expect(page.getByTestId('slot-board-motherboard-art')).toBeVisible();
   await expect(page.getByRole('switch', { name: '보드 정보 표시' })).toBeVisible();
+  const isometricToggleBox = await modeToggle.boundingBox();
+  if (!isometricToggleBox) {
+    throw new Error('3D 전환 후 3D UI 보기 토글 위치를 확인할 수 없습니다.');
+  }
+  expect(Math.abs(isometricToggleBox.x - motherboardToggleBox.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(isometricToggleBox.y - motherboardToggleBox.y)).toBeLessThanOrEqual(1);
   await expect(page.getByTestId('iso-part-CPU')).toBeVisible();
   await expect(page.getByTestId('iso-part-MOTHERBOARD')).toBeVisible();
   await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
