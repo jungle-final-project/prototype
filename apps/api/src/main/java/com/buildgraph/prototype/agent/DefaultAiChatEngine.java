@@ -62,6 +62,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
             확신이 낮거나 복합 명령이면 routeIntent.shouldNavigate=false, routeType=NONE, confidence=LOW로 두십시오.
             예산이 없으면 budget은 null입니다. 일반 성능 목표는 budgetPolicy=UNSPECIFIED이고, 예산 없는 최고급/끝판왕/명시 5090 의도만 OPEN_BUDGET입니다.
             명시 예산이 있으면 “최고급” 표현이 있어도 budgetPolicy=USER_BUDGET이며, “이하/안으로/넘지 않게”는 budgetMode=MAX, “이상/최소/부터”는 MIN, 일반 “으로/짜리/정도”는 TARGET입니다.
+            context.serverFacts.budgetWon이 없고 현재 견적(드래프트)도 없이 용도만 있는 요청은 조합을 지어내지 말고 intent=ASK_FOLLOW_UP으로 예산대를 되물으십시오. 단 예산 무관·끝판왕·명시적 고성능 요청이면 FULL_BUILD_RECOMMEND로 바로 추천하십시오.
             출력은 서버가 제공한 JSON schema를 반드시 따릅니다.
             """;
     private static final List<String> BUILD_CATEGORIES = List.of(

@@ -943,6 +943,151 @@ class BuildChatServiceTest {
         verifyNoInteractions(aiChatEngine);
     }
 
+    @Test
+    void buildChatAsksForBudgetWithDirectionChipsForUsageOnlyRequestWithoutBudgetOrDraft() {
+        // 무예산 용도-only("게임용 컴퓨터 추천해줘")는 조합 3장 즉답을 폐기하고, LLM이 되묻되 서버가
+        // 예산대 방향 칩을 붙여 클릭 한 번으로 다음 턴이 예산 추천으로 이어지게 한다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> List.<Map<String, Object>>of())
+                .when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(), any())).thenReturn(new AiChatEngineResponse(
+                "예산대를 알려주시면 딱 맞는 조합을 추천해 드릴게요.",
+                AiChatIntent.ASK_FOLLOW_UP,
+                List.<AiChatAction>of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(),
+                null
+        ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of("message", "게임용 컴퓨터 추천해줘"));
+
+        // 무관한 예산 조합이 주입되지 않는다(딱딱한 3장 폴백 폐기 확인).
+        assertThat(response.get("builds")).asList().isEmpty();
+        // 예산대 방향 칩 4개가 붙는다("N만원대" 문구는 다음 턴 parseBudgetWon으로 예산이 잡힌다).
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly(
+                        "100만원대로 추천해줘",
+                        "200만원대로 추천해줘",
+                        "300만원대로 추천해줘",
+                        "예산 무관 고성능으로 추천해줘");
+        // LLM 되묻기 경로를 실제로 탔다.
+        verify(aiChatEngine).respondLlmRequired(any(), any());
+    }
+
+    @Test
+    void buildChatKeepsReturningBuildsForUsageRequestWhenBudgetIsPresent() {
+        // 회귀 방지: 예산이 있으면(무예산 되묻기 조건이 아님) 기존대로 조합 카드가 나온다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(buildResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+
+        Map<String, Object> response = service.chat(Map.of("message", "200만원 게임용 PC 추천해줘"));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("builds")).asList().isNotEmpty();
+    }
+
+    @Test
+    void buildChatGuidesMultiPartReductionWhenDraftExceedsTargetWithoutSinglePartNamed() {
+        // 드래프트 있음 + 예산 목표 + 특정 단일 부품 미지목 + 총액 > 목표 → 감액 우선순위 안내 + 카테고리 교체 칩.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "현재 견적을 800만원 이하로 맞춰줘",
+                "currentQuoteDraft", Map.of("items", List.of(
+                        Map.of("partId", "gpu-1", "category", "GPU", "name", "RTX 5090", "quantity", 1, "lineTotal", 4_000_000),
+                        Map.of("partId", "cpu-1", "category", "CPU", "name", "Ryzen 9", "quantity", 1, "lineTotal", 3_000_000),
+                        Map.of("partId", "ram-1", "category", "RAM", "name", "DDR5 64GB", "quantity", 1, "lineTotal", 2_000_000),
+                        Map.of("partId", "ssd-1", "category", "STORAGE", "name", "NVMe 2TB", "quantity", 1, "lineTotal", 1_500_000)
+                ))
+        ));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("builds")).asList().isEmpty();
+        String message = response.get("message").toString();
+        assertThat(message)
+                .contains("1050만원")
+                .contains("800만원")
+                .contains("250만원")
+                .contains("한 번에 한 부품씩")
+                .contains("가장 비싼 GPU(400만원)");
+        // 라인총액 내림차순 상위 3개 카테고리 교체 칩 — 재진입 시 detectPartCategory가 잡아 단일 modify로 닫힌다.
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly(
+                        "GPU 더 저렴한 걸로 바꿔줘",
+                        "CPU 더 저렴한 걸로 바꿔줘",
+                        "RAM 더 저렴한 걸로 바꿔줘");
+        // LLM을 거치지 않고 결정적으로 응답한다.
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatCounterProposalListsEveryTopCandidateWithItsOwnAddChip() {
+        // applyPartConstraintCounterProposal의 TOP3 나열에서 추천픽 1개가 아니라 보여준 후보 전부에
+        // 개별 담기 칩을 준다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (!sql.contains("FROM parts")) {
+                return List.<Map<String, Object>>of();
+            }
+            // meetingCheapestFirst(price ASC, name ASC): 32GB 충족 후보 3개(예산 내)
+            return List.of(
+                    new java.util.HashMap<String, Object>(Map.of("id", "ram-a", "name", "램 후보 A", "price", 234_000,
+                            "capacity_gb", 32, "vram_gb", 0, "wattage_w", 0)),
+                    new java.util.HashMap<String, Object>(Map.of("id", "ram-b", "name", "램 후보 B", "price", 254_000,
+                            "capacity_gb", 32, "vram_gb", 0, "wattage_w", 0)),
+                    new java.util.HashMap<String, Object>(Map.of("id", "ram-c", "name", "램 후보 C", "price", 274_000,
+                            "capacity_gb", 32, "vram_gb", 0, "wattage_w", 0)));
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(), any())).thenReturn(new AiChatEngineResponse(
+                "요청을 분석했습니다.",
+                AiChatIntent.PART_RECOMMEND,
+                List.<AiChatAction>of(),
+                List.of(),
+                List.of(),
+                Map.of("partConstraint", Map.of(
+                        "category", "RAM",
+                        "minCapacityGb", 32,
+                        "quantity", 1,
+                        "maxBudgetWon", 500_000
+                )),
+                List.of(),
+                List.of(),
+                null
+        ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of("message", "램 32기가를 20만원으로 맞춰줘"));
+
+        // 스펙 충족(예산 내) → TOP3 나열, 후보 3개 각각의 담기 칩.
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly(
+                        "램 후보 A 견적에 담아줘",
+                        "램 후보 B 견적에 담아줘",
+                        "램 후보 C 견적에 담아줘");
+    }
+
     private static AiChatEngineResponse buildResponse() {
         return new AiChatEngineResponse(
                 "LLM/RAG로 조건을 분석해 추천 조합을 만들었습니다.",

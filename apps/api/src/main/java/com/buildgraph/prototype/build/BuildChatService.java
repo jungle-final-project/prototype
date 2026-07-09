@@ -71,6 +71,13 @@ public class BuildChatService {
     // dead-end 방지용 기능 안내 칩 — 우아한 거절과 종단 칩 플로어가 공유한다
     private static final List<String> FEATURE_GUIDE_QUICK_REPLIES =
             List.of("200만원 게이밍 PC 추천해줘", "지금 견적 나머지 채워줘", "CPU를 9700X로 바꾸면?");
+    // 무예산 용도-only 되묻기 턴에 붙이는 예산대 방향 칩 — "N만원대" 문구는 다음 턴 parseBudgetWon으로
+    // 예산이 잡혀 클릭 한 번으로 추천이 이어진다("200만원대"→200만원).
+    private static final List<String> USAGE_ONLY_BUDGET_DIRECTION_CHIPS = List.of(
+            "100만원대로 추천해줘",
+            "200만원대로 추천해줘",
+            "300만원대로 추천해줘",
+            "예산 무관 고성능으로 추천해줘");
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
     private final AiChatEngine aiChatEngine;
@@ -289,6 +296,17 @@ public class BuildChatService {
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return response;
         }
+        // 다중부품 감액 요청(드래프트+예산목표+단일부품 미지목+총액>목표)은 LLM을 거치지 않고 감액
+        // 우선순위 안내와 카테고리 교체 칩으로 결정적으로 응답한다(draftEdit 단일 카테고리 계약은 유지).
+        Optional<Map<String, Object>> multiPartReduction = multiPartReductionResponse(body, message, rawBudgetIntent);
+        if (multiPartReduction.isPresent()) {
+            Map<String, Object> response = multiPartReduction.get();
+            buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+            semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
+            logBuildChatPath("FAST_MULTI_PART_REDUCTION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
+                    "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
+            return response;
+        }
         stageStartNanos = System.nanoTime();
         // 사실 우선: 서버가 방금 계산한 사실(파싱 예산·최소 구성가·부품 조건 최저가·드래프트 요약)을
         // LLM 프롬프트에 주입한다 — LLM이 이미 아는 사실을 되묻거나("예산이 빠졌어요")
@@ -336,9 +354,15 @@ public class BuildChatService {
                 && !objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()
                 && (engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP
                         || engineResponse.intent() == AiChatIntent.BUILD_MODIFY);
+        // 무예산 용도-only 되묻기 턴(드래프트도 예산도 없이 용도만 있어 LLM이 되물은 경우)에는
+        // 무관한 예산 조합을 주입하지 않고, 대신 예산대 방향 칩만 붙인다(아래 에코 블록 근처).
+        boolean usageOnlyFollowUp = engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP
+                && !rawBudgetIntent.hasBudget()
+                && objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty();
         if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
                 && objectMaps(response.get("builds")).isEmpty()
-                && !draftModifyTurn) {
+                && !draftModifyTurn
+                && !usageOnlyFollowUp) {
             List<String> fallbackWarnings = new ArrayList<>();
             List<Map<String, Object>> fallbackBuilds = rawBudgetIntent.hasBudget()
                     ? nearBudgetLadderBuilds(rawBudgetIntent.budget(), List.of(), fallbackWarnings, new BuildChatGuardStats())
@@ -372,6 +396,10 @@ public class BuildChatService {
                     "missingSlots", List.of(),
                     "originalMessage", message
             ));
+        }
+        // 무예산 용도-only 되묻기에는 예산대 방향 칩을 붙여 클릭 한 번으로 다음 턴이 예산으로 진행되게 한다.
+        if (usageOnlyFollowUp && stringList(response.get("quickReplies")).isEmpty()) {
+            response.put("quickReplies", USAGE_ONLY_BUDGET_DIRECTION_CHIPS);
         }
         ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
@@ -1304,6 +1332,67 @@ public class BuildChatService {
         return facts;
     }
 
+    // 다중부품 감액 요청("총액 줄여줘", "800만원 이하로 맞춰줘"): 드래프트 있음 + 예산 목표 +
+    // 특정 단일 부품 미지목 + 현재 총액 > 목표. draftEdit는 한 번에 한 카테고리만 다루므로, 감액
+    // 우선순위(라인총액 상위)를 텍스트로 안내하고 카테고리 교체 칩을 준다 — 재진입 시 detectPartCategory가
+    // 카테고리를 잡아 기존 단일 modify→미리보기 루프로 닫힌다. 방향은 어휘가 아니라 숫자로 판정한다.
+    private Optional<Map<String, Object>> multiPartReductionResponse(
+            Map<String, Object> body, String message, BudgetIntent rawBudgetIntent) {
+        if (rawBudgetIntent == null || !rawBudgetIntent.hasBudget() || detectPartCategory(message) != null) {
+            return Optional.empty();
+        }
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
+        if (draftItems.isEmpty()) {
+            return Optional.empty();
+        }
+        int target = rawBudgetIntent.budget();
+        int draftTotal = 0;
+        for (Map<String, Object> item : draftItems) {
+            draftTotal += lineTotalWon(item);
+        }
+        // 현재 총액이 목표를 넘을 때만 감액 안내로 흘린다(넘지 않으면 이 결정경로를 타지 않고 LLM 경로로).
+        if (draftTotal <= target) {
+            return Optional.empty();
+        }
+        List<Map<String, Object>> byLineTotalDesc = new ArrayList<>(draftItems);
+        byLineTotalDesc.sort((left, right) -> Integer.compare(lineTotalWon(right), lineTotalWon(left)));
+        List<Map<String, Object>> topSpenders = byLineTotalDesc.stream()
+                .filter(item -> text(item.get("category")) != null)
+                .limit(3)
+                .toList();
+        if (topSpenders.isEmpty()) {
+            return Optional.empty();
+        }
+        StringBuilder textBuilder = new StringBuilder()
+                .append("현재 견적은 ").append(formatBudgetLabel(draftTotal))
+                .append("이고 목표 ").append(formatBudgetLabel(target)).append("까지 약 ")
+                .append(formatBudgetLabel(draftTotal - target))
+                .append(" 감액이 필요합니다. 챗봇은 한 번에 한 부품씩 교체를 도와드려요. 가장 비싼 ");
+        for (int index = 0; index < topSpenders.size(); index += 1) {
+            Map<String, Object> item = topSpenders.get(index);
+            String category = text(item.get("category"));
+            if (index > 0) {
+                textBuilder.append(", ");
+            }
+            textBuilder.append(CATEGORY_LABELS.getOrDefault(category, category))
+                    .append("(").append(formatBudgetLabel(lineTotalWon(item))).append(")");
+        }
+        textBuilder.append("부터 줄이면 효과가 큽니다.");
+        Map<String, Object> response = fastResponse("GENERAL", textBuilder.toString(), List.of());
+        response.put("quickReplies", topSpenders.stream()
+                .map(item -> {
+                    String category = text(item.get("category"));
+                    return CATEGORY_LABELS.getOrDefault(category, category) + " 더 저렴한 걸로 바꿔줘";
+                })
+                .toList());
+        return Optional.of(response);
+    }
+
+    private static int lineTotalWon(Map<String, Object> item) {
+        Integer price = firstNumber(item.get("lineTotal"), item.get("currentPrice"), item.get("price"));
+        return price == null ? 0 : Math.max(0, price);
+    }
+
     // LLM까지 불가한 경우의 우아한 거절 — dead-end 문구 대신 바로 눌러볼 기능 칩을 함께 준다.
     private Map<String, Object> gracefulRefusalResponse() {
         Map<String, Object> response = fastResponse(
@@ -1366,7 +1455,7 @@ public class BuildChatService {
             String listing = categoryLabel + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                     + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.";
             response.put("message", existing.isBlank() ? listing : existing + " " + listing);
-            response.put("quickReplies", List.of(options.get(0).name() + " 견적에 담아줘"));
+            response.put("quickReplies", options.stream().map(o -> o.name() + " 견적에 담아줘").toList());
             return;
         }
 
@@ -1392,7 +1481,7 @@ public class BuildChatService {
                 response.put("message", formatBudgetLabel(budget) + " 이내 " + categoryLabel
                         + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-                response.put("quickReplies", List.of(options.get(0).name() + " 견적에 담아줘"));
+                response.put("quickReplies", options.stream().map(o -> o.name() + " 견적에 담아줘").toList());
             }
             return;
         }
@@ -1450,7 +1539,7 @@ public class BuildChatService {
         response.put("message", "조건(" + specSummary + ")을 만족하는 " + categoryLabel
                 + " 추천 TOP" + top.size() + "입니다. " + topListText(top)
                 + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-        response.put("quickReplies", List.of(top.get(0).name() + " 견적에 담아줘"));
+        response.put("quickReplies", top.stream().map(o -> o.name() + " 견적에 담아줘").toList());
     }
 
     private static String topListText(List<BuildChatFeasibilityService.PartOption> options) {
@@ -1979,7 +2068,10 @@ public class BuildChatService {
                 return Optional.of(response);
             }
         }
-        if (isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
+        // 무예산 용도-only 요청("게임용 컴퓨터 추천")은 딱딱한 폴백 3장 즉답을 만들지 않고 LLM 되묻기
+        // 경로로 흘린다 — 명시 예산이 있을 때만 결정적 즉답(예산 폴백 조합)을 구성한다.
+        if (rawBudgetIntent != null && rawBudgetIntent.hasBudget()
+                && isStandaloneBuildRecommend(message, request, rawBudgetIntent)) {
             AiChatEngineResponse engineResponse = new AiChatEngineResponse(
                     "내부 자산과 자동 검증 기준으로 바로 추천 조합을 구성했습니다.",
                     AiChatIntent.FULL_BUILD_RECOMMEND,
