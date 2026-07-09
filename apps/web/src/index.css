@@ -155,6 +155,20 @@ background:
   animation: slot-edge-draw 520ms ease-out;
 }
 
+/* 선택된 카드→3D 부품 엘보 연결선 draw-in. pathLength=1 정규화라 경로 길이와 무관하게 점선이 흘러 나온다. */
+@keyframes iso-card-connector-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.iso-card-connector-draw {
+  animation: iso-card-connector-draw 420ms ease-out;
+}
+
 /* 꽂힌 포트가 잠깐 점등되는 펄스. */
 @keyframes slot-port-pulse {
   0% {
@@ -279,6 +293,7 @@ background:
   .slot-attach-flash,
   .slot-plug-in,
   .slot-edge-draw,
+  .iso-card-connector-draw,
   .slot-port-pulse,
   .slot-empty-pulse,
   .slot-pass-pulse,
@@ -291,6 +306,354 @@ background:
   .slot-hint-shimmer::after {
     animation: none;
     opacity: 0;
+  }
+}
+
+/* 등각 실장 씬 장착 모션: 부품이 장착 축을 따라 내려와 접촉 순간 살짝 눌렸다가 튀어 안착한다. */
+@keyframes iso-mount-drop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -56px, 0);
+    animation-timing-function: cubic-bezier(0.5, 0, 0.85, 0.4);
+  }
+  30% {
+    opacity: 1;
+  }
+  60% {
+    transform: translate3d(0, 0, 0) scale(1, 1);
+    animation-timing-function: ease-out;
+  }
+  68% {
+    transform: translate3d(0, 0, 0) scale(1.03, 0.96);
+    animation-timing-function: ease-in-out;
+  }
+  80% {
+    transform: translate3d(0, -6px, 0) scale(1, 1);
+    animation-timing-function: ease-in;
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes iso-mount-slide {
+  0% {
+    opacity: 0;
+    transform: translate3d(60px, -30px, 0);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1);
+  }
+  30% {
+    opacity: 1;
+  }
+  62% {
+    transform: translate3d(0, 0, 0);
+    animation-timing-function: ease-out;
+  }
+  78% {
+    transform: translate3d(-5px, 2.5px, 0);
+    animation-timing-function: ease-in;
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes iso-mount-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes iso-shadow-in {
+  from {
+    opacity: 0;
+    transform: scaleX(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes iso-land-glow {
+  0% {
+    filter: brightness(1);
+  }
+  45% {
+    filter: brightness(1.22);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+.iso-part-impact {
+  position: absolute;
+  left: 50%;
+  bottom: 5%;
+  width: 48%;
+  height: 16%;
+  border-radius: 50%;
+  opacity: 0;
+  transform: translateX(-50%) scale(0.35);
+  pointer-events: none;
+}
+
+@keyframes iso-impact-ring {
+  0% {
+    opacity: 0.75;
+    transform: translateX(-50%) scale(0.35);
+    box-shadow:
+      0 0 0 2px rgba(59, 130, 246, 0.55),
+      0 0 18px 4px rgba(59, 130, 246, 0.35);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1.35);
+    box-shadow:
+      0 0 0 2px rgba(59, 130, 246, 0),
+      0 0 22px 8px rgba(59, 130, 246, 0);
+  }
+}
+
+.iso-part[data-mounting='true'] .iso-part-img--drop {
+  transform-origin: 50% 88%;
+  animation:
+    iso-mount-drop 720ms ease-out,
+    iso-land-glow 300ms ease-out 430ms;
+}
+
+.iso-part[data-mounting='true'] .iso-part-img--slide {
+  animation:
+    iso-mount-slide 700ms ease-out,
+    iso-land-glow 300ms ease-out 430ms;
+}
+
+.iso-part[data-mounting='true'] .iso-part-img--fade {
+  animation: iso-mount-fade 420ms ease-out;
+}
+
+.iso-part[data-mounting='true'] .iso-part-shadow {
+  animation: iso-shadow-in 720ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.iso-part[data-mounting='true'] .iso-part-impact--drop,
+.iso-part[data-mounting='true'] .iso-part-impact--slide {
+  animation: iso-impact-ring 380ms ease-out 430ms both;
+}
+
+.iso-part {
+  transition:
+    transform 0.2s ease,
+    opacity 0.25s ease;
+}
+
+.iso-part[data-hovered='true'] {
+  transform: translateY(-5px);
+}
+
+.iso-part[data-dimmed='true'] {
+  opacity: 0.2;
+  filter: saturate(0.28) brightness(0.72);
+}
+
+.iso-part[data-spotlight='true'] {
+  opacity: 1;
+}
+
+.iso-part-img {
+  transition: filter 0.25s ease;
+}
+
+.slot-board-iso-scene-highlight {
+  opacity: 0;
+  filter:
+    drop-shadow(0 0 3px rgba(37, 99, 235, 0.85))
+    drop-shadow(0 0 12px rgba(37, 99, 235, 0.68))
+    drop-shadow(0 8px 22px rgba(37, 99, 235, 0.42));
+  transition: opacity 0.2s ease;
+}
+
+.slot-board-iso-scene-highlight[data-active='true'] {
+  opacity: 1;
+}
+
+.iso-part[data-status='PASS'] .iso-part-img {
+  filter: drop-shadow(0 0 5px rgba(22, 163, 74, 0.28));
+}
+
+.iso-part[data-status='WARN'] .iso-part-img {
+  filter: drop-shadow(0 0 9px rgba(245, 158, 11, 0.5));
+}
+
+.iso-part[data-status='FAIL'] .iso-part-img {
+  filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.6));
+}
+
+.iso-part[data-spotlight='true'][data-status='PASS'] .iso-part-img {
+  filter:
+    drop-shadow(0 6px 18px rgba(37, 99, 235, 0.55))
+    drop-shadow(0 0 10px rgba(22, 163, 74, 0.38));
+}
+
+.iso-part[data-spotlight='true'][data-status='WARN'] .iso-part-img {
+  filter:
+    drop-shadow(0 6px 18px rgba(37, 99, 235, 0.52))
+    drop-shadow(0 0 14px rgba(245, 158, 11, 0.62));
+}
+
+.iso-part[data-spotlight='true'][data-status='FAIL'] .iso-part-img {
+  filter:
+    drop-shadow(0 6px 18px rgba(37, 99, 235, 0.5))
+    drop-shadow(0 0 16px rgba(239, 68, 68, 0.72));
+}
+
+@keyframes iso-fail-glow-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.45));
+  }
+  50% {
+    filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.72));
+  }
+}
+
+.iso-part[data-mounting='false'][data-status='FAIL'] .iso-part-img {
+  animation: iso-fail-glow-pulse 1.8s ease-in-out infinite;
+}
+
+.iso-part[data-hovered='true'] .iso-part-img {
+  filter:
+    drop-shadow(0 7px 20px rgba(37, 99, 235, 0.72))
+    drop-shadow(0 0 12px rgba(37, 99, 235, 0.38));
+}
+
+.iso-part[data-selected='true'][data-spotlight='true'] .iso-part-img,
+.iso-part[data-selected='true'][data-hovered='true'] .iso-part-img,
+.iso-part[data-selected='true'] .iso-part-img {
+  filter:
+    drop-shadow(0 0 2px rgba(37, 99, 235, 0.95))
+    drop-shadow(0 0 7px rgba(37, 99, 235, 0.88))
+    drop-shadow(0 6px 20px rgba(37, 99, 235, 0.72));
+}
+
+.iso-part[data-selected='true'][data-mounting='false'][data-status='FAIL'] .iso-part-img {
+  animation: none;
+}
+
+.slot-problem-marker {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.92),
+    0 8px 18px -10px rgba(15, 23, 42, 0.8);
+}
+
+.slot-problem-marker:hover,
+.slot-problem-marker:focus-visible {
+  transform: translateY(-2px) scale(1.06);
+}
+
+.slot-problem-marker-hint {
+  opacity: 0;
+  transform: translate(-50%, -2px);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.slot-problem-marker:hover .slot-problem-marker-hint,
+.slot-problem-marker:focus-visible .slot-problem-marker-hint {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.slot-card-hovered {
+  animation: none;
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.22),
+    0 12px 24px -12px rgba(15, 23, 42, 0.4);
+}
+
+.slot-board-celebration::before,
+.slot-board-celebration::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.slot-board-celebration::before {
+  background: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, 0.55) 50%, transparent 68%);
+  transform: translateX(-100%);
+  animation: slot-celebrate-sweep 1400ms ease-out forwards;
+}
+
+.slot-board-celebration::after {
+  background: radial-gradient(ellipse at 50% 55%, rgba(22, 163, 74, 0.22) 0%, rgba(22, 163, 74, 0) 65%);
+  opacity: 0;
+  animation: slot-celebrate-glow 1800ms ease-out forwards;
+}
+
+@keyframes slot-celebrate-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes slot-celebrate-glow {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+[data-celebrating='true'] .iso-part {
+  animation: iso-celebrate-pop 450ms ease-out both;
+  animation-delay: calc(var(--iso-z, 1) * 70ms);
+}
+
+@keyframes iso-celebrate-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iso-part,
+  .iso-part-img,
+  .slot-board-iso-scene-highlight,
+  .slot-problem-marker,
+  .slot-problem-marker-hint {
+    transition: none;
+  }
+
+  .iso-part[data-mounting='true'] .iso-part-img--drop,
+  .iso-part[data-mounting='true'] .iso-part-img--slide,
+  .iso-part[data-mounting='true'] .iso-part-img--fade,
+  .iso-part[data-mounting='true'] .iso-part-shadow,
+  .iso-part[data-mounting='true'] .iso-part-impact--drop,
+  .iso-part[data-mounting='true'] .iso-part-impact--slide,
+  .iso-part[data-mounting='false'][data-status='FAIL'] .iso-part-img,
+  .slot-board-celebration::before,
+  .slot-board-celebration::after,
+  [data-celebrating='true'] .iso-part {
+    animation: none;
   }
 }
 
