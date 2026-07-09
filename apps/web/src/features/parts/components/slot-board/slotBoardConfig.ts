@@ -53,14 +53,14 @@ export const SLOT_ISO_ART: Record<PartCategory, SlotIsoArt> = {
 
 // SelfQuote 3D 관계도 전용 콜아웃 좌표. AdminBuildGraphLayoutsPage의 편집 좌표와 분리한다.
 export const SLOT_BOARD_ISO_CALLOUT_LAYOUTS: Record<PartCategory, SlotConfig['layout']> = {
-  CPU: { x: 2, y: 3, w: 20, h: 16 },
-  RAM: { x: 46, y: 2, w: 18, h: 16 },
-  STORAGE: { x: 66, y: 3, w: 20, h: 16 },
-  COOLER: { x: 24, y: 2, w: 20, h: 15 },
-  MOTHERBOARD: { x: 48, y: 86, w: 18, h: 12 },
-  GPU: { x: 24, y: 84, w: 22, h: 14 },
-  PSU: { x: 76, y: 86, w: 22, h: 12 },
-  CASE: { x: 2, y: 78, w: 20, h: 16 }
+  CPU: { x: 2, y: 2, w: 22, h: 14 },
+  COOLER: { x: 26, y: 2, w: 22, h: 14 },
+  RAM: { x: 50, y: 2, w: 22, h: 14 },
+  STORAGE: { x: 74, y: 2, w: 22, h: 14 },
+  CASE: { x: 2, y: 84, w: 22, h: 14 },
+  GPU: { x: 26, y: 84, w: 22, h: 14 },
+  MOTHERBOARD: { x: 50, y: 84, w: 22, h: 14 },
+  PSU: { x: 74, y: 84, w: 22, h: 14 }
 };
 
 // 실장도(placement) 좌표계: 평면도 아트가 viewBox 0 0 160 100으로 그려지고

@@ -478,6 +478,44 @@ test('toggles the slot board into 3D UI view and persists the selected mode', as
   await expect.poll(() => page.evaluate(() => localStorage.getItem('buildgraph.selfQuote.slotBoardVisualMode'))).toBe('motherboard');
 });
 
+test('aligns 3D slot cards into two equal rows', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('switch', { name: '3D UI 보기' }).click();
+
+  const readCardBox = async (category: string) => {
+    const box = await page.getByTestId(`slot-${category}`).boundingBox();
+    if (!box) {
+      throw new Error(`${category} 3D 카드 위치를 확인할 수 없습니다.`);
+    }
+    return box;
+  };
+  const topCategories = ['CPU', 'COOLER', 'RAM', 'STORAGE'];
+  const bottomCategories = ['CASE', 'GPU', 'MOTHERBOARD', 'PSU'];
+  const topBoxes = await Promise.all(topCategories.map(readCardBox));
+  const bottomBoxes = await Promise.all(bottomCategories.map(readCardBox));
+
+  for (const row of [topBoxes, bottomBoxes]) {
+    const [first, ...rest] = row;
+    for (const box of rest) {
+      expect(Math.abs(box.y - first.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.width - first.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.height - first.height)).toBeLessThanOrEqual(1);
+    }
+  }
+
+  for (let index = 0; index < topBoxes.length; index += 1) {
+    expect(Math.abs(topBoxes[index].x - bottomBoxes[index].x)).toBeLessThanOrEqual(1);
+  }
+});
+
 test('spotlights only the focused 3D part from slot card hover and dims the rest', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
