@@ -43,6 +43,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
             RTX 5090처럼 사용자가 명시한 부품/클래스는 requiredGpuClasses와 hardConstraintPolicy에 반드시 보존하십시오.
             셀프 견적 변경 요청은 draftEdit에 교체 대상 category, operation, priceDirection, targetMaxPrice를 구조화하십시오.
             예: “그래픽카드가 너무 비싸니 싼 걸로”는 category=GPU, operation=REPLACE, priceDirection=CHEAPER입니다.
+            부품 하나에 대한 수치 조건(용량·VRAM·와트·수량·예산)은 partConstraint에 구조화하십시오.
+            예: “램 32기가 20만원으로 맞춰줘”는 partConstraint={category=RAM, minCapacityGb=32, maxBudgetWon=200000}입니다.
+            예: “16GB 그래픽카드 80만원 이하”는 partConstraint={category=GPU, minVramGb=16, maxBudgetWon=800000}입니다.
+            수치 조건이 없는 요청이면 partConstraint의 모든 값을 null로 두십시오.
             순수 화면 이동 요청이면 routeIntent를 구조화하십시오. 추천/교체/삭제/담기/수량 변경 요청은 화면 이동이 아닙니다.
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
@@ -161,6 +165,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
         Map<String, Object> parsedContext = normalizeParsedContext(objectMap(plan.get("parsedContext")), fallbackContext);
         if (!draftEdit.isEmpty()) {
             parsedContext.put("draftEdit", draftEdit);
+        }
+        Map<String, Object> partConstraint = normalizePartConstraint(objectMap(plan.get("partConstraint")), selectedCategory);
+        if (!partConstraint.isEmpty()) {
+            parsedContext.put("partConstraint", partConstraint);
         }
         String assistantMessage = firstText(text(plan.get("assistantMessage")), null);
         EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
@@ -1396,9 +1404,30 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         )),
                         "parsedContext", requirementParseSchema(),
                         "draftEdit", draftEditSchema(),
-                        "routeIntent", routeIntentSchema()
+                        "routeIntent", routeIntentSchema(),
+                        "partConstraint", partConstraintSchema()
                 ),
-                "required", List.of("intent", "assistantMessage", "selectedCategory", "parsedContext", "draftEdit", "routeIntent")
+                "required", List.of("intent", "assistantMessage", "selectedCategory", "parsedContext", "draftEdit", "routeIntent", "partConstraint")
+        );
+    }
+
+    // 단일 부품 수치 제약(용량·VRAM·와트·수량·예산). 서버가 이 제약을 부품 DB와 대조해
+    // 충족 불가 시 실데이터 기반 역제안(부족액·예산 내 대안)을 만든다.
+    private static Map<String, Object> partConstraintSchema() {
+        return MockData.map(
+                "type", "object",
+                "additionalProperties", false,
+                "properties", MockData.map(
+                        "category", MockData.map("type", List.of("string", "null"), "enum", Arrays.asList(
+                                "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER", null
+                        )),
+                        "minCapacityGb", MockData.map("type", List.of("integer", "null")),
+                        "minVramGb", MockData.map("type", List.of("integer", "null")),
+                        "minWattageW", MockData.map("type", List.of("integer", "null")),
+                        "quantity", MockData.map("type", List.of("integer", "null")),
+                        "maxBudgetWon", MockData.map("type", List.of("integer", "null"))
+                ),
+                "required", List.of("category", "minCapacityGb", "minVramGb", "minWattageW", "quantity", "maxBudgetWon")
         );
     }
 
@@ -1942,6 +1971,33 @@ public class DefaultAiChatEngine implements AiChatEngine {
         result.put("targetQuantity", targetQuantity);
         result.put("reason", firstText(text(source.get("reason")), null));
         return result;
+    }
+
+    // 단일 부품 수치 제약 정규화. 유의미한 값(스펙·예산)이 하나도 없으면 빈 맵을 반환해
+    // parsedContext에 아예 싣지 않는다 — 하위 타당성 검사가 "제약 있음"으로 오인하지 않게.
+    private static Map<String, Object> normalizePartConstraint(Map<String, Object> source, String selectedCategory) {
+        String category = firstText(categoryFrom(text(source.get("category"))), categoryFrom(selectedCategory));
+        Integer minCapacityGb = positiveOrNull(numberValue(source.get("minCapacityGb")));
+        Integer minVramGb = positiveOrNull(numberValue(source.get("minVramGb")));
+        Integer minWattageW = positiveOrNull(numberValue(source.get("minWattageW")));
+        Integer quantity = positiveOrNull(numberValue(source.get("quantity")));
+        Integer maxBudgetWon = positiveOrNull(numberValue(source.get("maxBudgetWon")));
+        boolean hasSpec = minCapacityGb != null || minVramGb != null || minWattageW != null;
+        if (category == null || (!hasSpec && maxBudgetWon == null)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("category", category);
+        result.put("minCapacityGb", minCapacityGb);
+        result.put("minVramGb", minVramGb);
+        result.put("minWattageW", minWattageW);
+        result.put("quantity", quantity);
+        result.put("maxBudgetWon", maxBudgetWon);
+        return result;
+    }
+
+    private static Integer positiveOrNull(Integer value) {
+        return value == null || value <= 0 ? null : value;
     }
 
     private static String normalizeDraftOperation(String value) {
