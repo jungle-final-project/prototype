@@ -4,6 +4,7 @@ import { partShortSpec } from '../../partDisplay';
 import type { QuoteDraftItem } from '../../types';
 import {
   FALLBACK_EDGES,
+  SLOT_BOARD_ISO_CALLOUT_LAYOUTS,
   SLOT_BOARD_ISO_EDGES,
   SLOT_BOARD_ISO_SCENE,
   SLOT_BOARD_ART_VIEWBOX,
@@ -12,11 +13,15 @@ import {
   isMultiItemCategory,
   slotConfigFor,
   slotIsoCalloutLayout,
+  slotOrderNumber,
   type SlotConfig,
   type SlotEdgeConfig
 } from './slotBoardConfig';
 
 export type SlotBoardVisualMode = 'motherboard' | 'isometric';
+
+export type ConnectorAnchorPoint = { x: number; y: number };
+export type ConnectorAnchors = Record<string, { card: ConnectorAnchorPoint; part: ConnectorAnchorPoint }>;
 
 const SLOT_BOARD_OVERLAYS_VISIBLE_STORAGE_KEY = 'buildgraph.selfQuote.slotBoardOverlaysVisible';
 const SLOT_BOARD_EDGES_VISIBLE_STORAGE_KEY = 'buildgraph.selfQuote.slotBoardEdgesVisible';
@@ -37,6 +42,7 @@ type SlotBoardProps = {
   onRemoveItem: (partId: string) => void;
   isRemovePending: boolean;
   graph?: BuildGraphResolveResponse;
+  connectorAnchors?: ConnectorAnchors;
 };
 
 export function SlotBoard({
@@ -49,7 +55,8 @@ export function SlotBoard({
   onSlotSelect,
   onRemoveItem,
   isRemovePending,
-  graph
+  graph,
+  connectorAnchors
 }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
   const [overlaysVisible, setOverlaysVisible] = useState(readSlotBoardOverlaysVisible);
@@ -115,6 +122,7 @@ export function SlotBoard({
           statusByCategory={statusByCategory}
           flashingCategories={flashingCategories}
           overlaysVisible={overlaysVisible}
+          connectorAnchors={connectorAnchors}
         />
       ) : (
         <MotherboardSlotBoardBody
@@ -277,7 +285,8 @@ function IsometricSlotBoardBody({
   graph,
   statusByCategory,
   flashingCategories,
-  overlaysVisible
+  overlaysVisible,
+  connectorAnchors
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -290,6 +299,7 @@ function IsometricSlotBoardBody({
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
   overlaysVisible: boolean;
+  connectorAnchors?: ConnectorAnchors;
 }) {
   const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
   const [activeProblemCategory, setActiveProblemCategory] = useState<PartCategory | null>(null);
@@ -357,6 +367,11 @@ function IsometricSlotBoardBody({
         onHoverChange={setHoveredCategory}
         onSlotSelect={onSlotSelect}
         onProblemOpen={openProblemDetail}
+      />
+      <IsoCardConnector
+        selectedCategory={selectedCategory}
+        status={selectedCategory ? statusByCategory.get(selectedCategory) ?? 'PENDING' : 'PENDING'}
+        anchors={connectorAnchors}
       />
       {SLOT_CONFIGS.map((slot) => (
         <IsometricSlotCard
@@ -454,6 +469,7 @@ function IsometricSlotCard({
 }) {
   const filled = items.length > 0;
   const primaryItem = items[0];
+  const orderNumber = slotOrderNumber(slot.category);
   const slotStatus = filled ? problemStatus ?? 'PASS' : 'NONE';
   const layoutVars: CSSProperties = {
     ['--sx' as string]: `${layout.x}%`,
@@ -524,6 +540,13 @@ function IsometricSlotCard({
       <div className="pointer-events-none relative z-10 flex h-full flex-col gap-1 overflow-hidden">
         <div className="flex items-start justify-between gap-1">
           <span className={`flex items-center gap-1 text-[10px] font-black text-slate-600 ${filled ? 'rounded bg-white/85 px-1 py-0.5' : ''}`}>
+            <span
+              data-testid={`slot-order-${slot.category}`}
+              aria-hidden="true"
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-blue text-[9px] font-black leading-none text-white"
+            >
+              {orderNumber}
+            </span>
             {!filled ? <img src={slot.glyph} alt="" aria-hidden="true" className="h-4 w-auto max-w-12 shrink-0 opacity-35" /> : null}
             {slot.label}
           </span>
@@ -686,6 +709,7 @@ function IsoPart({
     return null;
   }
   const slotStatus = status ?? 'PASS';
+  const orderNumber = slotOrderNumber(slot.category);
   const markerPlacement = isoProblemMarkerPlacement(slot.category);
   return (
     <div
@@ -708,6 +732,13 @@ function IsoPart({
       <div className="iso-part-shadow absolute inset-x-[14%] bottom-[4%] h-[14%] rounded-[50%] bg-slate-900/20 blur-[5px]" />
       <img src={iso.src} alt="" className={`iso-part-img relative w-full iso-part-img--${iso.mount}`} />
       <span aria-hidden="true" className={`iso-part-impact iso-part-impact--${iso.mount}`} />
+      <span
+        data-testid={`iso-order-${slot.category}`}
+        aria-hidden="true"
+        className="pointer-events-none absolute left-[4%] top-[2%] z-[11] flex h-4 w-4 items-center justify-center rounded-full bg-brand-blue text-[9px] font-black leading-none text-white shadow"
+      >
+        {orderNumber}
+      </span>
       {problemDetail ? (
         <button
           type="button"
@@ -1231,6 +1262,75 @@ function SlotBoardEdges({
           </span>
         );
       })}
+    </div>
+  );
+}
+
+function isFiniteConnectorPoint(point: ConnectorAnchorPoint | undefined): point is ConnectorAnchorPoint {
+  return Boolean(point) && Number.isFinite(point?.x) && Number.isFinite(point?.y);
+}
+
+// 선택된 카드에서 대응하는 3D 부품 글리프까지 잇는 tether 한 줄. 부품↔부품 관계선이 아니라
+// "이 카드가 이 부품"임을 눈으로 잇는 선이라, 선택된 슬롯 하나만 그린다(3D 전용).
+function IsoCardConnector({
+  selectedCategory,
+  status,
+  anchors
+}: {
+  selectedCategory: PartCategory | null;
+  status: SlotEdgeStatus;
+  anchors?: ConnectorAnchors;
+}) {
+  if (!selectedCategory) {
+    return null;
+  }
+  const iso = SLOT_ISO_ART[selectedCategory];
+  const cardLayout = SLOT_BOARD_ISO_CALLOUT_LAYOUTS[selectedCategory];
+  if (!iso || !cardLayout) {
+    return null;
+  }
+  // 관리자가 /admin/build-graph-layouts에서 배치한 앵커가 있으면 그걸 쓰고,
+  // 없거나 값이 이상하면(fetch 실패 포함) 기존 자동 계산으로 폴백한다.
+  const adminAnchor = anchors?.[selectedCategory];
+  const adminAnchorValid = Boolean(adminAnchor) && isFiniteConnectorPoint(adminAnchor?.card) && isFiniteConnectorPoint(adminAnchor?.part);
+  // 부품 앵커: 글리프 높이는 이미지 비율이라 알 수 없어, 가로 중심 + 폭의 0.35만큼 아래로 잡아 글리프 안쪽에 안착시킨다.
+  const partPoint: Point = adminAnchorValid
+    ? { x: adminAnchor!.part.x, y: adminAnchor!.part.y }
+    : { x: iso.x + iso.w / 2, y: iso.y + iso.w * 0.35 };
+  const cardBox: Box = { x: cardLayout.x, y: cardLayout.y, w: cardLayout.w, h: cardLayout.h };
+  const cardCenter = boxCenter(cardBox);
+  const cardAnchor: Point = adminAnchorValid ? { x: adminAnchor!.card.x, y: adminAnchor!.card.y } : boxAnchorToward(cardBox, partPoint);
+  // 엘보(90도 1회): 긴 축을 먼저 진행해 꺾임이 부품 쪽에 가깝게 놓이도록 한다.
+  const dx = Math.abs(partPoint.x - cardCenter.x);
+  const dy = Math.abs(partPoint.y - cardCenter.y);
+  const elbow: Point = dx >= dy ? { x: partPoint.x, y: cardAnchor.y } : { x: cardAnchor.x, y: partPoint.y };
+  const path = `M ${cardAnchor.x} ${cardAnchor.y} L ${elbow.x} ${elbow.y} L ${partPoint.x} ${partPoint.y}`;
+  const stroke = EDGE_STROKES[status].stroke;
+  return (
+    <div
+      data-testid="iso-card-connector"
+      data-category={selectedCategory}
+      data-anchor-source={adminAnchorValid ? 'admin' : 'auto'}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-2 z-[12] hidden lg:block"
+    >
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+        <path
+          key={selectedCategory}
+          d={path}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={2.5}
+          strokeDasharray="0.02 0.015"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pathLength={1}
+          vectorEffect="non-scaling-stroke"
+          className="iso-card-connector-draw"
+        />
+        <circle cx={partPoint.x} cy={partPoint.y} r={0.9} fill={stroke} />
+        <circle cx={cardAnchor.x} cy={cardAnchor.y} r={0.9} fill={stroke} />
+      </svg>
     </div>
   );
 }

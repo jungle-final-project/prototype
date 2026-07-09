@@ -563,6 +563,124 @@ test('shows 3D problem markers, problem reasons, and overlay preference', async 
   await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
 });
 
+test('draws a card-to-part elbow connector only for the selected card in 3D view', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('switch', { name: '3D UI 보기' }).click();
+
+  const connector = page.getByTestId('iso-card-connector');
+  await expect(connector).toHaveCount(0);
+
+  await page.getByTestId('slot-GPU').getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  await expect(page).toHaveURL('/self-quote?category=GPU');
+  await expect(connector).toBeVisible();
+  await expect(connector).toHaveCount(1);
+  await expect(connector).toHaveAttribute('data-category', 'GPU');
+
+  // 엘보(90도 1회): M으로 시작하고 꺾임 2개(L 2개)라 각진 선임을 확인한다.
+  const d = await connector.locator('path').getAttribute('d');
+  expect(d?.startsWith('M')).toBe(true);
+  expect(d?.match(/L/g)?.length).toBe(2);
+
+  // 선택이 바뀌면 그 카드로 연결선이 옮겨간다.
+  await page.getByTestId('slot-CPU').getByRole('button', { name: 'CPU 슬롯 열기' }).click();
+  await expect(connector).toHaveAttribute('data-category', 'CPU');
+  await expect(connector).toHaveCount(1);
+
+  // 3D를 끄면 연결선도 사라진다(IsometricSlotBoardBody 안에만 존재).
+  await page.getByRole('switch', { name: '3D UI 보기' }).click();
+  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'motherboard');
+  await expect(connector).toHaveCount(0);
+});
+
+test('uses admin-placed anchors for the 3D connector when available', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/build-graph-layouts/default', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        layoutKey: 'DEFAULT',
+        source: 'SAVED',
+        positions: {},
+        anchors: {
+          GPU: { card: { x: 24, y: 84 }, part: { x: 40, y: 55 } }
+        }
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('switch', { name: '3D UI 보기' }).click();
+
+  await page.getByTestId('slot-GPU').getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  const connector = page.getByTestId('iso-card-connector');
+  await expect(connector).toHaveAttribute('data-category', 'GPU');
+  await expect(connector).toHaveAttribute('data-anchor-source', 'admin');
+
+  // cardCenter(35,91)→partPoint(40,55): dx=5 < dy=36이라 세로축을 먼저 진행하는 엘보.
+  const d = await connector.locator('path').getAttribute('d');
+  expect(d).toBe('M 24 84 L 24 55 L 40 55');
+});
+
+test('falls back to auto-computed anchors when the layout fetch fails', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/build-graph-layouts/default', async (route) => {
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'layout fetch failed' }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('switch', { name: '3D UI 보기' }).click();
+
+  await page.getByTestId('slot-GPU').getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  const connector = page.getByTestId('iso-card-connector');
+  await expect(connector).toBeVisible();
+  await expect(connector).toHaveAttribute('data-anchor-source', 'auto');
+});
+
+test('numbers cards and 3D glyphs with the checklist order in 3D view', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('switch', { name: '3D UI 보기' }).click();
+
+  // 카드 번호 = 체크리스트 RECOMMENDED_SLOT_ORDER index+1 (SLOT_CONFIGS 순서가 아님).
+  await expect(page.getByTestId('slot-order-CPU')).toHaveText('1');
+  await expect(page.getByTestId('slot-order-MOTHERBOARD')).toHaveText('2');
+  await expect(page.getByTestId('slot-order-GPU')).toHaveText('4');
+  await expect(page.getByTestId('slot-order-COOLER')).toHaveText('8');
+
+  // 3D 글리프 번호도 같은 체계.
+  await expect(page.getByTestId('iso-order-CPU')).toHaveText('1');
+  await expect(page.getByTestId('iso-order-GPU')).toHaveText('4');
+  await expect(page.getByTestId('iso-order-PSU')).toHaveText('6');
+});
+
 test('shows the AI start banner on an empty quote with manual and AI entry points', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {

@@ -85,6 +85,20 @@ export const SLOT_CONFIGS: SlotConfig[] = [
 
 export const SLOT_COUNT = SLOT_CONFIGS.length;
 
+// 견적 체크리스트 권장 순서 — 카드/3D 글리프 번호 뱃지와 체크리스트가 같은 번호를 쓰도록 단일 출처.
+// (SLOT_CONFIGS 배열 순서와 다르므로 번호는 반드시 이 배열에서 유도한다.)
+export const RECOMMENDED_SLOT_ORDER: PartCategory[] = ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
+
+const SLOT_ORDER_NUMBER: Record<PartCategory, number> = RECOMMENDED_SLOT_ORDER.reduce((acc, category, index) => {
+  acc[category] = index + 1;
+  return acc;
+}, {} as Record<PartCategory, number>);
+
+/** 체크리스트 번호(1..8). RECOMMENDED_SLOT_ORDER의 index+1과 일치. */
+export function slotOrderNumber(category: PartCategory): number {
+  return SLOT_ORDER_NUMBER[category] ?? 0;
+}
+
 export const SLOT_BOARD_DEFAULT_POSITIONS: Record<PartCategory, SlotBoardPosition> = SLOT_CONFIGS.reduce((positions, slot) => {
   positions[slot.category] = { x: slot.layout.x, y: slot.layout.y };
   return positions;
