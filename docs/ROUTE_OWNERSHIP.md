@@ -159,7 +159,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 
 | Route | 주 owner | 협업자 | 연결 API |
 |---|---|---|---|
-| `/` | 1번 | 2번 | `POST /api/ai/build-chat`, `POST /api/build-graphs/resolve`, `POST /api/parts/compatible-candidates`, `PUT /api/quote-drafts/current/apply-ai-build`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events` |
+| `/` | 1번 | 2번 | `POST /api/ai/build-chat`, `POST /api/build-graphs/resolve`, `POST /api/parts/compatible-candidates`, `GET /api/quote-drafts/current`(챗봇이 견적 문맥 어휘에서 선조회), `PUT /api/quote-drafts/current/apply-ai-build`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events` |
 | `/requirements/new` | 1번 | 3번 | `POST /api/requirements/parse`, `POST /api/builds/recommend` |
 | `/builds/latest` | 1번 | 3번 | 프론트 세션 보관 AI 추천 조합 표시, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat` |
 | `/builds/:buildId` | 1번 | 2번, 3번 | `GET /api/builds/{id}`, `GET /api/rag/evidence/{id}` |
@@ -328,8 +328,8 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 - 사용자-관리자 상담방은 `support_chat_rooms`, `support_chat_messages` 전용 테이블을 쓰며 `as_chat_*`(3번 AS AI Chat)와 공유하지 않는다. LLM/RAG/Tool 호출을 수행하지 않고 `role=USER|ADMIN|SYSTEM`과 unread/last-message 컬럼만 사용한다.
 - AS Chat profile 비교와 `llm_generations` 기록은 3번 owner 범위다. 기본 사용자 요청은 profile 1개만 실행하고, OpenAI profile 비교는 benchmark 명령에서만 수행한다.
 - `/api/ai/build-chat`의 `X-BuildGraph-AI-Profile` header는 3번 benchmark용이다. UI는 header를 보내지 않고, 1번/프론트 owner는 기존 응답 shape만 소비한다.
-- Build Chat의 순수 화면 이동 fast path, 서버 `BuildChatIntentRouter` decision, LLM `routeIntent` 판정, `OPEN_ROUTE`/quote draft action 생성은 3번 AI 계약이며, 실제 화면 라우팅은 프론트, 실제 견적초안 저장은 2번 quote draft API가 수행한다. draft mutation 자동 실행은 `intentConfidence=HIGH`와 `sideEffectRisk=LOW`인 action으로 제한한다. 관리자 화면 자동 이동은 허용하지 않는다.
-- `PART_DETAIL` 자동 이동은 3번 서버가 `ACTIVE` 부품 단일 고확신 매칭을 확인한 경우만 허용한다. 후보가 0개 또는 2개 이상이면 상품 상세 route를 만들지 않는다.
+- 서버 `BuildChatIntentRouter` decision(SIMULATE_REPLACEMENT/BUILD_RECOMMEND/ASK_CLARIFICATION/UNSUPPORTED)과 LLM intent 판정은 3번 AI 계약이다. 응답에 화면 이동 action(`OPEN_ROUTE`)이나 draft mutation action은 포함하지 않으며, 실제 화면 라우팅은 프론트, 실제 견적초안 저장은 2번 quote draft API가 수행한다. draft mutation은 자동 실행하지 않는다. 견적 변경(BUILD_MODIFY) 요청은 3번 서버가 `변경 미리보기` 카드(`tier=draft-edit`, `badges=[DRAFT_EDIT_PREVIEW]`)로 응답하고, 사용자가 카드의 적용 버튼을 누를 때만 2번 `PUT /api/quote-drafts/current/apply-ai-build`로 실제 견적초안에 반영한다. 관리자 화면 자동 이동은 허용하지 않는다.
+- `PART_DETAIL` 자동 이동은 챗봇 기능 축소로 폐지됐다. 3번 서버는 상품 상세 route를 build-chat 응답에 포함하지 않으며, 상품 상세 진입은 사용자가 `/parts/:partId` 화면으로 직접 이동하는 경우에만 이뤄진다.
 
 ## 1주차 완료 기준
 
