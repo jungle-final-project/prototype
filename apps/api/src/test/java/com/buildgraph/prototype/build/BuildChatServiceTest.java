@@ -46,6 +46,11 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.parseBudgetWon("2천만원 예산인데")).isEqualTo(20_000_000);
         assertThat(BuildChatService.parseBudgetWon("돈은 3천만원까지 괜찮으니")).isEqualTo(30_000_000);
         assertThat(BuildChatService.parseBudgetWon("천만에요 감사합니다")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("0.5억으로 최고급 워크스테이션")).isEqualTo(50_000_000);
+        assertThat(BuildChatService.parseBudgetWon("1억원으로 제일 좋은 컴퓨터")).isEqualTo(100_000_000);
+        assertThat(BuildChatService.parseBudgetWon("1억2천만원")).isEqualTo(120_000_000);
+        assertThat(BuildChatService.parseBudgetWon("일억")).isEqualTo(100_000_000);
+        assertThat(BuildChatService.parseBudgetWon("억 소리 나네")).isNull();
         assertThat(BuildChatService.budgetIntent("800만원으로 최고급 PC 추천해줘").mode()).isEqualTo("TARGET");
         assertThat(BuildChatService.budgetIntent("300만원 이하 RTX 5090 PC").mode()).isEqualTo("MAX");
         assertThat(BuildChatService.budgetIntent("300만원 이상으로 게임용 PC 맞춰줘").mode()).isEqualTo("MIN");
@@ -392,6 +397,73 @@ class BuildChatServiceTest {
                 .contains("1,300,000원")
                 .contains("미리보기 카드에서 적용");
         assertThat(response).containsEntry("answerType", "PART");
+    }
+
+    @Test
+    void buildChatEchoesClarificationWhenModifyIntentEndsWithoutCardsOrChips() {
+        // BUILD_MODIFY로 분류됐지만 카드도 칩도 못 만든 턴 — 다음 짧은 답이 맥락을 잃지 않게 원문을 에코한다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(java.util.Optional.empty());
+        doAnswer(invocation -> List.<Map<String, Object>>of())
+                .when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(), any())).thenReturn(new AiChatEngineResponse(
+                "어떤 부품으로 바꿀지 조금 더 알려주세요.",
+                AiChatIntent.BUILD_MODIFY,
+                List.<AiChatAction>of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(),
+                null
+        ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of("message", "그래픽카드를 더 싼 걸로 바꿔줘"));
+
+        assertThat(response.get("builds")).asList().isEmpty();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> clarification = (Map<String, Object>) response.get("clarification");
+        assertThat(clarification).containsEntry("originalMessage", "그래픽카드를 더 싼 걸로 바꿔줘");
+        // 되묻기 에코가 있으면 종단 칩 플로어는 개입하지 않는다.
+        assertThat(response).doesNotContainKey("quickReplies");
+    }
+
+    @Test
+    void buildChatDoesNotReattachClarificationEchoOnFollowUpTurnAndAddsFeatureChips() {
+        // 되묻기는 최대 1회 — 후속 턴이 또 빈손이어도 에코를 재부착하지 않고, 종단 칩 플로어가
+        // 기능 안내 칩을 보강해 dead-end를 막는다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(java.util.Optional.empty());
+        doAnswer(invocation -> List.<Map<String, Object>>of())
+                .when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(), any())).thenReturn(new AiChatEngineResponse(
+                "어떤 부품으로 바꿀지 조금 더 알려주세요.",
+                AiChatIntent.BUILD_MODIFY,
+                List.<AiChatAction>of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(),
+                null
+        ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "더 싼 걸로 바꿔줘",
+                "clarificationContext", Map.of("originalMessage", "그래픽카드를")
+        ));
+
+        assertThat(response).doesNotContainKey("clarification");
+        assertThat(response.get("quickReplies")).asList()
+                .contains("200만원 게이밍 PC 추천해줘", "지금 견적 나머지 채워줘", "CPU를 9700X로 바꾸면?");
     }
 
     @Test
