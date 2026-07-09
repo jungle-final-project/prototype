@@ -871,6 +871,130 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredStructuresCoolingAttributeIntoPartConstraint() {
+        // "수랭"→coolingType=LIQUID 같은 속성 자연어 해석은 LLM이 하고, 서버는 구조화된 값을 보존한다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "PART_RECOMMEND",
+                  "assistantMessage": "수랭 쿨러 후보를 찾아볼게요.",
+                  "selectedCategory": "COOLER",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "partConstraint": {
+                    "category": "COOLER",
+                    "minCapacityGb": null,
+                    "minVramGb": null,
+                    "minWattageW": null,
+                    "quantity": null,
+                    "maxBudgetWon": null,
+                    "coolingType": "LIQUID",
+                    "pcieGeneration": null,
+                    "airflowFocused": null
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "쿨러를 수랭으로 추천해줘",
+                "HOME",
+                "COOLER",
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> partConstraint = (Map<String, Object>) response.parsedContext().get("partConstraint");
+        assertThat(partConstraint)
+                .containsEntry("category", "COOLER")
+                .containsEntry("coolingType", "LIQUID");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredStructuresPcieAndAirflowAttributesIntoPartConstraint() {
+        // SSD PCIe 세대(정수)와 케이스 통풍(boolean) 속성이 partConstraint에 보존되는지 확인.
+        stubBuildChatPlan("""
+                {
+                  "intent": "PART_RECOMMEND",
+                  "assistantMessage": "PCIe 5.0 SSD 후보를 찾아볼게요.",
+                  "selectedCategory": "STORAGE",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "partConstraint": {
+                    "category": "STORAGE",
+                    "minCapacityGb": null,
+                    "minVramGb": null,
+                    "minWattageW": null,
+                    "quantity": null,
+                    "maxBudgetWon": null,
+                    "coolingType": null,
+                    "pcieGeneration": 5,
+                    "airflowFocused": null
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "SSD를 PCIe 5.0으로 추천해줘",
+                "HOME",
+                "STORAGE",
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> partConstraint = (Map<String, Object>) response.parsedContext().get("partConstraint");
+        assertThat(partConstraint)
+                .containsEntry("category", "STORAGE")
+                .containsEntry("pcieGeneration", 5);
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredBuildModifyDoesNotFallbackWhenHardModelIsUnavailable() {
         stubBuildChatPlan("""
                 {

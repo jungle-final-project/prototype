@@ -55,7 +55,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
             부품 하나에 대한 수치 조건(용량·VRAM·와트·수량·예산)은 partConstraint에 구조화하십시오.
             예: “램 32기가 20만원으로 맞춰줘”는 partConstraint={category=RAM, minCapacityGb=32, maxBudgetWon=200000}입니다.
             예: “16GB 그래픽카드 80만원 이하”는 partConstraint={category=GPU, minVramGb=16, maxBudgetWon=800000}입니다.
-            수치 조건이 없는 요청이면 partConstraint의 모든 값을 null로 두십시오.
+            모델명이 아닌 속성 요청도 partConstraint의 닫힌 속성으로 구조화하십시오: 쿨러 냉각방식(coolingType=AIR|LIQUID), SSD PCIe 세대(pcieGeneration=정수), 케이스 통풍(airflowFocused=true).
+            예: “쿨러를 수랭으로”는 {category=COOLER, coolingType=LIQUID}, “공랭 쿨러”는 {category=COOLER, coolingType=AIR}입니다.
+            예: “SSD를 PCIe 5.0으로”는 {category=STORAGE, pcieGeneration=5}, “통풍 좋은 케이스”는 {category=CASE, airflowFocused=true}입니다.
+            PCIe 세대는 드래프트 맥락으로 카테고리를 판단하되 카테고리가 불명확하면 STORAGE로 두십시오(자산상 SSD만 신뢰 가능).
+            수치·속성 조건이 없는 요청이면 partConstraint의 모든 값을 null로 두십시오.
             순수 화면 이동 요청이면 routeIntent를 구조화하십시오. 추천/교체/삭제/담기/수량 변경 요청은 화면 이동이 아닙니다.
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
@@ -1484,8 +1488,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         );
     }
 
-    // 단일 부품 수치 제약(용량·VRAM·와트·수량·예산). 서버가 이 제약을 부품 DB와 대조해
-    // 충족 불가 시 실데이터 기반 역제안(부족액·예산 내 대안)을 만든다.
+    // 단일 부품 수치 제약(용량·VRAM·와트·수량·예산) + 닫힌 속성(쿨러 냉각방식·SSD PCIe 세대·케이스 통풍).
+    // 서버가 이 제약을 부품 DB와 대조해 충족 불가 시 실데이터 기반 역제안(부족액·예산 내 대안)을 만든다.
+    // 속성값의 자연어 해석("수랭"→LIQUID 등)은 LLM이 하고, 서버는 구조화된 값으로 DB 조회만 한다.
     private static Map<String, Object> partConstraintSchema() {
         return MockData.map(
                 "type", "object",
@@ -1498,9 +1503,16 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         "minVramGb", MockData.map("type", List.of("integer", "null")),
                         "minWattageW", MockData.map("type", List.of("integer", "null")),
                         "quantity", MockData.map("type", List.of("integer", "null")),
-                        "maxBudgetWon", MockData.map("type", List.of("integer", "null"))
+                        "maxBudgetWon", MockData.map("type", List.of("integer", "null")),
+                        // 쿨러 냉각방식: 수랭=LIQUID, 공랭=AIR (COOLER 카테고리에만 유효)
+                        "coolingType", MockData.map("type", List.of("string", "null"), "enum", Arrays.asList("AIR", "LIQUID", null)),
+                        // SSD PCIe 세대의 정수(예: "PCIe 5.0"→5). DB상 STORAGE만 신뢰 가능.
+                        "pcieGeneration", MockData.map("type", List.of("integer", "null")),
+                        // 케이스 통풍 강조 요청이면 true (CASE 카테고리에만 유효)
+                        "airflowFocused", MockData.map("type", List.of("boolean", "null"))
                 ),
-                "required", List.of("category", "minCapacityGb", "minVramGb", "minWattageW", "quantity", "maxBudgetWon")
+                "required", List.of("category", "minCapacityGb", "minVramGb", "minWattageW", "quantity", "maxBudgetWon",
+                        "coolingType", "pcieGeneration", "airflowFocused")
         );
     }
 
@@ -2055,7 +2067,12 @@ public class DefaultAiChatEngine implements AiChatEngine {
         Integer minWattageW = positiveOrNull(numberValue(source.get("minWattageW")));
         Integer quantity = positiveOrNull(numberValue(source.get("quantity")));
         Integer maxBudgetWon = positiveOrNull(numberValue(source.get("maxBudgetWon")));
-        boolean hasSpec = minCapacityGb != null || minVramGb != null || minWattageW != null;
+        // 닫힌 속성 3종: LLM이 자연어를 이 값으로 매핑한다. 유의미한 값이 없으면 생략(기존 normalize 관례).
+        String coolingType = normalizeCoolingType(text(source.get("coolingType")));
+        Integer pcieGeneration = positiveOrNull(numberValue(source.get("pcieGeneration")));
+        Boolean airflowFocused = source.get("airflowFocused") instanceof Boolean flag && flag ? Boolean.TRUE : null;
+        boolean hasAttribute = coolingType != null || pcieGeneration != null || Boolean.TRUE.equals(airflowFocused);
+        boolean hasSpec = minCapacityGb != null || minVramGb != null || minWattageW != null || hasAttribute;
         if (category == null || (!hasSpec && maxBudgetWon == null)) {
             return Map.of();
         }
@@ -2066,7 +2083,19 @@ public class DefaultAiChatEngine implements AiChatEngine {
         result.put("minWattageW", minWattageW);
         result.put("quantity", quantity);
         result.put("maxBudgetWon", maxBudgetWon);
+        result.put("coolingType", coolingType);
+        result.put("pcieGeneration", pcieGeneration);
+        result.put("airflowFocused", airflowFocused);
         return result;
+    }
+
+    // 쿨러 냉각방식 정규화: AIR/LIQUID만 허용, 그 외는 무시(null).
+    private static String normalizeCoolingType(String value) {
+        if (value == null) {
+            return null;
+        }
+        String upper = value.toUpperCase(Locale.ROOT);
+        return "AIR".equals(upper) || "LIQUID".equals(upper) ? upper : null;
     }
 
     private static Integer positiveOrNull(Integer value) {

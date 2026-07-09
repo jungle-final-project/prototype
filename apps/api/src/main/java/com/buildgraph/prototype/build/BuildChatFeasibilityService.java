@@ -32,15 +32,34 @@ public class BuildChatFeasibilityService {
         return usageTags != null && usageTags.stream().anyMatch(GPU_REQUIRED_USAGES::contains);
     }
 
-    /** 단일 부품 수치 제약. quantity가 null이면 카테고리 기본 수량(RAM=2, 그 외 1)으로 평가한다. */
+    /**
+     * 단일 부품 수치 제약(용량·VRAM·와트·수량·예산) + 닫힌 속성(쿨러 냉각방식·SSD PCIe 세대·케이스 통풍).
+     * quantity가 null이면 카테고리 기본 수량(RAM=2, 그 외 1)으로 평가한다.
+     * 속성값의 자연어 해석은 LLM이 끝냈고, 여기서는 구조화된 값으로 DB 조회만 한다.
+     */
     public record SpecConstraint(
             String category,
             Integer minCapacityGb,
             Integer minVramGb,
             Integer minWattageW,
             Integer quantity,
-            Integer maxBudgetWon
+            Integer maxBudgetWon,
+            String coolingType,
+            Integer pcieGeneration,
+            Boolean airflowFocused
     ) {
+        // 기존 6-인자 호출부(용량·VRAM·와트 위주)를 위한 편의 생성자 — 속성은 비운다.
+        public SpecConstraint(
+                String category,
+                Integer minCapacityGb,
+                Integer minVramGb,
+                Integer minWattageW,
+                Integer quantity,
+                Integer maxBudgetWon
+        ) {
+            this(category, minCapacityGb, minVramGb, minWattageW, quantity, maxBudgetWon, null, null, null);
+        }
+
         public static SpecConstraint fromMap(Map<String, Object> source) {
             if (source == null || source.isEmpty()) {
                 return null;
@@ -55,12 +74,20 @@ public class BuildChatFeasibilityService {
                     intValue(source.get("minVramGb")),
                     intValue(source.get("minWattageW")),
                     intValue(source.get("quantity")),
-                    intValue(source.get("maxBudgetWon"))
+                    intValue(source.get("maxBudgetWon")),
+                    stringValue(source.get("coolingType")),
+                    intValue(source.get("pcieGeneration")),
+                    boolValue(source.get("airflowFocused"))
             );
         }
 
         public boolean hasSpec() {
-            return minCapacityGb != null || minVramGb != null || minWattageW != null;
+            return minCapacityGb != null || minVramGb != null || minWattageW != null || hasAttribute();
+        }
+
+        /** 닫힌 속성(냉각방식·PCIe 세대·통풍) 중 하나라도 지정됐는가. */
+        public boolean hasAttribute() {
+            return coolingType != null || pcieGeneration != null || Boolean.TRUE.equals(airflowFocused);
         }
 
         public int effectiveQuantity() {
@@ -85,6 +112,10 @@ public class BuildChatFeasibilityService {
                 return parsed > 0 ? parsed : null;
             }
             return null;
+        }
+
+        private static Boolean boolValue(Object value) {
+            return value instanceof Boolean flag ? flag : null;
         }
     }
 
@@ -118,6 +149,21 @@ public class BuildChatFeasibilityService {
         if (constraint.minWattageW() != null) {
             where.append(" AND ").append(numericAttribute("wattage", "capacityW")).append(" >= ?");
             params.add(constraint.minWattageW());
+        }
+        // 닫힌 속성 술어 — 자연어 해석은 LLM이 끝냈고 여기서는 구조화된 값으로 조회만 한다.
+        if (constraint.coolingType() != null) {
+            // 냉각방식: LIQUID→'LIQUID_AIO'(수랭), AIR→'AIR'(공랭). attributes.coolerType과 대문자 비교.
+            where.append(" AND ").append(textAttribute("coolerType")).append(" = ?");
+            params.add("LIQUID".equalsIgnoreCase(constraint.coolingType()) ? "LIQUID_AIO" : "AIR");
+        }
+        if (constraint.pcieGeneration() != null) {
+            // generation은 "PCIe 5.0" 같은 문자열 — 첫 정수(세대)만 뽑아 요청 세대 이상인지 비교한다.
+            where.append(" AND ").append(pcieGenerationAttribute()).append(" >= ?");
+            params.add(constraint.pcieGeneration());
+        }
+        if (Boolean.TRUE.equals(constraint.airflowFocused())) {
+            // 통풍 강조: attributes.airflowFocus = true (boolean)
+            where.append(" AND ").append(boolAttribute("airflowFocus"));
         }
         return queryOptions(where.toString(), "price ASC, name ASC", params, limit);
     }
@@ -219,5 +265,21 @@ public class BuildChatFeasibilityService {
         }
         coalesce.append(", '0')");
         return "coalesce(NULLIF(regexp_replace(" + coalesce + ", '[^0-9]', '', 'g'), '')::int, 0)";
+    }
+
+    // 문자열 attribute를 대문자 정규화해 비교 — 냉각방식('LIQUID_AIO'/'AIR') 등 enum성 매칭용.
+    private static String textAttribute(String key) {
+        return "upper(coalesce(p.attributes->>'" + key + "', ''))";
+    }
+
+    // 불리언 attribute 술어(값이 문자열 'true'/'false'로 저장돼도 안전).
+    private static String boolAttribute(String key) {
+        return "lower(coalesce(p.attributes->>'" + key + "', 'false')) = 'true'";
+    }
+
+    // "PCIe 5.0" 같은 세대 문자열에서 첫 정수(세대)만 추출. numericAttribute는 모든 숫자를 붙여
+    // "50"이 되므로(세대 비교 부적합), 여기서는 첫 정수 그룹만 뽑는다.
+    private static String pcieGenerationAttribute() {
+        return "coalesce(NULLIF(substring(coalesce(p.attributes->>'generation', ''), '[0-9]+'), '')::int, 0)";
     }
 }

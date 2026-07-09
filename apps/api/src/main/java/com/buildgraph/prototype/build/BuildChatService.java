@@ -22,6 +22,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -209,17 +210,26 @@ public class BuildChatService {
                 buildChatCacheService.getClass().getName()
         );
         if (intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT) {
-            Map<String, Object> response = performanceSimulationResponse(body, message)
-                    .orElseGet(() -> simulationClarificationResponse(body, message));
-            // 시뮬 카드가 못 나온 dead-end면 원문을 에코해 다음 짧은 답("MSI X870")이 원 요청과 합성되게
-            // 한다(무상태 후속). 되묻기는 최대 1회 — 이미 후속 턴이면 재부착하지 않는다.
-            if (response.get("simulation") == null && !clarificationFollowUp && response.get("clarification") == null) {
-                response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+            Optional<Map<String, Object>> simulationCard = performanceSimulationResponse(body, message);
+            // 카드가 못 나왔고(교체 대상 미해상) 속성 요청 가능성이 있으면 dead-end로 끝내지 않고 LLM 경로로
+            // 흘려보낸다(UNSUPPORTED→LLM 강등과 동일 철학) — LLM이 "수랭/PCIe 5.0/통풍" 같은 속성을
+            // partConstraint로 구조화하면 서버가 속성 조회로 1:1 비교 카드 또는 후보를 제시한다.
+            // LLM도 못 잡으면 아래 공통 경로의 안전망(속성 카드 실패 시 역제안·에코·칩)이 받는다.
+            boolean attributeFallThrough = simulationCard.isEmpty()
+                    && simulationAttributeFallThroughEligible(body, message);
+            if (!attributeFallThrough) {
+                Map<String, Object> response = simulationCard
+                        .orElseGet(() -> simulationClarificationResponse(body, message));
+                // 시뮬 카드가 못 나온 dead-end면 원문을 에코해 다음 짧은 답("MSI X870")이 원 요청과 합성되게
+                // 한다(무상태 후속). 되묻기는 최대 1회 — 이미 후속 턴이면 재부착하지 않는다.
+                if (response.get("simulation") == null && !clarificationFollowUp && response.get("clarification") == null) {
+                    response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+                }
+                // 에코도 카드도 없는 순수 dead-end에는 다음 행동 칩을 보강한다(형태 판정 — 에코가 붙었으면 개입 안 함).
+                ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
+                logBuildChatPath("FAST_SIMULATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
+                return response;
             }
-            // 에코도 카드도 없는 순수 dead-end에는 다음 행동 칩을 보강한다(형태 판정 — 에코가 붙었으면 개입 안 함).
-            ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
-            logBuildChatPath("FAST_SIMULATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
-            return response;
         }
         if (intentDecision.intent() == BuildChatIntent.ASK_CLARIFICATION) {
             Map<String, Object> response = clarificationResponse(message, rawMessage, intentDecision.ambiguityReasons(), clarificationFollowUp);
@@ -379,6 +389,9 @@ public class BuildChatService {
         // dead-end 대신 실데이터 숫자(최저가·부족액·최소 구성가)와 다음 행동 칩을 제시한다.
         // 미리보기(변경)를 먼저 시도하고, 미리보기가 못 만들어진 변경 요청은 부품 제약 역제안이 이어받는다.
         applyDraftEditPreview(response, engineResponse, body);
+        // 속성 요청(수랭/PCIe 세대/통풍) + 드래프트에 같은 카테고리 존재 → 1:1 스펙비교 카드로 답한다.
+        // 카드가 못 나오면(비교 대상 없음·후보 없음) 아래 역제안이 후보 나열로 이어받는다.
+        applyAttributeSimulationCard(response, engineResponse, message, body);
         applyPartConstraintCounterProposal(response, engineResponse, message, body);
         applyUsageMinimumCounterProposal(response, engineResponse, rawBudgetIntent);
         // LLM이 스스로 되물은 턴("용량이나 DDR 조건 알려주세요")은 원문을 에코해 다음 짧은 답("ddr5")이
@@ -391,7 +404,9 @@ public class BuildChatService {
                         && objectMaps(response.get("builds")).isEmpty()
                         && stringList(response.get("quickReplies")).isEmpty());
         // 되묻기는 최대 1회 — 이미 되묻기 후속 턴이면 에코를 재부착하지 않는다.
-        if (askedFollowUp && !clarificationFollowUp && response.get("clarification") == null) {
+        // 속성 1:1 카드로 답을 낸 턴은 완결 응답이므로 에코를 붙이지 않는다(카드가 주인공).
+        if (askedFollowUp && !clarificationFollowUp
+                && response.get("clarification") == null && response.get("simulation") == null) {
             response.put("clarification", MockData.map(
                     "missingSlots", List.of(),
                     "originalMessage", message
@@ -650,11 +665,9 @@ public class BuildChatService {
         PartCandidate currentCpu = draftPartCandidate(findDraftItem(draftItems, "CPU", message));
         Optional<PartCandidate> targetPart = simulationTargetPart(category, message);
         if (targetPart.isEmpty()) {
-            return Optional.of(fastResponse(
-                    "GENERAL",
-                    categoryLabel(category) + " 시뮬레이션을 하려면 바꿀 제품을 조금 더 구체적으로 알려주세요.",
-                    List.of("SIMULATION_TARGET_NOT_FOUND")
-            ));
+            // 교체 대상 미해상 — 호출부가 "속성 요청(수랭/PCIe/통풍) → LLM 흘려보내기"와 "되묻기"를
+            // 가를 수 있도록 카드 없음(empty)만 알린다. dead-end 문구/에코는 호출부가 결정한다.
+            return Optional.empty();
         }
 
         PartCandidate target = targetPart.get();
@@ -694,6 +707,24 @@ public class BuildChatService {
             guidance = categoryLabel(category) + " 시뮬레이션을 하려면 바꿀 제품을 조금 더 구체적으로 알려주세요.";
         }
         return fastResponse("GENERAL", guidance, List.of("SIMULATION_TARGET_NOT_FOUND"));
+    }
+
+    // 속성 어휘를 가진 카테고리(오너 확정 3종): 쿨러 냉각방식 / SSD PCIe 세대 / 케이스 통풍.
+    // 이 스코프 밖(GPU·메인보드 등)은 속성 요청이 아니므로 시뮬 미해상 시 되묻기를 유지한다.
+    private static final Set<String> ATTRIBUTE_CATEGORIES = Set.of("COOLER", "STORAGE", "CASE");
+
+    // 시뮬 카드가 못 나왔을 때 LLM 속성 경로로 흘려보낼지 판정한다.
+    // 조건: 속성 어휘 카테고리 + 드래프트에 그 부품 존재(교체 대상은 있는데 모델·용량·와트로 target을
+    // 못 잡음 = "수랭으로/PCIe 5.0으로/통풍 좋은" 같은 속성 요청 유력). 그 외(모호·타 카테고리)는 되묻기 유지.
+    private boolean simulationAttributeFallThroughEligible(Map<String, Object> body, String message) {
+        String category = firstText(
+                detectPartCategory(message),
+                EXPLICIT_GPU_MODEL.matcher(message == null ? "" : message).find() ? "GPU" : null);
+        if (category == null || !ATTRIBUTE_CATEGORIES.contains(category)) {
+            return false;
+        }
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
+        return !draftItems.isEmpty() && !findDraftItem(draftItems, category, message).isEmpty();
     }
 
     private Optional<PartCandidate> simulationTargetPart(String category, String message) {
@@ -1404,6 +1435,66 @@ public class BuildChatService {
         return response;
     }
 
+    // 속성 요청(수랭/PCIe 세대/통풍)에 대한 오너 확정 산출물: 드래프트에 같은 카테고리 부품이 있으면
+    // "현재 부품 vs 속성 충족 최적 후보 1개"의 기존 1:1 시뮬 스펙비교 카드(simulationPayload)를 재사용한다.
+    // 드래프트에 그 카테고리가 없거나 후보가 없으면 손대지 않고 역제안(후보 나열)이 이어받는다.
+    // "이해는 LLM이, 사실은 DB가": 속성은 LLM이 구조화했고 후보 조회는 feasibilityService(DB)가 한다.
+    private void applyAttributeSimulationCard(
+            Map<String, Object> response,
+            AiChatEngineResponse engineResponse,
+            String message,
+            Map<String, Object> body
+    ) {
+        // 이미 조합·시뮬 카드가 있으면 개입하지 않는다(LLM/미리보기 결과를 덮지 않기 위해).
+        if (response.get("simulation") != null || !objectMaps(response.get("builds")).isEmpty()) {
+            return;
+        }
+        BuildChatFeasibilityService.SpecConstraint constraint =
+                mergedPartConstraint(objectMap(engineResponse.parsedContext().get("partConstraint")), message);
+        // 속성(냉각방식·PCIe 세대·통풍)이 지정된 요청만 1:1 카드 대상 — 순수 수치/예산은 역제안이 담당.
+        if (constraint == null || !constraint.hasAttribute()) {
+            return;
+        }
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
+        Map<String, Object> currentItem = findDraftItem(draftItems, constraint.category(), message);
+        if (currentItem.isEmpty()) {
+            return; // 비교 대상 없음 → 후보 나열 폴백에 맡긴다.
+        }
+        // 속성을 충족하는 최적(최저가) 후보 1개를 실데이터로 조회.
+        Optional<BuildChatFeasibilityService.PartOption> best =
+                feasibilityService.meetingCheapestFirst(constraint, 1).stream().findFirst();
+        if (best.isEmpty()) {
+            return; // 속성 충족 후보 없음 → 역제안 폴백에 맡긴다.
+        }
+        PartCandidate currentPart = draftPartCandidate(currentItem);
+        PartCandidate target;
+        try {
+            target = partByPublicId(best.get().partId());
+        } catch (RuntimeException ignored) {
+            return; // 카탈로그 조회 실패 → 역제안 폴백에 맡긴다.
+        }
+        // 현재 부품이 이미 후보와 동일하면 비교가 무의미 — 후보 나열/설명 폴백에 맡긴다.
+        if (target.publicId() != null && target.publicId().equals(currentPart.publicId())) {
+            return;
+        }
+        List<String> warnings = new ArrayList<>();
+        List<PartCandidate> previewParts = simulationPreviewParts(draftItems, target);
+        List<Map<String, Object>> toolResults = toolResults(previewParts, totalPrice(previewParts), warnings);
+        if (hasBlockingToolFailure(toolResults)) {
+            warnings.add("현재 견적 기준 호환성 문제가 있을 수 있어 실제 교체 전 케이스/파워/소켓 조건을 확인해야 합니다.");
+        }
+        BenchmarkSnapshot currentBenchmark = latestBenchmark(currentPart).orElse(null);
+        BenchmarkSnapshot targetBenchmark = latestBenchmark(target).orElse(null);
+        Map<String, Object> simulation = simulationPayload(
+                constraint.category(), currentPart, target, currentBenchmark, targetBenchmark, List.of(), List.of(), warnings);
+        response.put("answerType", "GENERAL");
+        response.put("message", simulationSummary(constraint.category(), currentPart, target, false));
+        response.put("simulation", simulation);
+        response.put("warnings", distinct(warnings));
+        // 카드가 주인공이므로 역제안·에코가 덧붙일 칩은 비운다.
+        response.remove("quickReplies");
+    }
+
     // 단일 부품 요청(예: "램 32기가 20만원", "10만원짜리 램") — 실데이터로 추천을 나열하거나,
     // 불가능하면 부족액·근접 대안을 역제안한다. LLM 제약이 비어도 정규식 폴백으로 대표 패턴을 보강한다.
     private void applyPartConstraintCounterProposal(
@@ -1412,6 +1503,10 @@ public class BuildChatService {
             String message,
             Map<String, Object> body
     ) {
+        // 속성 1:1 카드가 이미 답을 냈으면 그 결과(카드·메시지)를 덮지 않는다.
+        if (response.get("simulation") != null) {
+            return;
+        }
         // PART_RECOMMEND 외에도, 변경(BUILD_MODIFY)이나 되묻기(ASK_FOLLOW_UP)로 분류됐지만 카드가 못
         // 만들어진 부품 제약 요청("램 32기가 20만원으로 바꿔줘")은 여기서 역제안으로 이어받는다 —
         // 엔진 캔드 문구("후보를 찾지 못했습니다")가 dead-end로 새는 것을 막는다.
@@ -1585,6 +1680,10 @@ public class BuildChatService {
         merged.put("minWattageW", wattage);
         merged.put("quantity", numberValue(llmConstraint.get("quantity")));
         merged.put("maxBudgetWon", firstNumber(llmConstraint.get("maxBudgetWon"), parseBudgetWon(message)));
+        // 닫힌 속성은 LLM만 구조화한다(서버 키워드 해석 금지) — 값이 있으면 그대로 이어받는다.
+        merged.put("coolingType", text(llmConstraint.get("coolingType")));
+        merged.put("pcieGeneration", numberValue(llmConstraint.get("pcieGeneration")));
+        merged.put("airflowFocused", llmConstraint.get("airflowFocused") instanceof Boolean flag && flag ? Boolean.TRUE : null);
         return BuildChatFeasibilityService.SpecConstraint.fromMap(merged);
     }
 
@@ -1612,6 +1711,16 @@ public class BuildChatService {
         }
         if (constraint.minWattageW() != null) {
             parts.add(constraint.minWattageW() + "W");
+        }
+        // 사용자 언어로 속성 요약(원어 노출 금지) — 수랭/공랭, PCIe 세대, 통풍 강조.
+        if (constraint.coolingType() != null) {
+            parts.add("LIQUID".equalsIgnoreCase(constraint.coolingType()) ? "수랭" : "공랭");
+        }
+        if (constraint.pcieGeneration() != null) {
+            parts.add("PCIe " + constraint.pcieGeneration() + ".0");
+        }
+        if (Boolean.TRUE.equals(constraint.airflowFocused())) {
+            parts.add("통풍 강조");
         }
         return String.join(" · ", parts);
     }

@@ -903,6 +903,126 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void buildChatFallsThroughToLlmForCoolingAttributeAndReturnsComparisonCard() {
+        // "쿨러를 수랭으로 바꾸면" — 모델 미지정이라 시뮬 target이 안 잡히지만 dead-end 대신 LLM으로
+        // 흘려보내 속성(coolingType=LIQUID)을 구조화하고, 드래프트의 현재 쿨러 vs 수랭 최적 후보를
+        // 기존 1:1 스펙비교 카드로 제시한다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of(Map.of(
+                "tool", "compatibility", "status", "PASS", "confidence", "HIGH", "summary", "호환 가능")));
+        String targetPublicId = "11111111-1111-1111-1111-111111111111";
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("public_id = ?::uuid")) {
+                // partByPublicId: 속성 충족 최적 후보(수랭 쿨러) 전체 행
+                return List.of(Map.of(
+                        "internal_id", 42L, "id", targetPublicId, "category", "COOLER",
+                        "name", "쿨매 수랭 360", "manufacturer", "CoolerMaster", "price", 180_000,
+                        "attributes", Map.of("coolerType", "LIQUID_AIO", "tdpW", 280, "radiatorLengthMm", 360)));
+            }
+            if (sql.contains("benchmark_summaries")) {
+                return List.of();
+            }
+            if (sql.contains("FROM parts p")) {
+                // meetingCheapestFirst: 속성 술어(coolerType) 통과 최저가 후보
+                return List.of(Map.of(
+                        "id", targetPublicId, "name", "쿨매 수랭 360", "price", 180_000,
+                        "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "수랭 쿨러로 바꾸면 이렇게 달라집니다.",
+                        AiChatIntent.BUILD_MODIFY,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "COOLER", "coolingType", "LIQUID")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "쿨러를 수랭으로 바꾸면 어때?",
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("cooler-current", "COOLER", "공랭 쿨러 212", 1, Map.of("coolerType", "AIR", "tdpW", 150))
+                ))
+        ));
+
+        // dead-end가 아니라 실데이터 1:1 카드로 답한다
+        assertThat(response.get("message").toString()).doesNotContain("구체적으로");
+        assertThat(response.get("simulation")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("type", "PERFORMANCE_COMPARISON")
+                .containsEntry("category", "COOLER");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> simulation = (Map<String, Object>) response.get("simulation");
+        assertThat(simulation.get("targetPart")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("name", "쿨매 수랭 360");
+        assertThat(simulation.get("specComparisons")).asList()
+                .anySatisfy(row -> assertThat(row)
+                        .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                        .containsEntry("label", "냉각 방식")
+                        .containsEntry("currentValue", "AIR")
+                        .containsEntry("targetValue", "LIQUID_AIO"));
+        // 속성 이해는 LLM이 했다 — 시뮬 dead-end로 끝나지 않고 LLM 경로로 흘러갔음을 확인
+        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
+    }
+
+    @Test
+    void buildChatListsAttributeCandidatesWhenDraftHasNoMatchingCategory() {
+        // "통풍 좋은 케이스 추천해줘" — 비교 대상(드래프트 케이스) 없음 → 속성 충족 후보 TOP 나열 + 담기 칩.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                // meetingCheapestFirst: 통풍(airflowFocus=true) 충족 케이스 후보
+                return List.of(
+                        Map.of("id", "case-1", "name", "메쉬 통풍 케이스 A", "price", 89_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0),
+                        Map.of("id", "case-2", "name", "메쉬 통풍 케이스 B", "price", 112_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0),
+                        Map.of("id", "case-3", "name", "메쉬 통풍 케이스 C", "price", 148_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "통풍 좋은 케이스 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "CASE", "airflowFocused", true)),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of("message", "통풍 좋은 케이스 추천해줘"));
+
+        assertThat(response.get("message").toString())
+                .doesNotContain("구체적으로")
+                .contains("통풍 강조")
+                .contains("케이스 추천 TOP");
+        assertThat(response.get("quickReplies")).asList()
+                .contains("메쉬 통풍 케이스 A 견적에 담아줘");
+        assertThat(response).doesNotContainKey("simulation");
+    }
+
+    @Test
     void missingOpenAiKeyPropagatesPreconditionRequired() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
