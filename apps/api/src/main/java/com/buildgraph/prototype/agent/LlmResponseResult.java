@@ -8,6 +8,7 @@ public record LlmResponseResult(
         long latencyMs,
         Integer inputTokens,
         Integer outputTokens,
-        Integer totalTokens
+        Integer totalTokens,
+        Integer reasoningTokens
 ) {
 }

@@ -143,7 +143,8 @@ public class OpenAiResponsesClient {
                 latencyMs,
                 usageValue(response, "input_tokens"),
                 usageValue(response, "output_tokens"),
-                usageValue(response, "total_tokens")
+                usageValue(response, "total_tokens"),
+                reasoningTokens(response)
         );
     }
 
@@ -192,6 +193,23 @@ public class OpenAiResponsesClient {
             return null;
         }
         Object value = usageMap.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return null;
+    }
+
+    // Responses API usage.output_tokens_details.reasoning_tokens — reasoning burst 진단용.
+    private static Integer reasoningTokens(Map<String, Object> response) {
+        Object usage = response == null ? null : response.get("usage");
+        if (!(usage instanceof Map<?, ?> usageMap)) {
+            return null;
+        }
+        Object details = usageMap.get("output_tokens_details");
+        if (!(details instanceof Map<?, ?> detailsMap)) {
+            return null;
+        }
+        Object value = detailsMap.get("reasoning_tokens");
         if (value instanceof Number number) {
             return number.intValue();
         }

@@ -204,6 +204,13 @@ public class BuildChatService {
         if (intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT) {
             Map<String, Object> response = performanceSimulationResponse(body, message)
                     .orElseGet(() -> simulationClarificationResponse(body, message));
+            // 시뮬 카드가 못 나온 dead-end면 원문을 에코해 다음 짧은 답("MSI X870")이 원 요청과 합성되게
+            // 한다(무상태 후속). 되묻기는 최대 1회 — 이미 후속 턴이면 재부착하지 않는다.
+            if (response.get("simulation") == null && !clarificationFollowUp && response.get("clarification") == null) {
+                response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+            }
+            // 에코도 카드도 없는 순수 dead-end에는 다음 행동 칩을 보강한다(형태 판정 — 에코가 붙었으면 개입 안 함).
+            ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
             logBuildChatPath("FAST_SIMULATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
@@ -322,8 +329,16 @@ public class BuildChatService {
         }
         // 데모 안전망: 견적 요청인데 LLM이 빈 조합을 반환하면(용도-only 등) 내부 자산 기준
         // 폴백 조합으로 보강해 빈 화면을 막는다. 라우터가 이미 BUILD_RECOMMEND로 판정한 경우만.
+        // 단 드래프트가 있는 되묻기/수정 턴(ASK_FOLLOW_UP·BUILD_MODIFY)은 무관한 예산 조합을 끼워넣지
+        // 않는다 — 되묻기 응답에 카드가 생기면 원문 에코 조건이 깨진다. 드래프트 없는 용도-only 턴은 유지.
+        boolean draftModifyTurn = intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
+                && objectMaps(response.get("builds")).isEmpty()
+                && !objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()
+                && (engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP
+                        || engineResponse.intent() == AiChatIntent.BUILD_MODIFY);
         if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
-                && objectMaps(response.get("builds")).isEmpty()) {
+                && objectMaps(response.get("builds")).isEmpty()
+                && !draftModifyTurn) {
             List<String> fallbackWarnings = new ArrayList<>();
             List<Map<String, Object>> fallbackBuilds = rawBudgetIntent.hasBudget()
                     ? nearBudgetLadderBuilds(rawBudgetIntent.budget(), List.of(), fallbackWarnings, new BuildChatGuardStats())
@@ -358,22 +373,7 @@ public class BuildChatService {
                     "originalMessage", message
             ));
         }
-        // 종단 칩 플로어: 카드·칩·되묻기·시뮬레이션이 전부 빈 dead-end 응답에는 다음 행동 칩만
-        // 마지막으로 보강한다(LLM 문구는 유지). 판정은 문구가 아니라 응답 형태로만 한다.
-        if (objectMaps(response.get("builds")).isEmpty()
-                && stringList(response.get("quickReplies")).isEmpty()
-                && response.get("clarification") == null
-                && response.get("simulation") == null) {
-            if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
-                    && rawBudgetIntent.hasBudget()
-                    && rawBudgetIntent.budget() >= minimumBuildTotal()) {
-                response.put("quickReplies", List.of(
-                        formatBudgetLabel(rawBudgetIntent.budget()) + " PC 추천해줘",
-                        "가능한 최소 구성으로 추천해줘"));
-            } else {
-                response.put("quickReplies", FEATURE_GUIDE_QUICK_REPLIES);
-            }
-        }
+        ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
         log.debug("Build Chat response generated: userId={}, requestedAiProfile={}, cacheStore=true", userId, requestedAiProfile);
         buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
@@ -385,6 +385,25 @@ public class BuildChatService {
 
     private static long elapsedMs(long startNanos) {
         return Math.max(0, (System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    // 종단 칩 플로어: 카드·칩·되묻기·시뮬레이션이 전부 빈 dead-end 응답에는 다음 행동 칩만 보강한다
+    // (LLM 문구는 유지). 판정은 문구가 아니라 응답 형태로만 한다. LLM 경로와 시뮬 경로가 함께 쓴다.
+    private void ensureNextAction(Map<String, Object> response, BuildChatIntent intent, BudgetIntent rawBudgetIntent) {
+        if (objectMaps(response.get("builds")).isEmpty()
+                && stringList(response.get("quickReplies")).isEmpty()
+                && response.get("clarification") == null
+                && response.get("simulation") == null) {
+            if (intent == BuildChatIntent.BUILD_RECOMMEND
+                    && rawBudgetIntent.hasBudget()
+                    && rawBudgetIntent.budget() >= minimumBuildTotal()) {
+                response.put("quickReplies", List.of(
+                        formatBudgetLabel(rawBudgetIntent.budget()) + " PC 추천해줘",
+                        "가능한 최소 구성으로 추천해줘"));
+            } else {
+                response.put("quickReplies", FEATURE_GUIDE_QUICK_REPLIES);
+            }
+        }
     }
 
     public record TierBuilds(List<Map<String, Object>> builds, List<String> warnings) {
@@ -448,6 +467,12 @@ public class BuildChatService {
         return null;
     }
 
+    // 만/억/원 앞에 붙는 "N백M십" 합성 수사만 하나의 숫자로 합친다("2백5십"→"250", "십"→"10").
+    // 천은 기존 천만/억 패턴이 이미 읽고(선행 숫자·백·원 유무로 "천만에요" 관용구까지 구분), 천 뒤에 붙은
+    // 백·십 런은 그 패턴을 깨지 않도록 건드리지 않는다.
+    private static final Pattern KOREAN_HUNDRED_TEN_RUN =
+            Pattern.compile("((?:[0-9]*[백십])+[0-9]*)(?=[만억원])");
+
     // "삼백만원", "일천삼백만원", "2천만원" 같은 한글/혼합 숫자 표기를 아라비아 숫자로 정규화한다
     private static String normalizeKoreanNumerals(String value) {
         String result = value;
@@ -455,7 +480,31 @@ public class BuildChatService {
         for (int index = 0; index < digits.length(); index += 1) {
             result = result.replace(String.valueOf(digits.charAt(index)), String.valueOf(index + 1));
         }
-        return result;
+        Matcher matcher = KOREAN_HUNDRED_TEN_RUN.matcher(result);
+        StringBuilder collapsed = new StringBuilder();
+        while (matcher.find()) {
+            boolean afterCheon = matcher.start() > 0 && result.charAt(matcher.start() - 1) == '천';
+            String run = matcher.group(1);
+            matcher.appendReplacement(collapsed,
+                    Matcher.quoteReplacement(afterCheon ? run : String.valueOf(collapseHundredTenRun(run))));
+        }
+        matcher.appendTail(collapsed);
+        return collapsed.toString();
+    }
+
+    private static long collapseHundredTenRun(String run) {
+        long total = 0;
+        long pending = 0;
+        for (int index = 0; index < run.length(); index += 1) {
+            char ch = run.charAt(index);
+            if (ch >= '0' && ch <= '9') {
+                pending = pending * 10 + (ch - '0');
+            } else {
+                total += (pending == 0 ? 1 : pending) * (ch == '백' ? 100 : 10);
+                pending = 0;
+            }
+        }
+        return total + pending;
     }
 
     // 곱셈 결과가 Integer 범위를 넘으면 (int) 캐스팅이 조용히 랩어라운드해 음수/잘못된 예산이
@@ -554,9 +603,8 @@ public class BuildChatService {
     }
 
     private Optional<Map<String, Object>> performanceSimulationResponse(Map<String, Object> request, String message) {
-        if (!isPerformanceSimulationIntent(message)) {
-            return Optional.empty();
-        }
+        // 시뮬 진입 판정은 라우터(isSimulationIntent)가 단독으로 한다 — 여기서 재검사하지 않고
+        // 카테고리·드래프트·해상 가능 target 유무만 보고 카드 또는 되묻기로 흘려보낸다.
         String category = firstText(detectPartCategory(message), EXPLICIT_GPU_MODEL.matcher(message == null ? "" : message).find() ? "GPU" : null);
         if (category == null) {
             return Optional.empty();
@@ -618,14 +666,6 @@ public class BuildChatService {
             guidance = categoryLabel(category) + " 시뮬레이션을 하려면 바꿀 제품을 조금 더 구체적으로 알려주세요.";
         }
         return fastResponse("GENERAL", guidance, List.of("SIMULATION_TARGET_NOT_FOUND"));
-    }
-
-    private static boolean isPerformanceSimulationIntent(String message) {
-        String normalized = normalizeCommand(message);
-        boolean changeHypothesis = containsAnyNormalized(normalized, "바꾸면", "교체하면", "넣으면", "달면", "변경하면", "업그레이드하면", "으로가면", "로가면");
-        boolean explicitImpactQuestion = containsAnyNormalized(normalized, "프레임", "fps", "성능", "벤치", "얼마나", "어떻게되", "어떻게", "어떨", "차이", "향상");
-        boolean shortWhatIfQuestion = changeHypothesis && (normalized.endsWith("?") || normalized.endsWith("면") || containsAnyNormalized(normalized, "좋을까", "나을까"));
-        return changeHypothesis && (explicitImpactQuestion || shortWhatIfQuestion);
     }
 
     private Optional<PartCandidate> simulationTargetPart(String category, String message) {
@@ -728,7 +768,13 @@ public class BuildChatService {
         return result;
     }
 
-    private static String simulationModelToken(String category, String message) {
+    private static final Pattern MODEL_TOKEN_PATTERN = Pattern.compile("(?i)([a-z가-힣]*\\s*\\d{2,5}[a-z0-9가-힣-]*)");
+    // "A에서 B로 바꾸면"처럼 출발지·도착지가 함께 오면 도착지(B) 구간만 대상으로 삼는다.
+    private static final Pattern REPLACEMENT_DESTINATION = Pattern.compile("에서\\s*(.+?)\\s*(?:으로|로)(?![0-9a-z가-힣])", Pattern.CASE_INSENSITIVE);
+    // 모델 토큰 끝에 달라붙는 한국어 조사 — 카탈로그 매칭을 방해하므로 떼어낸다.
+    private static final Pattern TRAILING_PARTICLE = Pattern.compile("(?:에서|으로|로|를|은|는|이|가)$");
+
+    static String simulationModelToken(String category, String message) {
         String text = message == null ? "" : message;
         if ("GPU".equals(category)) {
             String gpuClass = targetGpuClass(message);
@@ -738,12 +784,22 @@ public class BuildChatService {
             Matcher matcher = EXPLICIT_CPU_MODEL.matcher(text);
             return matcher.find() ? matcher.group() : null;
         }
-        Matcher model = Pattern.compile("(?i)([a-z가-힣]*\\s*\\d{2,5}[a-z0-9가-힣-]*)").matcher(text);
+        Matcher destination = REPLACEMENT_DESTINATION.matcher(text);
+        String scanText = destination.find() ? destination.group(1) : text;
+        Matcher model = MODEL_TOKEN_PATTERN.matcher(scanText);
         if (model.find()) {
-            return model.group(1).trim();
+            return stripTrailingParticle(model.group(1).trim());
         }
-        String brand = brandToken(text);
+        String brand = brandToken(scanText);
         return brand == null ? null : brand;
+    }
+
+    private static String stripTrailingParticle(String token) {
+        if (token == null) {
+            return null;
+        }
+        String stripped = TRAILING_PARTICLE.matcher(token).replaceFirst("").trim();
+        return stripped.isEmpty() ? token : stripped;
     }
 
     private static String safeNumericAttribute(String... keys) {
@@ -1720,11 +1776,10 @@ public class BuildChatService {
         List<String> warnings = new ArrayList<>();
         Integer budget = rawBudgetIntent != null && rawBudgetIntent.hasBudget() ? rawBudgetIntent.budget() : null;
 
+        // 채울 카테고리가 없으면 이 결정경로는 할 일이 없다 — "나머지로 비용 줄여줘" 같은 실제 의도를
+        // 만석 오안내로 가로채지 말고 LLM 경로로 위임한다(:215 UNSUPPORTED→LLM 강등과 같은 철학).
         if (missingCategories.isEmpty()) {
-            List<Map<String, Object>> toolResults = toolResults(fixedParts, fixedQuantities, budget == null ? fixedTotal : budget, warnings);
-            warnings.addAll(toolWarnings(toolResults));
-            Map<String, Object> build = completionBuildMap(TIERS.get(1), fixedParts, fixedQuantities, List.of(), budget, toolResults, warnings);
-            return Optional.of(fastResponse("BUDGET", "이미 모든 카테고리가 채워져 있어 현재 구성 그대로 검증했습니다.", List.of(build), warnings));
+            return Optional.empty();
         }
 
         int pickBudget = budget == null ? Integer.MAX_VALUE : budget - fixedTotal;
@@ -2625,8 +2680,13 @@ public class BuildChatService {
         );
     }
 
-    private static Integer parseCapacityGb(String message) {
+    static Integer parseCapacityGb(String message) {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        // TB 표기는 1TB=1000GB로 환산해 용량 해상에 태운다("4TB"→4000GB).
+        Matcher tb = CAPACITY_TB_PATTERN.matcher(normalized);
+        if (tb.find()) {
+            return Integer.parseInt(tb.group(1)) * 1000;
+        }
         Matcher matcher = CAPACITY_GB_PATTERN.matcher(normalized);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
     }

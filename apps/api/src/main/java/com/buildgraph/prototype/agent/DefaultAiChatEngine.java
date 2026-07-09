@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class DefaultAiChatEngine implements AiChatEngine {
+    private static final Logger log = LoggerFactory.getLogger(DefaultAiChatEngine.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern BUDGET_MANWON = Pattern.compile("([0-9]{1,4})\\s*만\\s*원?");
     private static final Pattern BUDGET_NUMBER = Pattern.compile("([0-9][0-9,]{5,})\\s*원?");
@@ -388,6 +391,13 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 3
         );
         List<AiChatEngineResponse.PartRecommendation> candidates = selection.parts();
+        // 소켓 배제로 후보가 비면(예: 인텔 보드에 AM5 CPU 요청) 사유를 숨긴 채 dead-end 하지 않고,
+        // 현재 메인보드에 맞는 CPU만 남겨 대안으로 제시한다(비호환 CPU는 목록에서 제외).
+        boolean socketBlocked = candidates.isEmpty()
+                && socketBlockedCpuRequest(effectiveCategory, context, constraints);
+        if (socketBlocked) {
+            candidates = socketCompatibleCpuFallback(effectiveCategory, currentItem, context);
+        }
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("category", effectiveCategory);
         payload.put("quantity", defaultQuantity(effectiveCategory));
@@ -411,8 +421,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (!selection.warnings().isEmpty()) {
             parsedContext.put("warnings", selection.warnings());
         }
+        String assistantMessage = socketBlocked
+                ? socketBlockedCpuMessage(effectiveCategory, candidates)
+                : buildModifyMessage(effectiveCategory, priceDirection, currentItem, candidates, constraints, selection.warnings());
         return response(
-                buildModifyMessage(effectiveCategory, priceDirection, currentItem, candidates, constraints, selection.warnings()),
+                assistantMessage,
                 AiChatIntent.BUILD_MODIFY,
                 List.of(new AiChatAction(AiChatActionType.REPLACE_DRAFT_PART, "견적 부품 교체", payload)),
                 List.of(),
@@ -1331,6 +1344,41 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 : currentName + " 대신 선택할 수 있는 " + directionText + " " + categoryLabel(category) + " 후보를 찾았습니다.";
     }
 
+    // 드래프트 메인보드 소켓과 다른 CPU를 요청해(예: 인텔 보드에 AM5 9700X) 소켓 배제로 후보가 빈 상황인지 판정.
+    // filterByCpuSocket와 같은 신호(메인보드 socket 속성)만 사용한다 — 새 키워드 분기 없음.
+    private boolean socketBlockedCpuRequest(String category, Map<String, Object> context, PartQueryConstraints constraints) {
+        if (!"CPU".equals(category) || constraints == null || !constraints.hasHardConstraint()) {
+            return false;
+        }
+        String motherboardSocket = attrText(draftItem(context, "MOTHERBOARD"), "socket");
+        if (motherboardSocket == null) {
+            return false;
+        }
+        return partRecommendations(category, 50).stream()
+                .filter(part -> matchesPartConstraints(part, constraints))
+                .map(part -> attrText(part.attributes(), "socket"))
+                .anyMatch(socket -> socket != null && !socket.equalsIgnoreCase(motherboardSocket));
+    }
+
+    // 소켓 배제 상황의 대안 — 현재 메인보드 소켓에 맞는 CPU만 남겨 상위 후보를 고른다(비호환 CPU 제외).
+    private List<AiChatEngineResponse.PartRecommendation> socketCompatibleCpuFallback(
+            String category,
+            Map<String, Object> currentItem,
+            Map<String, Object> context
+    ) {
+        List<AiChatEngineResponse.PartRecommendation> compatible =
+                compatibleReplacementParts(category, context, partRecommendations(category, 50));
+        return partReplacementRanker.select(category, currentItem, "ANY", null, compatible, 3).parts();
+    }
+
+    private static String socketBlockedCpuMessage(String category, List<AiChatEngineResponse.PartRecommendation> candidates) {
+        String label = categoryLabel(category);
+        String reason = "요청하신 " + label + " 모델은 현재 메인보드 소켓과 달라 장착할 수 없어요. ";
+        return candidates.isEmpty()
+                ? reason + "현재 메인보드에 맞는 " + label + "를 알려주시면 다시 찾아드릴게요."
+                : reason + "현재 메인보드에 맞는 " + label + " 후보로 추천해 드릴게요.";
+    }
+
     private Map<String, Object> llmParsedContext(
             String message,
             Map<String, Object> request,
@@ -1386,6 +1434,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 buildProfile.model(),
                 buildProfile.reasoningEffort(),
                 buildProfile.maxOutputTokens()
+        );
+        // 16초 클러스터 진단용 계측 — max_output_tokens 상한에서의 reasoning burst 여부를 데이터로 본다.
+        log.info(
+                "Build Chat llmPlan latencyMs={} model={} reasoningEffort={} maxOutputTokens={} outputTokens={} reasoningTokens={} totalTokens={}",
+                result.latencyMs(),
+                result.model(),
+                result.reasoningEffort(),
+                buildProfile.maxOutputTokens(),
+                result.outputTokens(),
+                result.reasoningTokens(),
+                result.totalTokens()
         );
         return parseJsonObject(result.text());
     }

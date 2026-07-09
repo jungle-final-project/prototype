@@ -46,6 +46,11 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.parseBudgetWon("2천만원 예산인데")).isEqualTo(20_000_000);
         assertThat(BuildChatService.parseBudgetWon("돈은 3천만원까지 괜찮으니")).isEqualTo(30_000_000);
         assertThat(BuildChatService.parseBudgetWon("천만에요 감사합니다")).isNull();
+        // 십/백 합성 수사를 숫자로 합쳐 bare 만원(1만원) 폴백으로 새지 않게 한다
+        assertThat(BuildChatService.parseBudgetWon("이백오십만원으로 게이밍 PC")).isEqualTo(2_500_000);
+        assertThat(BuildChatService.parseBudgetWon("삼백오십만원 정도 편집용")).isEqualTo(3_500_000);
+        assertThat(BuildChatService.parseBudgetWon("십만원짜리 램")).isEqualTo(100_000);
+        assertThat(BuildChatService.parseBudgetWon("천이백만원 예산")).isEqualTo(12_000_000);
         assertThat(BuildChatService.parseBudgetWon("0.5억으로 최고급 워크스테이션")).isEqualTo(50_000_000);
         assertThat(BuildChatService.parseBudgetWon("1억원으로 제일 좋은 컴퓨터")).isEqualTo(100_000_000);
         assertThat(BuildChatService.parseBudgetWon("1억2천만원")).isEqualTo(120_000_000);
@@ -61,6 +66,20 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.detectPartCategory("GPU 추천해줘")).isEqualTo("GPU");
         assertThat(BuildChatService.detectPartCategory("CPU는 뭐가 좋아?")).isEqualTo("CPU");
         assertThat(BuildChatService.detectPartCategory("쿨러 추천")).isEqualTo("COOLER");
+    }
+
+    @Test
+    void simulationTargetTokenPrefersDestinationAndStripsParticles() {
+        // "A에서 B로" 패턴은 도착지(B)를 우선하고, 조사 접미는 떼어낸다
+        assertThat(BuildChatService.simulationModelToken("MOTHERBOARD", "메인보드를 B850에서 X870으로 바꾸면")).isEqualTo("X870");
+        assertThat(BuildChatService.simulationModelToken("MOTHERBOARD", "메인보드를 X870으로 바꾸면 어때?")).isEqualTo("X870");
+    }
+
+    @Test
+    void parsesTerabyteCapacityAsGigabytes() {
+        assertThat(BuildChatService.parseCapacityGb("4TB SSD로 바꾸면")).isEqualTo(4000);
+        assertThat(BuildChatService.parseCapacityGb("2테라 저장장치")).isEqualTo(2000);
+        assertThat(BuildChatService.parseCapacityGb("512GB로 교체")).isEqualTo(512);
     }
 
     @Test
@@ -608,6 +627,56 @@ class BuildChatServiceTest {
         assertThat(response).containsEntry("answerType", "GENERAL");
         assertThat(response.get("warnings")).asList().contains("SIMULATION_TARGET_NOT_FOUND");
         assertThat(response).doesNotContainKey("simulation");
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void buildChatEchoesOriginalMessageWhenSimulationTargetIsUnresolved() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of());
+
+        // 드래프트는 있지만 도착지 제품이 카탈로그에서 해상 안 되는 시뮬 dead-end
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "그래픽카드를 5080으로 바꾸면 성능이 얼마나 좋아져?",
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("gpu-current", "GPU", "RTX 5070 Ti", 1, Map.of("gpuClass", "RTX_5070_TI"))
+                ))
+        ));
+
+        // 카드가 없으면 원문을 에코해 다음 짧은 답이 원 요청과 합성되게 한다
+        @SuppressWarnings("unchecked")
+        Map<String, Object> clarification = (Map<String, Object>) response.get("clarification");
+        assertThat(clarification).containsEntry("originalMessage", "그래픽카드를 5080으로 바꾸면 성능이 얼마나 좋아져?");
+        assertThat(response).doesNotContainKey("simulation");
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void buildChatDoesNotReattachSimulationEchoOnFollowUpAndAddsFeatureChips() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of());
+
+        // 되묻기 후속 턴("MSI X870")인데 여전히 target 해상 실패 — 에코는 재부착하지 않고 종단 칩만 붙인다
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "MSI X870",
+                "clarificationContext", Map.of("originalMessage", "메인보드를 바꾸면 성능 어때?"),
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("board-current", "MOTHERBOARD", "B850 Board", 1, Map.of("memoryType", "DDR5"))
+                ))
+        ));
+
+        assertThat(response).doesNotContainKey("clarification");
+        assertThat(response).doesNotContainKey("simulation");
+        assertThat(response.get("quickReplies")).asList()
+                .contains("200만원 게이밍 PC 추천해줘", "지금 견적 나머지 채워줘", "CPU를 9700X로 바꾸면?");
         verifyNoInteractions(aiChatEngine, cacheService);
     }
 

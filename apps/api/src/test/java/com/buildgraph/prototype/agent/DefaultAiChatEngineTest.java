@@ -617,6 +617,47 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void buildModifyIncompatibleCpuSocketExposesReasonInsteadOfHiding() {
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "CPU를 9700X로 바꿔줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                "draft-1",
+                Map.of("currentQuoteDraft", Map.of(
+                        "items", List.of(
+                                Map.of(
+                                        "partId", "cpu-current",
+                                        "category", "CPU",
+                                        "name", "Intel Core Ultra 7 265K",
+                                        "currentPrice", 400_000,
+                                        "quantity", 1,
+                                        "attributes", Map.of("socket", "LGA1851")
+                                ),
+                                Map.of(
+                                        "partId", "motherboard-msi-z890",
+                                        "category", "MOTHERBOARD",
+                                        "name", "MSI MPG Z890I EDGE TI WIFI",
+                                        "currentPrice", 520_000,
+                                        "quantity", 1,
+                                        "attributes", Map.of("socket", "LGA1851", "memoryType", "DDR5")
+                                )
+                        )
+                )),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.BUILD_MODIFY);
+        // 드래프트는 인텔(LGA1851) 보드인데 9700X는 AM5 — 소켓 배제로 후보가 비었지만
+        // "찾지 못했습니다"로 사유를 숨기지 않고 장착 불가 사유를 밝힌다.
+        assertThat(response.partRecommendations()).isEmpty();
+        assertThat(response.assistantMessage())
+                .contains("장착할 수 없어요")
+                .doesNotContain("찾지 못했습니다");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void buildModifyCheaperPsuKeepsStrongestLowerPriceCandidate() {
         AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
                 "파워가 너무 비싸니 더 싼 걸로 추천해줘",
@@ -754,7 +795,7 @@ class DefaultAiChatEngineTest {
                             "reason": null
                           }
                         }
-                        """, LlmProvider.OPENAI, "gpt-5.5", "low", 1234, 100, 80, 180));
+                        """, LlmProvider.OPENAI, "gpt-5.5", "low", 1234, 100, 80, 180, 64));
 
         AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
                 "5090 글카가 들어간 PC 추천해줘",
@@ -1247,7 +1288,7 @@ class DefaultAiChatEngineTest {
                 eq("low"),
                 eq(900)
         ))
-                .thenReturn(new LlmResponseResult(json, LlmProvider.OPENAI, "gpt-5.5", "low", 1234, 100, 80, 180));
+                .thenReturn(new LlmResponseResult(json, LlmProvider.OPENAI, "gpt-5.5", "low", 1234, 100, 80, 180, 64));
     }
 
     private static List<Map<String, Object>> partRows(String category) {
