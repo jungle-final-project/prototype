@@ -278,6 +278,11 @@ public class BuildChatService {
             return response;
         }
         stageStartNanos = System.nanoTime();
+        // 사실 우선: 서버가 방금 계산한 사실(파싱 예산·최소 구성가·부품 조건 최저가·드래프트 요약)을
+        // LLM 프롬프트에 주입한다 — LLM이 이미 아는 사실을 되묻거나("예산이 빠졌어요")
+        // 사실과 다른 캔드 답("찾지 못했다")을 쓰는 것을 원천 차단한다.
+        Map<String, Object> engineBody = new LinkedHashMap<>(body);
+        engineBody.put("serverFacts", buildServerFacts(message, rawBudgetIntent, body));
         AiChatEngineResponse engineResponse;
         try {
             engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
@@ -286,7 +291,7 @@ public class BuildChatService {
                     firstText(text(body.get("selectedCategory")), detectPartCategory(message)),
                     text(body.get("buildId")),
                     text(body.get("draftId")),
-                    body,
+                    engineBody,
                     userId
             ), requestedAiProfile);
         } catch (RuntimeException error) {
@@ -328,9 +333,10 @@ public class BuildChatService {
         }
         // 범용 역제안 후처리 — LLM이 구조화한 제약을 부품 DB와 대조해, 불가능한 요청이면
         // dead-end 대신 실데이터 숫자(최저가·부족액·최소 구성가)와 다음 행동 칩을 제시한다.
+        // 미리보기(변경)를 먼저 시도하고, 미리보기가 못 만들어진 변경 요청은 부품 제약 역제안이 이어받는다.
+        applyDraftEditPreview(response, engineResponse, body);
         applyPartConstraintCounterProposal(response, engineResponse, message);
         applyUsageMinimumCounterProposal(response, engineResponse, rawBudgetIntent);
-        applyDraftEditPreview(response, engineResponse, body);
         // LLM이 스스로 되물은 턴("용량이나 DDR 조건 알려주세요")은 원문을 에코해 다음 짧은 답("ddr5")이
         // 원 요청과 합성되게 한다 — 이게 없으면 후속 답이 맥락을 잃고 대화가 끊긴다.
         boolean askedFollowUp = engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP
@@ -1163,6 +1169,53 @@ public class BuildChatService {
     // ── 범용 역제안 계층 ─────────────────────────────────────────────
     // 원칙: 이해는 LLM(제약 구조화), 사실은 DB(최저가·최소 구성가), 문구별 분기 없음.
 
+    // LLM 프롬프트에 주입할 서버 계산 사실. 전부 결정적 질의 — LLM은 이 숫자를 되묻지 않고 그대로 쓴다.
+    private Map<String, Object> buildServerFacts(String message, BudgetIntent rawBudgetIntent, Map<String, Object> body) {
+        Map<String, Object> facts = new LinkedHashMap<>();
+        if (rawBudgetIntent != null && rawBudgetIntent.hasBudget()) {
+            facts.put("budgetWon", rawBudgetIntent.budget());
+            facts.put("budgetMode", rawBudgetIntent.mode());
+        }
+        int minimum = minimumBuildTotal();
+        if (minimum > 0) {
+            facts.put("minimumBuildTotalWon", minimum);
+        }
+        List<String> inferredUsage = inferUsageTags(message);
+        if (BuildChatFeasibilityService.requiresGpu(inferredUsage)) {
+            int usageMinimum = feasibilityService.usageMinimumTotal(inferredUsage);
+            if (usageMinimum > 0) {
+                facts.put("usageMinimumTotalWon", usageMinimum);
+                facts.put("usageTags", inferredUsage);
+            }
+        }
+        BuildChatFeasibilityService.SpecConstraint constraint = mergedPartConstraint(Map.of(), message);
+        if (constraint != null && (constraint.hasSpec() || constraint.maxBudgetWon() != null)) {
+            Map<String, Object> partFacts = new LinkedHashMap<>();
+            partFacts.put("category", constraint.category());
+            partFacts.put("minCapacityGb", constraint.minCapacityGb());
+            partFacts.put("minWattageW", constraint.minWattageW());
+            partFacts.put("maxBudgetWon", constraint.maxBudgetWon());
+            feasibilityService.cheapestMeeting(constraint).ifPresent(option -> partFacts.put(
+                    "cheapestMeeting", MockData.map("name", option.name(), "priceWon", option.unitPrice())));
+            if (constraint.maxBudgetWon() != null) {
+                feasibilityService.bestUnderBudget(constraint.category(), constraint.maxBudgetWon(), constraint.effectiveQuantity())
+                        .ifPresent(option -> partFacts.put(
+                                "bestWithinBudget", MockData.map("name", option.name(), "priceWon", option.unitPrice())));
+            }
+            facts.put("partConstraintFacts", partFacts);
+        }
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
+        if (!draftItems.isEmpty()) {
+            int draftTotal = 0;
+            for (Map<String, Object> item : draftItems) {
+                Integer price = firstNumber(item.get("lineTotal"), item.get("currentPrice"), item.get("price"));
+                draftTotal += price == null ? 0 : Math.max(0, price);
+            }
+            facts.put("currentDraftSummary", MockData.map("itemCount", draftItems.size(), "totalWon", draftTotal));
+        }
+        return facts;
+    }
+
     // LLM까지 불가한 경우의 우아한 거절 — dead-end 문구 대신 바로 눌러볼 기능 칩을 함께 준다.
     private Map<String, Object> gracefulRefusalResponse() {
         Map<String, Object> response = fastResponse(
@@ -1177,7 +1230,13 @@ public class BuildChatService {
     // 단일 부품 요청(예: "램 32기가 20만원", "10만원짜리 램") — 실데이터로 추천을 나열하거나,
     // 불가능하면 부족액·근접 대안을 역제안한다. LLM 제약이 비어도 정규식 폴백으로 대표 패턴을 보강한다.
     private void applyPartConstraintCounterProposal(Map<String, Object> response, AiChatEngineResponse engineResponse, String message) {
-        if (engineResponse.intent() != AiChatIntent.PART_RECOMMEND) {
+        // PART_RECOMMEND 외에도, 변경(BUILD_MODIFY)이나 되묻기(ASK_FOLLOW_UP)로 분류됐지만 카드가 못
+        // 만들어진 부품 제약 요청("램 32기가 20만원으로 바꿔줘")은 여기서 역제안으로 이어받는다 —
+        // 엔진 캔드 문구("후보를 찾지 못했습니다")가 dead-end로 새는 것을 막는다.
+        boolean eligible = engineResponse.intent() == AiChatIntent.PART_RECOMMEND
+                || ((engineResponse.intent() == AiChatIntent.BUILD_MODIFY || engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP)
+                        && objectMaps(response.get("builds")).isEmpty());
+        if (!eligible) {
             return;
         }
         BuildChatFeasibilityService.SpecConstraint constraint =
@@ -1377,10 +1436,12 @@ public class BuildChatService {
             AiChatEngineResponse engineResponse,
             BudgetIntent rawBudgetIntent
     ) {
-        if (engineResponse.intent() != AiChatIntent.FULL_BUILD_RECOMMEND) {
-            return;
-        }
-        if (rawBudgetIntent == null || !rawBudgetIntent.hasBudget()) {
+        // 서버는 예산을 파싱했는데(예: bare "만원") LLM이 되묻기(ASK_FOLLOW_UP)로 흐른 경우도 잡는다.
+        boolean budgetKnown = rawBudgetIntent != null && rawBudgetIntent.hasBudget();
+        boolean eligible = engineResponse.intent() == AiChatIntent.FULL_BUILD_RECOMMEND
+                || (engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP && budgetKnown
+                        && objectMaps(response.get("builds")).isEmpty());
+        if (!eligible || !budgetKnown) {
             return;
         }
         List<String> usageTags = stringList(engineResponse.parsedContext().get("usageTags"));
@@ -1404,10 +1465,14 @@ public class BuildChatService {
         warnings.add("BUDGET_BELOW_USAGE_MINIMUM");
         response.put("warnings", distinct(warnings));
         int suggested = ((minimum + 99_999) / 100_000) * 100_000;
-        response.put("quickReplies", List.of(
-                formatBudgetLabel(suggested) + " " + usageLabel + " PC 추천해줘",
-                formatBudgetLabel(rawBudgetIntent.budget()) + " 사무용 PC 추천해줘"
-        ));
+        // GPU 용도는 용도 하향(사무용) 대안이 의미 있지만, 이미 사무용 최소가 미달이면 예산 에코 칩은 무의미하다.
+        response.put("quickReplies", gpuRequired
+                ? List.of(
+                        formatBudgetLabel(suggested) + " " + usageLabel + " PC 추천해줘",
+                        formatBudgetLabel(rawBudgetIntent.budget()) + " 사무용 PC 추천해줘")
+                : List.of(
+                        formatBudgetLabel(suggested) + " 사무용 PC 추천해줘",
+                        "가능한 최소 구성으로 추천해줘"));
     }
 
     // 결정경로용 경량 용도 추정 — 라우팅에 쓰지 않고, 이미 선택된 응답의 최소 구성가 계산을 정확하게

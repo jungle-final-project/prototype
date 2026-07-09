@@ -43,6 +43,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
             RTX 5090처럼 사용자가 명시한 부품/클래스는 requiredGpuClasses와 hardConstraintPolicy에 반드시 보존하십시오.
             셀프 견적 변경 요청은 draftEdit에 교체 대상 category, operation, priceDirection, targetMaxPrice를 구조화하십시오.
             예: “그래픽카드가 너무 비싸니 싼 걸로”는 category=GPU, operation=REPLACE, priceDirection=CHEAPER입니다.
+            context.serverFacts에는 서버가 방금 계산한 사실이 들어 있습니다: 파싱된 예산(budgetWon),
+            최소 구성가(minimumBuildTotalWon), 감지된 부품 조건과 그 조건의 실제 최저가·예산 내 대안, 현재 견적 요약.
+            이 수치를 신뢰하고 답변에 그대로 사용하십시오. serverFacts.budgetWon이 있으면 예산을 다시 묻지 마십시오.
+            serverFacts에 최저가·대안 사실이 있으면 "찾지 못했다"고 답하지 말고 그 사실로 역제안하십시오.
             부품 하나에 대한 수치 조건(용량·VRAM·와트·수량·예산)은 partConstraint에 구조화하십시오.
             예: “램 32기가 20만원으로 맞춰줘”는 partConstraint={category=RAM, minCapacityGb=32, maxBudgetWon=200000}입니다.
             예: “16GB 그래픽카드 80만원 이하”는 partConstraint={category=GPU, minVramGb=16, maxBudgetWon=800000}입니다.
