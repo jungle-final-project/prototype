@@ -433,7 +433,10 @@ function needsDraftContext(prompt: string) {
   const normalized = prompt.toLowerCase().replace(/\s+/g, '');
   const completionLike = /지금|현재|이견적|그래프|나머지|마저|채워|완성/.test(normalized);
   const simulationLike = /바꾸면|바꿨|교체하면|교체시|넣으면|달면|끼우면|끼면|박으면|올리면|올렸|내리면|내려|낮추면|늘리면|줄이면|갈아|넘어가면|업그레이드하면|다운그레이드하면|프레임|fps|성능|체감|비교/.test(normalized);
-  return completionLike || simulationLike;
+  // 변경 명령("그래픽카드 더 싼걸로", "램 빼줘")은 서버가 드래프트 기준 미리보기를 만들므로
+  // 낡은 캐시본이 아닌 최신 드래프트를 실어 보낸다.
+  const modifyLike = /바꿔|교체|싼|저렴|올려|빼|제거|삭제|넣어|담아|추가|수량|늘려|줄여/.test(normalized);
+  return completionLike || simulationLike || modifyLike;
 }
 
 function messageKind(answerType: 'BUDGET' | 'PART' | 'GENERAL'): AiChatMessage['kind'] {

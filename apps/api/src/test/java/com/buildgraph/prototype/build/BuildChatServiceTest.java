@@ -455,20 +455,26 @@ class BuildChatServiceTest {
     }
 
     @Test
-    void buildChatStopsReAskingAfterOneClarificationRound() {
+    void buildChatQuotesUserAndReAsksWhenClarificationFollowUpIsStillAmbiguous() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         BuildChatService service = new BuildChatService(jdbcTemplate, mock(ToolCheckService.class), mock(AiChatEngine.class), mock(BuildChatCacheService.class));
 
-        // 되묻기에 또 모호하게 답해도 재질문하지 않는다 — 티어 스냅샷이 없으면 안내 문구로 즉답.
+        // 되묻기 후에도 예산·용도를 못 읽으면 임의 예산(300만) 3안을 가정하지 않는다 —
+        // 사용자의 말을 인용해 무엇을 못 읽었는지 밝히고 칩과 함께 한 번 더 정확히 묻는다.
         Map<String, Object> response = service.chat(Map.of(
                 "message", "알아서 해줘",
                 "clarificationContext", Map.of("originalMessage", "컴퓨터 하나 맞춰줘")
         ));
 
         assertThat(response).containsEntry("answerType", "GENERAL");
-        assertThat(response).doesNotContainKey("quickReplies");
-        assertThat(response).doesNotContainKey("clarification");
-        assertThat((String) response.get("message")).contains("예산");
+        assertThat((String) response.get("message"))
+                .contains("\"알아서 해줘\"")
+                .contains("정확히 읽지 못했어요");
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("quickReplies")).asList().contains("게이밍 200만원");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> clarification = (Map<String, Object>) response.get("clarification");
+        assertThat((String) clarification.get("originalMessage")).contains("컴퓨터 하나 맞춰줘");
     }
 
     @Test

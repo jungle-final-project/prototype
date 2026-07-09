@@ -40,6 +40,8 @@ public class BuildChatService {
     private static final Pattern BUDGET_BAEKMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*백\\s*만\\s*원?");
     private static final Pattern BUDGET_CHEONMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)?\\s*천\\s*(?:(\\d+(?:\\.\\d+)?)\\s*백)?\\s*만\\s*(원)?");
     private static final Pattern BUDGET_WON = Pattern.compile("(\\d{6,})\\s*원?");
+    // 숫자 없는 "만원" 단독(=1만원). 앞에 숫자가 붙은 "300만원"류는 위 패턴들이 선점한다.
+    private static final Pattern BUDGET_MANWON_BARE = Pattern.compile("(?<![\\d.])만\\s*원");
     private static final Pattern EXPLICIT_GPU_MODEL = Pattern.compile("(?i)(?:rtx|geforce|지포스)?\\s*(40[6-9]0|50[6-9]0)(?:\\s*(ti|super))?");
     private static final Pattern EXPLICIT_CPU_MODEL = Pattern.compile("(?i)\\b\\d{4,5}x3d\\b|\\b\\d{4,5}x\\b|\\bi[3579]-?\\d{4,5}\\b");
     private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
@@ -201,7 +203,7 @@ public class BuildChatService {
             return response;
         }
         if (intentDecision.intent() == BuildChatIntent.ASK_CLARIFICATION) {
-            Map<String, Object> response = clarificationResponse(message, intentDecision.ambiguityReasons(), clarificationFollowUp);
+            Map<String, Object> response = clarificationResponse(message, rawMessage, intentDecision.ambiguityReasons(), clarificationFollowUp);
             logBuildChatPath("FAST_CLARIFICATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
@@ -326,9 +328,21 @@ public class BuildChatService {
         }
         // 범용 역제안 후처리 — LLM이 구조화한 제약을 부품 DB와 대조해, 불가능한 요청이면
         // dead-end 대신 실데이터 숫자(최저가·부족액·최소 구성가)와 다음 행동 칩을 제시한다.
-        applyPartConstraintCounterProposal(response, engineResponse);
+        applyPartConstraintCounterProposal(response, engineResponse, message);
         applyUsageMinimumCounterProposal(response, engineResponse, rawBudgetIntent);
         applyDraftEditPreview(response, engineResponse, body);
+        // LLM이 스스로 되물은 턴("용량이나 DDR 조건 알려주세요")은 원문을 에코해 다음 짧은 답("ddr5")이
+        // 원 요청과 합성되게 한다 — 이게 없으면 후속 답이 맥락을 잃고 대화가 끊긴다.
+        boolean askedFollowUp = engineResponse.intent() == AiChatIntent.ASK_FOLLOW_UP
+                || (engineResponse.intent() == AiChatIntent.PART_RECOMMEND
+                        && objectMaps(response.get("builds")).isEmpty()
+                        && stringList(response.get("quickReplies")).isEmpty());
+        if (askedFollowUp && response.get("clarification") == null) {
+            response.put("clarification", MockData.map(
+                    "missingSlots", List.of(),
+                    "originalMessage", message
+            ));
+        }
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
         log.debug("Build Chat response generated: userId={}, requestedAiProfile={}, cacheStore=true", userId, requestedAiProfile);
         buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
@@ -386,6 +400,12 @@ public class BuildChatService {
             } catch (NumberFormatException ignored) {
                 return null;
             }
+        }
+        // 숫자 없는 "만원" 단독은 구어에서 1만원이다("만원으로 맞춰줘"). 숫자가 붙은 표기는
+        // 위 패턴들이 이미 소진했으므로 여기 도달한 "만원"은 bare 케이스뿐이다.
+        Matcher bareManWonMatcher = BUDGET_MANWON_BARE.matcher(normalized);
+        if (bareManWonMatcher.find()) {
+            return 10_000;
         }
         return null;
     }
@@ -1084,34 +1104,25 @@ public class BuildChatService {
         return null;
     }
 
-    // 되묻기 최대 1회 원칙에서 두 번째에도 정보가 없을 때 가정하는 기본 예산(가정은 응답 문구에 명시한다).
-    private static final int ASSUMED_DEFAULT_BUDGET_WON = 3_000_000;
-
     // 모호 요청 되묻기: 견적을 같이 던지지 않고 질문 + 선택지 칩만 준다. 칩 문구는 그 자체로
     // 완전한 프롬프트(용도+예산)라서 클릭 즉시 프리웜 티어 스냅샷에 적중해 즉답이 된다.
-    private Map<String, Object> clarificationResponse(String message, List<String> reasons, boolean followUp) {
+    private Map<String, Object> clarificationResponse(String message, String rawFollowUp, List<String> reasons, boolean followUp) {
         if (followUp) {
-            // 이미 한 번 되물었는데도 정보가 없다 — 질문을 반복하지 않고 기본 예산 기준 3안을 가정 명시와 함께 준다.
-            if (tierSnapshotStore != null) {
-                Optional<BuildChatTierSnapshotStore.TierSnapshot> snapshot =
-                        tierSnapshotStore.bestFor(ASSUMED_DEFAULT_BUDGET_WON, "TARGET", tierSnapshotTolerancePct);
-                if (snapshot.isPresent()) {
-                    List<String> warnings = new ArrayList<>(snapshot.get().warnings());
-                    warnings.add("ASSUMED_DEFAULT_BUDGET");
-                    return fastResponse(
-                            "BUDGET",
-                            "용도와 예산을 몰라서 우선 300만원 균형 구성 기준 대표 3안을 보여드려요. "
-                                    + "예산이나 용도(게임/사무/영상편집)를 알려주시면 다시 맞춰드릴게요.",
-                            snapshot.get().builds(),
-                            warnings
-                    );
-                }
-            }
-            return fastResponse(
+            // 이미 한 번 되물었는데도 예산·용도를 못 읽었다 — 임의 예산(300만) 3안을 가정하지 않고,
+            // 사용자의 말을 인용해 무엇을 못 읽었는지 솔직하게 밝히고 한 번 더 정확히 묻는다.
+            String quoted = rawFollowUp == null || rawFollowUp.isBlank() ? "" : "말씀하신 \"" + rawFollowUp.trim() + "\"에서 ";
+            Map<String, Object> retry = fastResponse(
                     "GENERAL",
-                    "예산(예: 200만원)이나 용도(게임/사무/영상편집)를 알려주시면 바로 견적을 추천해드릴게요.",
+                    quoted + "예산과 용도를 정확히 읽지 못했어요. 숫자를 포함한 예산(예: 100만원)이나 "
+                            + "용도(게임/사무/영상편집)를 한 번만 더 알려주시면 바로 추천해드릴게요.",
                     List.of("LOW_INFORMATION")
             );
+            retry.put("quickReplies", List.of("사무용 100만원", "게이밍 200만원", "게이밍 300만원", "영상편집 400만원"));
+            retry.put("clarification", MockData.map(
+                    "missingSlots", List.of("budget", "useCase"),
+                    "originalMessage", message
+            ));
+            return retry;
         }
         boolean resolutionHint = reasons != null && reasons.contains("RESOLUTION_CONTEXT");
         String question = resolutionHint
@@ -1163,26 +1174,67 @@ public class BuildChatService {
         return response;
     }
 
-    // 단일 부품 수치 제약(예: "램 32기가 20만원") — 예산으로 불가능하면 부족액과 예산 내 대안을 실데이터로 역제안.
-    private void applyPartConstraintCounterProposal(Map<String, Object> response, AiChatEngineResponse engineResponse) {
+    // 단일 부품 요청(예: "램 32기가 20만원", "10만원짜리 램") — 실데이터로 추천을 나열하거나,
+    // 불가능하면 부족액·근접 대안을 역제안한다. LLM 제약이 비어도 정규식 폴백으로 대표 패턴을 보강한다.
+    private void applyPartConstraintCounterProposal(Map<String, Object> response, AiChatEngineResponse engineResponse, String message) {
         if (engineResponse.intent() != AiChatIntent.PART_RECOMMEND) {
             return;
         }
         BuildChatFeasibilityService.SpecConstraint constraint =
-                BuildChatFeasibilityService.SpecConstraint.fromMap(objectMap(engineResponse.parsedContext().get("partConstraint")));
-        if (constraint == null || !constraint.hasSpec()) {
+                mergedPartConstraint(objectMap(engineResponse.parsedContext().get("partConstraint")), message);
+        if (constraint == null || (!constraint.hasSpec() && constraint.maxBudgetWon() == null)) {
             return;
         }
         int quantity = constraint.effectiveQuantity();
         String categoryLabel = CATEGORY_LABELS.getOrDefault(constraint.category(), constraint.category());
         String specSummary = specSummary(constraint);
         List<String> warnings = new ArrayList<>(stringList(response.get("warnings")));
+
+        // A. 예산만 명시("10만원짜리 램") — 예산 내 최상 스펙 TOP3를 나열하고 담기 칩을 준다.
+        if (!constraint.hasSpec()) {
+            int budget = constraint.maxBudgetWon();
+            List<BuildChatFeasibilityService.PartOption> options =
+                    feasibilityService.bestUnderBudget(constraint.category(), budget, quantity, 3);
+            if (options.isEmpty()) {
+                Optional<BuildChatFeasibilityService.PartOption> cheapestAny =
+                        feasibilityService.cheapestMeeting(new BuildChatFeasibilityService.SpecConstraint(
+                                constraint.category(), null, null, null, quantity, null));
+                StringBuilder textBuilder = new StringBuilder()
+                        .append(formatBudgetLabel(budget)).append(" 이내 ").append(categoryLabel)
+                        .append(" 부품을 내부 자산에서 찾지 못했습니다.");
+                cheapestAny.ifPresent(any -> textBuilder.append(" 보유 최저가는 ").append(any.name())
+                        .append(" ").append(String.format("%,d원", any.unitPrice())).append("입니다."));
+                response.put("message", textBuilder.toString());
+                warnings.add("PART_CONSTRAINT_NOT_FOUND");
+                response.put("warnings", distinct(warnings));
+                response.put("quickReplies", List.of(categoryLabel + " 최저가로 추천해줘"));
+            } else {
+                response.put("message", formatBudgetLabel(budget) + " 이내 " + categoryLabel
+                        + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
+                        + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
+                response.put("quickReplies", List.of(options.get(0).name() + " 견적에 담아줘"));
+            }
+            return;
+        }
+
         Optional<BuildChatFeasibilityService.PartOption> cheapest = feasibilityService.cheapestMeeting(constraint);
+        // B. 스펙 자체를 보유하지 않음 — 근접 대안(보유 최고 스펙)을 실데이터로 역제안.
         if (cheapest.isEmpty()) {
             StringBuilder textBuilder = new StringBuilder()
                     .append("요청하신 조건(").append(specSummary).append(")을 만족하는 ")
                     .append(categoryLabel).append(" 부품을 내부 자산에서 찾지 못했습니다.");
-            appendBudgetAlternative(textBuilder, constraint, quantity);
+            int alternativeBudget = constraint.maxBudgetWon() != null
+                    ? constraint.maxBudgetWon()
+                    : Integer.MAX_VALUE;
+            feasibilityService.bestUnderBudget(constraint.category(), alternativeBudget, quantity).ifPresent(alt -> {
+                String altSpec = altSpecSummary(constraint.category(), alt);
+                textBuilder.append(" 보유 자산 중에서는 ");
+                if (!altSpec.isBlank()) {
+                    textBuilder.append(altSpec).append(" ");
+                }
+                textBuilder.append(alt.name()).append("(").append(String.format("%,d원", alt.unitPrice()))
+                        .append(")이 가장 근접한 선택입니다.");
+            });
             response.put("message", textBuilder.toString());
             warnings.add("PART_CONSTRAINT_NOT_FOUND");
             response.put("warnings", distinct(warnings));
@@ -1192,6 +1244,7 @@ public class BuildChatService {
         BuildChatFeasibilityService.PartOption option = cheapest.get();
         int total = option.unitPrice() * quantity;
         Integer budget = constraint.maxBudgetWon();
+        // C. 스펙은 있으나 예산 부족 — 부족액 + 예산 내 대안 역제안.
         if (budget != null && total > budget) {
             StringBuilder textBuilder = new StringBuilder()
                     .append(formatBudgetLabel(budget)).append("으로 ")
@@ -1212,11 +1265,58 @@ public class BuildChatService {
             response.put("quickReplies", counterProposalQuickReplies(constraint, categoryLabel, specSummary));
             return;
         }
-        // 충족 가능 — LLM 답변 뒤에 실데이터 근거를 한 줄 보강해 숫자 환각을 차단한다.
-        String existing = firstText(text(response.get("message")), "");
-        response.put("message", (existing.isBlank() ? "" : existing + " ")
-                + "조건(" + specSummary + ")을 만족하는 최저가는 " + option.name()
-                + " " + String.format("%,d원", option.unitPrice()) + "입니다.");
+        // D. 충족 가능 — 실데이터 TOP3 나열 + 담기 칩 (대화가 결과 없이 끝나지 않게).
+        List<BuildChatFeasibilityService.PartOption> top = feasibilityService.meetingCheapestFirst(constraint, 3);
+        response.put("message", "조건(" + specSummary + ")을 만족하는 " + categoryLabel
+                + " 추천 TOP" + top.size() + "입니다. " + topListText(top)
+                + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
+        response.put("quickReplies", List.of(top.get(0).name() + " 견적에 담아줘"));
+    }
+
+    private static String topListText(List<BuildChatFeasibilityService.PartOption> options) {
+        StringBuilder builder = new StringBuilder();
+        for (int index = 0; index < options.size(); index += 1) {
+            BuildChatFeasibilityService.PartOption option = options.get(index);
+            if (index > 0) {
+                builder.append(" ");
+            }
+            builder.append(index + 1).append(") ").append(option.name())
+                    .append(" — ").append(String.format("%,d원", option.unitPrice()));
+        }
+        return builder.toString();
+    }
+
+    // LLM 제약 + 정규식 폴백 병합: LLM 값이 우선하고, 빈 곳만 메시지 정규식으로 채운다.
+    // (라우팅이 아니라 이미 PART_RECOMMEND로 판정된 요청의 데이터 보강 — LLM 비결정성 방어)
+    private static final Pattern CAPACITY_TB_PATTERN = Pattern.compile("(\\d+)\\s*(?:tb|테라)", Pattern.CASE_INSENSITIVE);
+
+    private BuildChatFeasibilityService.SpecConstraint mergedPartConstraint(Map<String, Object> llmConstraint, String message) {
+        String category = firstText(text(llmConstraint.get("category")), detectPartCategory(message));
+        if (category == null) {
+            return null;
+        }
+        Integer capacity = numberValue(llmConstraint.get("minCapacityGb"));
+        if (capacity == null && ("RAM".equals(category) || "STORAGE".equals(category))) {
+            capacity = parseCapacityGb(message);
+            if (capacity == null) {
+                Matcher tb = CAPACITY_TB_PATTERN.matcher(message == null ? "" : message.toLowerCase(Locale.ROOT));
+                if (tb.find()) {
+                    capacity = Integer.parseInt(tb.group(1)) * 1000;
+                }
+            }
+        }
+        Integer wattage = numberValue(llmConstraint.get("minWattageW"));
+        if (wattage == null && "PSU".equals(category)) {
+            wattage = parseWattage(message);
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        merged.put("category", category);
+        merged.put("minCapacityGb", capacity);
+        merged.put("minVramGb", numberValue(llmConstraint.get("minVramGb")));
+        merged.put("minWattageW", wattage);
+        merged.put("quantity", numberValue(llmConstraint.get("quantity")));
+        merged.put("maxBudgetWon", firstNumber(llmConstraint.get("maxBudgetWon"), parseBudgetWon(message)));
+        return BuildChatFeasibilityService.SpecConstraint.fromMap(merged);
     }
 
     private void appendBudgetAlternative(StringBuilder textBuilder, BuildChatFeasibilityService.SpecConstraint constraint, int quantity) {
@@ -1284,17 +1384,20 @@ public class BuildChatService {
             return;
         }
         List<String> usageTags = stringList(engineResponse.parsedContext().get("usageTags"));
-        if (!BuildChatFeasibilityService.requiresGpu(usageTags)) {
-            return;
-        }
-        int minimum = feasibilityService.usageMinimumTotal(usageTags);
+        boolean gpuRequired = BuildChatFeasibilityService.requiresGpu(usageTags);
+        // GPU 필수 용도는 용도 인지 최소가(GPU 포함), 그 외(사무용 등)도 일반 최소 구성가 미달이면 안내한다
+        // — "30만원 사무용"이 빈손 텍스트로 끝나지 않게.
+        int minimum = gpuRequired ? feasibilityService.usageMinimumTotal(usageTags) : minimumBuildTotal();
         if (minimum <= 0 || rawBudgetIntent.budget() >= minimum) {
             return;
         }
         String usageLabel = usageLabel(usageTags);
-        String notice = usageLabel + " PC는 그래픽카드가 필요해 내부 자산 기준 최소 약 "
-                + formatBudgetLabel(minimum) + "부터 가능합니다. "
-                + formatBudgetLabel(rawBudgetIntent.budget()) + " 예산으로는 어렵습니다.";
+        String notice = gpuRequired
+                ? usageLabel + " PC는 그래픽카드가 필요해 내부 자산 기준 최소 약 "
+                        + formatBudgetLabel(minimum) + "부터 가능합니다. "
+                        + formatBudgetLabel(rawBudgetIntent.budget()) + " 예산으로는 어렵습니다."
+                : formatBudgetLabel(rawBudgetIntent.budget()) + " 예산으로는 완전한 구성이 어렵습니다. "
+                        + "내부 자산 기준 최소 구성은 약 " + formatBudgetLabel(minimum) + "부터 가능합니다.";
         String existing = firstText(text(response.get("message")), "");
         response.put("message", existing.isBlank() ? notice : notice + " " + existing);
         List<String> warnings = new ArrayList<>(stringList(response.get("warnings")));
@@ -1340,7 +1443,7 @@ public class BuildChatService {
         if (tags.contains("DEVELOPMENT")) {
             return "개발용";
         }
-        return "요청하신 용도";
+        return "사무용";
     }
 
     // 부품 변경 요청 — 즉시 반영하지 않고, 변경을 반영한 전체 구성을 재검증해 미리보기 카드로 제시한다.
@@ -1371,6 +1474,7 @@ public class BuildChatService {
         List<PartCandidate> parts = new ArrayList<>();
         Map<String, Integer> quantities = new LinkedHashMap<>();
         List<Map<String, Object>> items = new ArrayList<>();
+        List<String> replacedNames = new ArrayList<>();
         for (Map<String, Object> item : draftItems) {
             Integer quantityValue = numberValue(item.get("quantity"));
             int quantity = quantityValue == null || quantityValue < 1 ? 1 : quantityValue;
@@ -1379,6 +1483,7 @@ public class BuildChatService {
             if (category.equals(candidate.category())) {
                 existingCategoryQuantity = quantity;
                 if ("REPLACE".equals(operation) || "REMOVE".equals(operation)) {
+                    replacedNames.add(candidate.name());
                     continue;
                 }
                 if ("UPDATE_QUANTITY".equals(operation) && targetQuantity != null && targetQuantity >= 1) {
@@ -1432,9 +1537,22 @@ public class BuildChatService {
                 ? "총액 변화는 없습니다."
                 : "총액이 " + String.format("%,d원", beforeTotal) + " → " + String.format("%,d원", afterTotal)
                         + " (" + (delta > 0 ? "+" : "-") + String.format("%,d원", Math.abs(delta)) + ")입니다.";
+        // 어떤 견적을 기준으로 무엇이 바뀌는지 명시 — 사용자가 자기 드래프트 상태를 모르면
+        // 미리보기 총액이 뜬금없어 보인다("총액 1,455만?!" 혼란 방지).
+        StringBuilder changeSummary = new StringBuilder()
+                .append("현재 견적(").append(draftItems.size()).append("개 부품, ")
+                .append(String.format("%,d원", beforeTotal)).append(") 기준입니다. ");
+        if ("REPLACE".equals(operation) && !replacedNames.isEmpty() && replacement != null) {
+            changeSummary.append("교체: ").append(String.join(", ", replacedNames))
+                    .append(" → ").append(replacement.name()).append(". ");
+        } else if ("REMOVE".equals(operation) && !replacedNames.isEmpty()) {
+            changeSummary.append("제거: ").append(String.join(", ", replacedNames)).append(". ");
+        } else if ("ADD".equals(operation) && replacement != null) {
+            changeSummary.append("추가: ").append(replacement.name()).append(". ");
+        }
         String existing = firstText(text(response.get("message")), "");
         response.put("message", (existing.isBlank() ? "" : existing + " ")
-                + "변경을 반영하면 " + deltaText + " 아래 미리보기 카드에서 적용할 수 있습니다.");
+                + changeSummary + "변경을 반영하면 " + deltaText + " 아래 미리보기 카드에서 적용할 수 있습니다.");
         response.put("builds", List.of(preview));
         response.put("answerType", "PART");
     }

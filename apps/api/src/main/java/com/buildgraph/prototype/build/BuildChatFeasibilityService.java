@@ -96,8 +96,13 @@ public class BuildChatFeasibilityService {
 
     /** 스펙 제약을 전부 만족하는 부품 중 최저가 1개. 없으면 empty(해당 스펙 자체가 자산에 없음). */
     public Optional<PartOption> cheapestMeeting(SpecConstraint constraint) {
+        return meetingCheapestFirst(constraint, 1).stream().findFirst();
+    }
+
+    /** 스펙 제약을 전부 만족하는 부품을 가격 오름차순 TOP-N으로 — 추천 나열용. */
+    public List<PartOption> meetingCheapestFirst(SpecConstraint constraint, int limit) {
         if (constraint == null || constraint.category() == null) {
-            return Optional.empty();
+            return List.of();
         }
         StringBuilder where = new StringBuilder();
         List<Object> params = new ArrayList<>();
@@ -114,7 +119,7 @@ public class BuildChatFeasibilityService {
             where.append(" AND ").append(numericAttribute("wattage", "capacityW")).append(" >= ?");
             params.add(constraint.minWattageW());
         }
-        return queryOptions(where.toString(), "price ASC, name ASC", params).stream().findFirst();
+        return queryOptions(where.toString(), "price ASC, name ASC", params, limit);
     }
 
     /**
@@ -122,8 +127,13 @@ public class BuildChatFeasibilityService {
      * 좋음의 기준은 카테고리별 대표 수치(RAM/STORAGE=용량, GPU=VRAM, PSU=와트), 그 외는 벤치 점수 없이 가격 상한 근접.
      */
     public Optional<PartOption> bestUnderBudget(String category, int maxTotalWon, int quantity) {
+        return bestUnderBudget(category, maxTotalWon, quantity, 1).stream().findFirst();
+    }
+
+    /** 예산 내 최상 스펙 TOP-N — "예산만 준 부품 추천"(10만원짜리 램) 나열용. */
+    public List<PartOption> bestUnderBudget(String category, int maxTotalWon, int quantity, int limit) {
         if (category == null || maxTotalWon <= 0) {
-            return Optional.empty();
+            return List.of();
         }
         int unitBudget = maxTotalWon / Math.max(1, quantity);
         String specOrder = switch (category) {
@@ -135,7 +145,7 @@ public class BuildChatFeasibilityService {
         List<Object> params = new ArrayList<>();
         params.add(category);
         params.add(unitBudget);
-        return queryOptions(" AND price <= ?", specOrder, params).stream().findFirst();
+        return queryOptions(" AND price <= ?", specOrder, params, limit);
     }
 
     /**
@@ -164,6 +174,10 @@ public class BuildChatFeasibilityService {
     }
 
     private List<PartOption> queryOptions(String extraWhere, String orderBy, List<Object> params) {
+        return queryOptions(extraWhere, orderBy, params, 1);
+    }
+
+    private List<PartOption> queryOptions(String extraWhere, String orderBy, List<Object> params, int limit) {
         return jdbcTemplate.queryForList("""
                         SELECT public_id::text AS id,
                                name,
@@ -180,7 +194,7 @@ public class BuildChatFeasibilityService {
                                 numericAttribute("capacityGb", "kitCapacityGb", "memoryGb"),
                                 numericAttribute("vramGb"),
                                 numericAttribute("wattage", "capacityW")
-                        ) + extraWhere + " ORDER BY " + orderBy + " LIMIT 1",
+                        ) + extraWhere + " ORDER BY " + orderBy + " LIMIT " + Math.max(1, limit),
                         params.toArray())
                 .stream()
                 .map(row -> new PartOption(
