@@ -3258,6 +3258,12 @@ public class BuildChatService {
     private static boolean hasRawHardPartConstraint(String message) {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
         String compact = normalizeCommand(message);
+        // 부정 문맥("RTX 5090 말고 가성비로")에서는 모델 키워드가 잡혀도 하드제약으로 승격하지 않는다 —
+        // 예산 완화 폴백을 막지 않아 대체 조합을 만들 수 있어야 한다. 예산 금액 파싱(serverFact)은
+        // budgetIntent에서 그대로 유지되고, 여기서는 '하드제약 여부' 판정만 부정 문맥에서 내린다.
+        if (containsAnyNormalized(compact, "말고", "빼고", "빼", "대신", "제외", "아닌", "말구")) {
+            return false;
+        }
         return EXPLICIT_GPU_MODEL.matcher(normalized).find()
                 || EXPLICIT_CPU_MODEL.matcher(normalized).find()
                 || containsAnyNormalized(compact, "정품멀티팩", "리안리216", "lianli216");

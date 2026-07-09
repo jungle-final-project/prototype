@@ -191,6 +191,11 @@ public class BuildChatIntentRouter {
     }
 
     private static boolean isDraftCompletionIntent(String normalized, boolean hasDraftItems) {
+        // "이 견적 나머지는 다 빼줘"처럼 제거 요청이 '나머지'만으로 완성 의도로 오인되지 않도록,
+        // 삭제/제거 동사가 있으면 완성으로 보지 않고 아래 mutation veto(그래프 UI 담당)로 넘긴다.
+        if (containsAny(normalized, "빼", "삭제", "제거", "없애", "지워", "remove", "delete")) {
+            return false;
+        }
         return hasDraftItems
                 && containsAny(normalized, "채워", "완성", "나머지", "마저")
                 && containsAny(normalized, "견적", "조합", "구성", "부품", "pc", "컴퓨터", "그래프");

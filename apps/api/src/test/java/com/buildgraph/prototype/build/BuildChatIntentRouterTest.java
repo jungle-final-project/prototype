@@ -107,6 +107,8 @@ class BuildChatIntentRouterTest {
                 c("SSD 추천해줘", BuildChatIntent.UNSUPPORTED),
                 // 장바구니 조작 대화 — 제거된 기능. "바꿔줘"는 시뮬레이션이 아니다
                 draft("GPU 빼줘", BuildChatIntent.UNSUPPORTED),
+                // "나머지 빼줘"는 완성 요청이 아니라 제거 요청 — 완성 분기가 '나머지'만으로 가로채지 않는다
+                draft("이 견적 나머지는 다 빼줘", BuildChatIntent.UNSUPPORTED),
                 draft("그래픽카드 삭제", BuildChatIntent.UNSUPPORTED),
                 draft("RAM 64GB로 바꿔줘", BuildChatIntent.UNSUPPORTED),
                 draft("램 수량 2개로 변경", BuildChatIntent.UNSUPPORTED),
@@ -149,6 +151,19 @@ class BuildChatIntentRouterTest {
         assertThat(mutation.isSemanticCacheEligible()).isFalse();
         assertThat(simulation.isSemanticCacheEligible()).isFalse();
         assertThat(draftCompletion.isSemanticCacheEligible()).isFalse();
+    }
+
+    @Test
+    void removalRequestIsNotTreatedAsDraftCompletion() {
+        // "나머지"라는 명사가 들어 있어도 삭제 동사("빼줘")가 있으면 견적 완성(빈 카테고리 채우기)이
+        // 아니라 변경(mutation) 요청으로 라우팅되어야 한다.
+        BuildChatIntentDecision removal = router.decide(draftRequest("이 견적 나머지는 다 빼줘"), "이 견적 나머지는 다 빼줘");
+        assertThat(removal.intent()).isEqualTo(BuildChatIntent.UNSUPPORTED);
+        assertThat(removal.intent()).isNotEqualTo(BuildChatIntent.BUILD_RECOMMEND);
+
+        // 회귀 방어: 순수 완성 요청("나머지 채워줘")은 그대로 BUILD_RECOMMEND로 유지된다.
+        BuildChatIntentDecision completion = router.decide(draftRequest("지금 견적 나머지 채워줘"), "지금 견적 나머지 채워줘");
+        assertThat(completion.intent()).isEqualTo(BuildChatIntent.BUILD_RECOMMEND);
     }
 
     private static Case c(String message, BuildChatIntent intent) {

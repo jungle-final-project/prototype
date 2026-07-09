@@ -156,12 +156,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (fallbackIntent == AiChatIntent.ASK_FOLLOW_UP && isGenericBuildRequest(safe(message).toLowerCase(Locale.ROOT))) {
             intent = AiChatIntent.ASK_FOLLOW_UP;
         }
-        if (fallbackIntent == AiChatIntent.PART_RECOMMEND && intent == AiChatIntent.FULL_BUILD_RECOMMEND) {
-            intent = AiChatIntent.PART_RECOMMEND;
-        }
-        if (fallbackIntent == AiChatIntent.FULL_BUILD_RECOMMEND && intent == AiChatIntent.PART_RECOMMEND) {
-            intent = AiChatIntent.FULL_BUILD_RECOMMEND;
-        }
+        // LLM이 판단한 부품추천↔전체견적 intent를 키워드(fallbackIntent)로 되덮지 않는다.
+        // classify()는 이미 LLM 왕복이 끝난 뒤라 속도 이득도 없는 사후 veto였다("RTX 5070 값이면
+        // 전체 견적 짜줘"가 '하나' 없이도 표층 어휘로 오라우팅). 상태 사실 가드는 아래에서 유지한다.
         Map<String, Object> draftEdit = normalizeDraftEdit(objectMap(plan.get("draftEdit")), message, request == null ? null : request.selectedCategory(), context);
         if (!hasEditableQuoteContext(context) && fallbackIntent == AiChatIntent.BUILD_MODIFY && categoryFrom(message) != null) {
             intent = AiChatIntent.PART_RECOMMEND;
@@ -2003,9 +2000,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             if (budget == null && "UNSPECIFIED".equals(budgetPolicy)) {
                 budgetPolicy = "OPEN_BUDGET";
             }
-            if (requiredGpuClasses.contains("RTX_5090") && "STANDARD".equals(performanceTier)) {
-                performanceTier = "ENTHUSIAST";
-            }
+            // LLM이 명시한 performanceTier를 존중한다. 티어 미지정 시엔 fallback(inferPerformanceTier)이
+            // 5090→ENTHUSIAST를 이미 커버하므로, LLM의 STANDARD 판단을 서버가 되덮지 않는다.
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("usageTags", usageTags.isEmpty() ? List.of("GENERAL") : usageTags);
@@ -2304,12 +2300,23 @@ public class DefaultAiChatEngine implements AiChatEngine {
 
     private static List<String> inferRequiredGpuClasses(String message) {
         String normalized = safe(message);
+        // 부정 문맥("RTX 5090 말고 가성비로")에서는 키워드가 잡혀도 하드제약으로 재주입하지 않는다.
+        // LLM이 명시적으로 준 requiredGpuClasses(비어있지 않으면)는 normalizeParsedContext에서 그대로 존중된다.
+        if (hasNegationContext(normalized)) {
+            return List.of();
+        }
         List<String> result = new ArrayList<>();
         Matcher matcher = RTX_CLASS.matcher(normalized);
         while (matcher.find()) {
             result.add("RTX_" + matcher.group(1));
         }
         return result.stream().distinct().toList();
+    }
+
+    // "말고/빼고/대신…"처럼 사용자가 특정 모델을 제외·거부하는 부정 문맥인지 판정한다.
+    private static boolean hasNegationContext(String message) {
+        String lower = safe(message).toLowerCase(Locale.ROOT);
+        return containsAny(lower, "말고", "빼고", "빼", "대신", "제외", "아닌", "말구", "not", "without", "except");
     }
 
     private static String categoryFrom(String value) {

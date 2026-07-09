@@ -1385,6 +1385,35 @@ class DefaultAiChatEngineTest {
         verifyNoJdbcWrites();
     }
 
+    @Test
+    void analyzeQuoteRequirementSkipsGpuHardConstraintInNegationContextWithoutLlm() {
+        when(openAiResponsesClient.isConfigured()).thenReturn(false);
+        when(agentTraceService.createQueuedSession(any(), eq("SYSTEM"), eq(AgentPurpose.REQUIREMENT_PARSE), isNull()))
+                .thenReturn("agent-session-neg");
+        when(agentRagRetrievalService.retrieveEvidenceSet(any(), eq(AgentRunProfiles.requirementParse())))
+                .thenReturn(List.of(new AgentRagEvidenceDraft(
+                        "requirement-rule-explicit-gpu-class-hard-constraint",
+                        "Explicit GPU class should be a hard constraint.",
+                        "Explicit GPU class hard constraint parse rule.",
+                        BigDecimal.valueOf(0.99),
+                        Map.of("purpose", "REQUIREMENT_PARSE")
+                )));
+        when(agentTraceService.recordRagEvidence(eq("agent-session-neg"), any()))
+                .thenReturn("evidence-neg");
+
+        // "RTX 5090 말고 가성비로" — 부정 문맥이므로 정규식 재주입으로 5090을 하드제약으로 강제하면 안 된다.
+        QuoteRequirementAnalysisResult result = engine.analyzeQuoteRequirement(new QuoteRequirementAnalysisRequest(
+                "00000000-0000-4000-8000-000000001002",
+                "RTX 5090 말고 가성비로 추천해줘",
+                Map.of(),
+                Map.of()
+        ));
+
+        assertThat(result.parsedContext().get("requiredGpuClasses")).asList().isEmpty();
+        assertThat(result.parsedContext()).containsEntry("hardConstraintPolicy", "NONE");
+        verifyNoJdbcWrites();
+    }
+
     private void verifyNoJdbcWrites() {
         verify(jdbcTemplate, never()).update(anyString(), (Object[]) any());
     }
