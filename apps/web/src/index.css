@@ -1375,3 +1375,87 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
 .compact-build-graph--card-link .react-flow__node {
   pointer-events: none;
 }
+
+/* 성능 패널 모션: 값이 어디서 어디로 변했는지 눈으로 따라가게 한다. 신규 의존성 없이 CSS keyframes만 사용한다. */
+
+/* 후보 선택 팝오버: 콤보 아래에서 가볍게 떠오른다 — 과한 슬라이드 금지. */
+@keyframes perf-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.perf-popover-in {
+  animation: perf-popover-in 150ms ease-out;
+}
+
+/* 비교 블록(범위 바·비용 대비 효과) 등장: 살짝 아래에서 떠오른다. */
+@keyframes perf-block-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.perf-block-in {
+  animation: perf-block-in 300ms ease-out both;
+}
+
+/* 수평 바: 마운트 시 0→목표 폭으로 자라고, 이후 값 변화는 transition으로 따라간다. */
+@keyframes perf-bar-grow {
+  from {
+    width: 0;
+  }
+}
+
+.perf-bar-grow {
+  animation: perf-bar-grow 500ms ease-out backwards;
+  transition: width 500ms ease-out, left 500ms ease-out;
+}
+
+/* 두 줄 바의 스태거: 기존 줄 먼저, 변경(또는 성능) 줄이 120ms 늦게. */
+.perf-bar-stagger {
+  animation-delay: 120ms;
+}
+
+/* 델타 배지: 범위 바가 자란 뒤 스케일 팝인(비교 진입 시퀀스의 마지막 박자). */
+@keyframes perf-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.perf-pop-in {
+  animation: perf-pop-in 240ms cubic-bezier(0.34, 1.4, 0.64, 1) 680ms backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .perf-popover-in,
+  .perf-block-in,
+  .perf-bar-grow,
+  .perf-pop-in {
+    animation: none;
+  }
+
+  .perf-bar-grow {
+    transition: none;
+  }
+}

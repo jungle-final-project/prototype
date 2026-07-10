@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
 import { useLockedPageScroll } from '../../../hooks/useHiddenPageScrollbar';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib/api';
-import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
-import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft } from '../../parts/partsApi';
+import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, requestPerfCompare, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
+import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   PART_CATEGORY_LABELS,
@@ -22,11 +22,12 @@ import {
   saveSelectedAiBuild,
   type AiChatMessage,
   type AiPerformanceSimulation,
+  type AiQuickReplyCommand,
   type AiRecommendedBuild,
   type AiToolResult,
   type BuildGraphFocus
 } from '../aiSelection';
-import { buildChat } from '../quoteApi';
+import { buildChat, resolveBuildGraph } from '../quoteApi';
 
 type AiBuildAssistantProps = {
   surface?: 'home' | 'self-quote';
@@ -77,6 +78,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
   const [applyError, setApplyError] = useState<string | null>(null);
   const [failedBuild, setFailedBuild] = useState<AiRecommendedBuild | null>(null);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
+  const [runningQuickReplyCommandId, setRunningQuickReplyCommandId] = useState<string | null>(null);
   const [pendingSubmit, setPendingSubmit] = useState<string | null>(null);
   const [centerScrollbar, setCenterScrollbar] = useState<CenterScrollbarState>({
     canScroll: false,
@@ -325,7 +327,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
           queryKey: ['quote-draft', 'current'],
           queryFn: getCurrentQuoteDraft
         })
-        : quoteDraftQuery.data;
+        : undefined;
       const response = await buildChat({
         message: nextPrompt,
         currentBuilds: recentBuildsForChatContext(baseSession),
@@ -350,7 +352,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
         builds: responseBuilds,
         simulation: response.simulation ?? undefined,
         warnings: response.warnings ?? [],
-        quickReplies: response.quickReplies ?? undefined
+        quickReplies: response.quickReplies ?? undefined,
+        quickReplyCommands: response.quickReplyCommands ?? undefined
       };
       const nextSession = {
         messages: [...optimisticSession.messages, assistantMessage],
@@ -380,11 +383,78 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
     }
   }
 
-  // 되묻기 칩 클릭 → 기존 pendingSubmit 경로로 자동 전송. setState만 쓰므로 참조가 영구 안정이라
-  // ChatMessage memo를 깨지 않는다.
-  const handleQuickReply = useCallback((reply: string) => {
-    setPendingSubmit(reply);
+  const appendAssistantStatus = useCallback((text: string, warnings: string[] = []) => {
+    const ownerKey = getAiStorageOwnerKey();
+    if (!ownerKey) return;
+    const baseSession = readAssistantSession(ownerKey);
+    const createdAt = new Date().toISOString();
+    const nextSession = {
+      ...baseSession,
+      messages: [...baseSession.messages, {
+        id: createAiMessageId('draft-action'),
+        role: 'assistant' as const,
+        text,
+        createdAt,
+        kind: 'part' as const,
+        warnings
+      }],
+      updatedAt: createdAt
+    };
+    setSession(nextSession);
+    saveAssistantSession(nextSession, ownerKey);
   }, []);
+
+  // 일반 칩은 기존처럼 자연어를 재전송한다. 다만 구체 RAM/SSD 상품 칩은 사용자가 이미 상품을
+  // 골랐으므로 LLM/Tool 미리보기를 다시 태우지 않고 quote draft API로 바로 추가한다.
+  const handleQuickReply = useCallback(async (
+    reply: string,
+    command?: AiQuickReplyCommand,
+    messageId?: string
+  ) => {
+    if (!command) {
+      setPendingSubmit(reply);
+      return;
+    }
+    const commandId = `${messageId ?? 'quick-reply'}:${command.partId}`;
+    if (runningQuickReplyCommandId) return;
+
+    setRunningQuickReplyCommandId(commandId);
+    try {
+      // 캐시된 draft가 아니라 버튼을 누른 순간의 최신 수량을 읽어, 같은 RAM/SSD를 +1 한다.
+      const currentDraft = await getCurrentQuoteDraft();
+      const existingItem = currentDraft.items.find((item) => item.partId === command.partId);
+      const nextQuantity = (existingItem?.quantity ?? 0) + command.quantityDelta;
+      if (nextQuantity > 9) {
+        appendAssistantStatus(`${command.partName}은(는) 최대 9개까지 담을 수 있습니다.`);
+        return;
+      }
+
+      const updatedDraft = await putQuoteDraftItem(command.partId, nextQuantity);
+      queryClient.setQueryData(['quote-draft', 'current'], updatedDraft);
+      void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+      void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
+      appendAssistantStatus(`${command.partName} 추가됨. 현재 수량: ${nextQuantity}개입니다.`);
+
+      // 직접 선택한 다중 상품은 저장을 막지 않는다. 다만 이후 graph 검사에서 FAIL이면 채팅에도
+      // 명확히 남겨 사용자가 견적 화면에서 조정할 수 있게 한다. 검사 실패 자체는 저장 실패가 아니다.
+      void resolveBuildGraph({ source: 'QUOTE_DRAFT_CURRENT' })
+        .then((graph) => {
+          if (graph.toolResults.some((result) => result.status === 'FAIL')) {
+            appendAssistantStatus(
+              `${command.partName}은(는) 추가됐지만 현재 견적에 호환성 확인이 필요한 항목이 있습니다. 구매 전 견적 화면에서 조정해 주세요.`,
+              ['DRAFT_COMPATIBILITY_WARNING']
+            );
+          }
+        })
+        .catch(() => {
+          appendAssistantStatus(`${command.partName} 추가됨. 호환성 상태는 견적 화면에서 다시 확인해 주세요.`);
+        });
+    } catch {
+      appendAssistantStatus(`${command.partName} 추가 실패. 현재 견적은 변경되지 않았습니다.`);
+    } finally {
+      setRunningQuickReplyCommandId(null);
+    }
+  }, [appendAssistantStatus, queryClient, runningQuickReplyCommandId]);
 
   // 새 메시지 추가로 리스트가 리렌더될 때 ChatMessage memo가 유지되도록 참조를 안정화한다.
   const selectBuild = useCallback(async (build: AiRecommendedBuild) => {
@@ -534,6 +604,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
                         message={message}
                         onSelectBuild={selectBuild}
                         onQuickReply={handleQuickReply}
+                        runningQuickReplyCommandId={runningQuickReplyCommandId}
                         applyingBuildId={applyingBuildId}
                         size="large"
                       />
@@ -656,6 +727,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
               message={message}
               onSelectBuild={selectBuild}
               onQuickReply={handleQuickReply}
+              runningQuickReplyCommandId={runningQuickReplyCommandId}
               applyingBuildId={applyingBuildId}
             />
           ))}
@@ -724,7 +796,10 @@ function needsDraftContext(prompt: string) {
   const normalized = prompt.toLowerCase().replace(/\s+/g, '');
   const completionLike = /지금|현재|이견적|그래프|나머지|마저|채워|완성/.test(normalized);
   const simulationLike = /바꾸면|바꿨|교체하면|교체시|넣으면|달면|끼우면|끼면|박으면|올리면|올렸|내리면|내려|낮추면|늘리면|줄이면|갈아|넘어가면|업그레이드하면|다운그레이드하면|프레임|fps|성능|체감|비교/.test(normalized);
-  return completionLike || simulationLike;
+  // 변경 명령("그래픽카드 더 싼걸로", "램 빼줘")은 서버가 드래프트 기준 미리보기를 만들므로
+  // 낡은 캐시본이 아닌 최신 드래프트를 실어 보낸다.
+  const modifyLike = /바꿔|교체|싼|저렴|올려|빼|제거|삭제|넣어|담아|추가|수량|늘려|줄여/.test(normalized);
+  return completionLike || simulationLike || modifyLike;
 }
 
 function messageKind(answerType: 'BUDGET' | 'PART' | 'GENERAL'): AiChatMessage['kind'] {
@@ -765,12 +840,14 @@ const ChatMessage = memo(function ChatMessage({
   message,
   onSelectBuild,
   onQuickReply,
+  runningQuickReplyCommandId,
   applyingBuildId,
   size = 'default'
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
-  onQuickReply: (reply: string) => void;
+  onQuickReply: (reply: string, command?: AiQuickReplyCommand, messageId?: string) => void;
+  runningQuickReplyCommandId: string | null;
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
 }) {
@@ -792,16 +869,22 @@ const ChatMessage = memo(function ChatMessage({
           <p className="break-keep">{message.text}</p>
           {!isUser && message.quickReplies?.length ? (
             <div data-testid="ai-quick-replies" className={`${isLarge ? 'mt-3 gap-3' : 'mt-2 gap-2'} flex flex-wrap`}>
-              {message.quickReplies.map((reply) => (
-                <button
-                  key={reply}
-                  type="button"
-                  onClick={() => onQuickReply(reply)}
-                  className={`${isLarge ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[11px]'} rounded-full border border-slate-200 bg-white font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100`}
-                >
-                  {reply}
-                </button>
-              ))}
+              {message.quickReplies.map((reply) => {
+                const command = message.quickReplyCommands?.find((item) => item.label === reply);
+                const commandId = command ? `${message.id}:${command.partId}` : null;
+                const isRunning = commandId !== null && runningQuickReplyCommandId === commandId;
+                return (
+                  <button
+                    key={reply}
+                    type="button"
+                    disabled={isRunning}
+                    onClick={() => onQuickReply(reply, command, message.id)}
+                    className={`${isLarge ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[11px]'} rounded-full border border-slate-200 bg-white font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-60`}
+                  >
+                    {isRunning ? '추가 중...' : reply}
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -827,6 +910,7 @@ const ChatMessage = memo(function ChatMessage({
   prev.message.id === next.message.id
   && prev.onSelectBuild === next.onSelectBuild
   && prev.onQuickReply === next.onQuickReply
+  && prev.runningQuickReplyCommandId === next.runningQuickReplyCommandId
   && prev.applyingBuildId === next.applyingBuildId
   && prev.size === next.size
 ));
@@ -952,6 +1036,10 @@ function MiniBar({ value, max, className, size = 'default' }: { value?: number |
   );
 }
 
+// 변경 미리보기 → 성능 패널 비교 연동을 이미 보낸 빌드 — 채팅을 다시 열어 과거 카드가
+// 재마운트될 때 옛 비교가 다시 켜지지 않도록 빌드 단위로 1회만 발행한다.
+const perfCompareNotifiedBuildIds = new Set<string>();
+
 function CompactBuildCard({
   build,
   onSelectBuild,
@@ -963,7 +1051,25 @@ function CompactBuildCard({
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
 }) {
-  const primaryItems = build.items.slice(0, 5);
+  // 변경 미리보기 카드는 전체 견적이 아니라 바뀐 부품만 보여준다(전체 8부품 나열은 무엇이 바뀌는지 흐린다).
+  // 적용은 여전히 build 전체(items 전량)로 하므로 나머지 부품이 삭제되지 않는다.
+  const isEditPreview = build.label === '변경 미리보기' && build.appliedPartCategories.length > 0;
+  const changedItems = build.items.filter((item) => build.appliedPartCategories.includes(item.category));
+
+  // CPU/GPU 변경 미리보기가 그려지면 셀프견적 성능 패널의 교체 비교도 함께 켠다(이벤트 발행만 — 디자인 불변).
+  useEffect(() => {
+    if (!isEditPreview || perfCompareNotifiedBuildIds.has(build.id)) return;
+    const changed = changedItems.find((item) => (item.category === 'CPU' || item.category === 'GPU') && item.partId);
+    if (!changed) return;
+    perfCompareNotifiedBuildIds.add(build.id);
+    requestPerfCompare({
+      category: changed.category as 'CPU' | 'GPU',
+      partId: changed.partId,
+      name: changed.name,
+      price: changed.price
+    });
+  }, [build.id, isEditPreview, changedItems]);
+  const primaryItems = isEditPreview && changedItems.length > 0 ? changedItems : build.items.slice(0, 5);
   const isLarge = size === 'large';
   // 이 카드가 적용 중이면 로딩 표시, 다른 카드가 적용 중이면 클릭이 조용히 무시되지 않도록 함께 비활성화한다.
   const isApplyingThis = applyingBuildId === build.id;
@@ -986,7 +1092,9 @@ function CompactBuildCard({
         </div>
         <div className="shrink-0 text-left sm:text-right">
           <div className={`${isLarge ? 'text-[22px] leading-8' : 'text-base'} font-black text-brand-blue`}>{build.totalPrice.toLocaleString()}원</div>
-          <div className={`${isLarge ? 'text-[15px]' : 'text-[11px]'} font-bold text-slate-500`}>{build.items.length}개 부품</div>
+          <div className={`${isLarge ? 'text-[15px]' : 'text-[11px]'} font-bold text-slate-500`}>
+            {isEditPreview ? `변경 ${primaryItems.length}건` : `${build.items.length}개 부품`}
+          </div>
         </div>
       </div>
       {build.toolResults?.length ? (

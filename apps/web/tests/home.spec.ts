@@ -397,7 +397,7 @@ async function mockCurrentQuoteDraftApi(page: Page) {
 }
 
 async function mockAiBuildChatApi(page: Page) {
-  const requests: Array<{ message: string; currentBuilds?: unknown[] }> = [];
+  const requests: Array<{ message: string; currentBuilds?: unknown[]; currentQuoteDraft?: unknown }> = [];
 
   await page.route('**/api/parts/part-*', async (route) => {
     const partId = decodeURIComponent(route.request().url().split('/').pop() ?? 'part-case-test');
@@ -409,9 +409,9 @@ async function mockAiBuildChatApi(page: Page) {
   });
 
   await page.route('**/api/ai/build-chat', async (route) => {
-    const body = JSON.parse(route.request().postData() ?? '{}') as { message?: string; currentBuilds?: unknown[] };
+    const body = JSON.parse(route.request().postData() ?? '{}') as { message?: string; currentBuilds?: unknown[]; currentQuoteDraft?: unknown };
     const message = body.message ?? '';
-    requests.push({ message, currentBuilds: body.currentBuilds });
+    requests.push({ message, currentBuilds: body.currentBuilds, currentQuoteDraft: body.currentQuoteDraft });
 
     if (message.includes('프레임') || message.includes('시뮬레이션') || message.includes('어떻게')) {
       await route.fulfill({
@@ -947,6 +947,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
 
   await expect.poll(() => buildChatRequests.length).toBe(1);
   expect(buildChatRequests[0].message).toBe('200만원 PC 추천');
+  expect(buildChatRequests[0].currentQuoteDraft).toBeUndefined();
   await expect(chatbotPanel).toContainText('AI 견적 어시스턴트');
   await expect(chatbotPanel).toContainText('가격 통과');
   await expect(main.getByRole('tab', { name: 'AI 추천상품' })).toHaveAttribute('aria-selected', 'true');
@@ -1237,6 +1238,91 @@ test('chatbot sends draft mutation messages to build-chat without touching the q
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId('ai-chat-messages')).toContainText('견적 변경은 셀프 견적 화면에서 직접 확인해 주세요.');
   expect(draftMutationMethods).toHaveLength(0);
+});
+
+test('adds a selected RAM recommendation directly and leaves a compatibility notice in chat', async ({ page }) => {
+  const putBodies: Array<{ quantity?: number }> = [];
+  let buildChatCalls = 0;
+  let draft = {
+    id: 'draft-ram-direct-add',
+    status: 'ACTIVE',
+    name: '셀프 견적',
+    items: [{
+      id: 'draft-ram-direct-add-item',
+      partId: 'ram-direct-add',
+      category: 'RAM',
+      name: 'RAM 후보 A',
+      manufacturer: 'BuildGraph',
+      quantity: 2,
+      unitPriceAtAdd: 234000,
+      currentPrice: 234000,
+      lineTotal: 468000,
+      attributes: {}
+    }],
+    totalPrice: 468000,
+    itemCount: 2
+  };
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PUT') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { quantity?: number };
+      putBodies.push(body);
+      const quantity = body.quantity ?? 1;
+      draft = {
+        ...draft,
+        items: draft.items.map((item) => ({ ...item, quantity, lineTotal: item.unitPriceAtAdd * quantity })),
+        totalPrice: 234000 * quantity,
+        itemCount: quantity
+      };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...buildGraphResponse(),
+        toolResults: [{ tool: 'compatibility', status: 'FAIL', confidence: 'HIGH', summary: '메모리 슬롯 수를 초과했습니다.' }]
+      })
+    });
+  });
+  await openHomeAsUser(page);
+  await page.route('**/api/ai/build-chat', async (route) => {
+    buildChatCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'PART',
+        message: '32GB 조건에 맞는 RAM 후보입니다.',
+        builds: [],
+        warnings: [],
+        quickReplies: ['RAM 후보 A 견적에 담아줘'],
+        quickReplyCommands: [{
+          label: 'RAM 후보 A 견적에 담아줘',
+          type: 'ADD_MULTI_ITEM_TO_DRAFT',
+          partId: 'ram-direct-add',
+          partName: 'RAM 후보 A',
+          category: 'RAM',
+          quantityDelta: 1
+        }]
+      })
+    });
+  });
+
+  await openDesktopAiAssistant(page);
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('32GB RAM 최저가로 추천해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect.poll(() => buildChatCalls).toBe(1);
+  await page.getByRole('button', { name: 'RAM 후보 A 견적에 담아줘' }).click();
+
+  await expect.poll(() => putBodies).toEqual([{ quantity: 3 }]);
+  const messages = page.getByTestId('ai-chat-messages');
+  await expect(messages).toContainText('RAM 후보 A 추가됨. 현재 수량: 3개입니다.');
+  await expect(messages).toContainText('현재 견적에 호환성 확인이 필요한 항목이 있습니다.');
+  // 추천 칩은 LLM으로 다시 보내지 않고 기존 quote draft item API만 호출한다.
+  expect(buildChatCalls).toBe(1);
 });
 
 test('chatbot maps build-chat 401 to login required instead of generic failure', async ({ page }) => {

@@ -208,6 +208,17 @@ export type AiChatMessage = {
   simulation?: AiPerformanceSimulation | null;
   warnings?: string[];
   quickReplies?: string[];
+  /** RAM/SSD처럼 다중 상품을 허용하는 구체 추천 칩의 직접 견적 추가 메타데이터. */
+  quickReplyCommands?: AiQuickReplyCommand[];
+};
+
+export type AiQuickReplyCommand = {
+  label: string;
+  type: 'ADD_MULTI_ITEM_TO_DRAFT';
+  partId: string;
+  partName: string;
+  category: 'RAM' | 'STORAGE';
+  quantityDelta: 1;
 };
 
 export type AiAssistantSession = {
@@ -235,6 +246,11 @@ export type AiBuildChatResponse = {
   warnings?: string[];
   /** 모호 요청 되묻기 시 함께 오는 선택지 칩 — 그 자체로 완전한 프롬프트다. */
   quickReplies?: string[];
+  /**
+   * 구체 RAM/SSD 추천 칩의 직접 견적 추가 명령. 일반 자연어 변경 요청은 이 필드를 쓰지 않고
+   * 기존 변경 미리보기 흐름을 유지한다.
+   */
+  quickReplyCommands?: AiQuickReplyCommand[];
   clarification?: { missingSlots: string[]; originalMessage: string } | null;
 };
 

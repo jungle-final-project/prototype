@@ -2,11 +2,11 @@
 
 Build Chat 성능 최적화 판단의 **근거 기록**이다. 외부 성능 리서치가 여러 최적화를 제안했을 때, 코드 구조뿐 아니라 "실제로 그 경로에 얼마나 도달하는지"를 계측으로 확인해 우선순위를 정한 결과를 남긴다.
 
-최종 갱신: 2026-07-05 (PR #57~#60 반영 main 기준)
+최종 갱신: 2026-07-10 (실측 수치는 2026-07-05 PR #57~#60 기준, 경로 사다리 변경 주석 §2.1은 챗봇 범용화 PR #133 기준)
 
 ## 1. 측정 방법
 
-`BuildChatService.logBuildChatPath(...)`가 요청마다 `pathType`과 `latencyMs`, 단계별 시간(`redisMs/tierMs/deterministicMs/semanticMs/engineMs`)을 INFO 로그로 남긴다. 대표 프롬프트 세트를 API로 호출한 뒤 로그를 집계한다.
+`BuildChatService.logBuildChatPath(...)`가 요청마다 `pathType`과 `latencyMs`, 단계별 시간(`redisMs/tierMs/completionMs/deterministicMs/semanticMs/engineMs`)을 INFO 로그로 남긴다. 대표 프롬프트 세트를 API로 호출한 뒤 로그를 집계한다.
 
 ```bash
 # 콜드: Redis flush 후 대표 세트 1회씩 호출
@@ -23,16 +23,26 @@ docker logs buildgraph-api --since 90s 2>&1 | grep -oE "latencyMs=[0-9]+" | grep
 | pathType | 콜드 | 웜(동일 재요청) | 비고 |
 | --- | --- | --- | --- |
 | CACHE_HIT | 0 | 15 | 예산·용도 추천이 exact cache로 흡수 |
-| FAST_DETERMINISTIC | 7 | 1 | 그리디 예산/용도 조합 |
+| FAST_DETERMINISTIC | 7 | 1 | 그리디 예산 조합 — 현재는 명시 예산+BUILD_RECOMMEND에서만, 무예산 용도-only는 LLM 되묻기(§2.1) |
 | FAST_CLARIFICATION | 6 | 9 | 되묻기(캐시 안 함, 항상 fast) |
-| FAST_UNSUPPORTED | 5 | 6 | 고정 안내(항상 fast) |
+| FAST_UNSUPPORTED | 5 | 6 | (당시) 고정 안내 — 현재 폐지, UNSUPPORTED는 LLM 강등·실패 시만 FAST_UNSUPPORTED_FALLBACK(§2.1) |
 | FAST_TIER_SNAPSHOT | 5 | 0(캐시 흡수) | 인메모리 티어 |
 | FAST_SIMULATION | 2 | 4 | 부품 교체 비교 |
 | FAST_DRAFT_COMPLETION | 1 | 1 | 드래프트 완성 |
-| **LLM_FULL** | **2 (7%)** | **1 (3.5%)** | 애매한 자연어만 |
+| **LLM_FULL** | **2 (7%)** | **1 (3.5%)** | (당시) 애매한 자연어만 — 현재는 미지원 강등·무예산 용도-only·속성/제약 요청도 이 경로(§2.1) |
 | **SEMANTIC_CACHE_HIT** | **0** | **0** | 아무도 도달 안 함 |
 
-- 콜드에서도 **93%가 밀리초 fast path**(deterministic/tier/unsupported/clarification/simulation/completion).
+### 2.1 경로 사다리 변경 (2026-07-09, 챗봇 범용화 PR #133) — 위 실측은 재측정 전 참고용
+
+위 분포는 구 사다리 기준이다. 범용화 이후 pathType 사다리는 FAST_SIMULATION → FAST_CLARIFICATION → CACHE_HIT → FAST_TIER_SNAPSHOT → FAST_DRAFT_COMPLETION → FAST_DETERMINISTIC → SEMANTIC_CACHE_HIT → FAST_MULTI_PART_REDUCTION → (LLM 실패 시 FAST_UNSUPPORTED_FALLBACK) → LLM_FULL 이다.
+
+- **FAST_UNSUPPORTED 폐지**: UNSUPPORTED 즉답 거절을 없애고 LLM으로 강등한다. LLM 호출이 예외로 실패할 때만 FAST_UNSUPPORTED_FALLBACK(우아한 거절 + 기능 안내 칩)을 기록한다. 미지원 문장 클래스의 latency는 ms → LLM 왕복으로 의도적으로 증가.
+- **FAST_MULTI_PART_REDUCTION 신설**: 드래프트 있음 + 예산 목표 파싱됨 + 단일 부품 미지목 + 총액>목표인 감액 요청은 LLM을 거치지 않고 결정적으로 응답한다.
+- **recommendFlow 게이트**: FAST_TIER_SNAPSHOT/FAST_DRAFT_COMPLETION/FAST_DETERMINISTIC은 라우터가 BUILD_RECOMMEND로 판정한 요청에만 시도한다 — 강등된 미지원 문장이 예산 스냅샷 즉답을 가로채지 않는다.
+- **무예산 용도-only는 LLM 되묻기**: "게임용 컴퓨터 추천"류는 더 이상 FAST_DETERMINISTIC 폴백 3장이 아니라 LLM_FULL(예산 되묻기 + 예산대 칩)로 간다.
+- 같은 28건 세트를 다시 돌리면 미지원·용도-only 몫이 LLM_FULL로 이동해 "콜드 93% fast path" 수치는 재현되지 않는다. 새 사다리 기준으로 분포를 재측정한 뒤 위 표를 갱신한다.
+
+- 콜드에서도 **93%가 밀리초 fast path**(deterministic/tier/unsupported/clarification/simulation/completion) — **2026-07-05 구 사다리 기준**. 범용화(§2.1) 이후 미지원·무예산 용도-only가 LLM_FULL로 이동해 이 비율은 재측정이 필요하다.
 - 웜 라운드 **latency median 1ms**, LLM 1건만 4초.
 - **semantic cache 경로 도달 0건** (콜드·웜 모두). exact cache가 반복 요청을 전부 흡수하므로 semantic까지 갈 일이 없다.
 
@@ -63,19 +73,19 @@ docker logs buildgraph-api --since 90s 2>&1 | grep -oE "latencyMs=[0-9]+" | grep
 ### JVM 콜드 스타트 (운영으로 대응)
 
 - 증상: 서버 재시작 직후 첫 build-chat 요청이 느리고, 두 번째부터 빠름.
-- 원인: JVM 콜드 스타트(클래스 로딩 + JIT 컴파일). API 재시작 직후 수십 초간은 완전히 데워지지 않는다. 프리웜(12개 예산 프롬프트)이 무거운 경로(예산 조합 그리디)를 워밍하지만, 프리웜 자체가 콜드에서 돌아 첫 몇 요청은 여전히 JIT 전이다. warm 후엔 프리웜에 없는 새 문구도 첫 요청 7~23ms.
-- 판단: **프리웜 경로 확대는 보류.** 무거운 경로는 이미 프리웜+티어가 커버하고, 나머지(unsupported/clarification)는 고정 응답이라 콜드여도 빠르다. 프리웜으로 콜드 스타트를 0으로 만들 수 없다(프리웜도 콜드에서 돎).
+- 원인: JVM 콜드 스타트(클래스 로딩 + JIT 컴파일). API 재시작 직후 수십 초간은 완전히 데워지지 않는다. 프리웜(12개 예산·용도 프롬프트)이 무거운 경로(예산 조합 그리디)를 워밍하지만 — 범용화(§2.1) 이후 무예산 용도-only 프롬프트는 그리디 대신 LLM 되묻기로 응답돼 exact cache만 데운다 — 프리웜 자체가 콜드에서 돌아 첫 몇 요청은 여전히 JIT 전이다. warm 후엔 프리웜에 없는 새 문구도 첫 요청 7~23ms.
+- 판단: **프리웜 경로 확대는 보류.** 무거운 경로는 이미 프리웜+티어가 커버하고, 나머지(clarification)는 고정 응답이라 콜드여도 빠르다. 미지원 문장은 범용화(§2.1) 이후 LLM 강등이라 콜드 여부와 무관하게 LLM 왕복이다. 프리웜으로 콜드 스타트를 0으로 만들 수 없다(프리웜도 콜드에서 돎).
 - **운영 대응**:
   - 데모 전 서버를 **미리 켜둔다**(JVM warm + 프리웜 완료까지 최소 1~2분). 재빌드/재시작 직후 바로 데모하지 않는다.
   - 프론트만 수정할 땐 `docker compose up --build -d web`(web만)으로 재빌드한다. `depends_on: api` 때문에 전체/api 재빌드는 API도 재시작시켜 JVM을 콜드로 되돌린다.
 
 ## 4. 결론과 재검토 트리거
 
-**현재 서버는 손댈 곳이 없다.** 93% fast path, semantic 0 도달, 웜 median 1ms. 프론트 eager fetch(PR #60)까지 반영하면 체감 latency도 마무리된다.
+**2026-07-05 실측 기준으로 서버는 손댈 곳이 없었다.** 93% fast path, semantic 0 도달, 웜 median 1ms. 프론트 eager fetch(PR #60)까지 반영해 체감 latency도 마무리했다. 이후 챗봇 범용화(§2.1)로 미지원·무예산 용도-only 클래스가 LLM_FULL로 이동했으므로(의도적 트레이드오프), fast path 비율과 latency 분포는 새 사다리 기준으로 재측정한 뒤 이 결론을 갱신한다.
 
 리서치의 나머지 서버 최적화는 **실사용 트래픽이 아래 분포를 바꿀 때** 재측정 후 판단한다.
 
-- **애매한 자연어 요청 비율이 급증** → LLM_FULL/semantic 도달이 늘면 semantic 경량화(P0-2)가 의미를 가진다.
+- **애매한 자연어 요청 비율이 급증** → 범용화(§2.1)로 미지원·용도-only 강등만으로도 LLM_FULL은 늘어난다. 강등분을 제외한 애매한 자연어/semantic 도달이 늘면 semantic 경량화(P0-2)가 의미를 가진다.
 - **동시 요청 부하 발생** → executor 분리(P0-4)가 p95/p99에 영향을 준다.
 - **같은 드래프트로 시뮬레이션 반복이 잦아짐** → simulation cache(P0-3) ROI 상승.
 

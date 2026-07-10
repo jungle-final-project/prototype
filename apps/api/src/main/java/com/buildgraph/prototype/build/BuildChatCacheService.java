@@ -167,7 +167,7 @@ public class BuildChatCacheService {
         }
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        return "buildgraph:build-chat:v20:" + sha256(json);
+        return "buildgraph:build-chat:v29:" + sha256(json);
     }
 
     private static CacheScope scopeFor(Map<String, Object> request) {

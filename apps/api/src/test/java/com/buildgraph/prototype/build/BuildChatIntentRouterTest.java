@@ -18,9 +18,21 @@ class BuildChatIntentRouterTest {
                 c("300만원 견적 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
                 c("3백만원 PC 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
                 c("800만원으로 최고급 PC 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
-                c("QHD 배그용 컴퓨터 맞춰줘", BuildChatIntent.BUILD_RECOMMEND),
-                c("FHD 발로란트 240Hz 목표로 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
+                c("QHD 배그용 컴퓨터 맞춰줘", BuildChatIntent.ASK_CLARIFICATION),
+                c("FHD 발로란트 240Hz 목표로 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("영상편집 + Docker + IDE 병행용으로 400만원 안쪽", BuildChatIntent.BUILD_RECOMMEND),
+                c("ASUS 보드와 AMD CPU로 400만원", BuildChatIntent.BUILD_RECOMMEND),
+                c("2TB SSD와 1000W 파워 포함 500만원", BuildChatIntent.BUILD_RECOMMEND),
+                c("MSI 메인보드로 350만원 게임용", BuildChatIntent.BUILD_RECOMMEND),
+                c("DDR5 64GB 포함해서 300만원 개발용", BuildChatIntent.BUILD_RECOMMEND),
+                c("30만원 게임용 CPU 추천해줘", BuildChatIntent.UNSUPPORTED),
+                c("60만원대 게임 CPU", BuildChatIntent.UNSUPPORTED),
+                c("게임용 PC 필요해", BuildChatIntent.ASK_CLARIFICATION),
+                c("개발용으로 하나 봐줘", BuildChatIntent.ASK_CLARIFICATION),
+                c("게임도 되는 컴퓨터", BuildChatIntent.ASK_CLARIFICATION),
+                c("돈 상관없이 끝판왕 게임용 PC 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
+                c("예산 무관 최고급 영상 편집 컴퓨터 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
+                c("최상급 CPU와 GPU로 추천", BuildChatIntent.BUILD_RECOMMEND),
                 // 예산·용도·모델 번호가 전혀 없는 동사+명사 요청은 이제 되묻기로 보낸다 (역질문 흐름)
                 c("오래 쓸 수 있게 업그레이드 여유 있는 구성", BuildChatIntent.ASK_CLARIFICATION),
                 c("컴퓨터 하나 맞춰줘", BuildChatIntent.ASK_CLARIFICATION),
@@ -48,13 +60,13 @@ class BuildChatIntentRouterTest {
                 c("2천만원 예산인데 뭐가 최선일지 견적 내줘", BuildChatIntent.BUILD_RECOMMEND),
                 c("돈은 3천만원까지 괜찮으니 끝판왕 사양으로", BuildChatIntent.BUILD_RECOMMEND),
                 c("1400만원쯤 생각 중인데 괜찮은 하이엔드 조합 있음?", BuildChatIntent.BUILD_RECOMMEND),
-                c("영상편집용 PC 필요해", BuildChatIntent.BUILD_RECOMMEND),
-                c("디아블로4 쾌적하게 돌릴 사양으로 견적 좀", BuildChatIntent.BUILD_RECOMMEND),
-                c("블렌더 3D 렌더링 돌릴 컴 하나 뽑아줘", BuildChatIntent.BUILD_RECOMMEND),
-                c("스타2랑 롤 정도 돌아가면 되는데 뭐 사면 됨?", BuildChatIntent.BUILD_RECOMMEND),
-                c("사무실에서 엑셀 문서작업만 할 컴 추천 좀요", BuildChatIntent.BUILD_RECOMMEND),
-                c("개발용으로 도커랑 IDE 여러개 띄울 워크스테이션 필요함", BuildChatIntent.BUILD_RECOMMEND),
-                c("몬헌 와일즈 돌아가는 데스크탑 하나 골라줘", BuildChatIntent.BUILD_RECOMMEND),
+                c("영상편집용 PC 필요해", BuildChatIntent.ASK_CLARIFICATION),
+                c("디아블로4 쾌적하게 돌릴 사양으로 견적 좀", BuildChatIntent.ASK_CLARIFICATION),
+                c("블렌더 3D 렌더링 돌릴 컴 하나 뽑아줘", BuildChatIntent.ASK_CLARIFICATION),
+                c("스타2랑 롤 정도 돌아가면 되는데 뭐 사면 됨?", BuildChatIntent.ASK_CLARIFICATION),
+                c("사무실에서 엑셀 문서작업만 할 컴 추천 좀요", BuildChatIntent.ASK_CLARIFICATION),
+                c("개발용으로 도커랑 IDE 여러개 띄울 워크스테이션 필요함", BuildChatIntent.ASK_CLARIFICATION),
+                c("몬헌 와일즈 돌아가는 데스크탑 하나 골라줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("2500만원 예산 잡았는데 뭐부터 넣어야 돼?", BuildChatIntent.BUILD_RECOMMEND),
                 // 시뮬레이션 — 스윕에서 발견된 동사 변형
                 draft("램을 64기가로 올리면 체감 돼?", BuildChatIntent.SIMULATE_REPLACEMENT),
@@ -78,7 +90,8 @@ class BuildChatIntentRouterTest {
                 c("아무거나 좋은 걸로", BuildChatIntent.ASK_CLARIFICATION),
                 c("뭐 사면 돼?", BuildChatIntent.ASK_CLARIFICATION),
                 c("추천 부탁드립니다", BuildChatIntent.ASK_CLARIFICATION),
-                c("싸고 좋은 거 없나", BuildChatIntent.ASK_CLARIFICATION),
+                // 경계 어휘("싸고좋은")는 즉답 되묻기에서 제외 — UNSUPPORTED로 흘려 LLM 강등이 맥락에 맞게 답한다
+                c("싸고 좋은 거 없나", BuildChatIntent.UNSUPPORTED),
                 c("요즘 뭐가 잘 나가요?", BuildChatIntent.ASK_CLARIFICATION),
                 c("조립컴 처음인데 뭐부터 봐야 하나요", BuildChatIntent.ASK_CLARIFICATION),
                 c("뭘 사야 할지 모르겠어요", BuildChatIntent.ASK_CLARIFICATION),
@@ -107,6 +120,8 @@ class BuildChatIntentRouterTest {
                 c("SSD 추천해줘", BuildChatIntent.UNSUPPORTED),
                 // 장바구니 조작 대화 — 제거된 기능. "바꿔줘"는 시뮬레이션이 아니다
                 draft("GPU 빼줘", BuildChatIntent.UNSUPPORTED),
+                // "나머지 빼줘"는 완성 요청이 아니라 제거 요청 — 완성 분기가 '나머지'만으로 가로채지 않는다
+                draft("이 견적 나머지는 다 빼줘", BuildChatIntent.UNSUPPORTED),
                 draft("그래픽카드 삭제", BuildChatIntent.UNSUPPORTED),
                 draft("RAM 64GB로 바꿔줘", BuildChatIntent.UNSUPPORTED),
                 draft("램 수량 2개로 변경", BuildChatIntent.UNSUPPORTED),
@@ -118,7 +133,7 @@ class BuildChatIntentRouterTest {
                 // 일반 설명/상담 — 제거된 기능
                 c("이 견적 왜 좋아?", BuildChatIntent.UNSUPPORTED),
                 c("지금 견적 호환 괜찮아?", BuildChatIntent.UNSUPPORTED),
-                c("예산 없이 끝판왕으로", BuildChatIntent.UNSUPPORTED),
+                c("예산 없이 끝판왕으로", BuildChatIntent.BUILD_RECOMMEND),
                 // 오통과 방어 — 스윕에서 발견된 케이스
                 draft("이 구성에서 램만 64기가로 올려줘", BuildChatIntent.UNSUPPORTED),
                 c("게임용 모니터 하나만 골라줘", BuildChatIntent.UNSUPPORTED),
@@ -149,6 +164,19 @@ class BuildChatIntentRouterTest {
         assertThat(mutation.isSemanticCacheEligible()).isFalse();
         assertThat(simulation.isSemanticCacheEligible()).isFalse();
         assertThat(draftCompletion.isSemanticCacheEligible()).isFalse();
+    }
+
+    @Test
+    void removalRequestIsNotTreatedAsDraftCompletion() {
+        // "나머지"라는 명사가 들어 있어도 삭제 동사("빼줘")가 있으면 견적 완성(빈 카테고리 채우기)이
+        // 아니라 변경(mutation) 요청으로 라우팅되어야 한다.
+        BuildChatIntentDecision removal = router.decide(draftRequest("이 견적 나머지는 다 빼줘"), "이 견적 나머지는 다 빼줘");
+        assertThat(removal.intent()).isEqualTo(BuildChatIntent.UNSUPPORTED);
+        assertThat(removal.intent()).isNotEqualTo(BuildChatIntent.BUILD_RECOMMEND);
+
+        // 회귀 방어: 순수 완성 요청("나머지 채워줘")은 그대로 BUILD_RECOMMEND로 유지된다.
+        BuildChatIntentDecision completion = router.decide(draftRequest("지금 견적 나머지 채워줘"), "지금 견적 나머지 채워줘");
+        assertThat(completion.intent()).isEqualTo(BuildChatIntent.BUILD_RECOMMEND);
     }
 
     private static Case c(String message, BuildChatIntent intent) {
