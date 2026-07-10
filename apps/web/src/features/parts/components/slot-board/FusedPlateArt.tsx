@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type FocusEvent } from 'react'
 import type { PartCategory } from '../../../quote/aiSelection';
 import type { QuoteDraftItem } from '../../types';
 import {
+  FUSED_BADGE_ANCHORS,
   FUSED_BOARD_SIZE,
   FUSED_PART_AREAS,
   FUSED_PART_LAYERS,
@@ -15,6 +16,7 @@ import './FusedPlateArt.css';
 type FusedPlateArtProps = {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
@@ -26,6 +28,7 @@ type FusedPlateArtProps = {
 export function FusedPlateArt({
   items,
   selectedCategory,
+  statusByCategory,
   flashingCategories,
   onSlotSelect,
   onRemoveItem,
@@ -116,6 +119,7 @@ export function FusedPlateArt({
           const hovered = spotlightCategory === layer.category;
           const dimmed = Boolean(spotlightCategory && !hovered);
           const mounting = visible && flashingCategories.has(layer.category);
+          const status = statusByCategory.get(layer.category) ?? 'PASS';
           return (
             <img
               key={layer.src}
@@ -124,6 +128,7 @@ export function FusedPlateArt({
               data-hovered={hovered ? 'true' : 'false'}
               data-dimmed={dimmed ? 'true' : 'false'}
               data-mounting={mounting ? 'true' : 'false'}
+              data-status={status}
               src={layer.src}
               alt=""
               aria-hidden="true"
@@ -137,18 +142,20 @@ export function FusedPlateArt({
           const categoryItems = itemsByCategory.get(area.category) ?? [];
           const filled = area.category === 'RAM' ? ramSlotCount > 0 : categoryItems.length > 0;
           const hovered = hoveredCategory === area.category;
+          const status = statusByCategory.get(area.category) ?? 'PASS';
           return (
             <div
               key={area.category}
               data-testid={`slot-fused-area-wrap-${area.category}`}
               data-filled={filled ? 'true' : 'false'}
               data-hovered={hovered ? 'true' : 'false'}
+              data-status={status}
               onPointerEnter={() => setHoveredCategory(area.category)}
               onPointerLeave={() => clearHoverIfLeavingArea(area.category)}
               onFocus={() => setHoveredCategory(area.category)}
               onBlur={(event) => clearHoverIfFocusLeavesArea(area.category, event)}
               className="fused-part-hitbox absolute z-30 rounded"
-              style={fusedAreaStyle(area.box)}
+              style={fusedAreaStyle(area.box, FUSED_BADGE_ANCHORS[area.category])}
             >
               <button
                 type="button"
@@ -242,12 +249,22 @@ export function FusedPlateArt({
   );
 }
 
-function fusedAreaStyle(box: { x: number; y: number; w: number; h: number }): CSSProperties {
+type FusedAreaStyle = CSSProperties & {
+  '--fused-badge-left': string;
+  '--fused-badge-top': string;
+};
+
+function fusedAreaStyle(
+  box: { x: number; y: number; w: number; h: number },
+  badgeAnchor: { x: number; y: number }
+): FusedAreaStyle {
   return {
     left: `${(box.x / FUSED_BOARD_SIZE.width) * 100}%`,
     top: `${(box.y / FUSED_BOARD_SIZE.height) * 100}%`,
     width: `${(box.w / FUSED_BOARD_SIZE.width) * 100}%`,
-    height: `${(box.h / FUSED_BOARD_SIZE.height) * 100}%`
+    height: `${(box.h / FUSED_BOARD_SIZE.height) * 100}%`,
+    '--fused-badge-left': `${((badgeAnchor.x - box.x) / box.w) * 100}%`,
+    '--fused-badge-top': `${((badgeAnchor.y - box.y) / box.h) * 100}%`
   };
 }
 

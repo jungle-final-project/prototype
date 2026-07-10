@@ -47,6 +47,17 @@ export type FusedPartArea = {
   box: { x: number; y: number; w: number; h: number };
 };
 
+export const FUSED_BADGE_ANCHORS: Record<PartCategory, { x: number; y: number }> = {
+  CPU: { x: 1485, y: 570 },
+  MOTHERBOARD: { x: 1043, y: 159 },
+  RAM: { x: 477, y: 245 },
+  GPU: { x: 1031, y: 532 },
+  STORAGE: { x: 479, y: 171 },
+  PSU: { x: 409, y: 533 },
+  CASE: { x: 1508, y: 105 },
+  COOLER: { x: 1372, y: 524 }
+};
+
 export const FUSED_PART_AREAS: FusedPartArea[] = [
   { category: 'STORAGE', label: 'SSD', box: { x: 190, y: 150, w: 310, h: 95 } },
   { category: 'RAM', label: 'RAM', box: { x: 160, y: 230, w: 345, h: 295 } },

@@ -261,6 +261,7 @@ function MotherboardSlotBoardBody({
       <FusedPlateArt
         items={items}
         selectedCategory={selectedCategory}
+        statusByCategory={statusByCategory}
         flashingCategories={flashingCategories}
         onSlotSelect={onSlotSelect}
         onRemoveItem={onRemoveItem}
