@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query';
-import type { BuildGraphResolveResponse } from '../../../quote/aiSelection';
+import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PART_CATEGORY_LABELS, type BuildGraphResolveResponse } from '../../../quote/aiSelection';
 import { CompositeScoreGauge } from '../../../quote/components/CompositeScoreGauge';
 import type { PerfCompareTarget } from '../../../../lib/events';
 import { checkBuildPerformance, type GameFpsEvidence } from '../../../quote/quoteApi';
+import { listParts } from '../../partsApi';
+import type { PartCompatibility } from '../../types';
+import { withObjectParticle } from './koreanParticle';
 
 // 담긴 견적으로 FPS를 조회할 수 있는 게임·해상도 — game_fps_benchmarks 시드 커버리지 기준.
 const FPS_GAMES = [
@@ -32,16 +35,21 @@ type PerfTab = 'composite' | 'game';
 
 // 종합 점수(단일값)와 게임 성능(비교 가능)을 한 카드의 모드 탭으로 통합한다.
 // comparison이 없으면 기존과 동일하게 동작한다 — MyQuotesPage 등 다른 사용처는 탭만 추가된 형태.
+// onStartComparison/onApplyComparison을 주면 게임 성능 탭에 후보 선택기·교체 담기 액션이 붙는다(셀프견적 전용).
 export function QuotePerformancePanel({
   graph,
   items,
   comparison = null,
-  onClearComparison
+  onClearComparison,
+  onStartComparison,
+  onApplyComparison
 }: {
   graph?: BuildGraphResolveResponse;
   items: PerfItem[];
   comparison?: PerfCompareTarget | null;
   onClearComparison?: () => void;
+  onStartComparison?: (target: PerfCompareTarget) => void;
+  onApplyComparison?: (target: PerfCompareTarget) => Promise<unknown>;
 }) {
   const [tab, setTab] = useState<PerfTab>('composite');
 
@@ -128,7 +136,13 @@ export function QuotePerformancePanel({
             </p>
           </>
         ) : hasGpu ? (
-          <GameFpsSection items={perfItems} comparison={comparison} onClearComparison={onClearComparison} />
+          <GameFpsSection
+            items={perfItems}
+            comparison={comparison}
+            onClearComparison={onClearComparison}
+            onStartComparison={onStartComparison}
+            onApplyComparison={onApplyComparison}
+          />
         ) : (
           <div data-testid="fps-no-gpu" className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-bold text-slate-500">
             그래픽카드를 담으면 게임 예상 성능을 보여드려요.
@@ -144,12 +158,17 @@ export function QuotePerformancePanel({
 function GameFpsSection({
   items,
   comparison,
-  onClearComparison
+  onClearComparison,
+  onStartComparison,
+  onApplyComparison
 }: {
   items: PerfItem[];
   comparison: PerfCompareTarget | null;
   onClearComparison?: () => void;
+  onStartComparison?: (target: PerfCompareTarget) => void;
+  onApplyComparison?: (target: PerfCompareTarget) => Promise<unknown>;
 }) {
+  const queryClient = useQueryClient();
   const [gameKey, setGameKey] = useState<string>(FPS_GAMES[0].key);
   const [resKey, setResKey] = useState<string>('QHD');
   const game = FPS_GAMES.find((g) => g.key === gameKey) ?? FPS_GAMES[0];
@@ -224,6 +243,29 @@ function GameFpsSection({
     return () => window.clearTimeout(timer);
   }, [isCompareReady]);
 
+  // 교체 담기: 비교 중인 후보를 실제 견적에 반영한다(성공 시 상위에서 드래프트 갱신 → 비교 자동 해제 → 게이지 스윕).
+  const [isApplying, setIsApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const activeComparisonPartId = activeComparison?.partId ?? null;
+  useEffect(() => {
+    // 비교 대상이 바뀌거나 해제되면 이전 교체 실패 안내를 지운다.
+    setApplyError(null);
+  }, [activeComparisonPartId]);
+  const applyComparison = async () => {
+    if (!activeComparison || !onApplyComparison || isApplying) return;
+    setIsApplying(true);
+    setApplyError(null);
+    try {
+      await onApplyComparison(activeComparison);
+      // 교체 후에는 후보 호환 평가가 새 조합 기준으로 달라진다 — 선택기 목록을 재평가한다.
+      void queryClient.invalidateQueries({ queryKey: ['parts', 'perf-compare-candidates'] });
+    } catch {
+      setApplyError('부품을 교체하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
   return (
     <div data-testid="quote-fps-section" className="rounded-lg border border-commerce-line bg-white p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -276,16 +318,35 @@ function GameFpsSection({
             {' · '}
             {currentPart?.name ?? '지금 담긴 부품'} → {activeComparison.name}
           </span>
-          {onClearComparison ? (
-            <button
-              type="button"
-              data-testid="compare-clear"
-              onClick={onClearComparison}
-              className="shrink-0 rounded border border-commerce-line bg-white px-2 py-1 text-[10px] font-black text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
-            >
-              기존 견적만 보기
-            </button>
-          ) : null}
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            {onApplyComparison ? (
+              <button
+                type="button"
+                data-testid="perf-apply-replace"
+                disabled={isApplying}
+                onClick={() => void applyComparison()}
+                className="rounded bg-brand-blue px-2.5 py-1 text-[10px] font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isApplying ? '교체해 담는 중…' : '이 제품으로 교체해 담기'}
+              </button>
+            ) : null}
+            {onClearComparison ? (
+              <button
+                type="button"
+                data-testid="compare-clear"
+                onClick={onClearComparison}
+                className="rounded border border-commerce-line bg-white px-2 py-1 text-[10px] font-black text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
+              >
+                기존 견적만 보기
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {applyError ? (
+        <div data-testid="perf-apply-error" className="mb-2.5 rounded-md border border-red-100 bg-red-50/70 px-2.5 py-1.5 text-[11px] font-bold text-red-600">
+          {applyError}
         </div>
       ) : null}
 
@@ -408,11 +469,162 @@ function GameFpsSection({
       ) : null}
       </div>
 
+      {/* 교체 후보 비교 선택기 — 후보 카드 옆 버튼 대신, 비교 칸에서 직접 후보를 고르고 보면서 교체까지 간다. */}
+      {onStartComparison ? (
+        <PerfCandidatePicker items={items} comparison={activeComparison} onStartComparison={onStartComparison} />
+      ) : null}
+
       <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
         공개 자료 기준 참고 범위입니다 — 실제 FPS는 게임 설정·패치·드라이버에 따라 달라집니다.
       </p>
     </div>
   );
+}
+
+// 교체 비교가 의미 있는 카테고리(벤치마크 근거가 있는 CPU/GPU)만 선택기에 노출한다.
+const PERF_PICKER_CATEGORIES: Array<PerfCompareTarget['category']> = ['CPU', 'GPU'];
+
+// 패널 내 교체 후보 선택기: 아코디언과 같은 GET /api/parts(QUOTE_DRAFT_CURRENT, 호환 정렬)를 재사용한다.
+// PASS/WARN은 선택 즉시 비교 모드로 들어가고, FAIL은 숨기지 않고 회색 비활성 + 선택 불가 사유를 보여준다.
+function PerfCandidatePicker({
+  items,
+  comparison,
+  onStartComparison
+}: {
+  items: PerfItem[];
+  comparison: PerfCompareTarget | null;
+  onStartComparison: (target: PerfCompareTarget) => void;
+}) {
+  const [category, setCategory] = useState<PerfCompareTarget['category']>(comparison?.category ?? 'GPU');
+  // 외부(AI 변경 미리보기 이벤트 등)에서 비교가 켜지면 선택기도 그 카테고리를 따라간다.
+  const comparisonCategory = comparison?.category;
+  useEffect(() => {
+    if (comparisonCategory) {
+      setCategory(comparisonCategory);
+    }
+  }, [comparisonCategory]);
+
+  const currentPart = items.find((item) => item.category === category);
+  // keepPreviousData를 쓰지 않는다 — 토글 직후 이전 카테고리 후보가 잠깐 남으면 엉뚱한 비교를 시작할 수 있다.
+  const candidateQuery = useQuery({
+    queryKey: ['parts', 'perf-compare-candidates', category],
+    queryFn: () => listParts({
+      category,
+      page: 0,
+      size: 20,
+      sort: 'compatibility',
+      compatibilitySource: 'QUOTE_DRAFT_CURRENT'
+    }),
+    enabled: Boolean(currentPart),
+    staleTime: 30_000
+  });
+  const candidates = candidateQuery.data?.items ?? [];
+
+  return (
+    <div data-testid="perf-candidate-picker" className="mt-3 rounded-lg border border-commerce-line bg-slate-50/60 p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="text-[11px] font-black text-slate-600">교체 후보 비교</span>
+          <span className="ml-1.5 text-[10px] font-bold text-slate-400">후보를 고르면 위 게이지에서 바로 비교돼요</span>
+        </div>
+        <div className="flex gap-0.5 rounded-md border border-commerce-line bg-white p-0.5" role="group" aria-label="비교할 부품 종류 선택">
+          {PERF_PICKER_CATEGORIES.map((pickerCategory) => (
+            <button
+              key={pickerCategory}
+              type="button"
+              data-testid={`perf-candidate-category-${pickerCategory}`}
+              aria-pressed={category === pickerCategory}
+              onClick={() => setCategory(pickerCategory)}
+              className={`rounded px-2.5 py-1 text-[10px] font-black transition ${
+                category === pickerCategory ? 'bg-brand-blue text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              {PART_CATEGORY_LABELS[pickerCategory]}
+            </button>
+          ))}
+        </div>
+      </div>
+      {!currentPart ? (
+        <div data-testid="perf-candidate-picker-empty" className="rounded-md border border-dashed border-slate-300 bg-white px-2.5 py-3 text-center text-[11px] font-bold text-slate-500">
+          {withObjectParticle(PART_CATEGORY_LABELS[category])} 먼저 담으면 교체 비교를 할 수 있어요.
+        </div>
+      ) : candidateQuery.isLoading ? (
+        <div className="rounded-md bg-white px-2 py-3 text-center text-[11px] font-bold text-slate-400">후보를 불러오는 중</div>
+      ) : candidateQuery.isError ? (
+        <div className="rounded-md bg-white px-2 py-3 text-center text-[11px] font-bold text-red-500">후보를 불러오지 못했습니다</div>
+      ) : candidates.length === 0 ? (
+        <div className="rounded-md bg-white px-2 py-3 text-center text-[11px] font-bold text-slate-400">표시할 후보가 없습니다</div>
+      ) : (
+        <div className="max-h-60 space-y-1 overflow-y-auto pr-1">
+          {candidates.map((part, index) => {
+            const status = part.compatibility?.status;
+            const isFail = status === 'FAIL';
+            const isCurrent = part.id === currentPart.partId;
+            const isSelected = comparison?.partId === part.id;
+            return (
+              <button
+                key={part.id}
+                type="button"
+                data-testid={`perf-candidate-option-${index}`}
+                disabled={isFail || isCurrent}
+                aria-pressed={isSelected}
+                onClick={() => onStartComparison({ category, partId: part.id, name: part.name, price: part.price })}
+                className={`w-full rounded-md border bg-white px-2.5 py-2 text-left text-[11px] transition disabled:cursor-not-allowed ${
+                  isFail
+                    ? 'border-slate-200 opacity-55'
+                    : isCurrent
+                      ? 'border-emerald-200 bg-emerald-50/60'
+                      : isSelected
+                        ? 'border-brand-blue ring-2 ring-blue-100'
+                        : 'border-commerce-line hover:border-brand-blue'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="line-clamp-2 min-w-0 font-black text-commerce-ink">{part.name}</span>
+                  <span className="shrink-0 font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
+                  <span className="truncate text-slate-500">{part.manufacturer ?? '제조사 미상'}</span>
+                  <span className={`shrink-0 font-black ${candidateStatusTone(status, isCurrent, isSelected)}`}>
+                    {isCurrent ? '지금 담긴 부품' : isSelected ? '비교 중' : candidateStatusLabel(part.compatibility)}
+                  </span>
+                </div>
+                {isFail ? (
+                  <div className="mt-1 text-[10px] font-bold text-red-500">
+                    {part.compatibility?.summary || '현재 조합에는 장착할 수 없어요.'}
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 호환 상태 → 사용자 언어 배지(서버 라벨 우선). 원어(PASS/WARN/FAIL)는 노출하지 않는다.
+function candidateStatusLabel(compatibility?: PartCompatibility | null): string {
+  if (compatibility?.statusLabel) return compatibility.statusLabel;
+  switch (compatibility?.status) {
+    case 'PASS':
+      return '호환 가능';
+    case 'WARN':
+      return '간섭 주의';
+    case 'FAIL':
+      return '장착 불가';
+    default:
+      return '확인 전';
+  }
+}
+
+function candidateStatusTone(status: PartCompatibility['status'] | undefined, isCurrent: boolean, isSelected: boolean): string {
+  if (isCurrent) return 'text-emerald-700';
+  if (isSelected) return 'text-brand-blue';
+  if (status === 'PASS') return 'text-emerald-700';
+  if (status === 'WARN') return 'text-amber-600';
+  if (status === 'FAIL') return 'text-red-600';
+  return 'text-slate-400';
 }
 
 // 단일(비교 아님) 모드의 오른쪽 칸: "다른 게임 한눈에" 미니 리스트 — 넓은 칸을 게이지 하나가

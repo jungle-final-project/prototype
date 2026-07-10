@@ -1344,9 +1344,9 @@ test('shows the other-games overview list in single mode and switches game by ro
   await expect(overview.getByTestId('fps-game-row-pubg')).toHaveAttribute('aria-pressed', 'false');
 });
 
-test('starts a panel performance comparison from a CPU candidate and clears it back', async ({ page }) => {
+test('picks a replacement candidate in the performance panel, compares, and applies the replacement', async ({ page }) => {
   await loginAsUser(page);
-  const draft = {
+  const baseDraft = {
     ...emptyDraft,
     items: [
       draftItem('part-perf-cpu', 'CPU', '라이젠 9600X', 300000),
@@ -1355,8 +1355,28 @@ test('starts a panel performance comparison from a CPU candidate and clears it b
     totalPrice: 800000,
     itemCount: 2
   };
+  const replacedDraft = {
+    ...emptyDraft,
+    id: 'draft-slot-replaced',
+    items: [
+      draftItem('cand-cpu-1', 'CPU', '인텔 245K', 350000),
+      draftItem('part-perf-gpu', 'GPU', 'RTX 5060', 500000)
+    ],
+    totalPrice: 850000,
+    itemCount: 2
+  };
+  let currentDraft = baseDraft;
+  const replaceRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  // 같은 prefix가 PUT /items/{partId}에도 매칭되므로 메서드·경로로 분기한다 — 교체(PUT)는 카테고리 upsert.
   await page.route('**/api/quote-drafts/current**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+    const request = route.request();
+    if (request.method() === 'PUT' && request.url().includes('/items/')) {
+      replaceRequests.push({ url: request.url(), body: JSON.parse(request.postData() ?? '{}') });
+      currentDraft = replacedDraft;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(replacedDraft) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
   });
   await page.route('**/api/build-graphs/resolve', async (route) => {
     await route.fulfill({
@@ -1365,26 +1385,25 @@ test('starts a panel performance comparison from a CPU candidate and clears it b
       body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture() })
     });
   });
+  // 선택기·아코디언이 공유하는 GET /api/parts — 카테고리별 후보를 돌려준다(FAIL 후보는 사유 포함).
   await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    const category = url.searchParams.get('category');
+    const items = category === 'CPU'
+      ? [
+          candidatePart('cand-cpu-1', 'CPU', '인텔 245K', { price: 350000 }),
+          candidatePart('cand-cpu-fail', 'CPU', '구형 소켓 CPU', {
+            price: 200000,
+            compatibility: { status: 'FAIL', statusLabel: '장착 불가', summary: '메인보드 소켓과 맞지 않습니다.' }
+          })
+        ]
+      : category === 'GPU'
+        ? [candidatePart('cand-gpu-1', 'GPU', 'RTX 5070', { price: 900000 })]
+        : [];
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        items: [
-          {
-            id: 'cand-cpu-1',
-            category: 'CPU',
-            name: '인텔 245K',
-            manufacturer: '인텔',
-            price: 350000,
-            attributes: {},
-            compatibility: { status: 'PASS', statusLabel: '호환', summary: '' }
-          }
-        ],
-        page: 0,
-        size: 20,
-        total: 1
-      })
+      body: JSON.stringify({ items, page: 0, size: 20, total: items.length })
     });
   });
   // 같은 FPS 엔드포인트를 2회 호출한다 — 기존 조합과 후보 치환 조합을 partIds로 구분해 응답한다.
@@ -1416,45 +1435,57 @@ test('starts a panel performance comparison from a CPU candidate and clears it b
 
   await page.goto('/self-quote?category=CPU');
 
-  // CPU 슬롯에 현재 부품이 있으면 후보마다 '성능 비교' 진입점이 뜬다(챗봇 프리필이 아니라 패널 비교).
-  const compareBtn = page.getByTestId('candidate-perf-compare').first();
-  await expect(compareBtn).toBeVisible();
-  await expect(compareBtn).toHaveAttribute('aria-label', /현재 라이젠 9600X.*인텔 245K.*성능 비교/);
-  await compareBtn.click();
+  // 아코디언 후보 옆 '성능 비교' 버튼은 제거됐다 — 비교는 성능 패널의 후보 선택기에서 시작한다.
+  await expect(page.getByTestId('checklist-candidates-CPU')).toContainText('인텔 245K');
+  await expect(page.getByTestId('candidate-perf-compare')).toHaveCount(0);
 
+  // 게임 성능 탭 → '교체 후보 비교' 선택기(기본 GPU, CPU 토글 가능).
   const panel = page.getByTestId('quote-performance-panel');
-  // 비교가 켜지면 게임 성능 탭으로 자동 전환되고, 고스트 게이지·범위 바·비용 대비 효과가 위→아래로 쌓인다.
-  await expect(panel.getByTestId('perf-tab-game')).toHaveAttribute('aria-selected', 'true');
+  await panel.getByTestId('perf-tab-game').click();
+  const picker = panel.getByTestId('perf-candidate-picker');
+  await expect(picker).toBeVisible();
+  await expect(picker).toContainText('교체 후보 비교');
+  await expect(picker.getByTestId('perf-candidate-category-GPU')).toHaveAttribute('aria-pressed', 'true');
+  await expect(picker.getByTestId('perf-candidate-option-0')).toContainText('RTX 5070');
+  await picker.getByTestId('perf-candidate-category-CPU').click();
+
+  // PASS 후보는 이름+가격+호환 배지, FAIL 후보는 숨기지 않고 회색 비활성 + 선택 불가 사유.
+  const firstOption = picker.getByTestId('perf-candidate-option-0');
+  await expect(firstOption).toContainText('인텔 245K');
+  await expect(firstOption).toContainText('350,000원');
+  await expect(firstOption).toContainText('호환 가능');
+  const failOption = picker.getByTestId('perf-candidate-option-1');
+  await expect(failOption).toBeDisabled();
+  await expect(failOption).toContainText('장착 불가');
+  await expect(failOption).toContainText('메인보드 소켓과 맞지 않습니다.');
+
+  // 후보 선택 → 즉시 비교 모드(기존 조합 vs 변경 조합).
+  await firstOption.click();
   await expect(panel.getByTestId('fps-compare-banner')).toContainText('라이젠 9600X → 인텔 245K');
   await expect(panel.getByTestId('fps-arc-gauge')).toBeVisible();
   await expect(panel.getByTestId('fps-avg')).toHaveText('243');
   await expect(panel.getByTestId('fps-compare-avg')).toHaveText('281');
   await expect(panel.getByTestId('fps-compare-delta')).toHaveText('+16%');
-  const rangeBars = panel.getByTestId('fps-range-bars');
-  await expect(rangeBars).toContainText('기존');
-  await expect(rangeBars).toContainText('200~243 FPS');
-  await expect(rangeBars).toContainText('변경');
-  await expect(rangeBars).toContainText('220~281 FPS');
-  const costBlock = panel.getByTestId('cost-effect-block');
-  await expect(costBlock).toContainText('비용 대비 효과');
-  await expect(costBlock.getByTestId('cost-effect-price')).toHaveText('추가 비용 +50,000원');
-  await expect(costBlock.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
-  await expect(costBlock).toContainText('+17%');
+  await expect(firstOption).toHaveAttribute('aria-pressed', 'true');
+  await expect(firstOption).toContainText('비교 중');
 
-  // 비교 해제: '기존 견적만 보기' → 단일 게이지로 복귀.
-  await panel.getByTestId('compare-clear').click();
+  // 보면서 담기: '이 제품으로 교체해 담기' → 실제 교체(PUT) + 비교 해제 + 게이지가 새 조합 값으로 스윕.
+  await panel.getByTestId('perf-apply-replace').click();
   await expect(panel.getByTestId('fps-compare-delta')).toHaveCount(0);
-  await expect(panel.getByTestId('fps-range-bars')).toHaveCount(0);
-  await expect(panel.getByTestId('cost-effect-block')).toHaveCount(0);
-  await expect(panel.getByTestId('fps-avg')).toHaveText('243');
+  await expect(panel.getByTestId('fps-compare-banner')).toHaveCount(0);
+  expect(replaceRequests).toHaveLength(1);
+  expect(replaceRequests[0].url).toContain('/api/quote-drafts/current/items/cand-cpu-1');
+  expect(replaceRequests[0].body).toMatchObject({ quantity: 1 });
+  await expect(page.getByTestId('checklist-CPU')).toContainText('인텔 245K');
+  await expect(panel.getByTestId('fps-avg')).toHaveText('281');
 
-  // AI 변경 미리보기 연동과 같은 창 이벤트로도 같은 비교가 켜진다.
+  // AI 변경 미리보기 연동(창 이벤트)은 그대로 유지된다 — 같은 비교 모드가 켜진다.
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('buildgraph.perfCompare.request', {
-      detail: { category: 'CPU', partId: 'cand-cpu-1', name: '인텔 245K', price: 350000 }
+      detail: { category: 'CPU', partId: 'part-perf-cpu', name: '라이젠 9600X', price: 300000 }
     }));
   });
-  await expect(panel.getByTestId('fps-compare-delta')).toHaveText('+16%');
+  await expect(panel.getByTestId('fps-compare-banner')).toContainText('인텔 245K → 라이젠 9600X');
 });
 
 test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', async ({ page }) => {

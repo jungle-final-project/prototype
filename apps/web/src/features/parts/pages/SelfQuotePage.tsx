@@ -376,7 +376,6 @@ function SelfQuoteSlotBoardPage() {
             nextCategory={nextCategory}
             onSelect={selectSlot}
             onAddPart={addPart}
-            onComparePerf={startPerfComparison}
             isMutating={isMutating}
           />
           <div className="min-h-0 lg:h-[800px]">
@@ -400,13 +399,17 @@ function SelfQuoteSlotBoardPage() {
         </div>
 
         {/* 담긴 견적으로 성능 비교(R1): resolveBuildGraph가 이미 내려주는 performance 툴 결과를 표시한다.
-            perfComparison이 있으면 게임 성능 탭에서 기존 조합 vs 변경 조합을 겹쳐 보여준다. */}
+            perfComparison이 있으면 게임 성능 탭에서 기존 조합 vs 변경 조합을 겹쳐 보여준다.
+            후보 선택기(패널 내)에서 비교를 시작하고, 교체 담기는 기존 단일 슬롯 교체 mutation(PUT upsert)을 재사용한다.
+            성공 시 드래프트 invalidate → 아래 자동 해제 effect가 비교를 끄고 게이지가 새 조합 값으로 스윕한다. */}
         <div ref={perfPanelRef}>
           <QuotePerformancePanel
             graph={graphQuery.data}
             items={draftItems}
             comparison={perfComparison}
             onClearComparison={() => setPerfComparison(null)}
+            onStartComparison={startPerfComparison}
+            onApplyComparison={(target) => addMutation.mutateAsync({ partId: target.partId, quantity: 1 })}
           />
         </div>
 
@@ -488,16 +491,12 @@ function writeSlotBoardVisualMode(mode: SlotBoardVisualMode) {
   }
 }
 
-// CPU·GPU만 벤치마크 근거가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 비교 진입점을 숨긴다.
-const PERF_COMPARABLE_CATEGORIES = new Set<PartCategory>(['CPU', 'GPU']);
-
 function QuoteChecklist({
   draftItems,
   selectedCategory,
   nextCategory,
   onSelect,
   onAddPart,
-  onComparePerf,
   isMutating
 }: {
   draftItems: QuoteDraftItem[];
@@ -505,7 +504,6 @@ function QuoteChecklist({
   nextCategory: PartCategory | null;
   onSelect: (category: PartCategory) => void;
   onAddPart: (part: PartRow) => void;
-  onComparePerf: (target: PerfCompareTarget) => void;
   isMutating: boolean;
 }) {
   const [expandedCategory, setExpandedCategory] = useState<PartCategory | null>(() => selectedCategory ?? nextCategory ?? 'CPU');
@@ -618,63 +616,40 @@ function QuoteChecklist({
                         const isAlreadySelected = selectedPartIds.has(part.id);
                         const status = part.compatibility?.status;
                         const isFail = status === 'FAIL';
-                        // 교체 성능 비교: CPU/GPU 슬롯에 이미 다른 부품이 담겨 있으면 후보별 비교 진입점을 붙인다.
-                        const currentInCategory = draftItems.find((item) => item.category === category);
-                        const canComparePerf = PERF_COMPARABLE_CATEGORIES.has(category)
-                          && Boolean(currentInCategory)
-                          && !isAlreadySelected;
+                        // 교체 성능 비교 진입점은 성능 패널의 후보 선택기로 옮겼다 — 여기서는 담기/교체만 담당한다.
                         return (
-                          <div key={part.id} className="flex items-stretch gap-1">
-                            <button
-                              type="button"
-                              disabled={isMutating || isAlreadySelected || isFail}
-                              onClick={() => choosePart(category, part)}
-                              className={`min-w-0 flex-1 rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
-                                isFail
-                                  ? 'border-slate-200 opacity-55'
-                                  : isAlreadySelected
-                                    ? 'border-emerald-200 bg-emerald-50'
-                                    : 'border-commerce-line hover:border-brand-blue hover:bg-white'
-                              } disabled:cursor-not-allowed`}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <span className="line-clamp-2 min-w-0 font-black text-commerce-ink">{part.name}</span>
-                                <span className="shrink-0 font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
-                              </div>
-                              <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
-                                <span className="truncate text-slate-500">{part.manufacturer ?? '제조사 미상'}</span>
-                                <span className={`shrink-0 font-black ${
-                                  status === 'PASS'
-                                    ? 'text-emerald-700'
-                                    : status === 'WARN'
-                                      ? 'text-amber-600'
-                                      : status === 'FAIL'
-                                        ? 'text-red-600'
-                                        : 'text-slate-400'
-                                }`}>
-                                  {isAlreadySelected ? '선택됨' : status ?? '확인 전'}
-                                </span>
-                              </div>
-                            </button>
-                            {canComparePerf && currentInCategory ? (
-                              <button
-                                type="button"
-                                data-testid="candidate-perf-compare"
-                                aria-label={`현재 ${currentInCategory.name}을(를) ${part.name}(으)로 바꾸면 성능 비교`}
-                                onClick={() => onComparePerf({
-                                  category: category as PerfCompareTarget['category'],
-                                  partId: part.id,
-                                  name: part.name,
-                                  price: part.price
-                                })}
-                                className="shrink-0 whitespace-nowrap rounded border border-brand-blue/30 bg-blue-50 px-1.5 text-[10px] font-black leading-tight text-brand-blue transition hover:bg-blue-100"
-                              >
-                                성능
-                                <br />
-                                비교
-                              </button>
-                            ) : null}
-                          </div>
+                          <button
+                            key={part.id}
+                            type="button"
+                            disabled={isMutating || isAlreadySelected || isFail}
+                            onClick={() => choosePart(category, part)}
+                            className={`w-full rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
+                              isFail
+                                ? 'border-slate-200 opacity-55'
+                                : isAlreadySelected
+                                  ? 'border-emerald-200 bg-emerald-50'
+                                  : 'border-commerce-line hover:border-brand-blue hover:bg-white'
+                            } disabled:cursor-not-allowed`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="line-clamp-2 min-w-0 font-black text-commerce-ink">{part.name}</span>
+                              <span className="shrink-0 font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
+                              <span className="truncate text-slate-500">{part.manufacturer ?? '제조사 미상'}</span>
+                              <span className={`shrink-0 font-black ${
+                                status === 'PASS'
+                                  ? 'text-emerald-700'
+                                  : status === 'WARN'
+                                    ? 'text-amber-600'
+                                    : status === 'FAIL'
+                                      ? 'text-red-600'
+                                      : 'text-slate-400'
+                              }`}>
+                                {isAlreadySelected ? '선택됨' : status ?? '확인 전'}
+                              </span>
+                            </div>
+                          </button>
                         );
                       })}
                       {candidateQuery.data?.items.length === 0 ? (
