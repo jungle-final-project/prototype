@@ -1377,14 +1377,6 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
 }
 
 /* 성능 패널 모션: 값이 어디서 어디로 변했는지 눈으로 따라가게 한다. 신규 의존성 없이 CSS keyframes만 사용한다. */
-@keyframes perf-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
 
 /* 후보 선택 팝오버: 콤보 아래에서 가볍게 떠오른다 — 과한 슬라이드 금지. */
 @keyframes perf-popover-in {
@@ -1435,7 +1427,7 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
   animation-delay: 120ms;
 }
 
-/* 델타 배지: 변경 아크 스윕이 끝날 즈음 스케일 팝인(비교 진입 시퀀스의 마지막 박자). */
+/* 델타 배지: 범위 바가 자란 뒤 스케일 팝인(비교 진입 시퀀스의 마지막 박자). */
 @keyframes perf-pop-in {
   0% {
     opacity: 0;
@@ -1455,29 +1447,15 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
   animation: perf-pop-in 240ms cubic-bezier(0.34, 1.4, 0.64, 1) 680ms backwards;
 }
 
-/* 아크 고스트 전환: 비교 on/off 때 기존 아크의 색·불투명도가 300ms에 걸쳐 바뀐다. */
-.perf-arc-transition {
-  transition: stroke 300ms ease, opacity 300ms ease;
-}
-
-/* 변경(파랑) 아크: 등장 페이드인 + 해제 시 페이드아웃용 opacity 전환. */
-.perf-compare-arc {
-  animation: perf-fade-in 300ms ease-out;
-  transition: opacity 300ms ease;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .perf-popover-in,
   .perf-block-in,
   .perf-bar-grow,
-  .perf-pop-in,
-  .perf-compare-arc {
+  .perf-pop-in {
     animation: none;
   }
 
-  .perf-bar-grow,
-  .perf-arc-transition,
-  .perf-compare-arc {
+  .perf-bar-grow {
     transition: none;
   }
 }

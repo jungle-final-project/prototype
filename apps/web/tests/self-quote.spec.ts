@@ -1170,12 +1170,13 @@ test('shows the current build performance panel from the resolve performance too
   // 정책: 정확 FPS·실성능 보장 아님 문구 노출.
   await expect(panel).toContainText('보장하지 않습니다');
 
-  // 종합 점수 아크 옆에 게임 FPS 섹션이 나란히 동시에 보인다(자료 없음 문구).
-  await expect(panel.getByTestId('quote-fps-section')).toBeVisible();
-  await expect(panel.getByTestId('fps-empty')).toContainText('이 조합의 공개 참고 자료가 아직 없어요');
-  // 오른쪽 비교 작업창은 상시 노출 — 미선택 시엔 짧은 안내 한 줄만 보인다.
+  // 오른쪽 작업창 안에 게임 FPS 섹션(자료 없음 문구)이 함께 보인다.
   await expect(panel.getByTestId('perf-compare-workspace')).toBeVisible();
   await expect(panel.getByTestId('perf-compare-workspace')).toContainText('게임 성능 비교');
+  await expect(panel.getByTestId('quote-fps-section')).toBeVisible();
+  await expect(panel.getByTestId('fps-empty')).toContainText('이 조합의 공개 참고 자료가 아직 없어요');
+  // 왼쪽 카드의 아크 옆 = 가격·성능 향상 그래프 자리 — 미선택 시엔 짧은 안내 한 줄만 보인다.
+  await expect(panel.getByTestId('price-effect-panel')).toContainText('가격·성능 향상');
   await expect(panel.getByTestId('perf-compare-idle')).toContainText('후보를 고르면');
 });
 
@@ -1243,14 +1244,15 @@ test('shows game FPS reference in the performance panel with game and resolution
 
   await page.goto('/self-quote');
 
-  // 게임 FPS 섹션은 탭 없이 종합 점수 아크 아래에 항상 함께 보인다.
+  // 게임 FPS 섹션은 탭 없이 오른쪽 작업창 안에 항상 함께 보인다.
   const fps = page.getByTestId('quote-fps-section');
   await expect(fps).toBeVisible();
   await expect(page.getByTestId('quote-performance-grid')).toBeVisible();
   // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 하위 1% 평균(1% low).
   await expect(fps.getByTestId('fps-avg')).toHaveText('130');
-  // 곡선(반원 아크) FPS 게이지 — 종합점수 게이지와 같은 시각 언어.
-  await expect(fps.getByTestId('fps-arc-gauge')).toBeVisible();
+  // 원래 수평 막대 스타일 — 그라데이션 바 + 1% low 마커(아크 게이지는 제거됨).
+  await expect(fps.getByTestId('fps-gauge')).toBeVisible();
+  await expect(fps.getByTestId('fps-arc-gauge')).toHaveCount(0);
   await expect(fps.getByTestId('fps-result')).toContainText('매우 부드러움');
   await expect(fps.getByTestId('fps-result')).toContainText('중간 옵션');
   await expect(fps.getByTestId('fps-result')).toContainText('최저 약 91 FPS');
@@ -1318,9 +1320,9 @@ test('switches the game with compact chips next to the composite gauge', async (
   await page.goto('/self-quote');
   const fps = page.getByTestId('quote-fps-section');
 
-  // 왼쪽 카드: 종합점수 아크 옆에 FPS 아크가 나란히 보이고, 게임 선택은 컴팩트 칩 5개.
+  // 종합점수 아크 + 오른쪽 작업창의 수평 막대 FPS 게이지, 게임 선택은 컴팩트 칩 5개.
   await expect(page.getByTestId('quote-composite-score-gauge')).toBeVisible();
-  await expect(fps.getByTestId('fps-arc-gauge')).toBeVisible();
+  await expect(fps.getByTestId('fps-gauge')).toBeVisible();
   await expect(fps.locator('[data-testid^="fps-game-"]')).toHaveCount(5);
   await expect(fps.getByTestId('fps-game-pubg')).toHaveAttribute('aria-pressed', 'true');
   // '다른 게임 한눈에' 리스트는 제거됐다.
@@ -1465,23 +1467,24 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   await expect(workspace.getByTestId('perf-candidate-popover')).toHaveCount(0);
   await expect(workspace.getByTestId('perf-candidate-select')).toContainText('인텔 245K');
   await expect(workspace.getByTestId('fps-compare-banner')).toContainText('라이젠 9600X → 인텔 245K');
-  // 왼쪽 FPS 아크와 연동: 고스트(기존) 위에 변경 값·델타 배지가 겹쳐 그려진다.
-  await expect(panel.getByTestId('fps-arc-gauge')).toBeVisible();
-  await expect(panel.getByTestId('fps-avg')).toHaveText('243');
-  await expect(panel.getByTestId('fps-compare-avg')).toHaveText('281');
-  await expect(panel.getByTestId('fps-compare-delta')).toHaveText('+16%');
-  // 콤보 아래 비교 결과: 가격·성능 변화 막대 + 기존/변경 FPS 범위 바 + 추가 비용 + 예상 FPS 화살표.
-  await expect(workspace.getByTestId('cost-effect-block')).toContainText('비용 대비 효과');
+  // 게임 예상 성능이 비교 표시로 전환: 기존→변경 숫자 + 델타 배지 + 기존/변경 범위 바 2줄.
+  await expect(workspace.getByTestId('fps-result')).toBeVisible();
+  await expect(workspace.getByTestId('fps-avg')).toHaveText('243');
+  await expect(workspace.getByTestId('fps-compare-avg')).toHaveText('281');
+  await expect(workspace.getByTestId('fps-compare-delta')).toHaveText('+16%');
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('기존');
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
-  await expect(workspace.getByTestId('cost-effect-price')).toContainText('추가 비용 +50,000원');
-  await expect(workspace.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
+  // 왼쪽 카드의 아크 옆 = 가격·성능 향상 그래프: 변화 % 막대 + 추가 비용 + 예상 FPS 화살표.
+  await expect(panel.getByTestId('price-effect-panel')).toContainText('가격·성능 향상');
+  await expect(panel.getByTestId('cost-effect-block')).toBeVisible();
+  await expect(panel.getByTestId('cost-effect-price')).toContainText('추가 비용 +50,000원');
+  await expect(panel.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
 
   // 보면서 담기: '이 제품으로 교체해 담기' → 실제 교체(PUT) + 비교 해제 + 게이지가 새 조합 값으로 스윕.
   await workspace.getByTestId('perf-apply-replace').click();
-  await expect(panel.getByTestId('fps-compare-delta')).toHaveCount(0);
+  await expect(workspace.getByTestId('fps-compare-delta')).toHaveCount(0);
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
-  await expect(workspace.getByTestId('perf-compare-idle')).toBeVisible();
+  await expect(panel.getByTestId('perf-compare-idle')).toBeVisible();
   expect(replaceRequests).toHaveLength(1);
   expect(replaceRequests[0].url).toContain('/api/quote-drafts/current/items/cand-cpu-1');
   expect(replaceRequests[0].body).toMatchObject({ quantity: 1 });
@@ -1564,10 +1567,10 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
 
   await page.goto('/self-quote');
 
-  // 미선택 빈 상태: 비교 결과 대신 짧은 안내 한 줄만 보인다(세로 압박 없음).
+  // 미선택 빈 상태: 향상 그래프 자리엔 짧은 안내 한 줄만 보인다(세로 압박 없음).
   const workspace = page.getByTestId('perf-compare-workspace');
   await expect(workspace).toBeVisible();
-  await expect(workspace.getByTestId('perf-compare-idle')).toBeVisible();
+  await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
 
   // 열기 → Escape로 닫기: 선택 없이 닫혀도 빈 상태가 유지된다.
@@ -1577,7 +1580,7 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
   await expect(popover.getByTestId('perf-candidate-current')).toContainText('RTX 5060');
   await page.keyboard.press('Escape');
   await expect(workspace.getByTestId('perf-candidate-popover')).toHaveCount(0);
-  await expect(workspace.getByTestId('perf-compare-idle')).toBeVisible();
+  await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
 
   // 다시 열고 팝오버 바깥 클릭으로 닫기.
   await workspace.getByTestId('perf-candidate-select').click();
@@ -1596,10 +1599,10 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
   await expect(page.getByTestId('fps-compare-avg')).toHaveText('152');
 
-  // 비교 해제 → 다시 미선택 빈 상태로 복귀하고 왼쪽 게이지도 기존 값만 남는다.
+  // 비교 해제 → 다시 미선택 빈 상태로 복귀하고 게이지도 기존 값만 남는다.
   await workspace.getByTestId('compare-clear').click();
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
-  await expect(workspace.getByTestId('perf-compare-idle')).toBeVisible();
+  await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
   await expect(page.getByTestId('fps-avg')).toHaveText('130');
 });
 
