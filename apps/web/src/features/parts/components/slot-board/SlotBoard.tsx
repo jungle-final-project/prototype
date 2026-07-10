@@ -16,6 +16,8 @@ import {
   type SlotConfig,
   type SlotEdgeConfig
 } from './slotBoardConfig';
+import { FusedPlateArt } from './FusedPlateArt';
+import { itemStickCount } from './slotBoardItemCounts';
 
 export type SlotBoardVisualMode = 'motherboard' | 'isometric';
 
@@ -213,12 +215,7 @@ function SlotBoardDisplaySwitch({
 function MotherboardSlotBoardBody({
   items,
   selectedCategory,
-  nextCategory,
   onSlotSelect,
-  onRemoveItem,
-  isRemovePending,
-  graph,
-  statusByCategory,
   flashingCategories
 }: {
   items: QuoteDraftItem[];
@@ -239,30 +236,12 @@ function MotherboardSlotBoardBody({
       data-visual-mode="motherboard"
       className="slot-board-tray relative flex flex-col gap-2 p-3 lg:block lg:aspect-[16/10] lg:overflow-hidden lg:p-0"
     >
-      <BoardPlanArt />
-      <SlotBoardEdges
+      <FusedPlateArt
         items={items}
-        graph={graph}
         selectedCategory={selectedCategory}
-        hoveredCategory={null}
         flashingCategories={flashingCategories}
-        visualMode="motherboard"
+        onSlotSelect={onSlotSelect}
       />
-      {SLOT_CONFIGS.map((slot) => (
-        <MotherboardSlot
-          key={slot.category}
-          slot={slot}
-          layout={slot.layout}
-          items={items.filter((item) => item.category === slot.category)}
-          problemStatus={statusByCategory.get(slot.category)}
-          isSelected={selectedCategory === slot.category}
-          isNext={nextCategory === slot.category}
-          isFlashing={flashingCategories.has(slot.category)}
-          onSelect={() => onSlotSelect(slot.category)}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-        />
-      ))}
     </div>
   );
 }
@@ -1543,12 +1522,6 @@ function writeSlotBoardBooleanPreference(storageKey: string, visible: boolean) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-// "32GB(16Gx2)" 같은 킷 상품은 스틱 2개를 차지한다. moduleCount 없는 상품은 단품(1)으로 본다.
-function itemStickCount(item: QuoteDraftItem): number {
-  const moduleCount = Number(item.attributes?.moduleCount);
-  return item.quantity * (Number.isFinite(moduleCount) && moduleCount >= 1 ? moduleCount : 1);
 }
 
 function MiniSlotRow({ slot, items }: { slot: SlotConfig; items: QuoteDraftItem[] }) {
