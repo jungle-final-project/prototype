@@ -572,7 +572,9 @@ function CandidateCombo({
     queryFn: () => listParts({
       category,
       page: 0,
-      size: 20,
+      // 팝오버는 페이지네이션이 없으므로 서버 최대치(100)로 한 번에 받는다 —
+      // size 20이면 호환 정렬의 가격 오름차순 탓에 저가 후보에서 잘려 5080/5090이 안 보였다.
+      size: 100,
       sort: 'compatibility',
       compatibilitySource: 'QUOTE_DRAFT_CURRENT'
     }),
