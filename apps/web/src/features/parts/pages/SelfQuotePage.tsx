@@ -399,7 +399,7 @@ function SelfQuoteSlotBoardPage() {
         </div>
 
         {/* 담긴 견적으로 성능 비교(R1): resolveBuildGraph가 이미 내려주는 performance 툴 결과를 표시한다.
-            상시 2열 — 왼쪽 종합점수·FPS 아크, 오른쪽 "게임 성능 비교" 작업창. perfComparison이 있으면
+            헤더 콤보(토글+후보 선택 팝오버) + 상시 2열(왼쪽 종합점수·향상 그래프, 오른쪽 게임 예상 성능). perfComparison이 있으면
             기존 조합 vs 변경 조합을 겹쳐 보여주고, 교체 담기는 기존 단일 슬롯 교체 mutation(PUT upsert)을 재사용한다.
             성공 시 드래프트 invalidate → 아래 자동 해제 effect가 비교를 끄고 게이지가 새 조합 값으로 스윕한다. */}
         <div ref={perfPanelRef}>

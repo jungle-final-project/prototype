@@ -1170,14 +1170,17 @@ test('shows the current build performance panel from the resolve performance too
   // 정책: 정확 FPS·실성능 보장 아님 문구 노출.
   await expect(panel).toContainText('보장하지 않습니다');
 
-  // 오른쪽 작업창 안에 게임 FPS 섹션(자료 없음 문구)이 함께 보인다.
+  // 후보 선택 콤보는 카드 헤더 줄 오른쪽 끝으로 이동 — 본문 작업창엔 게임 FPS 섹션(자료 없음 문구)만 남는다.
+  await expect(panel.getByTestId('perf-candidate-select')).toContainText('교체 후보 선택');
   await expect(panel.getByTestId('perf-compare-workspace')).toBeVisible();
-  await expect(panel.getByTestId('perf-compare-workspace')).toContainText('게임 성능 비교');
+  await expect(panel.getByTestId('perf-compare-workspace')).toContainText('게임 예상 성능');
   await expect(panel.getByTestId('quote-fps-section')).toBeVisible();
   await expect(panel.getByTestId('fps-empty')).toContainText('이 조합의 공개 참고 자료가 아직 없어요');
-  // 왼쪽 카드의 아크 옆 = 가격·성능 향상 그래프 자리 — 미선택 시엔 짧은 안내 한 줄만 보인다.
+  // 왼쪽 카드의 아크 옆 = 가격·성능 향상 자리 — 미선택 시에도 빈 막대 구조(회색 트랙+라벨)가 고정으로 보인다.
   await expect(panel.getByTestId('price-effect-panel')).toContainText('가격·성능 향상');
-  await expect(panel.getByTestId('perf-compare-idle')).toContainText('후보를 고르면');
+  await expect(panel.getByTestId('cost-effect-empty')).toContainText('가격');
+  await expect(panel.getByTestId('cost-effect-empty')).toContainText('성능');
+  await expect(panel.getByTestId('perf-compare-idle')).toContainText('교체 후보를 고르면 채워져요');
 });
 
 test('shows game FPS reference in the performance panel with game and resolution selectors', async ({ page }) => {
@@ -1434,22 +1437,22 @@ test('picks a replacement candidate in the performance panel, compares, and appl
 
   await page.goto('/self-quote?category=CPU');
 
-  // 아코디언 후보 옆 '성능 비교' 버튼은 제거됐다 — 비교는 오른쪽 '게임 성능 비교' 작업창에서 시작한다.
+  // 아코디언 후보 옆 '성능 비교' 버튼은 제거됐다 — 비교는 카드 헤더의 후보 선택 콤보에서 시작한다.
   await expect(page.getByTestId('checklist-candidates-CPU')).toContainText('인텔 245K');
   await expect(page.getByTestId('candidate-perf-compare')).toHaveCount(0);
 
-  // 상시 작업창의 한 줄 콤보: [CPU|GPU 토글] + [후보 선택 ▾] — 클릭하면 팝오버로 호환 후보 리스트.
+  // 카드 헤더 줄의 한 줄 콤보: [CPU|GPU 토글] + [교체 후보 선택 ▾] — 클릭하면 팝오버로 호환 후보 리스트.
   const panel = page.getByTestId('quote-performance-panel');
   const workspace = panel.getByTestId('perf-compare-workspace');
   await expect(workspace).toBeVisible();
-  await expect(workspace).toContainText('게임 성능 비교');
-  await expect(workspace.getByTestId('perf-candidate-category-GPU')).toHaveAttribute('aria-pressed', 'true');
-  await workspace.getByTestId('perf-candidate-select').click();
-  const popover = workspace.getByTestId('perf-candidate-popover');
+  await expect(workspace).toContainText('게임 예상 성능');
+  await expect(panel.getByTestId('perf-candidate-category-GPU')).toHaveAttribute('aria-pressed', 'true');
+  await panel.getByTestId('perf-candidate-select').click();
+  const popover = panel.getByTestId('perf-candidate-popover');
   await expect(popover).toBeVisible();
   await expect(popover.getByTestId('perf-candidate-option-0')).toContainText('RTX 5070');
   // 팝오버가 열린 채 카테고리를 토글하면 닫히지 않고 그 카테고리 후보로 바뀐다 + 지금 담긴 부품 표시.
-  await workspace.getByTestId('perf-candidate-category-CPU').click();
+  await panel.getByTestId('perf-candidate-category-CPU').click();
   await expect(popover.getByTestId('perf-candidate-current')).toContainText('라이젠 9600X');
 
   // PASS 후보는 이름+가격+호환 배지, FAIL 후보는 숨기지 않고 회색 비활성 + 선택 불가 사유.
@@ -1464,8 +1467,8 @@ test('picks a replacement candidate in the performance panel, compares, and appl
 
   // 후보 선택 → 팝오버가 닫히고 즉시 비교 모드(기존 조합 vs 변경 조합).
   await firstOption.click();
-  await expect(workspace.getByTestId('perf-candidate-popover')).toHaveCount(0);
-  await expect(workspace.getByTestId('perf-candidate-select')).toContainText('인텔 245K');
+  await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
+  await expect(panel.getByTestId('perf-candidate-select')).toContainText('인텔 245K');
   await expect(workspace.getByTestId('fps-compare-banner')).toContainText('라이젠 9600X → 인텔 245K');
   // 게임 예상 성능이 비교 표시로 전환: 기존→변경 숫자 + 델타 배지 + 기존/변경 범위 바 2줄.
   await expect(workspace.getByTestId('fps-result')).toBeVisible();
@@ -1480,8 +1483,9 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   await expect(panel.getByTestId('cost-effect-price')).toContainText('추가 비용 +50,000원');
   await expect(panel.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
 
-  // 보면서 담기: '이 제품으로 교체해 담기' → 실제 교체(PUT) + 비교 해제 + 게이지가 새 조합 값으로 스윕.
-  await workspace.getByTestId('perf-apply-replace').click();
+  // 보면서 담기: 패널 하단 전체 폭 액션 줄의 '이 제품으로 교체해 담기' → 실제 교체(PUT) + 비교 해제 + 게이지가 새 조합 값으로 스윕.
+  await expect(panel.getByTestId('perf-action-row')).toBeVisible();
+  await panel.getByTestId('perf-apply-replace').click();
   await expect(workspace.getByTestId('fps-compare-delta')).toHaveCount(0);
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
   await expect(panel.getByTestId('perf-compare-idle')).toBeVisible();
@@ -1498,7 +1502,7 @@ test('picks a replacement candidate in the performance panel, compares, and appl
     }));
   });
   await expect(workspace.getByTestId('fps-compare-banner')).toContainText('인텔 245K → 라이젠 9600X');
-  await expect(workspace.getByTestId('perf-candidate-category-CPU')).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByTestId('perf-candidate-category-CPU')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('drives the candidate popover: open, dismiss without picking, pick WARN, and clear', async ({ page }) => {
@@ -1567,41 +1571,45 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
 
   await page.goto('/self-quote');
 
-  // 미선택 빈 상태: 향상 그래프 자리엔 짧은 안내 한 줄만 보인다(세로 압박 없음).
+  // 미선택 빈 상태: 향상 그래프 자리는 빈 막대 구조가 고정으로 보이고, 액션 줄은 없다.
+  const panel = page.getByTestId('quote-performance-panel');
   const workspace = page.getByTestId('perf-compare-workspace');
   await expect(workspace).toBeVisible();
   await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
+  await expect(page.getByTestId('cost-effect-empty')).toBeVisible();
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
+  await expect(panel.getByTestId('perf-action-row')).toHaveCount(0);
 
-  // 열기 → Escape로 닫기: 선택 없이 닫혀도 빈 상태가 유지된다.
-  await workspace.getByTestId('perf-candidate-select').click();
-  const popover = workspace.getByTestId('perf-candidate-popover');
+  // 헤더 콤보 열기 → Escape로 닫기: 선택 없이 닫혀도 빈 상태가 유지된다.
+  await panel.getByTestId('perf-candidate-select').click();
+  const popover = panel.getByTestId('perf-candidate-popover');
   await expect(popover).toBeVisible();
   await expect(popover.getByTestId('perf-candidate-current')).toContainText('RTX 5060');
   await page.keyboard.press('Escape');
-  await expect(workspace.getByTestId('perf-candidate-popover')).toHaveCount(0);
+  await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
   await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
 
   // 다시 열고 팝오버 바깥 클릭으로 닫기.
-  await workspace.getByTestId('perf-candidate-select').click();
+  await panel.getByTestId('perf-candidate-select').click();
   await expect(popover).toBeVisible();
   await page.getByTestId('quote-composite-score-card').click();
-  await expect(workspace.getByTestId('perf-candidate-popover')).toHaveCount(0);
+  await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
 
   // WARN 후보는 '간섭 주의'를 단 채 선택 가능 — 고르면 팝오버가 닫히고 비교가 켜진다.
-  await workspace.getByTestId('perf-candidate-select').click();
+  await panel.getByTestId('perf-candidate-select').click();
   const warnOption = popover.getByTestId('perf-candidate-option-1');
   await expect(warnOption).toContainText('간섭 주의');
   await expect(warnOption).toBeEnabled();
   await warnOption.click();
-  await expect(workspace.getByTestId('perf-candidate-popover')).toHaveCount(0);
+  await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
   await expect(workspace.getByTestId('fps-compare-banner')).toContainText('RTX 5060 → 대형 3팬 GPU');
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
   await expect(page.getByTestId('fps-compare-avg')).toHaveText('152');
 
-  // 비교 해제 → 다시 미선택 빈 상태로 복귀하고 게이지도 기존 값만 남는다.
-  await workspace.getByTestId('compare-clear').click();
+  // 비교 해제(하단 액션 줄) → 다시 미선택 빈 상태로 복귀하고 게이지도 기존 값만 남는다.
+  await panel.getByTestId('compare-clear').click();
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
+  await expect(panel.getByTestId('perf-action-row')).toHaveCount(0);
   await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
   await expect(page.getByTestId('fps-avg')).toHaveText('130');
 });

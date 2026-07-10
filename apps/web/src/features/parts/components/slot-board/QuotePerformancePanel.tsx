@@ -32,10 +32,12 @@ const FPS_CAP = 165;
 // name/currentPrice는 교체 비교(가격·성능 향상)에만 쓰는 선택 필드다 — 없으면 비용 문구만 생략된다.
 type PerfItem = { category: string; partId: string; name?: string; currentPrice?: number };
 
-// 팀장 확정 설계(정정 반영): 탭 없이 상시 2열.
-// 왼쪽 카드 하나 = [종합점수 아크 | 가격·성능 향상 그래프], 오른쪽 = "게임 성능 비교" 상시 작업창
-// ([CPU|GPU 토글 + 후보 선택 팝오버] + 게임 예상 성능(원래 수평 막대) + 교체해 담기).
-// onStartComparison이 없으면(저장 견적 등) 작업창·향상 그래프 없이 [종합점수 | 게임 예상 성능]으로 렌더된다.
+// 팀장 확정 설계(최종 개편): 헤더 한 줄 + 데이터 시각화 본문 + 하단 액션 줄.
+// 헤더 = 타이틀·적합 배지(왼쪽) + [CPU|GPU 토글 + 교체 후보 선택 ▾] 콤보(오른쪽 끝, 팝오버).
+// 본문 = 왼쪽 카드 [종합점수 아크 | 가격·성능 향상(비교 미선택 시에도 빈 막대 구조 고정)],
+//        오른쪽 [게임 예상 성능 수평 막대 + 게임 칩·해상도, 비교 시 기존/변경 범위 바 2줄 + 델타].
+// 액션 줄 = 비교 활성 시에만 패널 하단 전체 폭([이 제품으로 교체해 담기] + [비교 해제]).
+// onStartComparison이 없으면(저장 견적 등) 헤더 콤보·향상 그래프 없이 [종합점수 | 게임 예상 성능]으로 렌더된다.
 export function QuotePerformancePanel({
   graph,
   items,
@@ -61,19 +63,6 @@ export function QuotePerformancePanel({
 
   return (
     <section data-testid="quote-performance-panel" className="panel p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-black text-commerce-ink">담긴 견적 성능</h2>
-          <span
-            data-testid="quote-performance-fit"
-            className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${scoreBadgeTone(compositeScore.score)}`}
-          >
-            {compositeScore.label}
-          </span>
-        </div>
-        <span className="text-[10px] font-bold text-slate-400">공개 자료 기준 참고치</span>
-      </div>
-
       <PerfPanelBody
         compositeScore={compositeScore}
         perfItems={perfItems}
@@ -88,7 +77,7 @@ export function QuotePerformancePanel({
 }
 
 // 패널 본문: 게임/해상도 선택과 FPS 조회(기존·변경 조합)를 한곳에서 소유하고,
-// 왼쪽 카드(종합점수 아크 + 가격·성능 향상)와 오른쪽 작업창(콤보 + 게임 예상 성능 + 교체 담기)에 같은 상태를 내려준다.
+// 헤더 콤보(후보 선택)·왼쪽 카드(종합점수 아크 + 가격·성능 향상)·오른쪽 작업창(게임 예상 성능)·하단 액션 줄에 같은 상태를 내려준다.
 function PerfPanelBody({
   compositeScore,
   perfItems,
@@ -340,129 +329,154 @@ function PerfPanelBody({
   );
 
   return (
-    <div
-      data-testid="quote-performance-grid"
-      className={`grid gap-3 lg:items-start ${
-        hasWorkspace ? 'lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]' : 'lg:grid-cols-[minmax(260px,38%)_minmax(0,1fr)]'
-      }`}
-    >
-      {/* 왼쪽 카드 하나 = [종합점수 아크 | 가격·성능 향상 그래프] 가로 배치(모바일은 세로 스택) — 구분은 얇은 디바이더만.
-          작업창이 없는 사용처(저장 견적 등)는 향상 그래프 없이 종합점수만 둔다. */}
-      <div className="rounded-lg border border-commerce-line bg-white p-3">
-        {hasWorkspace ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {compositeCard}
-            <div data-testid="price-effect-panel" className="border-t border-commerce-line pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
-              <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                <span className="font-black text-slate-600">가격·성능 향상</span>
-                <span className="font-bold text-slate-400">교체 비교 기준</span>
-              </div>
-              {isCompareReady && activeComparison ? (
-                <>
-                  {/* 가격 변화 % vs 성능(FPS 평균) 변화 % — "돈을 더 내면 얼마나 좋아지나"를 한눈에. */}
-                  <div data-testid="cost-effect-block" className="perf-block-in rounded-lg border border-commerce-line bg-slate-50/60 p-2.5">
-                    <CostEffectBars
-                      currentPrice={currentPart?.currentPrice}
-                      targetPrice={activeComparison.price}
-                      baseAvg={avg}
-                      compareAvg={compareAvg}
-                    />
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] font-bold text-slate-500">
-                    <span data-testid="cost-effect-price">{priceDiffText(currentPart?.currentPrice, activeComparison.price)}</span>
-                    <span data-testid="cost-effect-fps">
-                      예상 FPS {fpsRangeText(avg, hasLow ? low : undefined)} → {fpsRangeText(compareAvg, hasCompareLow ? compareLow : undefined)}
-                    </span>
-                  </div>
-                </>
-              ) : isCompareLoading ? (
-                <div className="h-20 animate-pulse rounded-lg bg-slate-100" />
-              ) : activeComparison ? (
-                <p className="text-[11px] font-bold leading-relaxed text-slate-400">
-                  변경 조합 자료가 없어 향상 폭을 계산할 수 없어요.
-                </p>
-              ) : (
-                <p data-testid="perf-compare-idle" className="text-[11px] font-bold leading-relaxed text-slate-400">
-                  후보를 고르면 가격·성능 향상 폭을 보여드려요.
-                </p>
-              )}
-            </div>
-          </div>
-        ) : (
-          compositeCard
-        )}
-      </div>
-
-      {/* 오른쪽 열: "게임 성능 비교" 상시 작업창 — 한 줄 콤보(토글+후보 선택 팝오버)는 세로로 고정되고,
-          팝오버는 겹쳐 떠서 아래 게임 예상 성능을 밀어내지 않는다. 작업창이 없으면 게임 예상 성능만 카드로 둔다. */}
-      {hasWorkspace && onStartComparison ? (
-        <div data-testid="perf-compare-workspace" className="rounded-lg border border-commerce-line bg-white p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[11px] font-black text-slate-600">게임 성능 비교</span>
-            <span className="text-[10px] font-bold text-slate-400">후보를 고르면 아래 예상 성능·왼쪽 향상 폭이 같이 바뀌어요</span>
-          </div>
-
+    <>
+      {/* 헤더 한 줄: 타이틀·적합 배지(왼쪽) + [CPU|GPU 토글 + 교체 후보 선택 ▾] 콤보(오른쪽 끝).
+          본문은 데이터 시각화만 남긴다 — 콤보가 없는 사용처(저장 견적 등)는 참고치 캡션만 둔다. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-black text-commerce-ink">담긴 견적 성능</h2>
+          <span
+            data-testid="quote-performance-fit"
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${scoreBadgeTone(compositeScore.score)}`}
+          >
+            {compositeScore.label}
+          </span>
+        </div>
+        {hasWorkspace && onStartComparison ? (
           <CandidateCombo
             perfItems={perfItems}
             activeComparison={activeComparison}
             onStartComparison={onStartComparison}
           />
+        ) : (
+          <span className="text-[10px] font-bold text-slate-400">공개 자료 기준 참고치</span>
+        )}
+      </div>
 
-          {activeComparison ? (
-            <div data-testid="fps-compare-banner" className="mt-2.5 flex min-w-0 flex-wrap items-center gap-1 rounded-md border border-blue-100 bg-blue-50/60 px-2.5 py-1.5 text-[11px] font-bold text-slate-600">
-              <span className="font-black text-brand-blue">교체 비교</span>
-              <span aria-hidden="true">·</span>
-              <span className="min-w-0 truncate">
-                {currentPart?.name ?? '지금 담긴 부품'} → {activeComparison.name}
-              </span>
+      <div
+        data-testid="quote-performance-grid"
+        className={`grid gap-3 lg:items-start ${
+          hasWorkspace ? 'lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]' : 'lg:grid-cols-[minmax(260px,38%)_minmax(0,1fr)]'
+        }`}
+      >
+        {/* 왼쪽 카드 하나 = [종합점수 아크 | 가격·성능 향상 그래프] 가로 배치(모바일은 세로 스택) — 구분은 얇은 디바이더만.
+            작업창이 없는 사용처(저장 견적 등)는 향상 그래프 없이 종합점수만 둔다. */}
+        <div className="rounded-lg border border-commerce-line bg-white p-3">
+          {hasWorkspace ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {compositeCard}
+              <div data-testid="price-effect-panel" className="border-t border-commerce-line pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className="font-black text-slate-600">가격·성능 향상</span>
+                  <span className="font-bold text-slate-400">교체 비교 기준</span>
+                </div>
+                {isCompareReady && activeComparison ? (
+                  <>
+                    {/* 가격 변화 % vs 성능(FPS 평균) 변화 % — "돈을 더 내면 얼마나 좋아지나"를 한눈에. */}
+                    <div data-testid="cost-effect-block" className="perf-block-in rounded-lg border border-commerce-line bg-slate-50/60 p-2.5">
+                      <CostEffectBars
+                        currentPrice={currentPart?.currentPrice}
+                        targetPrice={activeComparison.price}
+                        baseAvg={avg}
+                        compareAvg={compareAvg}
+                      />
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] font-bold text-slate-500">
+                      <span data-testid="cost-effect-price">{priceDiffText(currentPart?.currentPrice, activeComparison.price)}</span>
+                      <span data-testid="cost-effect-fps">
+                        예상 FPS {fpsRangeText(avg, hasLow ? low : undefined)} → {fpsRangeText(compareAvg, hasCompareLow ? compareLow : undefined)}
+                      </span>
+                    </div>
+                  </>
+                ) : isCompareLoading ? (
+                  <div className="h-20 animate-pulse rounded-lg bg-slate-100" />
+                ) : (
+                  <>
+                    {/* 빈 구조 고정: 비교 미선택(또는 자료 없음)에도 회색 트랙 빈 막대·라벨이 그대로 보여
+                        자리가 흔들리지 않고, 값 영역은 미묘한 placeholder만 둔다. 후보를 고르면 grow 모션으로 채워진다. */}
+                    <div data-testid="cost-effect-empty" className="rounded-lg border border-dashed border-slate-200 bg-slate-50/40 p-2.5">
+                      <div className="space-y-1.5">
+                        <EffectBar label="가격" percent={null} maxPercent={1} barClass="bg-slate-300" textClass="text-slate-400" />
+                        <EffectBar label="성능" percent={null} maxPercent={1} barClass="bg-slate-300" textClass="text-slate-400" />
+                      </div>
+                    </div>
+                    <p
+                      data-testid={activeComparison ? 'perf-compare-no-data' : 'perf-compare-idle'}
+                      className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400"
+                    >
+                      {activeComparison ? '변경 조합 자료가 없어 향상 폭을 계산할 수 없어요.' : '교체 후보를 고르면 채워져요.'}
+                    </p>
+                  </>
+                )}
+              </div>
             </div>
-          ) : null}
+          ) : (
+            compositeCard
+          )}
+        </div>
 
+        {/* 오른쪽 열: 게임 예상 성능 작업창 — 선택기는 헤더 콤보로 올라갔고, 여기는 비교 배너 + 데이터 시각화만 남는다. */}
+        {hasWorkspace ? (
+          <div data-testid="perf-compare-workspace" className="rounded-lg border border-commerce-line bg-white p-3">
+            {activeComparison ? (
+              <div data-testid="fps-compare-banner" className="mb-2.5 flex min-w-0 flex-wrap items-center gap-1 rounded-md border border-blue-100 bg-blue-50/60 px-2.5 py-1.5 text-[11px] font-bold text-slate-600">
+                <span className="font-black text-brand-blue">교체 비교</span>
+                <span aria-hidden="true">·</span>
+                <span className="min-w-0 truncate">
+                  {currentPart?.name ?? '지금 담긴 부품'} → {activeComparison.name}
+                </span>
+              </div>
+            ) : null}
+
+            {fpsSection}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-commerce-line bg-white p-3">{fpsSection}</div>
+        )}
+      </div>
+
+      {/* 액션 줄: 비교 활성 시에만 패널 하단 전체 폭으로 등장 — 두 열(향상 폭·예상 성능)이 모두 이 비교의
+          결과라서, 다 보고 난 뒤의 마지막 결정 단계로 한 줄을 깐다(모바일 스택에서도 데이터 아래 자연 위치). */}
+      {hasWorkspace && activeComparison ? (
+        <div data-testid="perf-action-row" className="perf-block-in mt-3 border-t border-commerce-line pt-3">
           {applyError ? (
-            <div data-testid="perf-apply-error" className="mt-2.5 rounded-md border border-red-100 bg-red-50/70 px-2.5 py-1.5 text-[11px] font-bold text-red-600">
+            <div data-testid="perf-apply-error" className="mb-2 rounded-md border border-red-100 bg-red-50/70 px-2.5 py-1.5 text-[11px] font-bold text-red-600">
               {applyError}
             </div>
           ) : null}
-
-          <div className="mt-2.5 border-t border-commerce-line pt-2.5">{fpsSection}</div>
-
-          {activeComparison ? (
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              {onApplyComparison ? (
-                <button
-                  type="button"
-                  data-testid="perf-apply-replace"
-                  disabled={isApplying}
-                  onClick={() => void applyComparison()}
-                  className="rounded bg-brand-blue px-2.5 py-1.5 text-[10px] font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isApplying ? '교체해 담는 중…' : '이 제품으로 교체해 담기'}
-                </button>
-              ) : null}
-              {onClearComparison ? (
-                <button
-                  type="button"
-                  data-testid="compare-clear"
-                  onClick={onClearComparison}
-                  className="rounded border border-commerce-line bg-white px-2 py-1.5 text-[10px] font-black text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
-                >
-                  비교 해제
-                </button>
-              ) : null}
-            </div>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {onApplyComparison ? (
+              <button
+                type="button"
+                data-testid="perf-apply-replace"
+                disabled={isApplying}
+                onClick={() => void applyComparison()}
+                className="rounded bg-brand-blue px-3 py-2 text-[11px] font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isApplying ? '교체해 담는 중…' : '이 제품으로 교체해 담기'}
+              </button>
+            ) : null}
+            {onClearComparison ? (
+              <button
+                type="button"
+                data-testid="compare-clear"
+                onClick={onClearComparison}
+                className="rounded border border-commerce-line bg-white px-2.5 py-2 text-[11px] font-black text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
+              >
+                비교 해제
+              </button>
+            ) : null}
+          </div>
         </div>
-      ) : (
-        <div className="rounded-lg border border-commerce-line bg-white p-3">{fpsSection}</div>
-      )}
-    </div>
+      ) : null}
+    </>
   );
 }
 
 // 교체 비교가 의미 있는 카테고리(벤치마크 근거가 있는 CPU/GPU)만 선택기에 노출한다.
 const PERF_PICKER_CATEGORIES: Array<PerfCompareTarget['category']> = ['CPU', 'GPU'];
 
-// 한 줄 콤보: [CPU|GPU 토글] + [후보 선택 ▾ 버튼] — 클릭하면 팝오버로 호환 후보 리스트를 겹쳐 띄운다.
+// 카드 헤더 줄의 한 줄 콤보: [CPU|GPU 토글] + [교체 후보 선택 ▾ 버튼] — 클릭하면 팝오버로 호환 후보 리스트를 겹쳐 띄운다.
 // PASS/WARN은 선택 즉시 비교가 켜지고, FAIL은 숨기지 않고 회색 비활성 + 선택 불가 사유를 보여준다.
 function CandidateCombo({
   perfItems,
@@ -523,7 +537,8 @@ function CandidateCombo({
   const candidates = candidateQuery.data?.items ?? [];
 
   return (
-    <div ref={comboRef} className="flex items-center gap-2">
+    // 헤더 오른쪽 끝에 붙는다 — 좁은 화면에서 줄바꿈되면 자기 줄에서 오른쪽 정렬을 유지한다.
+    <div ref={comboRef} className="flex min-w-0 grow items-center justify-end gap-1.5 sm:grow-0">
       <div className="flex shrink-0 gap-0.5 rounded-md border border-commerce-line bg-white p-0.5" role="group" aria-label="비교할 부품 종류 선택">
         {PERF_PICKER_CATEGORIES.map((pickerCategory) => (
           <button
@@ -540,7 +555,7 @@ function CandidateCombo({
           </button>
         ))}
       </div>
-      <div className="relative min-w-0 flex-1">
+      <div className="relative w-44 sm:w-56">
         <button
           type="button"
           data-testid="perf-candidate-select"
@@ -556,9 +571,10 @@ function CandidateCombo({
         </button>
 
         {isPickerOpen ? (
+          // 팝오버는 버튼 오른쪽 끝에 정렬해 헤더 아래로 겹쳐 뜬다 — 본문 데이터 시각화를 밀어내지 않는다.
           <div
             data-testid="perf-candidate-popover"
-            className="perf-popover-in absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-commerce-line bg-white p-2 shadow-xl"
+            className="perf-popover-in absolute right-0 top-full z-30 mt-1 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-commerce-line bg-white p-2 shadow-xl"
           >
             {categoryCurrentPart ? (
               <div data-testid="perf-candidate-current" className="mb-1.5 truncate rounded-md bg-slate-50 px-2 py-1.5 text-[10px] font-bold text-slate-500">
@@ -837,7 +853,7 @@ function EffectBar({
       <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
         <div className={`h-full rounded-full ${barClass} perf-bar-grow${stagger ? ' perf-bar-stagger' : ''}`} style={{ width: `${width}%` }} />
       </div>
-      <span className={`text-right font-black ${textClass}`}>{percent === null ? '-' : formatSignedPercent(percent)}</span>
+      <span className={`text-right font-black ${textClass}`}>{percent === null ? '—' : formatSignedPercent(percent)}</span>
     </div>
   );
 }
