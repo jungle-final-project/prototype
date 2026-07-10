@@ -36,7 +36,10 @@ public final class ToolApplicabilityPolicy {
                 .map(category -> category.toUpperCase(Locale.ROOT))
                 .collect(Collectors.toSet());
         return switch (tool) {
-            case "power" -> categories.contains("GPU") && categories.contains("PSU");
+            // power는 판정 대상인 PSU가 담겨 있으면 유효하다 — GPU 부재는 예상 부하를 낮출 뿐이라
+            // GPU 없이도 FAIL이면(예: 고TDP CPU + 저용량 PSU) GPU를 담으면 더 확실한 FAIL이다.
+            // GPU까지 요구하면 그 진짜 FAIL이 '호환 가능'으로 둔갑한다. PSU 미선택만 '선택 대기'로 거른다.
+            case "power" -> categories.contains("PSU");
             case "size" -> hasAnySizePair(categories);
             case "performance" -> categories.contains("CPU") && categories.contains("GPU");
             case "compatibility", "price" -> true;

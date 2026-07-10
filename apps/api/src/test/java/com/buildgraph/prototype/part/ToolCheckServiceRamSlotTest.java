@@ -59,7 +59,7 @@ class ToolCheckServiceRamSlotTest {
         ));
 
         assertThat(result.get("status")).isEqualTo("FAIL");
-        assertThat(String.valueOf(result.get("summary"))).contains("메모리 슬롯").contains("6개");
+        assertThat(String.valueOf(result.get("summary"))).contains("메인보드 슬롯").contains("6개");
         assertThat(details(result).get("ramSticksTotal")).isEqualTo(6);
         assertThat(details(result).get("ramSlotsMatched")).isEqualTo(false);
     }
