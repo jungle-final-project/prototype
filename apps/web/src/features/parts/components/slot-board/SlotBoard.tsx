@@ -18,6 +18,7 @@ import {
   type SlotConfig,
   type SlotEdgeConfig
 } from './slotBoardConfig';
+import { FusedPlateArt } from './FusedPlateArt';
 
 export type SlotBoardVisualMode = 'motherboard' | 'isometric';
 
@@ -247,30 +248,38 @@ function MotherboardSlotBoardBody({
       data-visual-mode="motherboard"
       className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
     >
-      <BoardPlanArt />
-      <SlotBoardEdges
+      <FusedPlateArt
         items={items}
-        graph={graph}
         selectedCategory={selectedCategory}
-        hoveredCategory={null}
         flashingCategories={flashingCategories}
-        visualMode="motherboard"
+        onSlotSelect={onSlotSelect}
       />
-      {SLOT_CONFIGS.map((slot) => (
-        <MotherboardSlot
-          key={slot.category}
-          slot={slot}
-          layout={slot.layout}
-          items={items.filter((item) => item.category === slot.category)}
-          problemStatus={statusByCategory.get(slot.category)}
-          isSelected={selectedCategory === slot.category}
-          isNext={nextCategory === slot.category}
-          isFlashing={flashingCategories.has(slot.category)}
-          onSelect={() => onSlotSelect(slot.category)}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
+      <div className="flex flex-col gap-2 lg:hidden">
+        <BoardPlanArt />
+        <SlotBoardEdges
+          items={items}
+          graph={graph}
+          selectedCategory={selectedCategory}
+          hoveredCategory={null}
+          flashingCategories={flashingCategories}
+          visualMode="motherboard"
         />
-      ))}
+        {SLOT_CONFIGS.map((slot) => (
+          <MotherboardSlot
+            key={slot.category}
+            slot={slot}
+            layout={slot.layout}
+            items={items.filter((item) => item.category === slot.category)}
+            problemStatus={statusByCategory.get(slot.category)}
+            isSelected={selectedCategory === slot.category}
+            isNext={nextCategory === slot.category}
+            isFlashing={flashingCategories.has(slot.category)}
+            onSelect={() => onSlotSelect(slot.category)}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+          />
+        ))}
+      </div>
     </div>
   );
 }
