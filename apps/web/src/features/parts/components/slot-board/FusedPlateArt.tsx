@@ -52,11 +52,9 @@ export function FusedPlateArt({
           className="fused-plate-bg pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
         />
         {FUSED_PART_LAYERS.map((layer) => {
-          const selectedEmptyRamPreview =
-            selectedCategory === 'RAM' && ramSlotCount === 0 && layer.category === 'RAM' && layer.slotIndex === 0;
           const visible = layer.category === 'RAM'
-            ? (layer.slotIndex ?? 0) < ramSlotCount || selectedEmptyRamPreview
-            : filledCategories.has(layer.category) || selectedCategory === layer.category;
+            ? (layer.slotIndex ?? 0) < ramSlotCount
+            : filledCategories.has(layer.category);
           const focused = selectedCategory === layer.category;
           const hovered = spotlightCategory === layer.category;
           const dimmed = Boolean(spotlightCategory && !hovered);

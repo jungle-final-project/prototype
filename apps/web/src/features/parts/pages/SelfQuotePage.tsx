@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, LayoutGrid, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
@@ -345,7 +345,9 @@ function SelfQuoteSlotBoardPage() {
             nextCategory={nextCategory}
             onSelect={selectSlot}
             onAddPart={addPart}
+            onRemoveItem={removeItem}
             isMutating={isMutating}
+            isRemovePending={deleteMutation.isPending}
           />
           <div className="min-h-0 lg:h-[800px]">
             <SlotBoard
@@ -454,14 +456,18 @@ function QuoteChecklist({
   nextCategory,
   onSelect,
   onAddPart,
-  isMutating
+  onRemoveItem,
+  isMutating,
+  isRemovePending
 }: {
   draftItems: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
   nextCategory: PartCategory | null;
   onSelect: (category: PartCategory) => void;
   onAddPart: (part: PartRow) => void;
+  onRemoveItem: (partId: string) => void;
   isMutating: boolean;
+  isRemovePending: boolean;
 }) {
   const [expandedCategory, setExpandedCategory] = useState<PartCategory | null>(() => selectedCategory ?? nextCategory ?? 'CPU');
   const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
@@ -488,6 +494,14 @@ function QuoteChecklist({
     onSelect(category);
   };
 
+  const openCategoryFromKeyboard = (event: KeyboardEvent<HTMLDivElement>, category: PartCategory) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+    event.preventDefault();
+    openCategory(category);
+  };
+
   const choosePart = (category: PartCategory, part: PartRow) => {
     onAddPart(part);
     const next = RECOMMENDED_SLOT_ORDER.find((candidate) => candidate !== category && !draftItems.some((item) => item.category === candidate));
@@ -497,13 +511,33 @@ function QuoteChecklist({
     }
   };
 
+  const removeCategoryItems = (items: QuoteDraftItem[]) => {
+    items.forEach((item) => onRemoveItem(item.partId));
+  };
+
+  const removeAllItems = () => {
+    draftItems.forEach((item) => onRemoveItem(item.partId));
+  };
+
   return (
     // lg: 보드(구성 관계도) 높이에 맞춰 늘어난다 — 좌·중 열의 아래 끝이 나란해진다.
     <aside data-testid="quote-checklist" className="panel flex h-fit flex-col p-4 lg:h-[800px] lg:overflow-hidden">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-black text-commerce-ink">견적 체크리스트</h2>
-        <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
-          {filledCount}/{RECOMMENDED_SLOT_ORDER.length} 완료
+        <span className="flex items-center gap-2">
+          <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
+            {filledCount}/{RECOMMENDED_SLOT_ORDER.length} 완료
+          </span>
+          {draftItems.length > 0 ? (
+            <button
+              type="button"
+              disabled={isRemovePending}
+              onClick={removeAllItems}
+              className="rounded px-1 text-[10px] font-black text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              전부 제거
+            </button>
+          ) : null}
         </span>
       </div>
       <ol className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
@@ -516,14 +550,16 @@ function QuoteChecklist({
           const label = PART_CATEGORY_LABELS[category] ?? category;
           return (
             <li key={category}>
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 aria-label={`${label} 후보 목록 열기`}
                 aria-expanded={expandedCategory === category}
                 data-testid={`checklist-${category}`}
                 data-filled={filled ? 'true' : 'false'}
                 data-next={isNext ? 'true' : 'false'}
                 onClick={() => openCategory(category)}
+                onKeyDown={(event) => openCategoryFromKeyboard(event, category)}
                 className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
                   isSelected || expandedCategory === category
                     ? 'border-brand-blue bg-white ring-2 ring-blue-100'
@@ -539,7 +575,20 @@ function QuoteChecklist({
                     {index + 1}. {label}
                   </span>
                   {filled ? (
-                    <span className="shrink-0 text-[10px] font-black text-emerald-700">✓ 완료</span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-[10px] font-black text-emerald-700">✓ 완료</span>
+                      <button
+                        type="button"
+                        disabled={isRemovePending}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeCategoryItems(items);
+                        }}
+                        className="rounded px-1 text-[10px] font-black text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        제거
+                      </button>
+                    </span>
                   ) : isNext ? (
                     <span className="shrink-0 text-[10px] font-black text-brand-blue">다음 선택</span>
                   ) : (
@@ -557,7 +606,7 @@ function QuoteChecklist({
                 ) : (
                   <div className="mt-1 text-[11px] text-slate-400">+ 부품 선택</div>
                 )}
-              </button>
+              </div>
               {expandedCategory === category ? (
                 <div
                   data-testid={`checklist-candidates-${category}`}
