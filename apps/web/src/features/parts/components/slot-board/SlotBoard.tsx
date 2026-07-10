@@ -20,7 +20,8 @@ import {
 } from './slotBoardConfig';
 import { FusedPlateArt } from './FusedPlateArt';
 
-export type SlotBoardVisualMode = 'motherboard' | 'isometric';
+// 3뷰: 배치판(fused, 기본) / 실장도(motherboard, 구 평면도 복원) / 3D 등각(isometric).
+export type SlotBoardVisualMode = 'fused' | 'motherboard' | 'isometric';
 
 export type ConnectorAnchorPoint = { x: number; y: number };
 export type ConnectorAnchors = Record<string, { card: ConnectorAnchorPoint; part: ConnectorAnchorPoint }>;
@@ -53,7 +54,7 @@ export function SlotBoard({
   items,
   selectedCategory,
   nextCategory,
-  visualMode = 'motherboard',
+  visualMode = 'fused',
   onVisualModeChange,
   onClearSelection,
   onSlotSelect,
@@ -70,6 +71,7 @@ export function SlotBoard({
   // 카테고리별 장착 플래시를 보드 수준에서 계산해 카드(꽂힘 모션)와 관계선(draw-in·포트 점등)이 함께 반응한다.
   const flashingCategories = useAttachFlashByCategory(items);
   const isIsometric = visualMode === 'isometric';
+  const isMotherboard = visualMode === 'motherboard';
 
   useEffect(() => {
     if (isIsometric) {
@@ -83,10 +85,7 @@ export function SlotBoard({
       <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
-          <SlotBoardModeSwitch
-            checked={isIsometric}
-            onToggle={() => onVisualModeChange?.(isIsometric ? 'motherboard' : 'isometric')}
-          />
+          <SlotBoardModeSegments value={visualMode} onChange={onVisualModeChange} />
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-end gap-3 text-[10px] font-bold text-slate-500">
           {isIsometric ? (
@@ -132,8 +131,20 @@ export function SlotBoard({
           overlaysVisible={overlaysVisible}
           connectorAnchors={connectorAnchors}
         />
-      ) : (
+      ) : isMotherboard ? (
         <MotherboardSlotBoardBody
+          items={items}
+          selectedCategory={selectedCategory}
+          nextCategory={nextCategory}
+          onSlotSelect={onSlotSelect}
+          onRemoveItem={onRemoveItem}
+          isRemovePending={isRemovePending}
+          graph={graph}
+          statusByCategory={statusByCategory}
+          flashingCategories={flashingCategories}
+        />
+      ) : (
+        <FusedSlotBoardBody
           items={items}
           selectedCategory={selectedCategory}
           nextCategory={nextCategory}
@@ -152,38 +163,44 @@ export function SlotBoard({
   );
 }
 
-function SlotBoardModeSwitch({
-  checked,
-  onToggle
+// 3단 보기 전환(사용자 언어 라벨): 배치도 = 배치판(fused), 실장도 = 구 평면도, 3D = 등각 뷰.
+const SLOT_BOARD_MODE_OPTIONS: Array<{ mode: SlotBoardVisualMode; label: string }> = [
+  { mode: 'fused', label: '배치도' },
+  { mode: 'motherboard', label: '실장도' },
+  { mode: 'isometric', label: '3D' }
+];
+
+function SlotBoardModeSegments({
+  value,
+  onChange
 }: {
-  checked: boolean;
-  onToggle: () => void;
+  value: SlotBoardVisualMode;
+  onChange?: (mode: SlotBoardVisualMode) => void;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-label="3D UI 보기"
-      aria-checked={checked}
-      onClick={onToggle}
-      className={`hidden items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue lg:inline-flex ${
-        checked
-          ? 'border-blue-200 bg-blue-50 text-brand-blue'
-          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-      }`}
+    <div
+      role="radiogroup"
+      aria-label="보드 보기 방식"
+      className="hidden items-center gap-0.5 rounded-full border border-slate-200 bg-white p-0.5 lg:inline-flex"
     >
-      <span
-        aria-hidden="true"
-        className={`relative h-3.5 w-6 rounded-full transition ${checked ? 'bg-brand-blue' : 'bg-slate-300'}`}
-      >
-        <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white shadow-sm transition ${
-            checked ? 'left-3' : 'left-0.5'
-          }`}
-        />
-      </span>
-      3D UI 보기
-    </button>
+      {SLOT_BOARD_MODE_OPTIONS.map((option) => {
+        const active = value === option.mode;
+        return (
+          <button
+            key={option.mode}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange?.(option.mode)}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
+              active ? 'bg-brand-blue text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -228,7 +245,7 @@ function SlotBoardDisplaySwitch({
   );
 }
 
-function MotherboardSlotBoardBody({
+function FusedSlotBoardBody({
   items,
   selectedCategory,
   nextCategory,
@@ -256,11 +273,11 @@ function MotherboardSlotBoardBody({
   flashingCategories: Set<PartCategory>;
 }) {
   return (
-    // 보드 본체 — 실장도: 추상 메인보드 평면도의 실장 지점(소켓/DIMM/PCIe/M.2)에 부품이 꽂히고,
-    // 보드에 안 꽂히는 부품은 케이스 좌상·파워 좌하·쿨러 상단(소켓 위)에 도킹된다.
+    // 보드 본체 — 배치도(기본): 실사 배치판(FusedPlateArt) 위에 부품 오버레이가 겹쳐진다(데스크톱 전용).
+    // 모바일은 실장도와 같은 세로 카드 목록으로 폴백한다.
     <div
       data-testid="slot-board"
-      data-visual-mode="motherboard"
+      data-visual-mode="fused"
       className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
     >
       <FusedPlateArt
@@ -276,15 +293,6 @@ function MotherboardSlotBoardBody({
       />
       <SlotBoardProblemBanner problem={boardProblem} />
       <div className="flex flex-col gap-2 lg:hidden">
-        <BoardPlanArt />
-        <SlotBoardEdges
-          items={items}
-          graph={graph}
-          selectedCategory={selectedCategory}
-          hoveredCategory={null}
-          flashingCategories={flashingCategories}
-          visualMode="motherboard"
-        />
         {SLOT_CONFIGS.map((slot) => (
           <MotherboardSlot
             key={slot.category}
@@ -301,6 +309,63 @@ function MotherboardSlotBoardBody({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function MotherboardSlotBoardBody({
+  items,
+  selectedCategory,
+  nextCategory,
+  onSlotSelect,
+  onRemoveItem,
+  isRemovePending,
+  graph,
+  statusByCategory,
+  flashingCategories
+}: {
+  items: QuoteDraftItem[];
+  selectedCategory: PartCategory | null;
+  nextCategory?: PartCategory | null;
+  onSlotSelect: (category: PartCategory) => void;
+  onRemoveItem: (partId: string) => void;
+  isRemovePending: boolean;
+  graph?: BuildGraphResolveResponse;
+  statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
+  flashingCategories: Set<PartCategory>;
+}) {
+  return (
+    // 보드 본체 — 실장도: 추상 메인보드 평면도의 실장 지점(소켓/DIMM/PCIe/M.2)에 부품이 꽂히고,
+    // 보드에 안 꽂히는 부품은 케이스 좌상·파워 좌하·쿨러 상단(소켓 위)에 도킹된다.
+    <div
+      data-testid="slot-board"
+      data-visual-mode="motherboard"
+      className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
+    >
+      <BoardPlanArt />
+      <SlotBoardEdges
+        items={items}
+        graph={graph}
+        selectedCategory={selectedCategory}
+        hoveredCategory={null}
+        flashingCategories={flashingCategories}
+        visualMode="motherboard"
+      />
+      {SLOT_CONFIGS.map((slot) => (
+        <MotherboardSlot
+          key={slot.category}
+          slot={slot}
+          layout={slot.layout}
+          items={items.filter((item) => item.category === slot.category)}
+          problemStatus={statusByCategory.get(slot.category)}
+          isSelected={selectedCategory === slot.category}
+          isNext={nextCategory === slot.category}
+          isFlashing={flashingCategories.has(slot.category)}
+          onSelect={() => onSlotSelect(slot.category)}
+          onRemoveItem={onRemoveItem}
+          isRemovePending={isRemovePending}
+        />
+      ))}
     </div>
   );
 }
