@@ -1265,9 +1265,83 @@ test('shows game FPS reference in the performance panel with game and resolution
   await expect(fps.getByTestId('fps-avg')).toHaveText('55');
   await expect(fps.getByTestId('fps-result')).toContainText('무난');
 
-  // 게임 발로란트 전환 → 240fps, '매우 부드러움'.
-  await fps.getByTestId('fps-game-valorant').click();
+  // 게임 발로란트 전환(단일 모드 선택기 = '다른 게임 한눈에' 행 클릭) → 240fps.
+  await expect(fps.getByTestId('fps-game-row-valorant')).toContainText('240');
+  await fps.getByTestId('fps-game-row-valorant').click();
   await expect(fps.getByTestId('fps-avg')).toHaveText('240');
+});
+
+test('shows the other-games overview list in single mode and switches game by row click', async ({ page }) => {
+  await loginAsUser(page);
+  const draft = {
+    ...emptyDraft,
+    items: [
+      draftItem('part-perf-cpu', 'CPU', '라이젠 9600X', 300000),
+      draftItem('part-perf-gpu', 'GPU', 'RTX 5060', 500000)
+    ],
+    totalPrice: 800000,
+    itemCount: 2
+  };
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture() })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  // 게임별로 다른 FPS를 돌려준다 — 로스트아크만 자료 없음('자료 없음' 회색 행 검증용).
+  await page.route('**/api/tools/performance/check', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    const game = String(body?.context?.game ?? '');
+    const gameFpsEvidence = game.includes('lost')
+      ? []
+      : [{
+          gameTitle: game,
+          gameKey: game,
+          resolution: 'QHD',
+          graphicsPreset: 'PC_BUILDS_MEDIUM',
+          avgFps: game.includes('valorant') ? 240 : game.includes('cyberpunk') ? 48 : 130,
+          onePercentLowFps: 90,
+          sourceName: 'PC-Builds FPS calculator',
+          confidence: 'MEDIUM',
+          match: { evidenceExactness: 'GPU_CLASS_REFERENCE', gameMatched: true, resolutionMatched: true }
+        }];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '', details: { gameFpsEvidence } })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByTestId('perf-tab-game').click();
+  const fps = page.getByTestId('quote-fps-section');
+
+  // 단일 모드 2열: 왼쪽 아크 게이지 + 오른쪽 '다른 게임 한눈에' 미니 리스트(5개 게임 전부).
+  await expect(fps.getByTestId('fps-arc-gauge')).toBeVisible();
+  const overview = fps.getByTestId('fps-game-overview');
+  await expect(overview).toBeVisible();
+  await expect(overview).toContainText('다른 게임 한눈에');
+  await expect(overview.locator('[data-testid^="fps-game-row-"]')).toHaveCount(5);
+  // 현재 선택(배그) 행 하이라이트 + 게임별 평균 FPS 숫자, 자료 없는 게임은 '자료 없음' 회색 행.
+  await expect(overview.getByTestId('fps-game-row-pubg')).toHaveAttribute('aria-pressed', 'true');
+  await expect(overview.getByTestId('fps-game-row-valorant')).toContainText('240');
+  await expect(overview.getByTestId('fps-game-row-cyberpunk-2077')).toContainText('48');
+  await expect(overview.getByTestId('fps-game-row-lost-ark')).toContainText('자료 없음');
+  // 단일 모드에서는 리스트가 게임 선택기 역할 — 역할이 겹치는 게임 칩 행은 비교 모드에서만 노출한다.
+  await expect(fps.getByTestId('fps-game-valorant')).toHaveCount(0);
+
+  // 행 클릭 = 그 게임 선택(칩과 동일 동작) → 게이지가 그 게임 기준으로 갱신된다.
+  await overview.getByTestId('fps-game-row-valorant').click();
+  await expect(fps.getByTestId('fps-avg')).toHaveText('240');
+  await expect(overview.getByTestId('fps-game-row-valorant')).toHaveAttribute('aria-pressed', 'true');
+  await expect(overview.getByTestId('fps-game-row-pubg')).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('starts a panel performance comparison from a CPU candidate and clears it back', async ({ page }) => {
