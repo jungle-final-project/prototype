@@ -42,7 +42,9 @@ type SlotBoardProps = {
   onClearSelection?: () => void;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isRemovePending: boolean;
+  isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   connectorAnchors?: ConnectorAnchors;
 };
@@ -56,7 +58,9 @@ export function SlotBoard({
   onClearSelection,
   onSlotSelect,
   onRemoveItem,
+  onUpdateQuantity,
   isRemovePending,
+  isQuantityPending,
   graph,
   connectorAnchors
 }: SlotBoardProps) {
@@ -133,7 +137,9 @@ export function SlotBoard({
           nextCategory={nextCategory}
           onSlotSelect={onSlotSelect}
           onRemoveItem={onRemoveItem}
+          onUpdateQuantity={onUpdateQuantity}
           isRemovePending={isRemovePending}
+          isQuantityPending={isQuantityPending}
           graph={graph}
           statusByCategory={statusByCategory}
           flashingCategories={flashingCategories}
@@ -225,7 +231,9 @@ function MotherboardSlotBoardBody({
   nextCategory,
   onSlotSelect,
   onRemoveItem,
+  onUpdateQuantity,
   isRemovePending,
+  isQuantityPending,
   graph,
   statusByCategory,
   flashingCategories
@@ -235,7 +243,9 @@ function MotherboardSlotBoardBody({
   nextCategory?: PartCategory | null;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isRemovePending: boolean;
+  isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
@@ -253,6 +263,10 @@ function MotherboardSlotBoardBody({
         selectedCategory={selectedCategory}
         flashingCategories={flashingCategories}
         onSlotSelect={onSlotSelect}
+        onRemoveItem={onRemoveItem}
+        onUpdateQuantity={onUpdateQuantity}
+        isRemovePending={isRemovePending}
+        isQuantityPending={isQuantityPending}
       />
       <div className="flex flex-col gap-2 lg:hidden">
         <BoardPlanArt />

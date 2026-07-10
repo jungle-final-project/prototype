@@ -27,6 +27,7 @@ import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { withObjectParticle } from '../components/slot-board/koreanParticle';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
+import { DraftQuantityStepper } from '../components/slot-board/DraftQuantityStepper';
 import { SlotBoard, type SlotBoardVisualMode } from '../components/slot-board/SlotBoard';
 import { SlotStatusBar } from '../components/slot-board/SlotStatusBar';
 import { RECOMMENDED_SLOT_ORDER, SLOT_CONFIGS, SLOT_COUNT, isMultiItemCategory, isSlotCategory } from '../components/slot-board/slotBoardConfig';
@@ -36,6 +37,7 @@ import {
   getBuildGraphLayoutDefault,
   getCurrentQuoteDraft,
   listParts,
+  patchQuoteDraftItem,
   putQuoteDraftItem
 } from '../partsApi';
 import { quoteDraftToRecommendedBuild, selfQuoteBuildId } from '../selfQuoteBuild';
@@ -86,9 +88,14 @@ function SelfQuoteSlotBoardPage() {
     void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
     // 담기(ADD) 평가는 현재 구성에 직접 의존하므로 드래프트가 바뀌면 후보 목록도 재평가한다.
     void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
+    void queryClient.invalidateQueries({ queryKey: ['parts', 'checklist-accordion-candidates'] });
   };
   const addMutation = useMutation({
     mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => putQuoteDraftItem(partId, quantity),
+    onSuccess: invalidateQuoteDraft
+  });
+  const updateQuantityMutation = useMutation({
+    mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => patchQuoteDraftItem(partId, quantity),
     onSuccess: invalidateQuoteDraft
   });
   const deleteMutation = useMutation({
@@ -211,7 +218,15 @@ function SelfQuoteSlotBoardPage() {
     deleteMutation.mutate(partId);
   };
 
-  const isMutating = addMutation.isPending || deleteMutation.isPending;
+  const updateQuantity = (partId: string, quantity: number) => {
+    if (!hasToken) {
+      navigate(loginHref);
+      return;
+    }
+    updateQuantityMutation.mutate({ partId, quantity });
+  };
+
+  const isMutating = addMutation.isPending || updateQuantityMutation.isPending || deleteMutation.isPending;
   const hasCompatibilityFail = quoteHasCompatibilityFail(graphQuery.data, draftItems);
 
   const filledCount = SLOT_CONFIGS.filter((slot) => draftItems.some((item) => item.category === slot.category)).length;
@@ -346,6 +361,7 @@ function SelfQuoteSlotBoardPage() {
             onSelect={selectSlot}
             onAddPart={addPart}
             onRemoveItem={removeItem}
+            onUpdateQuantity={updateQuantity}
             isMutating={isMutating}
             isRemovePending={deleteMutation.isPending}
           />
@@ -359,7 +375,9 @@ function SelfQuoteSlotBoardPage() {
               onClearSelection={closePanel}
               onSlotSelect={selectSlot}
               onRemoveItem={removeItem}
+              onUpdateQuantity={updateQuantity}
               isRemovePending={deleteMutation.isPending}
+              isQuantityPending={updateQuantityMutation.isPending}
               graph={graphQuery.data}
               connectorAnchors={anchorQuery.data?.anchors}
             />
@@ -457,6 +475,7 @@ function QuoteChecklist({
   onSelect,
   onAddPart,
   onRemoveItem,
+  onUpdateQuantity,
   isMutating,
   isRemovePending
 }: {
@@ -466,6 +485,7 @@ function QuoteChecklist({
   onSelect: (category: PartCategory) => void;
   onAddPart: (part: PartRow) => void;
   onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isMutating: boolean;
   isRemovePending: boolean;
 }) {
@@ -612,6 +632,19 @@ function QuoteChecklist({
                   data-testid={`checklist-candidates-${category}`}
                   className="mt-1.5 rounded-md border border-blue-100 bg-blue-50/30 p-1.5"
                 >
+                  {isMultiItemCategory(category) && items.length > 0 ? (
+                    <div data-testid={`checklist-selected-items-${category}`} className="mb-1.5 space-y-1">
+                      {items.map((item) => (
+                        <div
+                          key={item.partId}
+                          className="flex items-center justify-between gap-2 rounded border border-commerce-line bg-white px-2 py-1.5"
+                        >
+                          <span className="min-w-0 truncate text-[11px] font-black text-commerce-ink">{item.name}</span>
+                          <DraftQuantityStepper item={item} disabled={isMutating} onChange={onUpdateQuantity} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {candidateQuery.isLoading ? (
                     <div className="rounded bg-white px-2 py-3 text-center text-[11px] font-bold text-slate-400">후보를 불러오는 중</div>
                   ) : candidateQuery.isError ? (

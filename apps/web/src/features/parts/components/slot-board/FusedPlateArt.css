@@ -50,9 +50,9 @@
 
 .fused-part-layer[data-visible='true'][data-hovered='true'] {
   opacity: 1;
-  transform: perspective(900px) translate3d(0, -14px, 42px) scale(1.012);
+  transform: perspective(900px) translate3d(0, -4px, 20px) scale(1.004);
   filter:
-    drop-shadow(0 16px 18px rgba(15, 23, 42, 0.28))
+    drop-shadow(0 10px 14px rgba(15, 23, 42, 0.22))
     drop-shadow(0 0 16px rgba(37, 99, 235, 0.24));
 }
 
@@ -60,9 +60,149 @@
   animation: fused-mount-drop 760ms both;
 }
 
+.fused-part-hitbox {
+  pointer-events: auto;
+}
+
+.fused-part-select-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.fused-part-action-button,
+.fused-ram-number-badge,
+.fused-ram-remove-button {
+  position: absolute;
+  right: -6px;
+  top: -6px;
+  z-index: 2;
+  display: inline-grid;
+  height: 24px;
+  min-width: 24px;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.94);
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fused-part-action-button {
+  cursor: pointer;
+}
+
+.fused-part-action-button:disabled,
+.fused-ram-quantity-controls button:disabled,
+.fused-ram-remove-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.fused-part-action-number,
+.fused-part-action-x {
+  grid-area: 1 / 1;
+  transition:
+    opacity 150ms ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fused-part-action-x {
+  opacity: 0;
+  transform: translateY(4px) scale(0.7);
+}
+
+.fused-part-hitbox[data-hovered='true'] .fused-part-action-button {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.94);
+  color: #ffffff;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(239, 68, 68, 0.28);
+}
+
+.fused-part-hitbox[data-hovered='true'] .fused-part-action-number {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.7);
+}
+
+.fused-part-hitbox[data-hovered='true'] .fused-part-action-x {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.fused-ram-number-badge {
+  pointer-events: none;
+}
+
+.fused-ram-quantity-controls {
+  position: absolute;
+  right: -6px;
+  top: 24px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  background: rgba(255, 255, 255, 0.96);
+  padding: 3px;
+  color: #0f172a;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
+}
+
+.fused-ram-quantity-controls button {
+  display: inline-grid;
+  height: 22px;
+  width: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  transition:
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.fused-ram-quantity-controls button:not(:disabled):hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.fused-ram-quantity-controls span {
+  min-width: 20px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.fused-ram-remove-button {
+  top: 58px;
+  z-index: 3;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.94);
+  color: #ffffff;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fused-plate-bg,
-  .fused-part-layer {
+  .fused-part-layer,
+  .fused-part-action-button,
+  .fused-part-action-number,
+  .fused-part-action-x,
+  .fused-ram-quantity-controls button {
     transition: none;
   }
 

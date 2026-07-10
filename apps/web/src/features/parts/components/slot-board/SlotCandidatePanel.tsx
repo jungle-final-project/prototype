@@ -6,6 +6,7 @@ import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay'
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
+import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 
 // CPU·GPU만 벤치마크 점수가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 버튼을 숨긴다.
@@ -335,7 +336,7 @@ export function SlotCandidatePanel({
                 <div className="flex shrink-0 items-center gap-1.5">
                   {isMulti ? (
                     <>
-                      <QuantityStepper item={item} disabled={isMutating} onChange={onUpdateQuantity} />
+                      <DraftQuantityStepper item={item} disabled={isMutating} onChange={onUpdateQuantity} />
                       <button
                         type="button"
                         aria-label={`${item.name} 교체 대상 선택`}
@@ -646,32 +647,6 @@ function PartQuickView({
           ) : null}
         </div>
       </div>
-    </div>
-  );
-}
-
-function QuantityStepper({ item, disabled, onChange }: { item: QuoteDraftItem; disabled: boolean; onChange: (partId: string, quantity: number) => void }) {
-  return (
-    <div className="flex h-7 overflow-hidden rounded border border-slate-300" aria-label={`${item.name} 수량 선택`}>
-      <button
-        type="button"
-        aria-label={`${item.name} 수량 감소`}
-        disabled={disabled || item.quantity <= 1}
-        onClick={() => onChange(item.partId, item.quantity - 1)}
-        className="w-7 bg-slate-50 text-sm font-bold text-slate-600 disabled:text-slate-300"
-      >
-        -
-      </button>
-      <div className="flex w-8 items-center justify-center border-x border-slate-300 text-[11px] font-bold text-slate-900">{item.quantity}</div>
-      <button
-        type="button"
-        aria-label={`${item.name} 수량 증가`}
-        disabled={disabled || item.quantity >= 9}
-        onClick={() => onChange(item.partId, item.quantity + 1)}
-        className="w-7 bg-slate-50 text-sm font-bold text-slate-600 disabled:text-slate-300"
-      >
-        +
-      </button>
     </div>
   );
 }
