@@ -3685,6 +3685,13 @@ components:
             역제안("{부품명} 견적에 담아줘"), 다중부품 감액 안내("{카테고리} 더 저렴한 걸로 바꿔줘") 응답에도 온다.
             카드·칩·되묻기·시뮬레이션이 전부 빈 응답에는 서버가 항상 칩을 채운다(dead-end 방지).
             각 항목은 그 자체로 완전한 프롬프트라서 그대로 다음 message로 보내면 된다.
+        quickReplyCommands:
+          type: array
+          description: >
+            구체 RAM/SSD 추천 칩의 직접 견적 추가 메타데이터. 일반 자연어 변경 요청에는 내려주지 않으며,
+            클라이언트는 이 명령만 기존 quote draft item API로 즉시 반영할 수 있다.
+          items:
+            $ref: "#/components/schemas/AiQuickReplyCommandDto"
         clarification:
           nullable: true
           type: object
@@ -3700,6 +3707,27 @@ components:
           type: string
           nullable: true
           description: 저장 가능한 Agent root가 있을 때만 채워진다. 홈 챗봇 단독 대화는 null일 수 있다.
+    AiQuickReplyCommandDto:
+      type: object
+      required: [label, type, partId, partName, category, quantityDelta]
+      properties:
+        label:
+          type: string
+          description: 연결된 quickReplies 문구
+        type:
+          type: string
+          enum: [ADD_MULTI_ITEM_TO_DRAFT]
+        partId:
+          type: string
+          format: uuid
+        partName:
+          type: string
+        category:
+          type: string
+          enum: [RAM, STORAGE]
+        quantityDelta:
+          type: integer
+          enum: [1]
     AiPerformanceSimulationDto:
       type: object
       required: [type, category, currentPart, targetPart, summary]

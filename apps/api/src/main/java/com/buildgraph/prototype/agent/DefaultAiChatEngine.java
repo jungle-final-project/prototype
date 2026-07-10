@@ -2333,7 +2333,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
     // "말고/빼고/대신…"처럼 사용자가 특정 모델을 제외·거부하는 부정 문맥인지 판정한다.
     private static boolean hasNegationContext(String message) {
         String lower = safe(message).toLowerCase(Locale.ROOT);
-        return containsAny(lower, "말고", "빼고", "빼", "대신", "제외", "아닌", "말구", "not", "without", "except");
+        return containsAny(lower, "말고", "빼고", "빼", "대신", "제외", "아닌", "말구", "없는", "없이", "not", "without", "except");
     }
 
     private static String categoryFrom(String value) {

@@ -183,7 +183,7 @@ public class BuildChatSemanticCacheService {
                   coalesce((SELECT max(coalesce(updated_at, created_at))::text FROM part_alias_rules WHERE deleted_at IS NULL), 'none') AS alias_version
                 """);
         Map<String, Object> versioned = new LinkedHashMap<>(versions);
-        versioned.put("buildChatRouterVersion", "intent-router-v4");
+        versioned.put("buildChatRouterVersion", "intent-router-v8");
         return sha256(OBJECT_MAPPER.writeValueAsString(versioned));
     }
 

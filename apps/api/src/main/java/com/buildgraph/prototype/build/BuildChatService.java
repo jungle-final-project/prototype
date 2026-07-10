@@ -69,6 +69,9 @@ public class BuildChatService {
             "CASE", "케이스",
             "COOLER", "쿨러"
     );
+    // RAM/SSD는 견적에 여러 상품을 함께 담을 수 있다. 구체 상품 추천 칩을 누른 경우에는
+    // 다시 자연어 변경 요청으로 해석하지 않고, 사용자가 고른 상품을 1개 직접 추가한다.
+    private static final Set<String> DIRECT_MULTI_ITEM_QUICK_REPLY_CATEGORIES = Set.of("RAM", "STORAGE");
     // dead-end 방지용 기능 안내 칩 — 우아한 거절과 종단 칩 플로어가 공유한다
     private static final List<String> FEATURE_GUIDE_QUICK_REPLIES =
             List.of("200만원 게이밍 PC 추천해줘", "지금 견적 나머지 채워줘", "CPU를 9700X로 바꾸면?");
@@ -345,13 +348,17 @@ public class BuildChatService {
             // 라우터가 UNSUPPORTED로 봤던 문장인데 LLM까지 불가한 경우 — dead-end 문구 대신
             // 지금 눌러볼 수 있는 기능 칩과 함께 우아하게 거절한다.
             log.warn("Build Chat LLM unavailable for demoted UNSUPPORTED intent, returning graceful refusal", error);
-            Map<String, Object> refusal = gracefulRefusalResponse();
+            Map<String, Object> refusal = gracefulRefusalResponse(intentDecision.targetCategory());
             logBuildChatPath("FAST_UNSUPPORTED_FALLBACK", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return refusal;
         }
         long engineMs = elapsedMs(stageStartNanos);
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
         Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
+        boolean readOnlySimulationFlow = intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT;
+        if (readOnlySimulationFlow) {
+            response.put("builds", List.of());
+        }
         // 라우터가 전체 견적(BUILD_RECOMMEND)으로 판정했는데 LLM 엔진이 내부적으로 부품 추천으로
         // 분류해 answerType=PART가 되는 경우를 교정한다 (조합 카드가 있으면 BUDGET으로 표기).
         if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
@@ -376,7 +383,8 @@ public class BuildChatService {
         if (intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND
                 && objectMaps(response.get("builds")).isEmpty()
                 && !draftModifyTurn
-                && !usageOnlyFollowUp) {
+                && !usageOnlyFollowUp
+                && !hasEffectiveHardConstraint(engineResponse.parsedContext(), rawBudgetIntent)) {
             List<String> fallbackWarnings = new ArrayList<>();
             List<Map<String, Object>> fallbackBuilds = rawBudgetIntent.hasBudget()
                     ? nearBudgetLadderBuilds(rawBudgetIntent.budget(), rawBudgetIntent.mode(), List.of(), fallbackWarnings, new BuildChatGuardStats())
@@ -392,12 +400,30 @@ public class BuildChatService {
         // 범용 역제안 후처리 — LLM이 구조화한 제약을 부품 DB와 대조해, 불가능한 요청이면
         // dead-end 대신 실데이터 숫자(최저가·부족액·최소 구성가)와 다음 행동 칩을 제시한다.
         // 미리보기(변경)를 먼저 시도하고, 미리보기가 못 만들어진 변경 요청은 부품 제약 역제안이 이어받는다.
-        applyDraftEditPreview(response, engineResponse, body);
+        if (!readOnlySimulationFlow) {
+            applyDraftEditPreview(response, engineResponse, body);
+        }
         // 속성 요청(수랭/PCIe 세대/통풍) + 드래프트에 같은 카테고리 존재 → 1:1 스펙비교 카드로 답한다.
         // 카드가 못 나오면(비교 대상 없음·후보 없음) 아래 역제안이 후보 나열로 이어받는다.
         applyAttributeSimulationCard(response, engineResponse, message, body);
         applyPartConstraintCounterProposal(response, engineResponse, message, body);
         applyUsageMinimumCounterProposal(response, engineResponse, rawBudgetIntent);
+        if (recommendFlow
+                && objectMaps(response.get("builds")).isEmpty()
+                && response.get("simulation") == null
+                && hasEffectiveHardConstraint(engineResponse.parsedContext(), rawBudgetIntent)) {
+            List<String> unresolvedWarnings = new ArrayList<>(stringList(response.get("warnings")));
+            unresolvedWarnings.add("PART_CONSTRAINT_NOT_FOUND");
+            response.put("answerType", "BUDGET");
+            response.put("message", "요청하신 \"" + message.trim()
+                    + "\" 조건을 모두 만족하면서 자동 검증을 통과한 내부 자산 조합을 찾지 못했습니다. "
+                    + "조건을 유지한 채 예산을 조정하거나 일부 조건을 완화해 다시 확인해 주세요.");
+            response.put("warnings", distinct(unresolvedWarnings));
+            response.put("quickReplies", List.of(
+                    "조건을 유지하고 예산을 높여 추천해줘",
+                    "일부 조건을 완화해서 추천해줘"));
+            response.remove("clarification");
+        }
         // LLM이 스스로 되물은 턴("용량이나 DDR 조건 알려주세요")은 원문을 에코해 다음 짧은 답("ddr5")이
         // 원 요청과 합성되게 한다 — 이게 없으면 후속 답이 맥락을 잃고 대화가 끊긴다.
         // GENERAL 계열(PRICE_ALERT_HELP 등)은 의도적으로 제외 — 에코 오염 진입점을 넓히지 않는다.
@@ -589,14 +615,14 @@ public class BuildChatService {
         }
         String normalized = normalizeCommand(message);
         String mode;
-        if (containsAnyNormalized(normalized, "이하", "안으로", "안쪽", "넘지않", "넘지말", "내로", "아래", "까지")) {
+        if (containsAnyNormalized(normalized, "이하", "안으로", "안에서", "안에", "안쪽", "넘지않", "넘지말", "내로", "예산내", "범위내", "아래", "까지")) {
             mode = "MAX";
         } else if (containsAnyNormalized(normalized, "이상", "최소", "부터", "넘게")) {
             mode = "MIN";
         } else {
             mode = "TARGET";
         }
-        return new BudgetIntent(budget, mode, hasRawHardPartConstraint(message));
+        return new BudgetIntent(budget, mode, hasRawHardPartConstraint(message), hasRawNegatedPartConstraint(message));
     }
 
     private static boolean isStandaloneBuildRecommend(String message, Map<String, Object> request, BudgetIntent rawBudgetIntent) {
@@ -1304,16 +1330,21 @@ public class BuildChatService {
             return retry;
         }
         boolean resolutionHint = reasons != null && reasons.contains("RESOLUTION_CONTEXT");
-        String question = resolutionHint
+        boolean usageOnly = reasons != null && reasons.contains("USAGE_ONLY");
+        String question = usageOnly
+                ? "요청하신 용도는 확인했어요. 생각하신 예산대를 골라주시면 그 범위에 맞춰 추천해드릴게요."
+                : resolutionHint
                 ? "어떤 해상도 기준으로 맞출까요? 해상도에 따라 필요한 그래픽카드 급이 크게 달라져요. 예산까지 알려주시면 바로 추천해드릴게요."
                 : "용도와 예산을 알려주시면 정확하게 맞춰드릴 수 있어요. 아래에서 골라도 되고, 직접 입력해도 돼요.";
-        List<String> quickReplies = resolutionHint
+        List<String> quickReplies = usageOnly
+                ? USAGE_ONLY_BUDGET_DIRECTION_CHIPS
+                : resolutionHint
                 ? List.of("FHD 게이밍 150만원", "QHD 게이밍 250만원", "4K 게이밍 400만원")
                 : List.of("사무용 100만원", "게이밍 200만원", "게이밍 300만원", "영상편집 400만원");
         Map<String, Object> response = fastResponse("GENERAL", question, List.of("LOW_INFORMATION"));
         response.put("quickReplies", quickReplies);
         response.put("clarification", MockData.map(
-                "missingSlots", List.of("budget", "useCase"),
+                "missingSlots", usageOnly ? List.of("budget") : List.of("budget", "useCase"),
                 "originalMessage", message
         ));
         return response;
@@ -1451,13 +1482,19 @@ public class BuildChatService {
     }
 
     // LLM까지 불가한 경우의 우아한 거절 — dead-end 문구 대신 바로 눌러볼 기능 칩을 함께 준다.
-    private Map<String, Object> gracefulRefusalResponse() {
+    private Map<String, Object> gracefulRefusalResponse(String category) {
+        String categoryPrefix = category == null ? "" : categoryLabel(category) + " 요청을 지금 처리하지 못했어요. ";
         Map<String, Object> response = fastResponse(
                 "GENERAL",
-                "이 요청은 제가 도와드리기 어려워요. 예산 견적 추천, 현재 견적 완성, 부품 교체 비교는 바로 도와드릴 수 있습니다. 아래 예시를 눌러 시작해 보세요.",
+                categoryPrefix + "예산 견적 추천, 현재 견적 완성, 부품 교체 비교는 바로 도와드릴 수 있습니다. 아래 예시를 눌러 다시 시도해 보세요.",
                 List.of("UNSUPPORTED_INTENT")
         );
-        response.put("quickReplies", FEATURE_GUIDE_QUICK_REPLIES);
+        List<String> quickReplies = new ArrayList<>();
+        if (category != null) {
+            quickReplies.add(categoryLabel(category) + " 추천 조건 다시 알려줘");
+        }
+        quickReplies.addAll(FEATURE_GUIDE_QUICK_REPLIES);
+        response.put("quickReplies", distinct(quickReplies));
         return response;
     }
 
@@ -1552,6 +1589,26 @@ public class BuildChatService {
         String specSummary = specSummary(constraint);
         List<String> warnings = new ArrayList<>(stringList(response.get("warnings")));
 
+        ExplicitPartSelection explicitSelection = explicitPartSelection(constraint.category(), message);
+        if (!constraint.hasSpec() && constraint.maxBudgetWon() == null && explicitSelection != null) {
+            List<BuildChatFeasibilityService.PartOption> options = feasibilityService.matchingSelection(
+                    constraint.category(), explicitSelection.gpuClass(), explicitSelection.modelOrVendorToken(), 3);
+            response.put("answerType", "PART");
+            if (options.isEmpty()) {
+                response.put("message", "요청하신 " + explicitSelection.label() + " 조건을 만족하는 "
+                        + categoryLabel + " 부품을 내부 자산에서 찾지 못했습니다.");
+                warnings.add("PART_CONSTRAINT_NOT_FOUND");
+                response.put("warnings", distinct(warnings));
+                response.put("quickReplies", List.of(categoryLabel + " 조건을 넓혀서 추천해줘"));
+            } else {
+                response.put("message", explicitSelection.label() + " 조건을 만족하는 " + categoryLabel
+                        + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
+                        + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
+                setPartRecommendationQuickReplies(response, constraint.category(), options);
+            }
+            return;
+        }
+
         // 수치 스펙·예산 어느 쪽으로도 구조화되지 않은 제약(색상·소음·규격 등) — 특정 키워드를
         // 해석하지 않고, 해당 카테고리 TOP3를 예산 무제한으로 나열해 다음 행동을 남기는 범용 폴백.
         // 카드·칩이 이미 있으면 개입하지 않는다(LLM이 만든 결과를 덮지 않기 위해).
@@ -1576,7 +1633,7 @@ public class BuildChatService {
             String listing = categoryLabel + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                     + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.";
             response.put("message", existing.isBlank() ? listing : existing + " " + listing);
-            response.put("quickReplies", options.stream().map(o -> o.name() + " 견적에 담아줘").toList());
+            setPartRecommendationQuickReplies(response, constraint.category(), options);
             return;
         }
 
@@ -1602,7 +1659,7 @@ public class BuildChatService {
                 response.put("message", formatBudgetLabel(budget) + " 이내 " + categoryLabel
                         + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-                response.put("quickReplies", options.stream().map(o -> o.name() + " 견적에 담아줘").toList());
+                setPartRecommendationQuickReplies(response, constraint.category(), options);
             }
             return;
         }
@@ -1660,7 +1717,35 @@ public class BuildChatService {
         response.put("message", "조건(" + specSummary + ")을 만족하는 " + categoryLabel
                 + " 추천 TOP" + top.size() + "입니다. " + topListText(top)
                 + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-        response.put("quickReplies", top.stream().map(o -> o.name() + " 견적에 담아줘").toList());
+        setPartRecommendationQuickReplies(response, constraint.category(), top);
+    }
+
+    /**
+     * 부품 후보 칩은 기존 문장형 quickReplies를 유지한다. 다만 RAM/SSD는 여러 상품을 함께 담을 수
+     * 있으므로, 프론트가 안전하게 기존 quote draft API를 직접 호출할 수 있는 별도 메타데이터를 함께
+     * 내려준다. 단일 카테고리는 기존 미리보기/명시 적용 정책을 유지한다.
+     */
+    private static void setPartRecommendationQuickReplies(
+            Map<String, Object> response,
+            String category,
+            List<BuildChatFeasibilityService.PartOption> options
+    ) {
+        List<String> labels = options.stream().map(option -> option.name() + " 견적에 담아줘").toList();
+        response.put("quickReplies", labels);
+        if (!DIRECT_MULTI_ITEM_QUICK_REPLY_CATEGORIES.contains(category)) {
+            response.remove("quickReplyCommands");
+            return;
+        }
+        response.put("quickReplyCommands", options.stream()
+                .map(option -> MockData.map(
+                        "label", option.name() + " 견적에 담아줘",
+                        "type", "ADD_MULTI_ITEM_TO_DRAFT",
+                        "partId", option.partId(),
+                        "partName", option.name(),
+                        "category", category,
+                        "quantityDelta", 1
+                ))
+                .toList());
     }
 
     private static String topListText(List<BuildChatFeasibilityService.PartOption> options) {
@@ -1674,6 +1759,18 @@ public class BuildChatService {
                     .append(" — ").append(String.format("%,d원", option.unitPrice()));
         }
         return builder.toString();
+    }
+
+    private static ExplicitPartSelection explicitPartSelection(String category, String message) {
+        String gpuClass = "GPU".equals(category) ? targetGpuClass(message) : null;
+        String modelOrVendor = gpuClass == null ? simulationModelToken(category, message) : null;
+        if (gpuClass == null && modelOrVendor == null) {
+            return null;
+        }
+        String label = gpuClass != null
+                ? gpuClass.replace('_', ' ')
+                : modelOrVendor;
+        return new ExplicitPartSelection(gpuClass, modelOrVendor, label);
     }
 
     // LLM 제약 + 정규식 폴백 병합: LLM 값이 우선하고, 빈 곳만 메시지 정규식으로 채운다.
@@ -1923,6 +2020,25 @@ public class BuildChatService {
         List<String> previewWarnings = new ArrayList<>();
         List<Map<String, Object>> previewToolResults = toolResults(parts, quantities, afterTotal, previewWarnings);
         previewWarnings.addAll(toolWarnings(previewToolResults));
+        if (hasBlockingToolFailure(previewToolResults)) {
+            List<String> responseWarnings = new ArrayList<>(stringList(response.get("warnings")));
+            responseWarnings.addAll(previewWarnings);
+            String reason = previewWarnings.stream()
+                    .filter(Objects::nonNull)
+                    .findFirst()
+                    .orElse("자동 검증에서 현재 견적과 함께 사용할 수 없는 조합으로 확인됐습니다.");
+            String existing = firstText(text(response.get("message")), "");
+            response.put("message", (existing.isBlank() ? "" : existing + " ")
+                    + "요청한 변경은 자동 검증을 통과하지 못해 적용 미리보기를 만들지 않았습니다. " + reason);
+            response.put("builds", List.of());
+            response.put("answerType", "PART");
+            response.put("warnings", distinct(responseWarnings));
+            response.put("quickReplies", List.of(
+                    categoryLabel(category) + " 호환되는 다른 후보 추천해줘",
+                    "현재 견적 그대로 둘게"
+            ));
+            return;
+        }
         Map<String, Object> preview = MockData.map(
                 "id", "ai-draft-edit-preview-" + Math.abs(items.hashCode()),
                 "tier", "draft-edit",
@@ -2183,7 +2299,7 @@ public class BuildChatService {
                     GreedyBuild greedy = minimumBuild.get();
                     warnings.addAll(greedy.warnings());
                     Map<String, Object> build = budgetFallbackBuildMap(
-                            TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false), 1,
+                            TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false, false), 1,
                             greedy.toolResults(), greedy.warnings(), List.of());
                     build.put("title", "가능한 최소 구성");
                     build.put("summary", gpuRequired
@@ -2451,7 +2567,7 @@ public class BuildChatService {
                 if (minimumBuild.isPresent()) {
                     GreedyBuild greedy = minimumBuild.get();
                     Map<String, Object> build = budgetFallbackBuildMap(
-                            TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false), 1,
+                            TIERS.get(0), greedy.parts(), new BudgetIntent(minimumTotal, "MIN", false, false), 1,
                             greedy.toolResults(), greedy.warnings(), evidenceIds);
                     build.put("title", "가능한 최소 구성");
                     build.put("summary", "현재 판매 중인 내부 자산으로 구성 가능한 가장 저렴한 조합입니다. 그래픽카드는 제외되어 있습니다.");
@@ -2526,8 +2642,8 @@ public class BuildChatService {
                 TIERS.get(1),
                 greedy.parts(),
                 targetBand
-                        ? new BudgetIntent(displayBudgetWon, "TARGET", false)
-                        : new BudgetIntent(targetBudget, "MAX", false),
+                        ? new BudgetIntent(displayBudgetWon, "TARGET", false, false)
+                        : new BudgetIntent(targetBudget, "MAX", false, false),
                 2,
                 greedy.toolResults(),
                 greedy.warnings(),
@@ -3275,7 +3391,8 @@ public class BuildChatService {
         // LLM이 명시 GPU 모델을 소프트 선호(hardConstraintPolicy=NONE)로 판단했으면, 원문 정규식이 잡은
         // explicitHardConstraint나 requiredGpuClasses/파생 키워드만으로 하드제약을 강제하지 않는다 —
         // 예산완화 폴백이 살아나 대체 조합/역제안이 가능해진다. LLM이 하드(MUST_INCLUDE)로 판단한 경우는 그대로 유지된다.
-        if (isLlmSoftenedExplicitModel(parsedContext)) {
+        if ((rawBudgetIntent != null && rawBudgetIntent.negatedPartConstraint())
+                || isLlmSoftenedExplicitModel(parsedContext)) {
             return false;
         }
         return hasHardConstraint(parsedContext) || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint());
@@ -3341,12 +3458,35 @@ public class BuildChatService {
         // 부정 문맥("RTX 5090 말고 가성비로")에서는 모델 키워드가 잡혀도 하드제약으로 승격하지 않는다 —
         // 예산 완화 폴백을 막지 않아 대체 조합을 만들 수 있어야 한다. 예산 금액 파싱(serverFact)은
         // budgetIntent에서 그대로 유지되고, 여기서는 '하드제약 여부' 판정만 부정 문맥에서 내린다.
-        if (containsAnyNormalized(compact, "말고", "빼고", "빼", "대신", "제외", "아닌", "말구")) {
+        if (hasRawNegatedPartConstraint(message)) {
             return false;
         }
+        String category = detectPartCategory(message);
+        boolean explicitInclusion = category != null
+                && containsAnyNormalized(compact, "포함", "들어간", "들어가는", "장착", "로구성", "로맞춰");
+        boolean manufacturerBoundPart = category != null
+                && containsAnyNormalized(compact,
+                        "asus", "msi", "gigabyte", "기가바이트", "asrock", "애즈락",
+                        "amd", "라이젠", "intel", "인텔", "lianli", "리안리", "corsair", "커세어",
+                        "samsung", "삼성", "wd", "western digital", "시게이트", "seagate");
+        boolean quantitativePartConstraint = category != null
+                && (CAPACITY_GB_PATTERN.matcher(normalized).find()
+                        || WATT_PATTERN.matcher(normalized).find()
+                        || normalized.matches(".*\\d+\\s*(?:tb|테라(?:바이트)?).*"));
+        boolean explicitMemoryConstraint = containsAnyNormalized(compact, "ddr5", "ddr4")
+                && CAPACITY_GB_PATTERN.matcher(normalized).find();
         return EXPLICIT_GPU_MODEL.matcher(normalized).find()
                 || EXPLICIT_CPU_MODEL.matcher(normalized).find()
+                || explicitInclusion
+                || manufacturerBoundPart
+                || quantitativePartConstraint
+                || explicitMemoryConstraint
                 || containsAnyNormalized(compact, "정품멀티팩", "리안리216", "lianli216");
+    }
+
+    private static boolean hasRawNegatedPartConstraint(String message) {
+        String compact = normalizeCommand(message);
+        return containsAnyNormalized(compact, "말고", "빼고", "빼", "대신", "제외", "아닌", "말구", "없는", "없이");
     }
 
     private static String budgetMode(Map<String, Object> parsedContext) {
@@ -3513,14 +3653,17 @@ public class BuildChatService {
     private record CategoryKeywords(String category, List<String> keywords) {
     }
 
-    record BudgetIntent(Integer budget, String mode, boolean explicitHardConstraint) {
+    record BudgetIntent(Integer budget, String mode, boolean explicitHardConstraint, boolean negatedPartConstraint) {
         static BudgetIntent empty() {
-            return new BudgetIntent(null, "UNSPECIFIED", false);
+            return new BudgetIntent(null, "UNSPECIFIED", false, false);
         }
 
         boolean hasBudget() {
             return budget != null && budget > 0;
         }
+    }
+
+    private record ExplicitPartSelection(String gpuClass, String modelOrVendorToken, String label) {
     }
 
     private static final class BuildChatGuardStats {
