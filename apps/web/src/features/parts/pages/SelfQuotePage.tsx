@@ -1,11 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, LayoutGrid, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
-import { PERF_COMPARE_REQUEST_EVENT, openAiAssistant, type PerfCompareTarget } from '../../../lib/events';
+import { openAiAssistant } from '../../../lib/events';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   AI_SELECTED_BUILD_CHANGED_EVENT,
@@ -27,6 +27,7 @@ import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { withObjectParticle } from '../components/slot-board/koreanParticle';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
+import { DraftQuantityStepper } from '../components/slot-board/DraftQuantityStepper';
 import { SlotBoard, type SlotBoardVisualMode } from '../components/slot-board/SlotBoard';
 import { SlotStatusBar } from '../components/slot-board/SlotStatusBar';
 import { RECOMMENDED_SLOT_ORDER, SLOT_CONFIGS, SLOT_COUNT, isMultiItemCategory, isSlotCategory } from '../components/slot-board/slotBoardConfig';
@@ -36,6 +37,7 @@ import {
   getBuildGraphLayoutDefault,
   getCurrentQuoteDraft,
   listParts,
+  patchQuoteDraftItem,
   putQuoteDraftItem
 } from '../partsApi';
 import { quoteDraftToRecommendedBuild, selfQuoteBuildId } from '../selfQuoteBuild';
@@ -73,9 +75,7 @@ function SelfQuoteSlotBoardPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
-  // 성능 패널 교체 비교(기존 조합 vs 변경 조합) — 변경 후보 1개를 페이지가 소유하고 패널에 내려준다.
-  const [perfComparison, setPerfComparison] = useState<PerfCompareTarget | null>(null);
-  const perfPanelRef = useRef<HTMLDivElement | null>(null);
+  const [boardSelectionRequest, setBoardSelectionRequest] = useState(0);
   const { effectiveVisualMode, setVisualMode } = useSlotBoardVisualMode();
   const hasToken = Boolean(getToken());
   const loginHref = `/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
@@ -89,9 +89,14 @@ function SelfQuoteSlotBoardPage() {
     void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
     // 담기(ADD) 평가는 현재 구성에 직접 의존하므로 드래프트가 바뀌면 후보 목록도 재평가한다.
     void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
+    void queryClient.invalidateQueries({ queryKey: ['parts', 'checklist-accordion-candidates'] });
   };
   const addMutation = useMutation({
     mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => putQuoteDraftItem(partId, quantity),
+    onSuccess: invalidateQuoteDraft
+  });
+  const updateQuantityMutation = useMutation({
+    mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => patchQuoteDraftItem(partId, quantity),
     onSuccess: invalidateQuoteDraft
   });
   const deleteMutation = useMutation({
@@ -152,34 +157,6 @@ function SelfQuoteSlotBoardPage() {
     };
   }, []);
 
-  // 성능 비교 시작: 비교 대상을 저장하고 성능 패널로 부드럽게 이동한다(패널은 그리드 아래에 있어 안 보일 수 있다).
-  const startPerfComparison = useCallback((target: PerfCompareTarget) => {
-    setPerfComparison(target);
-    requestAnimationFrame(() => {
-      perfPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-  }, []);
-
-  // 비교 대상이 실제 견적과 어긋나면 자동 해제한다 — 후보를 실제로 담았거나(같은 부품), 기존 부품을 뺀 경우.
-  useEffect(() => {
-    if (!perfComparison) return;
-    const inCategory = draftItems.filter((item) => item.category === perfComparison.category);
-    if (inCategory.length === 0 || inCategory.some((item) => item.partId === perfComparison.partId)) {
-      setPerfComparison(null);
-    }
-  }, [draftItems, perfComparison]);
-
-  // AI 변경 미리보기(draft-edit) 연동 — 챗봇이 CPU/GPU 변경 미리보기를 그리면 같은 비교를 패널에도 켠다.
-  useEffect(() => {
-    const onPerfCompareRequest = (event: Event) => {
-      const detail = (event as CustomEvent<PerfCompareTarget>).detail;
-      if (!detail || (detail.category !== 'CPU' && detail.category !== 'GPU') || !detail.partId) return;
-      startPerfComparison(detail);
-    };
-    window.addEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
-    return () => window.removeEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
-  }, [startPerfComparison]);
-
   // 비교 패널에서 안 선택 — 챗봇 selectBuild와 같은 레시피(일괄 적용 성공 후에만 선택 저장).
   const applyCompareBuild = async (build: AiRecommendedBuild) => {
     if (applyingBuildId) return;
@@ -218,6 +195,11 @@ function SelfQuoteSlotBoardPage() {
     });
   };
 
+  const selectBoardSlot = (category: PartCategory) => {
+    setBoardSelectionRequest((request) => request + 1);
+    selectSlot(category);
+  };
+
   const closePanel = useCallback(() => {
     setSearchParams((current) => {
       const nextParams = new URLSearchParams(current);
@@ -242,8 +224,17 @@ function SelfQuoteSlotBoardPage() {
     deleteMutation.mutate(partId);
   };
 
-  const isMutating = addMutation.isPending || deleteMutation.isPending;
+  const updateQuantity = (partId: string, quantity: number) => {
+    if (!hasToken) {
+      navigate(loginHref);
+      return;
+    }
+    updateQuantityMutation.mutate({ partId, quantity });
+  };
+
+  const isMutating = addMutation.isPending || updateQuantityMutation.isPending || deleteMutation.isPending;
   const hasCompatibilityFail = quoteHasCompatibilityFail(graphQuery.data, draftItems);
+  const statusByCategory = quoteStatusByCategory(graphQuery.data);
 
   const filledCount = SLOT_CONFIGS.filter((slot) => draftItems.some((item) => item.category === slot.category)).length;
   // 순차 가이드: 권장 순서에서 아직 비어 있는 첫 카테고리를 "다음 선택"으로 안내한다(강제 아님).
@@ -374,9 +365,14 @@ function SelfQuoteSlotBoardPage() {
             draftItems={draftItems}
             selectedCategory={selectedCategory}
             nextCategory={nextCategory}
+            boardSelectionRequest={boardSelectionRequest}
             onSelect={selectSlot}
             onAddPart={addPart}
+            onRemoveItem={removeItem}
+            onUpdateQuantity={updateQuantity}
             isMutating={isMutating}
+            isRemovePending={deleteMutation.isPending}
+            statusByCategory={statusByCategory}
           />
           <div className="min-h-0 lg:h-[800px]">
             <SlotBoard
@@ -386,9 +382,11 @@ function SelfQuoteSlotBoardPage() {
               visualMode={effectiveVisualMode}
               onVisualModeChange={setVisualMode}
               onClearSelection={closePanel}
-              onSlotSelect={selectSlot}
+              onSlotSelect={selectBoardSlot}
               onRemoveItem={removeItem}
+              onUpdateQuantity={updateQuantity}
               isRemovePending={deleteMutation.isPending}
+              isQuantityPending={updateQuantityMutation.isPending}
               graph={graphQuery.data}
               connectorAnchors={anchorQuery.data?.anchors}
             />
@@ -398,20 +396,8 @@ function SelfQuoteSlotBoardPage() {
           </div>
         </div>
 
-        {/* 담긴 견적으로 성능 비교(R1): resolveBuildGraph가 이미 내려주는 performance 툴 결과를 표시한다.
-            헤더 콤보(토글+후보 선택 팝오버) + 상시 2열(왼쪽 종합점수·향상 그래프, 오른쪽 게임 예상 성능). perfComparison이 있으면
-            기존 조합 vs 변경 조합을 겹쳐 보여주고, 교체 담기는 기존 단일 슬롯 교체 mutation(PUT upsert)을 재사용한다.
-            성공 시 드래프트 invalidate → 아래 자동 해제 effect가 비교를 끄고 게이지가 새 조합 값으로 스윕한다. */}
-        <div ref={perfPanelRef}>
-          <QuotePerformancePanel
-            graph={graphQuery.data}
-            items={draftItems}
-            comparison={perfComparison}
-            onClearComparison={() => setPerfComparison(null)}
-            onStartComparison={startPerfComparison}
-            onApplyComparison={(target) => addMutation.mutateAsync({ partId: target.partId, quantity: 1 })}
-          />
-        </div>
+        {/* 담긴 견적으로 성능 비교(R1): resolveBuildGraph가 이미 내려주는 performance 툴 결과를 표시한다. */}
+        <QuotePerformancePanel graph={graphQuery.data} items={draftItems} />
 
         {/* 멘토 피드백: 지금까지 고른 부품 한눈에 — 그리드 아래 비어 있던 띠를 전폭 견적 테이블로 채운다. */}
         <QuoteItemsTable draftItems={draftItems} />
@@ -495,16 +481,26 @@ function QuoteChecklist({
   draftItems,
   selectedCategory,
   nextCategory,
+  boardSelectionRequest,
   onSelect,
   onAddPart,
-  isMutating
+  onRemoveItem,
+  onUpdateQuantity,
+  isMutating,
+  isRemovePending,
+  statusByCategory
 }: {
   draftItems: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
   nextCategory: PartCategory | null;
+  boardSelectionRequest: number;
   onSelect: (category: PartCategory) => void;
   onAddPart: (part: PartRow) => void;
+  onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isMutating: boolean;
+  isRemovePending: boolean;
+  statusByCategory: Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>;
 }) {
   const [expandedCategory, setExpandedCategory] = useState<PartCategory | null>(() => selectedCategory ?? nextCategory ?? 'CPU');
   const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
@@ -516,7 +512,7 @@ function QuoteChecklist({
     queryFn: () => listParts({
       category: activeCategory,
       page: 0,
-      size: 24,
+      size: 100,
       sort: 'compatibility',
       compatibilitySource: 'QUOTE_DRAFT_CURRENT',
       compatibilityMode: activeIsMulti ? 'ADD' : undefined
@@ -526,9 +522,23 @@ function QuoteChecklist({
     staleTime: 30_000
   });
 
+  useEffect(() => {
+    if (selectedCategory) {
+      setExpandedCategory(selectedCategory);
+    }
+  }, [selectedCategory, boardSelectionRequest]);
+
   const openCategory = (category: PartCategory) => {
     setExpandedCategory((current) => current === category ? null : category);
     onSelect(category);
+  };
+
+  const openCategoryFromKeyboard = (event: KeyboardEvent<HTMLDivElement>, category: PartCategory) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+    event.preventDefault();
+    openCategory(category);
   };
 
   const choosePart = (category: PartCategory, part: PartRow) => {
@@ -540,13 +550,33 @@ function QuoteChecklist({
     }
   };
 
+  const removeCategoryItems = (items: QuoteDraftItem[]) => {
+    items.forEach((item) => onRemoveItem(item.partId));
+  };
+
+  const removeAllItems = () => {
+    draftItems.forEach((item) => onRemoveItem(item.partId));
+  };
+
   return (
     // lg: 보드(구성 관계도) 높이에 맞춰 늘어난다 — 좌·중 열의 아래 끝이 나란해진다.
     <aside data-testid="quote-checklist" className="panel flex h-fit flex-col p-4 lg:h-[800px] lg:overflow-hidden">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-black text-commerce-ink">견적 체크리스트</h2>
-        <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
-          {filledCount}/{RECOMMENDED_SLOT_ORDER.length} 완료
+        <span className="flex items-center gap-2">
+          <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
+            {filledCount}/{RECOMMENDED_SLOT_ORDER.length} 완료
+          </span>
+          {draftItems.length > 0 ? (
+            <button
+              type="button"
+              disabled={isRemovePending}
+              onClick={removeAllItems}
+              className="rounded px-1 text-[10px] font-black text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              전부 제거
+            </button>
+          ) : null}
         </span>
       </div>
       <ol className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
@@ -557,21 +587,34 @@ function QuoteChecklist({
           const isSelected = category === selectedCategory;
           const lineTotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
           const label = PART_CATEGORY_LABELS[category] ?? category;
+          const slotStatus = statusByCategory.get(category);
+          const hasFail = filled && slotStatus === 'FAIL';
+          const hasWarn = filled && slotStatus === 'WARN';
           return (
             <li key={category}>
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 aria-label={`${label} 후보 목록 열기`}
                 aria-expanded={expandedCategory === category}
                 data-testid={`checklist-${category}`}
                 data-filled={filled ? 'true' : 'false'}
                 data-next={isNext ? 'true' : 'false'}
                 onClick={() => openCategory(category)}
+                onKeyDown={(event) => openCategoryFromKeyboard(event, category)}
                 className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
                   isSelected || expandedCategory === category
-                    ? 'border-brand-blue bg-white ring-2 ring-blue-100'
+                    ? hasFail
+                      ? 'border-red-300 bg-red-50/60 ring-2 ring-red-100'
+                      : hasWarn
+                        ? 'border-amber-300 bg-amber-50/60 ring-2 ring-amber-100'
+                        : 'border-brand-blue bg-white ring-2 ring-blue-100'
                     : filled
-                      ? 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
+                      ? hasFail
+                        ? 'border-red-200 bg-red-50/50 hover:border-red-400'
+                        : hasWarn
+                          ? 'border-amber-200 bg-amber-50/50 hover:border-amber-400'
+                          : 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
                       : isNext
                         ? 'slot-empty-pulse slot-hint-shimmer border-brand-blue bg-blue-50/50'
                         : 'border-dashed border-slate-300 bg-white hover:border-slate-400'
@@ -582,7 +625,22 @@ function QuoteChecklist({
                     {index + 1}. {label}
                   </span>
                   {filled ? (
-                    <span className="shrink-0 text-[10px] font-black text-emerald-700">✓ 완료</span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className={`text-[10px] font-black ${hasFail ? 'text-red-700' : hasWarn ? 'text-amber-700' : 'text-emerald-700'}`}>
+                        {hasFail ? '경고' : hasWarn ? '주의' : '✓ 완료'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isRemovePending}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeCategoryItems(items);
+                        }}
+                        className="rounded px-1 text-[10px] font-black text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        제거
+                      </button>
+                    </span>
                   ) : isNext ? (
                     <span className="shrink-0 text-[10px] font-black text-brand-blue">다음 선택</span>
                   ) : (
@@ -600,12 +658,25 @@ function QuoteChecklist({
                 ) : (
                   <div className="mt-1 text-[11px] text-slate-400">+ 부품 선택</div>
                 )}
-              </button>
+              </div>
               {expandedCategory === category ? (
                 <div
                   data-testid={`checklist-candidates-${category}`}
                   className="mt-1.5 rounded-md border border-blue-100 bg-blue-50/30 p-1.5"
                 >
+                  {isMultiItemCategory(category) && items.length > 0 ? (
+                    <div data-testid={`checklist-selected-items-${category}`} className="mb-1.5 space-y-1">
+                      {items.map((item) => (
+                        <div
+                          key={item.partId}
+                          className="flex items-center justify-between gap-2 rounded border border-commerce-line bg-white px-2 py-1.5"
+                        >
+                          <span className="min-w-0 truncate text-[11px] font-black text-commerce-ink">{item.name}</span>
+                          <DraftQuantityStepper item={item} disabled={isMutating} onChange={onUpdateQuantity} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {candidateQuery.isLoading ? (
                     <div className="rounded bg-white px-2 py-3 text-center text-[11px] font-bold text-slate-400">후보를 불러오는 중</div>
                   ) : candidateQuery.isError ? (
@@ -616,16 +687,15 @@ function QuoteChecklist({
                         const isAlreadySelected = selectedPartIds.has(part.id);
                         const status = part.compatibility?.status;
                         const isFail = status === 'FAIL';
-                        // 교체 성능 비교 진입점은 성능 패널의 후보 선택기로 옮겼다 — 여기서는 담기/교체만 담당한다.
                         return (
                           <button
                             key={part.id}
                             type="button"
-                            disabled={isMutating || isAlreadySelected || isFail}
+                            disabled={isMutating || isAlreadySelected}
                             onClick={() => choosePart(category, part)}
                             className={`w-full rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
                               isFail
-                                ? 'border-slate-200 opacity-55'
+                                ? 'border-red-100 bg-red-50/40 hover:border-red-300'
                                 : isAlreadySelected
                                   ? 'border-emerald-200 bg-emerald-50'
                                   : 'border-commerce-line hover:border-brand-blue hover:bg-white'
@@ -912,6 +982,56 @@ function quoteHasCompatibilityFail(graph: BuildGraphResolveResponse | undefined,
       && filledCategories.has(sourceCategory) && filledCategories.has(targetCategory);
   });
   return nodeFail || edgeFail || blockingToolFailures(graph, items).length > 0;
+}
+
+function quoteStatusByCategory(graph: BuildGraphResolveResponse | undefined) {
+  const statusMap = new Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>();
+  if (!graph) {
+    return statusMap;
+  }
+  const categoryByNodeId = new Map<string, PartCategory>();
+  const promote = (category: PartCategory | undefined, status: string) => {
+    if (!category || (status !== 'PASS' && status !== 'WARN' && status !== 'FAIL')) {
+      return;
+    }
+    const current = statusMap.get(category);
+    if (!current || statusRank(status) > statusRank(current)) {
+      statusMap.set(category, status);
+    }
+  };
+
+  graph.nodes.forEach((node) => {
+    const category = typeof node.category === 'string' && isSlotCategory(node.category) ? node.category : undefined;
+    if (category) {
+      categoryByNodeId.set(node.id, category);
+    }
+    if (node.type === 'PART') {
+      promote(category, node.status);
+    }
+  });
+
+  graph.edges.forEach((edge) => {
+    if (edge.status !== 'WARN' && edge.status !== 'FAIL') {
+      return;
+    }
+    promote(categoryByNodeId.get(edge.source), edge.status);
+    promote(categoryByNodeId.get(edge.target), edge.status);
+  });
+
+  graph.insights.forEach((insight) => {
+    if (insight.status !== 'WARN' && insight.status !== 'FAIL') {
+      return;
+    }
+    insight.relatedNodeIds.forEach((nodeId) => promote(categoryByNodeId.get(nodeId), insight.status));
+  });
+
+  return statusMap;
+}
+
+function statusRank(status: 'PASS' | 'WARN' | 'FAIL') {
+  if (status === 'FAIL') return 3;
+  if (status === 'WARN') return 2;
+  return 1;
 }
 
 function graphToolForCategory(category: PartCategory): BuildGraphFocus['tool'] {

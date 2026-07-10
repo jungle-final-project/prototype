@@ -18,6 +18,7 @@ import {
   type SlotConfig,
   type SlotEdgeConfig
 } from './slotBoardConfig';
+import { FusedPlateArt } from './FusedPlateArt';
 
 export type SlotBoardVisualMode = 'motherboard' | 'isometric';
 
@@ -41,7 +42,9 @@ type SlotBoardProps = {
   onClearSelection?: () => void;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isRemovePending: boolean;
+  isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   connectorAnchors?: ConnectorAnchors;
 };
@@ -55,11 +58,14 @@ export function SlotBoard({
   onClearSelection,
   onSlotSelect,
   onRemoveItem,
+  onUpdateQuantity,
   isRemovePending,
+  isQuantityPending,
   graph,
   connectorAnchors
 }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
+  const boardProblem = slotBoardProblemBanner(graph);
   const [overlaysVisible, setOverlaysVisible] = useState(readSlotBoardOverlaysVisible);
   // 카테고리별 장착 플래시를 보드 수준에서 계산해 카드(꽂힘 모션)와 관계선(draw-in·포트 점등)이 함께 반응한다.
   const flashingCategories = useAttachFlashByCategory(items);
@@ -121,6 +127,7 @@ export function SlotBoard({
           isRemovePending={isRemovePending}
           graph={graph}
           statusByCategory={statusByCategory}
+          boardProblem={boardProblem}
           flashingCategories={flashingCategories}
           overlaysVisible={overlaysVisible}
           connectorAnchors={connectorAnchors}
@@ -132,9 +139,12 @@ export function SlotBoard({
           nextCategory={nextCategory}
           onSlotSelect={onSlotSelect}
           onRemoveItem={onRemoveItem}
+          onUpdateQuantity={onUpdateQuantity}
           isRemovePending={isRemovePending}
+          isQuantityPending={isQuantityPending}
           graph={graph}
           statusByCategory={statusByCategory}
+          boardProblem={boardProblem}
           flashingCategories={flashingCategories}
         />
       )}
@@ -224,9 +234,12 @@ function MotherboardSlotBoardBody({
   nextCategory,
   onSlotSelect,
   onRemoveItem,
+  onUpdateQuantity,
   isRemovePending,
+  isQuantityPending,
   graph,
   statusByCategory,
+  boardProblem,
   flashingCategories
 }: {
   items: QuoteDraftItem[];
@@ -234,9 +247,12 @@ function MotherboardSlotBoardBody({
   nextCategory?: PartCategory | null;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isRemovePending: boolean;
+  isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
+  boardProblem: SlotBoardBannerProblem | null;
   flashingCategories: Set<PartCategory>;
 }) {
   return (
@@ -247,30 +263,44 @@ function MotherboardSlotBoardBody({
       data-visual-mode="motherboard"
       className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
     >
-      <BoardPlanArt />
-      <SlotBoardEdges
+      <FusedPlateArt
         items={items}
-        graph={graph}
         selectedCategory={selectedCategory}
-        hoveredCategory={null}
+        statusByCategory={statusByCategory}
         flashingCategories={flashingCategories}
-        visualMode="motherboard"
+        onSlotSelect={onSlotSelect}
+        onRemoveItem={onRemoveItem}
+        onUpdateQuantity={onUpdateQuantity}
+        isRemovePending={isRemovePending}
+        isQuantityPending={isQuantityPending}
       />
-      {SLOT_CONFIGS.map((slot) => (
-        <MotherboardSlot
-          key={slot.category}
-          slot={slot}
-          layout={slot.layout}
-          items={items.filter((item) => item.category === slot.category)}
-          problemStatus={statusByCategory.get(slot.category)}
-          isSelected={selectedCategory === slot.category}
-          isNext={nextCategory === slot.category}
-          isFlashing={flashingCategories.has(slot.category)}
-          onSelect={() => onSlotSelect(slot.category)}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
+      <SlotBoardProblemBanner problem={boardProblem} />
+      <div className="flex flex-col gap-2 lg:hidden">
+        <BoardPlanArt />
+        <SlotBoardEdges
+          items={items}
+          graph={graph}
+          selectedCategory={selectedCategory}
+          hoveredCategory={null}
+          flashingCategories={flashingCategories}
+          visualMode="motherboard"
         />
-      ))}
+        {SLOT_CONFIGS.map((slot) => (
+          <MotherboardSlot
+            key={slot.category}
+            slot={slot}
+            layout={slot.layout}
+            items={items.filter((item) => item.category === slot.category)}
+            problemStatus={statusByCategory.get(slot.category)}
+            isSelected={selectedCategory === slot.category}
+            isNext={nextCategory === slot.category}
+            isFlashing={flashingCategories.has(slot.category)}
+            onSelect={() => onSlotSelect(slot.category)}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -285,6 +315,7 @@ function IsometricSlotBoardBody({
   isRemovePending,
   graph,
   statusByCategory,
+  boardProblem,
   flashingCategories,
   overlaysVisible,
   connectorAnchors
@@ -298,6 +329,7 @@ function IsometricSlotBoardBody({
   isRemovePending: boolean;
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
+  boardProblem: SlotBoardBannerProblem | null;
   flashingCategories: Set<PartCategory>;
   overlaysVisible: boolean;
   connectorAnchors?: ConnectorAnchors;
@@ -409,6 +441,7 @@ function IsometricSlotBoardBody({
           onShowCandidates={() => showReplacementCandidates(activeProblem.category)}
         />
       ) : null}
+      <SlotBoardProblemBanner problem={boardProblem} />
       {celebrating ? (
         <div
           data-testid="slot-board-celebration"
@@ -781,6 +814,34 @@ type SlotProblemReason = {
   status: SlotProblemStatus;
   text: string;
 };
+
+type SlotBoardBannerProblem = {
+  status: SlotProblemStatus;
+  message: string;
+};
+
+function SlotBoardProblemBanner({ problem }: { problem: SlotBoardBannerProblem | null }) {
+  if (!problem) {
+    return null;
+  }
+  const isFail = problem.status === 'FAIL';
+
+  return (
+    <div className="pointer-events-none absolute inset-x-4 bottom-4 z-[35] flex justify-center lg:bottom-5">
+      <p
+        data-testid="slot-board-problem-banner"
+        data-status={problem.status}
+        className={`max-w-[88%] rounded-md border bg-white px-2.5 py-1.5 text-center text-[13.5px] font-semibold shadow-sm sm:text-[16px] ${
+          isFail
+            ? 'border-red-500 text-red-500'
+            : 'border-amber-500 text-amber-500'
+        }`}
+      >
+        {problem.message}
+      </p>
+    </div>
+  );
+}
 
 function isoProblemMarkerPlacement(category: PartCategory) {
   if (category === 'CPU') {
@@ -1446,11 +1507,37 @@ function statusPulseClass(status: 'PASS' | 'WARN' | 'FAIL' | 'NONE') {
 
 function partStatusByCategory(graph?: BuildGraphResolveResponse) {
   const statusMap = new Map<string, 'PASS' | 'WARN' | 'FAIL'>();
+  const categoryByNodeId = new Map<string, PartCategory>();
+  const promote = (category: PartCategory | undefined, status: string) => {
+    if (!category || !isGraphStatus(status)) {
+      return;
+    }
+    const current = statusMap.get(category);
+    if (!current || graphStatusRank(status) > graphStatusRank(current)) {
+      statusMap.set(category, status);
+    }
+  };
   graph?.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
-    if (node.type === 'PART' && category) {
-      statusMap.set(category, node.status);
+    if (category) {
+      categoryByNodeId.set(node.id, category);
     }
+    if (node.type === 'PART' && category) {
+      promote(category, node.status);
+    }
+  });
+  graph?.edges.forEach((edge) => {
+    if (!isProblemStatus(edge.status)) {
+      return;
+    }
+    promote(categoryByNodeId.get(edge.source), edge.status);
+    promote(categoryByNodeId.get(edge.target), edge.status);
+  });
+  graph?.insights.forEach((insight) => {
+    if (!isProblemStatus(insight.status)) {
+      return;
+    }
+    insight.relatedNodeIds.forEach((nodeId) => promote(categoryByNodeId.get(nodeId), insight.status));
   });
   return statusMap;
 }
@@ -1529,6 +1616,40 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
   return result;
 }
 
+function slotBoardProblemBanner(graph?: BuildGraphResolveResponse): SlotBoardBannerProblem | null {
+  if (!graph) {
+    return null;
+  }
+  const reasons: SlotProblemReason[] = [];
+  const addReason = (status: string, text?: string) => {
+    if (!isProblemStatus(status)) {
+      return;
+    }
+    const trimmed = text?.trim();
+    if (trimmed) {
+      reasons.push({ status, text: trimmed });
+    }
+  };
+
+  graph.toolResults.forEach((result) => addReason(result.status, result.summary));
+  graph.nodes.forEach((node) => addReason(node.status, node.detail));
+  graph.edges.forEach((edge) => addReason(edge.status, edge.summary || edge.label));
+  graph.insights.forEach((insight) => addReason(insight.status, insight.description || insight.title));
+
+  const status: SlotProblemStatus | null = reasons.some((reason) => reason.status === 'FAIL')
+    ? 'FAIL'
+    : reasons.some((reason) => reason.status === 'WARN')
+      ? 'WARN'
+      : null;
+  if (!status) {
+    return null;
+  }
+
+  const message = uniqueProblemReasons(reasons.filter((reason) => reason.status === status))[0]
+    ?? (status === 'FAIL' ? '현재 구성에서 장착 불가 항목이 있습니다.' : '현재 구성에서 주의 항목이 있습니다.');
+  return { status, message };
+}
+
 function findGraphEdge(graph: BuildGraphResolveResponse | undefined, from: PartCategory, to: PartCategory) {
   if (!graph) {
     return undefined;
@@ -1561,6 +1682,16 @@ function slotCategoryFromGraphCategory(category: unknown): PartCategory | undefi
 
 function isProblemStatus(status: string): status is SlotProblemStatus {
   return status === 'WARN' || status === 'FAIL';
+}
+
+function isGraphStatus(status: string): status is 'PASS' | 'WARN' | 'FAIL' {
+  return status === 'PASS' || status === 'WARN' || status === 'FAIL';
+}
+
+function graphStatusRank(status: 'PASS' | 'WARN' | 'FAIL') {
+  if (status === 'FAIL') return 3;
+  if (status === 'WARN') return 2;
+  return 1;
 }
 
 function worstProblemStatus(left: SlotProblemStatus, right: SlotProblemStatus) {

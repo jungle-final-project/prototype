@@ -3,6 +3,7 @@ package com.buildgraph.prototype.build;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.part.ToolBuildPart;
+import com.buildgraph.prototype.part.ToolApplicabilityPolicy;
 import com.buildgraph.prototype.part.ToolCheckService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
@@ -55,8 +56,9 @@ public class BuildGraphService {
         int total = total(parts);
         int budget = firstNumber(body.get("budgetWon"), total);
         List<Map<String, Object>> toolResults = parts.isEmpty() ? List.of() : toolCheckService.checkBuild(parts, budget);
-        Map<String, Object> compositeScore = buildCompositeScoreService.score(parts, toolResults, budget, total);
-        GraphDraft draft = buildGraph(parts, toolResults, mode, view, focus, budget, total);
+        List<Map<String, Object>> applicableToolResults = ToolApplicabilityPolicy.applicableToolResults(toolResults, parts);
+        Map<String, Object> compositeScore = buildCompositeScoreService.score(parts, applicableToolResults, budget, total);
+        GraphDraft draft = buildGraph(parts, applicableToolResults, mode, view, focus, budget, total);
         List<Map<String, Object>> nodes = withLayoutPositions(draft.nodes(), buildGraphLayoutService.resolvePositions());
         return MockData.map(
                 "mode", mode,
@@ -66,7 +68,7 @@ public class BuildGraphService {
                 "focusNodeIds", draft.focusNodeIds(),
                 "insights", draft.insights(),
                 "compositeScore", compositeScore,
-                "toolResults", toolResults
+                "toolResults", applicableToolResults
         );
     }
 

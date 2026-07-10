@@ -274,24 +274,25 @@ public class PartCompatibleCandidateService {
             nextParts.add(candidate.toolPart());
         }
         List<Map<String, Object>> toolResults = toolCheckService.checkBuild(nextParts, total(nextParts));
+        List<String> applicableCheckedTools = ToolApplicabilityPolicy.applicableCandidateTools(checkedTools, nextParts);
         List<Map<String, Object>> relevantResults = toolResults.stream()
-                .filter(result -> checkedTools.contains(text(result.get("tool"))))
+                .filter(result -> applicableCheckedTools.contains(text(result.get("tool"))))
                 .toList();
         String status = worstStatus(relevantResults);
         String summary = summary(status, relevantResults);
-        return new CandidateEvaluation(candidate.partMap(), status, summary, checkedTools);
+        return new CandidateEvaluation(candidate.partMap(), status, summary, applicableCheckedTools);
     }
 
     private static String summary(String status, List<Map<String, Object>> toolResults) {
         if ("PASS".equals(status)) {
-            return "현재 조합 기준 호환 가능합니다.";
+            return "현재 조합 기준 호환 가능합니다";
         }
         return toolResults.stream()
                 .filter(result -> status.equals(text(result.get("status"))))
                 .map(result -> text(result.get("summary")))
                 .filter(summary -> summary != null && !summary.isBlank())
                 .findFirst()
-                .orElse("현재 조합 기준 추가 확인이 필요합니다.");
+                .orElse("현재 조합 기준 추가 확인이 필요합니다");
     }
 
     private static String worstStatus(List<Map<String, Object>> toolResults) {
