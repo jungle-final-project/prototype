@@ -1,11 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, LayoutGrid, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
-import { openAiAssistant } from '../../../lib/events';
+import { PERF_COMPARE_REQUEST_EVENT, openAiAssistant, type PerfCompareTarget } from '../../../lib/events';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   AI_SELECTED_BUILD_CHANGED_EVENT,
@@ -73,6 +73,9 @@ function SelfQuoteSlotBoardPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
+  // 성능 패널 교체 비교(기존 조합 vs 변경 조합) — 변경 후보 1개를 페이지가 소유하고 패널에 내려준다.
+  const [perfComparison, setPerfComparison] = useState<PerfCompareTarget | null>(null);
+  const perfPanelRef = useRef<HTMLDivElement | null>(null);
   const { effectiveVisualMode, setVisualMode } = useSlotBoardVisualMode();
   const hasToken = Boolean(getToken());
   const loginHref = `/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
@@ -148,6 +151,34 @@ function SelfQuoteSlotBoardPage() {
       window.removeEventListener('storage', syncAll);
     };
   }, []);
+
+  // 성능 비교 시작: 비교 대상을 저장하고 성능 패널로 부드럽게 이동한다(패널은 그리드 아래에 있어 안 보일 수 있다).
+  const startPerfComparison = useCallback((target: PerfCompareTarget) => {
+    setPerfComparison(target);
+    requestAnimationFrame(() => {
+      perfPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, []);
+
+  // 비교 대상이 실제 견적과 어긋나면 자동 해제한다 — 후보를 실제로 담았거나(같은 부품), 기존 부품을 뺀 경우.
+  useEffect(() => {
+    if (!perfComparison) return;
+    const inCategory = draftItems.filter((item) => item.category === perfComparison.category);
+    if (inCategory.length === 0 || inCategory.some((item) => item.partId === perfComparison.partId)) {
+      setPerfComparison(null);
+    }
+  }, [draftItems, perfComparison]);
+
+  // AI 변경 미리보기(draft-edit) 연동 — 챗봇이 CPU/GPU 변경 미리보기를 그리면 같은 비교를 패널에도 켠다.
+  useEffect(() => {
+    const onPerfCompareRequest = (event: Event) => {
+      const detail = (event as CustomEvent<PerfCompareTarget>).detail;
+      if (!detail || (detail.category !== 'CPU' && detail.category !== 'GPU') || !detail.partId) return;
+      startPerfComparison(detail);
+    };
+    window.addEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
+    return () => window.removeEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
+  }, [startPerfComparison]);
 
   // 비교 패널에서 안 선택 — 챗봇 selectBuild와 같은 레시피(일괄 적용 성공 후에만 선택 저장).
   const applyCompareBuild = async (build: AiRecommendedBuild) => {
@@ -367,8 +398,20 @@ function SelfQuoteSlotBoardPage() {
           </div>
         </div>
 
-        {/* 담긴 견적으로 성능 비교(R1): resolveBuildGraph가 이미 내려주는 performance 툴 결과를 표시한다. */}
-        <QuotePerformancePanel graph={graphQuery.data} items={draftItems} />
+        {/* 담긴 견적으로 성능 비교(R1): resolveBuildGraph가 이미 내려주는 performance 툴 결과를 표시한다.
+            헤더 콤보(토글+후보 선택 팝오버) + 상시 2열(왼쪽 종합점수·향상 그래프, 오른쪽 게임 예상 성능). perfComparison이 있으면
+            기존 조합 vs 변경 조합을 겹쳐 보여주고, 교체 담기는 기존 단일 슬롯 교체 mutation(PUT upsert)을 재사용한다.
+            성공 시 드래프트 invalidate → 아래 자동 해제 effect가 비교를 끄고 게이지가 새 조합 값으로 스윕한다. */}
+        <div ref={perfPanelRef}>
+          <QuotePerformancePanel
+            graph={graphQuery.data}
+            items={draftItems}
+            comparison={perfComparison}
+            onClearComparison={() => setPerfComparison(null)}
+            onStartComparison={startPerfComparison}
+            onApplyComparison={(target) => addMutation.mutateAsync({ partId: target.partId, quantity: 1 })}
+          />
+        </div>
 
         {/* 멘토 피드백: 지금까지 고른 부품 한눈에 — 그리드 아래 비어 있던 띠를 전폭 견적 테이블로 채운다. */}
         <QuoteItemsTable draftItems={draftItems} />
@@ -573,6 +616,7 @@ function QuoteChecklist({
                         const isAlreadySelected = selectedPartIds.has(part.id);
                         const status = part.compatibility?.status;
                         const isFail = status === 'FAIL';
+                        // 교체 성능 비교 진입점은 성능 패널의 후보 선택기로 옮겼다 — 여기서는 담기/교체만 담당한다.
                         return (
                           <button
                             key={part.id}

@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay';
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
-import { openAiAssistant } from '../../../../lib/events';
+import type { PerfCompareTarget } from '../../../../lib/events';
 import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 
 // CPU·GPU만 벤치마크 점수가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 버튼을 숨긴다.
@@ -21,6 +21,8 @@ type SlotCandidatePanelProps = {
   onReplacePart: (removePartId: string, part: PartRow) => void;
   onRemoveItem: (partId: string) => void;
   onUpdateQuantity: (partId: string, quantity: number) => void;
+  /** CPU/GPU 후보의 교체 성능 비교 — 성능 패널(기존 vs 변경)을 켠다. */
+  onComparePerf?: (target: PerfCompareTarget) => void;
   isMutating: boolean;
 };
 
@@ -32,6 +34,7 @@ export function SlotCandidatePanel({
   onReplacePart,
   onRemoveItem,
   onUpdateQuantity,
+  onComparePerf,
   isMutating
 }: SlotCandidatePanelProps) {
   const [sort, setSort] = useState<PartSearchParams['sort']>('price_asc');
@@ -101,9 +104,17 @@ export function SlotCandidatePanel({
   }, [slot.category]);
   const isMulti = isMultiItemCategory(slot.category);
   const selectedPartIds = new Set(draftItems.map((item) => item.partId));
-  // 교체 성능 비교: CPU·GPU 슬롯에 현재 부품이 있으면, 후보로 바꿨을 때 성능 변화를 챗봇에 물어본다.
+  // 교체 성능 비교: CPU·GPU 슬롯에 현재 부품이 있으면, 후보로 바꿨을 때 성능 변화를 성능 패널에서 겹쳐 보여준다.
   const currentPart = draftItems[0];
-  const canComparePerf = PERF_COMPARABLE.has(slot.category) && Boolean(currentPart);
+  const canComparePerf = PERF_COMPARABLE.has(slot.category) && Boolean(currentPart) && Boolean(onComparePerf);
+  const comparePerf = (part: PartRow) => {
+    onComparePerf?.({
+      category: slot.category as PerfCompareTarget['category'],
+      partId: part.id,
+      name: part.name,
+      price: part.price
+    });
+  };
 
   // 평가 의미론: 교체 대상을 지정하면 그 행만 빼고(REPLACE+target), RAM/SSD처럼 여러 개 담는
   // 카테고리는 담기 기준(ADD — 기존 구성 유지+후보 합산)으로 평가한다. 단일 슬롯은 서버 기본
@@ -394,13 +405,20 @@ export function SlotCandidatePanel({
                 ? `${part.name} 담기`
                 : `${part.name} 교체`;
             const actionText = replaceTarget ? '이걸로 교체' : isMulti || draftItems.length === 0 ? '담기' : '교체';
+            const canCompareThis = canComparePerf && !isSelected;
             return (
               <article
                 key={part.id}
                 data-compat={part.compatibility?.status ?? 'NONE'}
+                // CPU/GPU 단일 슬롯은 현재 부품이 있으면 후보 선택 = 교체라, 카드 본문 클릭으로도 비교를 켠다.
+                // 링크·버튼(상세 이동, 담기/교체, 찜 등) 클릭은 제외해 기존 동작과 충돌하지 않는다.
+                onClick={canCompareThis ? (event) => {
+                  if ((event.target as HTMLElement).closest('a, button')) return;
+                  comparePerf(part);
+                } : undefined}
                 className={`flex items-center gap-3 rounded-md border p-2.5 ${
                   isFail ? 'border-red-200 bg-red-50/40' : 'border-commerce-line bg-white'
-                }`}
+                }${canCompareThis ? ' cursor-pointer' : ''}`}
               >
                 {/* 제품 사진·이름을 누르면 상세 페이지로 이동한다(담기와 구분되는 진입점 — 살아있던 상세 페이지 재연결). */}
                 <Link to={`/parts/${part.id}`} aria-label={`${part.name} 상세 페이지 보기`} className="shrink-0">
@@ -476,16 +494,13 @@ export function SlotCandidatePanel({
                   >
                     {isSelected ? '장착됨' : actionText}
                   </button>
-                  {/* 교체 성능 비교: 현재 부품 → 후보 시뮬레이션을 챗봇에 프리필(읽기 전용, 드래프트 무변경). */}
-                  {canComparePerf && !isSelected ? (
+                  {/* 교체 성능 비교: 성능 패널에서 기존 조합 vs 이 후보 조합을 겹쳐 본다(읽기 전용, 드래프트 무변경). */}
+                  {canCompareThis ? (
                     <button
                       type="button"
                       data-testid="candidate-perf-compare"
                       aria-label={`현재 ${currentPart.name}을(를) ${part.name}(으)로 바꾸면 성능 비교`}
-                      onClick={() => openAiAssistant({
-                        prefill: `현재 ${currentPart.name}을(를) ${part.name}(으)로 바꾸면 성능이 어떻게 달라져?`,
-                        autoSubmit: true
-                      })}
+                      onClick={() => comparePerf(part)}
                       className="rounded-md border border-brand-blue/30 bg-blue-50 px-2.5 py-1 text-[10px] font-black text-brand-blue transition hover:bg-blue-100"
                     >
                       성능 비교
