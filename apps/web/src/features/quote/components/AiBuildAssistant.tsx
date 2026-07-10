@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
 import { useLockedPageScroll } from '../../../hooks/useHiddenPageScrollbar';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib/api';
-import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
+import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, requestPerfCompare, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -955,6 +955,10 @@ function MiniBar({ value, max, className, size = 'default' }: { value?: number |
   );
 }
 
+// 변경 미리보기 → 성능 패널 비교 연동을 이미 보낸 빌드 — 채팅을 다시 열어 과거 카드가
+// 재마운트될 때 옛 비교가 다시 켜지지 않도록 빌드 단위로 1회만 발행한다.
+const perfCompareNotifiedBuildIds = new Set<string>();
+
 function CompactBuildCard({
   build,
   onSelectBuild,
@@ -970,6 +974,20 @@ function CompactBuildCard({
   // 적용은 여전히 build 전체(items 전량)로 하므로 나머지 부품이 삭제되지 않는다.
   const isEditPreview = build.label === '변경 미리보기' && build.appliedPartCategories.length > 0;
   const changedItems = build.items.filter((item) => build.appliedPartCategories.includes(item.category));
+
+  // CPU/GPU 변경 미리보기가 그려지면 셀프견적 성능 패널의 교체 비교도 함께 켠다(이벤트 발행만 — 디자인 불변).
+  useEffect(() => {
+    if (!isEditPreview || perfCompareNotifiedBuildIds.has(build.id)) return;
+    const changed = changedItems.find((item) => (item.category === 'CPU' || item.category === 'GPU') && item.partId);
+    if (!changed) return;
+    perfCompareNotifiedBuildIds.add(build.id);
+    requestPerfCompare({
+      category: changed.category as 'CPU' | 'GPU',
+      partId: changed.partId,
+      name: changed.name,
+      price: changed.price
+    });
+  }, [build.id, isEditPreview, changedItems]);
   const primaryItems = isEditPreview && changedItems.length > 0 ? changedItems : build.items.slice(0, 5);
   const isLarge = size === 'large';
   // 이 카드가 적용 중이면 로딩 표시, 다른 카드가 적용 중이면 클릭이 조용히 무시되지 않도록 함께 비활성화한다.

@@ -1155,6 +1155,9 @@ test('shows the current build performance panel from the resolve performance too
 
   const panel = page.getByTestId('quote-performance-panel');
   await expect(panel).toBeVisible();
+  // 단일 카드 + 모드 탭: 기본은 종합 점수 탭이다.
+  await expect(panel.getByTestId('perf-tab-composite')).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByTestId('perf-tab-game')).toHaveAttribute('aria-selected', 'false');
   // CPU/GPU 개별 점수 대신 완성 견적 1000점 종합 점수만 대표로 노출한다.
   await expect(panel.getByTestId('quote-performance-grid')).toBeVisible();
   await expect(panel.getByTestId('quote-performance-fit')).toHaveText('기본형');
@@ -1166,6 +1169,16 @@ test('shows the current build performance panel from the resolve performance too
   await expect(panel.getByTestId('quote-performance-gpu-score')).toHaveCount(0);
   // 정책: 정확 FPS·실성능 보장 아님 문구 노출.
   await expect(panel).toContainText('보장하지 않습니다');
+
+  // 탭 전환: 게임 성능 탭 → FPS 섹션(자료 없음 문구), 다시 종합 점수 탭 → 게이지 복귀.
+  await panel.getByTestId('perf-tab-game').click();
+  await expect(panel.getByTestId('perf-tab-game')).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByTestId('quote-fps-section')).toBeVisible();
+  await expect(panel.getByTestId('fps-empty')).toContainText('이 조합의 공개 참고 자료가 아직 없어요');
+  await expect(panel.getByTestId('quote-composite-score-gauge')).toHaveCount(0);
+  await panel.getByTestId('perf-tab-composite').click();
+  await expect(panel.getByTestId('quote-composite-score-gauge')).toBeVisible();
+  await expect(panel.getByTestId('quote-fps-section')).toHaveCount(0);
 });
 
 test('shows game FPS reference in the performance panel with game and resolution selectors', async ({ page }) => {
@@ -1232,11 +1245,15 @@ test('shows game FPS reference in the performance panel with game and resolution
 
   await page.goto('/self-quote');
 
+  // 게임 성능은 통합 카드의 두 번째 탭이다.
+  await page.getByTestId('perf-tab-game').click();
   const fps = page.getByTestId('quote-fps-section');
   await expect(fps).toBeVisible();
   await expect(page.getByTestId('quote-performance-grid')).toBeVisible();
   // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 하위 1% 평균(1% low).
   await expect(fps.getByTestId('fps-avg')).toHaveText('130');
+  // 곡선(반원 아크) FPS 게이지 — 종합점수 게이지와 같은 시각 언어.
+  await expect(fps.getByTestId('fps-arc-gauge')).toBeVisible();
   await expect(fps.getByTestId('fps-result')).toContainText('매우 부드러움');
   await expect(fps.getByTestId('fps-result')).toContainText('중간 옵션');
   await expect(fps.getByTestId('fps-result')).toContainText('최저 약 91 FPS');
@@ -1253,16 +1270,26 @@ test('shows game FPS reference in the performance panel with game and resolution
   await expect(fps.getByTestId('fps-avg')).toHaveText('240');
 });
 
-test.skip('offers a performance comparison entry point on CPU candidates that prefills the assistant', async ({ page }) => {
+test('starts a panel performance comparison from a CPU candidate and clears it back', async ({ page }) => {
   await loginAsUser(page);
   const draft = {
     ...emptyDraft,
-    items: [draftItem('part-perf-cpu', 'CPU', '라이젠 9600X', 300000)],
-    totalPrice: 300000,
-    itemCount: 1
+    items: [
+      draftItem('part-perf-cpu', 'CPU', '라이젠 9600X', 300000),
+      draftItem('part-perf-gpu', 'GPU', 'RTX 5060', 500000)
+    ],
+    totalPrice: 800000,
+    itemCount: 2
   };
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture() })
+    });
   });
   await page.route('**/api/parts**', async (route) => {
     await route.fulfill({
@@ -1286,13 +1313,74 @@ test.skip('offers a performance comparison entry point on CPU candidates that pr
       })
     });
   });
+  // 같은 FPS 엔드포인트를 2회 호출한다 — 기존 조합과 후보 치환 조합을 partIds로 구분해 응답한다.
+  await page.route('**/api/tools/performance/check', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    const partIds: string[] = Array.isArray(body?.partIds) ? body.partIds : [];
+    const isChangedBuild = partIds.includes('cand-cpu-1');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '',
+        details: {
+          gameFpsEvidence: [{
+            gameTitle: '배틀그라운드',
+            gameKey: 'pubg',
+            resolution: 'QHD',
+            graphicsPreset: 'PC_BUILDS_MEDIUM',
+            avgFps: isChangedBuild ? 281 : 243,
+            onePercentLowFps: isChangedBuild ? 220 : 200,
+            sourceName: 'PC-Builds FPS calculator',
+            confidence: 'MEDIUM',
+            match: { evidenceExactness: 'GPU_CLASS_REFERENCE', gameMatched: true, resolutionMatched: true }
+          }]
+        }
+      })
+    });
+  });
 
   await page.goto('/self-quote?category=CPU');
 
-  // CPU 슬롯에 현재 부품이 있으면 후보마다 '성능 비교' 진입점이 뜬다.
+  // CPU 슬롯에 현재 부품이 있으면 후보마다 '성능 비교' 진입점이 뜬다(챗봇 프리필이 아니라 패널 비교).
   const compareBtn = page.getByTestId('candidate-perf-compare').first();
   await expect(compareBtn).toBeVisible();
-  await expect(compareBtn).toHaveAttribute('aria-label', /현재 라이젠 9600X.*인텔 245K.*성능/);
+  await expect(compareBtn).toHaveAttribute('aria-label', /현재 라이젠 9600X.*인텔 245K.*성능 비교/);
+  await compareBtn.click();
+
+  const panel = page.getByTestId('quote-performance-panel');
+  // 비교가 켜지면 게임 성능 탭으로 자동 전환되고, 고스트 게이지·범위 바·비용 대비 효과가 위→아래로 쌓인다.
+  await expect(panel.getByTestId('perf-tab-game')).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByTestId('fps-compare-banner')).toContainText('라이젠 9600X → 인텔 245K');
+  await expect(panel.getByTestId('fps-arc-gauge')).toBeVisible();
+  await expect(panel.getByTestId('fps-avg')).toHaveText('243');
+  await expect(panel.getByTestId('fps-compare-avg')).toHaveText('281');
+  await expect(panel.getByTestId('fps-compare-delta')).toHaveText('+16%');
+  const rangeBars = panel.getByTestId('fps-range-bars');
+  await expect(rangeBars).toContainText('기존');
+  await expect(rangeBars).toContainText('200~243 FPS');
+  await expect(rangeBars).toContainText('변경');
+  await expect(rangeBars).toContainText('220~281 FPS');
+  const costBlock = panel.getByTestId('cost-effect-block');
+  await expect(costBlock).toContainText('비용 대비 효과');
+  await expect(costBlock.getByTestId('cost-effect-price')).toHaveText('추가 비용 +50,000원');
+  await expect(costBlock.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
+  await expect(costBlock).toContainText('+17%');
+
+  // 비교 해제: '기존 견적만 보기' → 단일 게이지로 복귀.
+  await panel.getByTestId('compare-clear').click();
+  await expect(panel.getByTestId('fps-compare-delta')).toHaveCount(0);
+  await expect(panel.getByTestId('fps-range-bars')).toHaveCount(0);
+  await expect(panel.getByTestId('cost-effect-block')).toHaveCount(0);
+  await expect(panel.getByTestId('fps-avg')).toHaveText('243');
+
+  // AI 변경 미리보기 연동과 같은 창 이벤트로도 같은 비교가 켜진다.
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('buildgraph.perfCompare.request', {
+      detail: { category: 'CPU', partId: 'cand-cpu-1', name: '인텔 245K', price: 350000 }
+    }));
+  });
+  await expect(panel.getByTestId('fps-compare-delta')).toHaveText('+16%');
 });
 
 test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', async ({ page }) => {
