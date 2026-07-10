@@ -1170,7 +1170,7 @@ test('shows the current build performance panel from the resolve performance too
   // 정책: 정확 FPS·실성능 보장 아님 문구 노출.
   await expect(panel).toContainText('보장하지 않습니다');
 
-  // 종합 점수 아크 아래에 게임 FPS 섹션이 동시에 보인다(자료 없음 문구).
+  // 종합 점수 아크 옆에 게임 FPS 섹션이 나란히 동시에 보인다(자료 없음 문구).
   await expect(panel.getByTestId('quote-fps-section')).toBeVisible();
   await expect(panel.getByTestId('fps-empty')).toContainText('이 조합의 공개 참고 자료가 아직 없어요');
   // 오른쪽 비교 작업창은 상시 노출 — 미선택 시엔 짧은 안내 한 줄만 보인다.
@@ -1262,13 +1262,12 @@ test('shows game FPS reference in the performance panel with game and resolution
   await expect(fps.getByTestId('fps-avg')).toHaveText('55');
   await expect(fps.getByTestId('fps-result')).toContainText('무난');
 
-  // 게임 발로란트 전환(단일 모드 선택기 = '다른 게임 한눈에' 행 클릭) → 240fps.
-  await expect(fps.getByTestId('fps-game-row-valorant')).toContainText('240');
-  await fps.getByTestId('fps-game-row-valorant').click();
+  // 게임 발로란트 전환(컴팩트 칩 버튼) → 240fps.
+  await fps.getByTestId('fps-game-valorant').click();
   await expect(fps.getByTestId('fps-avg')).toHaveText('240');
 });
 
-test('shows the other-games overview list in single mode and switches game by row click', async ({ page }) => {
+test('switches the game with compact chips next to the composite gauge', async ({ page }) => {
   await loginAsUser(page);
   const draft = {
     ...emptyDraft,
@@ -1292,7 +1291,7 @@ test('shows the other-games overview list in single mode and switches game by ro
   await page.route('**/api/parts**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
   });
-  // 게임별로 다른 FPS를 돌려준다 — 로스트아크만 자료 없음('자료 없음' 회색 행 검증용).
+  // 게임별로 다른 FPS를 돌려준다 — 로스트아크만 자료 없음(선택 시 fps-empty 검증용).
   await page.route('**/api/tools/performance/check', async (route) => {
     const body = JSON.parse(route.request().postData() ?? '{}');
     const game = String(body?.context?.game ?? '');
@@ -1319,25 +1318,27 @@ test('shows the other-games overview list in single mode and switches game by ro
   await page.goto('/self-quote');
   const fps = page.getByTestId('quote-fps-section');
 
-  // 왼쪽 열 FPS 카드: 아크 게이지 아래 '다른 게임 한눈에' 컴팩트 리스트(5개 게임 전부).
+  // 왼쪽 카드: 종합점수 아크 옆에 FPS 아크가 나란히 보이고, 게임 선택은 컴팩트 칩 5개.
+  await expect(page.getByTestId('quote-composite-score-gauge')).toBeVisible();
   await expect(fps.getByTestId('fps-arc-gauge')).toBeVisible();
-  const overview = fps.getByTestId('fps-game-overview');
-  await expect(overview).toBeVisible();
-  await expect(overview).toContainText('다른 게임 한눈에');
-  await expect(overview.locator('[data-testid^="fps-game-row-"]')).toHaveCount(5);
-  // 현재 선택(배그) 행 하이라이트 + 게임별 평균 FPS 숫자, 자료 없는 게임은 '자료 없음' 회색 행.
-  await expect(overview.getByTestId('fps-game-row-pubg')).toHaveAttribute('aria-pressed', 'true');
-  await expect(overview.getByTestId('fps-game-row-valorant')).toContainText('240');
-  await expect(overview.getByTestId('fps-game-row-cyberpunk-2077')).toContainText('48');
-  await expect(overview.getByTestId('fps-game-row-lost-ark')).toContainText('자료 없음');
-  // 이 리스트가 게임 선택기 역할을 겸한다 — 역할이 겹치는 게임 칩은 더 이상 없다.
-  await expect(fps.getByTestId('fps-game-valorant')).toHaveCount(0);
+  await expect(fps.locator('[data-testid^="fps-game-"]')).toHaveCount(5);
+  await expect(fps.getByTestId('fps-game-pubg')).toHaveAttribute('aria-pressed', 'true');
+  // '다른 게임 한눈에' 리스트는 제거됐다.
+  await expect(fps.getByTestId('fps-game-overview')).toHaveCount(0);
+  await expect(fps.getByTestId('fps-game-row-valorant')).toHaveCount(0);
 
-  // 행 클릭 = 그 게임 선택 → 게이지가 그 게임 기준으로 갱신된다.
-  await overview.getByTestId('fps-game-row-valorant').click();
+  // 칩 클릭 = 그 게임 선택 → 게이지가 그 게임 기준으로 갱신된다.
+  await fps.getByTestId('fps-game-valorant').click();
   await expect(fps.getByTestId('fps-avg')).toHaveText('240');
-  await expect(overview.getByTestId('fps-game-row-valorant')).toHaveAttribute('aria-pressed', 'true');
-  await expect(overview.getByTestId('fps-game-row-pubg')).toHaveAttribute('aria-pressed', 'false');
+  await expect(fps.getByTestId('fps-game-valorant')).toHaveAttribute('aria-pressed', 'true');
+  await expect(fps.getByTestId('fps-game-pubg')).toHaveAttribute('aria-pressed', 'false');
+
+  // 자료 없는 게임(로스트아크)을 고르면 숨기지 않고 '자료 없음' 안내를 보여준다.
+  await fps.getByTestId('fps-game-lost-ark').click();
+  await expect(fps.getByTestId('fps-empty')).toContainText('이 조합의 공개 참고 자료가 아직 없어요');
+
+  // 해상도 토글은 그대로 유지된다.
+  await expect(fps.getByTestId('fps-res-QHD')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('picks a replacement candidate in the performance panel, compares, and applies the replacement', async ({ page }) => {

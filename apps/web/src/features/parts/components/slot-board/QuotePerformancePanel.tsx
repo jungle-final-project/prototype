@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown } from 'lucide-react';
 import { PART_CATEGORY_LABELS, type BuildGraphResolveResponse } from '../../../quote/aiSelection';
 import { CompositeScoreGauge } from '../../../quote/components/CompositeScoreGauge';
@@ -210,9 +210,10 @@ function PerfPanelBody({
       data-testid="quote-performance-grid"
       className={`grid gap-3 ${hasWorkspace ? 'lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:items-start' : ''}`}
     >
-      {/* 왼쪽 열: 카드 하나 안에 종합점수 아크(위) + 게임 FPS 아크(아래) 상하 적층 — 구분은 얇은 디바이더만.
-          모바일에서는 전체가 1열로 쌓인다. */}
+      {/* 왼쪽 열: 카드 하나 안에 종합점수 아크와 게임 FPS 아크를 가로로 나란히 배치(모바일은 세로 스택) —
+          구분은 얇은 디바이더만. */}
       <div className="rounded-lg border border-commerce-line bg-white p-3">
+        <div className="grid gap-3 sm:grid-cols-2">
         <div data-testid="quote-composite-score-card">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
             <span className="font-black text-slate-600">종합 점수</span>
@@ -236,7 +237,7 @@ function PerfPanelBody({
         </div>
 
         {hasGpu ? (
-          <div data-testid="quote-fps-section" className="mt-3 border-t border-commerce-line pt-3">
+          <div data-testid="quote-fps-section" className="border-t border-commerce-line pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-[11px] font-black text-slate-600">게임 예상 성능 <span className="text-slate-400">(참고)</span></span>
               <div className="flex gap-0.5 rounded-md border border-commerce-line bg-slate-50 p-0.5" role="group" aria-label="해상도 선택">
@@ -255,6 +256,26 @@ function PerfPanelBody({
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* 게임 선택: 컴팩트 칩 버튼 — 유일한 게임 선택기(비교 중에도 동작). */}
+            <div className="mb-2.5 flex flex-wrap gap-1.5" role="group" aria-label="게임 선택">
+              {FPS_GAMES.map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  data-testid={`fps-game-${g.key}`}
+                  aria-pressed={gameKey === g.key}
+                  onClick={() => setGameKey(g.key)}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-black transition ${
+                    gameKey === g.key
+                      ? 'border-brand-blue bg-brand-blue text-white'
+                      : 'border-commerce-line bg-white text-slate-600 hover:border-brand-blue'
+                  }`}
+                >
+                  {g.label}
+                </button>
+              ))}
             </div>
 
             {isFetching && !evidence ? (
@@ -336,24 +357,16 @@ function PerfPanelBody({
               </div>
             )}
 
-            {/* 다른 게임 한눈에(컴팩트): 5개 게임 평균을 나란히 — 행 클릭이 게임 선택기 역할을 겸한다(비교 중에도 동작). */}
-            <GameFpsOverview
-              partIds={partIds}
-              partKey={partKey}
-              resolution={resolution}
-              selectedGameKey={game.key}
-              onSelectGame={setGameKey}
-            />
-
             <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
               공개 자료 기준 참고 범위입니다 — 실제 FPS는 게임 설정·패치·드라이버에 따라 달라집니다.
             </p>
           </div>
         ) : (
-          <div data-testid="fps-no-gpu" className="mt-3 rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-bold text-slate-500">
+          <div data-testid="fps-no-gpu" className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-bold text-slate-500">
             그래픽카드를 담으면 게임 예상 성능을 보여드려요.
           </div>
         )}
+        </div>
       </div>
 
       {/* 오른쪽 열: "게임 성능 비교" 상시 작업창 — 한 줄 콤보(토글+후보 선택 팝오버)는 세로로 고정되고,
@@ -686,93 +699,6 @@ function candidateStatusTone(status: PartCompatibility['status'] | undefined, is
   if (status === 'WARN') return 'text-amber-600';
   if (status === 'FAIL') return 'text-red-600';
   return 'text-slate-400';
-}
-
-// 왼쪽 FPS 아크 아래 컴팩트 리스트: "다른 게임 한눈에" — 현재 해상도 기준 5개 게임 평균 FPS.
-// 게임별 useQuery 5개 병렬(결정적 DB 조회라 부담 없음) — queryKey를 메인 조회와 공유해 캐시가 그대로 재사용된다.
-// 행 클릭 = 그 게임 선택: 이 리스트가 게임 선택기 역할을 겸한다(비교 중에도 동작).
-function GameFpsOverview({
-  partIds,
-  partKey,
-  resolution,
-  selectedGameKey,
-  onSelectGame
-}: {
-  partIds: string[];
-  partKey: string;
-  resolution: (typeof FPS_RESOLUTIONS)[number];
-  selectedGameKey: string;
-  onSelectGame: (gameKey: string) => void;
-}) {
-  const results = useQueries({
-    queries: FPS_GAMES.map((g) => ({
-      queryKey: ['quote-fps', partKey, g.key, resolution.key],
-      queryFn: () => checkBuildPerformance({ partIds, game: g.query, resolution: resolution.query }),
-      enabled: partIds.length > 0,
-      placeholderData: keepPreviousData,
-      staleTime: 5 * 60 * 1000
-    }))
-  });
-
-  return (
-    <div data-testid="fps-game-overview" className="mt-2.5 border-t border-commerce-line pt-2.5">
-      <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
-        <span className="font-black text-slate-600">다른 게임 한눈에</span>
-        <span className="font-bold text-slate-400">{resolution.label} · FPS 평균</span>
-      </div>
-      <div className="flex flex-col gap-1" role="group" aria-label="게임 선택">
-        {FPS_GAMES.map((g, index) => {
-          const query = results[index];
-          // 아직 캐시도 없는 첫 로딩만 스켈레톤 — 해상도 전환 시엔 keepPreviousData로 이전 값을 유지한다.
-          if (query.isPending) {
-            return <div key={g.key} data-testid={`fps-game-row-${g.key}`} className="h-7 animate-pulse rounded-md bg-slate-100" />;
-          }
-          const rowEvidence: GameFpsEvidence | undefined = query.data?.details?.gameFpsEvidence?.[0];
-          const rowAvg = Number(rowEvidence?.avgFps);
-          const hasRowAvg = Number.isFinite(rowAvg) && rowAvg > 0;
-          const isSelected = g.key === selectedGameKey;
-          return (
-            <button
-              key={g.key}
-              type="button"
-              data-testid={`fps-game-row-${g.key}`}
-              aria-pressed={isSelected}
-              aria-label={hasRowAvg ? `${g.label} 평균 약 ${Math.round(rowAvg)} FPS` : `${g.label} 자료 없음`}
-              onClick={() => onSelectGame(g.key)}
-              className={`grid w-full grid-cols-[64px_minmax(0,1fr)_40px_10px] items-center gap-2 rounded-md border px-2 py-1 text-left transition ${
-                isSelected ? 'border-brand-blue bg-blue-50/70' : 'border-transparent hover:border-commerce-line hover:bg-slate-50'
-              }`}
-            >
-              <span
-                className={`truncate text-[11px] ${
-                  isSelected ? 'font-black text-commerce-ink' : hasRowAvg ? 'font-bold text-slate-600' : 'font-bold text-slate-400'
-                }`}
-              >
-                {g.label}
-              </span>
-              {hasRowAvg ? (
-                <>
-                  <span className="relative block h-1.5 overflow-hidden rounded-full bg-slate-200/80">
-                    {/* 165 스케일 미니 바 — 기존 모션 결(perf-bar-grow: 0→목표 폭 + 값 변화 transition)에
-                        행별 스태거를 얹는다. reduced-motion이면 기존 규칙대로 즉시 표시. */}
-                    <span
-                      className={`perf-bar-grow absolute left-0 top-0 block h-full rounded-full ${feelTone(rowAvg).bar}`}
-                      style={{ width: `${fpsPercent(rowAvg)}%`, animationDelay: `${index * 70}ms` }}
-                    />
-                  </span>
-                  <span className="text-right text-[11px] font-black text-slate-700">{Math.round(rowAvg)}</span>
-                  {/* 체감 색점 — 색약 대비 라벨은 행 aria-label과 게이지 쪽 체감 라벨이 담당한다. */}
-                  <span className={`h-2 w-2 justify-self-center rounded-full ${feelTone(rowAvg).bar}`} aria-hidden="true" />
-                </>
-              ) : (
-                <span className="col-span-3 text-right text-[10px] font-bold text-slate-400">자료 없음</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 const FPS_ARC_PATH = 'M 24 112 A 86 86 0 0 1 196 112';
