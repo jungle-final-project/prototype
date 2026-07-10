@@ -18,8 +18,10 @@ import {
   type SlotConfig,
   type SlotEdgeConfig
 } from './slotBoardConfig';
+import { FusedPlateArt } from './FusedPlateArt';
 
-export type SlotBoardVisualMode = 'motherboard' | 'isometric';
+// 3뷰: 배치판(fused, 기본) / 실장도(motherboard, 구 평면도 복원) / 3D 등각(isometric).
+export type SlotBoardVisualMode = 'fused' | 'motherboard' | 'isometric';
 
 export type ConnectorAnchorPoint = { x: number; y: number };
 export type ConnectorAnchors = Record<string, { card: ConnectorAnchorPoint; part: ConnectorAnchorPoint }>;
@@ -41,7 +43,9 @@ type SlotBoardProps = {
   onClearSelection?: () => void;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
   isRemovePending: boolean;
+  isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   connectorAnchors?: ConnectorAnchors;
 };
@@ -50,20 +54,24 @@ export function SlotBoard({
   items,
   selectedCategory,
   nextCategory,
-  visualMode = 'motherboard',
+  visualMode = 'fused',
   onVisualModeChange,
   onClearSelection,
   onSlotSelect,
   onRemoveItem,
+  onUpdateQuantity,
   isRemovePending,
+  isQuantityPending,
   graph,
   connectorAnchors
 }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
+  const boardProblem = slotBoardProblemBanner(graph);
   const [overlaysVisible, setOverlaysVisible] = useState(readSlotBoardOverlaysVisible);
   // 카테고리별 장착 플래시를 보드 수준에서 계산해 카드(꽂힘 모션)와 관계선(draw-in·포트 점등)이 함께 반응한다.
   const flashingCategories = useAttachFlashByCategory(items);
   const isIsometric = visualMode === 'isometric';
+  const isMotherboard = visualMode === 'motherboard';
 
   useEffect(() => {
     if (isIsometric) {
@@ -77,10 +85,7 @@ export function SlotBoard({
       <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
-          <SlotBoardModeSwitch
-            checked={isIsometric}
-            onToggle={() => onVisualModeChange?.(isIsometric ? 'motherboard' : 'isometric')}
-          />
+          <SlotBoardModeSegments value={visualMode} onChange={onVisualModeChange} />
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-end gap-3 text-[10px] font-bold text-slate-500">
           {isIsometric ? (
@@ -121,11 +126,12 @@ export function SlotBoard({
           isRemovePending={isRemovePending}
           graph={graph}
           statusByCategory={statusByCategory}
+          boardProblem={boardProblem}
           flashingCategories={flashingCategories}
           overlaysVisible={overlaysVisible}
           connectorAnchors={connectorAnchors}
         />
-      ) : (
+      ) : isMotherboard ? (
         <MotherboardSlotBoardBody
           items={items}
           selectedCategory={selectedCategory}
@@ -137,43 +143,64 @@ export function SlotBoard({
           statusByCategory={statusByCategory}
           flashingCategories={flashingCategories}
         />
+      ) : (
+        <FusedSlotBoardBody
+          items={items}
+          selectedCategory={selectedCategory}
+          nextCategory={nextCategory}
+          onSlotSelect={onSlotSelect}
+          onRemoveItem={onRemoveItem}
+          onUpdateQuantity={onUpdateQuantity}
+          isRemovePending={isRemovePending}
+          isQuantityPending={isQuantityPending}
+          graph={graph}
+          statusByCategory={statusByCategory}
+          boardProblem={boardProblem}
+          flashingCategories={flashingCategories}
+        />
       )}
     </div>
   );
 }
 
-function SlotBoardModeSwitch({
-  checked,
-  onToggle
+// 3단 보기 전환(사용자 언어 라벨): 배치도 = 배치판(fused), 실장도 = 구 평면도, 3D = 등각 뷰.
+const SLOT_BOARD_MODE_OPTIONS: Array<{ mode: SlotBoardVisualMode; label: string }> = [
+  { mode: 'fused', label: '배치도' },
+  { mode: 'motherboard', label: '실장도' },
+  { mode: 'isometric', label: '3D' }
+];
+
+function SlotBoardModeSegments({
+  value,
+  onChange
 }: {
-  checked: boolean;
-  onToggle: () => void;
+  value: SlotBoardVisualMode;
+  onChange?: (mode: SlotBoardVisualMode) => void;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-label="3D UI 보기"
-      aria-checked={checked}
-      onClick={onToggle}
-      className={`hidden items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue lg:inline-flex ${
-        checked
-          ? 'border-blue-200 bg-blue-50 text-brand-blue'
-          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-      }`}
+    <div
+      role="radiogroup"
+      aria-label="보드 보기 방식"
+      className="hidden items-center gap-0.5 rounded-full border border-slate-200 bg-white p-0.5 lg:inline-flex"
     >
-      <span
-        aria-hidden="true"
-        className={`relative h-3.5 w-6 rounded-full transition ${checked ? 'bg-brand-blue' : 'bg-slate-300'}`}
-      >
-        <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white shadow-sm transition ${
-            checked ? 'left-3' : 'left-0.5'
-          }`}
-        />
-      </span>
-      3D UI 보기
-    </button>
+      {SLOT_BOARD_MODE_OPTIONS.map((option) => {
+        const active = value === option.mode;
+        return (
+          <button
+            key={option.mode}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange?.(option.mode)}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
+              active ? 'bg-brand-blue text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -215,6 +242,74 @@ function SlotBoardDisplaySwitch({
       </span>
       {checked ? onText : offText}
     </button>
+  );
+}
+
+function FusedSlotBoardBody({
+  items,
+  selectedCategory,
+  nextCategory,
+  onSlotSelect,
+  onRemoveItem,
+  onUpdateQuantity,
+  isRemovePending,
+  isQuantityPending,
+  graph,
+  statusByCategory,
+  boardProblem,
+  flashingCategories
+}: {
+  items: QuoteDraftItem[];
+  selectedCategory: PartCategory | null;
+  nextCategory?: PartCategory | null;
+  onSlotSelect: (category: PartCategory) => void;
+  onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
+  isRemovePending: boolean;
+  isQuantityPending: boolean;
+  graph?: BuildGraphResolveResponse;
+  statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
+  boardProblem: SlotBoardBannerProblem | null;
+  flashingCategories: Set<PartCategory>;
+}) {
+  return (
+    // 보드 본체 — 배치도(기본): 실사 배치판(FusedPlateArt) 위에 부품 오버레이가 겹쳐진다(데스크톱 전용).
+    // 모바일은 실장도와 같은 세로 카드 목록으로 폴백한다.
+    <div
+      data-testid="slot-board"
+      data-visual-mode="fused"
+      className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
+    >
+      <FusedPlateArt
+        items={items}
+        selectedCategory={selectedCategory}
+        statusByCategory={statusByCategory}
+        flashingCategories={flashingCategories}
+        onSlotSelect={onSlotSelect}
+        onRemoveItem={onRemoveItem}
+        onUpdateQuantity={onUpdateQuantity}
+        isRemovePending={isRemovePending}
+        isQuantityPending={isQuantityPending}
+      />
+      <SlotBoardProblemBanner problem={boardProblem} />
+      <div className="flex flex-col gap-2 lg:hidden">
+        {SLOT_CONFIGS.map((slot) => (
+          <MotherboardSlot
+            key={slot.category}
+            slot={slot}
+            layout={slot.layout}
+            items={items.filter((item) => item.category === slot.category)}
+            problemStatus={statusByCategory.get(slot.category)}
+            isSelected={selectedCategory === slot.category}
+            isNext={nextCategory === slot.category}
+            isFlashing={flashingCategories.has(slot.category)}
+            onSelect={() => onSlotSelect(slot.category)}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -285,6 +380,7 @@ function IsometricSlotBoardBody({
   isRemovePending,
   graph,
   statusByCategory,
+  boardProblem,
   flashingCategories,
   overlaysVisible,
   connectorAnchors
@@ -298,6 +394,7 @@ function IsometricSlotBoardBody({
   isRemovePending: boolean;
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
+  boardProblem: SlotBoardBannerProblem | null;
   flashingCategories: Set<PartCategory>;
   overlaysVisible: boolean;
   connectorAnchors?: ConnectorAnchors;
@@ -409,6 +506,7 @@ function IsometricSlotBoardBody({
           onShowCandidates={() => showReplacementCandidates(activeProblem.category)}
         />
       ) : null}
+      <SlotBoardProblemBanner problem={boardProblem} />
       {celebrating ? (
         <div
           data-testid="slot-board-celebration"
@@ -781,6 +879,34 @@ type SlotProblemReason = {
   status: SlotProblemStatus;
   text: string;
 };
+
+type SlotBoardBannerProblem = {
+  status: SlotProblemStatus;
+  message: string;
+};
+
+function SlotBoardProblemBanner({ problem }: { problem: SlotBoardBannerProblem | null }) {
+  if (!problem) {
+    return null;
+  }
+  const isFail = problem.status === 'FAIL';
+
+  return (
+    <div className="pointer-events-none absolute inset-x-4 bottom-4 z-[35] flex justify-center lg:bottom-5">
+      <p
+        data-testid="slot-board-problem-banner"
+        data-status={problem.status}
+        className={`max-w-[88%] rounded-md border bg-white px-2.5 py-1.5 text-center text-[13.5px] font-semibold shadow-sm sm:text-[16px] ${
+          isFail
+            ? 'border-red-500 text-red-500'
+            : 'border-amber-500 text-amber-500'
+        }`}
+      >
+        {problem.message}
+      </p>
+    </div>
+  );
+}
 
 function isoProblemMarkerPlacement(category: PartCategory) {
   if (category === 'CPU') {
@@ -1446,11 +1572,37 @@ function statusPulseClass(status: 'PASS' | 'WARN' | 'FAIL' | 'NONE') {
 
 function partStatusByCategory(graph?: BuildGraphResolveResponse) {
   const statusMap = new Map<string, 'PASS' | 'WARN' | 'FAIL'>();
+  const categoryByNodeId = new Map<string, PartCategory>();
+  const promote = (category: PartCategory | undefined, status: string) => {
+    if (!category || !isGraphStatus(status)) {
+      return;
+    }
+    const current = statusMap.get(category);
+    if (!current || graphStatusRank(status) > graphStatusRank(current)) {
+      statusMap.set(category, status);
+    }
+  };
   graph?.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
-    if (node.type === 'PART' && category) {
-      statusMap.set(category, node.status);
+    if (category) {
+      categoryByNodeId.set(node.id, category);
     }
+    if (node.type === 'PART' && category) {
+      promote(category, node.status);
+    }
+  });
+  graph?.edges.forEach((edge) => {
+    if (!isProblemStatus(edge.status)) {
+      return;
+    }
+    promote(categoryByNodeId.get(edge.source), edge.status);
+    promote(categoryByNodeId.get(edge.target), edge.status);
+  });
+  graph?.insights.forEach((insight) => {
+    if (!isProblemStatus(insight.status)) {
+      return;
+    }
+    insight.relatedNodeIds.forEach((nodeId) => promote(categoryByNodeId.get(nodeId), insight.status));
   });
   return statusMap;
 }
@@ -1529,6 +1681,40 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
   return result;
 }
 
+function slotBoardProblemBanner(graph?: BuildGraphResolveResponse): SlotBoardBannerProblem | null {
+  if (!graph) {
+    return null;
+  }
+  const reasons: SlotProblemReason[] = [];
+  const addReason = (status: string, text?: string) => {
+    if (!isProblemStatus(status)) {
+      return;
+    }
+    const trimmed = text?.trim();
+    if (trimmed) {
+      reasons.push({ status, text: trimmed });
+    }
+  };
+
+  graph.toolResults.forEach((result) => addReason(result.status, result.summary));
+  graph.nodes.forEach((node) => addReason(node.status, node.detail));
+  graph.edges.forEach((edge) => addReason(edge.status, edge.summary || edge.label));
+  graph.insights.forEach((insight) => addReason(insight.status, insight.description || insight.title));
+
+  const status: SlotProblemStatus | null = reasons.some((reason) => reason.status === 'FAIL')
+    ? 'FAIL'
+    : reasons.some((reason) => reason.status === 'WARN')
+      ? 'WARN'
+      : null;
+  if (!status) {
+    return null;
+  }
+
+  const message = uniqueProblemReasons(reasons.filter((reason) => reason.status === status))[0]
+    ?? (status === 'FAIL' ? '현재 구성에서 장착 불가 항목이 있습니다.' : '현재 구성에서 주의 항목이 있습니다.');
+  return { status, message };
+}
+
 function findGraphEdge(graph: BuildGraphResolveResponse | undefined, from: PartCategory, to: PartCategory) {
   if (!graph) {
     return undefined;
@@ -1561,6 +1747,16 @@ function slotCategoryFromGraphCategory(category: unknown): PartCategory | undefi
 
 function isProblemStatus(status: string): status is SlotProblemStatus {
   return status === 'WARN' || status === 'FAIL';
+}
+
+function isGraphStatus(status: string): status is 'PASS' | 'WARN' | 'FAIL' {
+  return status === 'PASS' || status === 'WARN' || status === 'FAIL';
+}
+
+function graphStatusRank(status: 'PASS' | 'WARN' | 'FAIL') {
+  if (status === 'FAIL') return 3;
+  if (status === 'WARN') return 2;
+  return 1;
 }
 
 function worstProblemStatus(left: SlotProblemStatus, right: SlotProblemStatus) {

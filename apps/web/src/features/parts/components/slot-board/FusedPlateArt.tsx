@@ -1,0 +1,371 @@
+import { useEffect, useRef, useState, type CSSProperties, type FocusEvent } from 'react';
+import type { PartCategory } from '../../../quote/aiSelection';
+import type { QuoteDraftItem } from '../../types';
+import {
+  FUSED_BADGE_ANCHORS,
+  FUSED_BOARD_SIZE,
+  FUSED_PART_AREAS,
+  FUSED_PART_LAYERS,
+  FUSED_PLATE_BG,
+  FUSED_PRELOAD_URLS
+} from './fusedPlateConfig';
+import { itemStickCount } from './slotBoardItemCounts';
+import { slotOrderNumber } from './slotBoardConfig';
+import './FusedPlateArt.css';
+
+type FusedPlateArtProps = {
+  items: QuoteDraftItem[];
+  selectedCategory: PartCategory | null;
+  statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
+  flashingCategories: Set<PartCategory>;
+  onSlotSelect: (category: PartCategory) => void;
+  onRemoveItem: (partId: string) => void;
+  onUpdateQuantity: (partId: string, quantity: number) => void;
+  isRemovePending: boolean;
+  isQuantityPending: boolean;
+};
+
+export function FusedPlateArt({
+  items,
+  selectedCategory,
+  statusByCategory,
+  flashingCategories,
+  onSlotSelect,
+  onRemoveItem,
+  onUpdateQuantity,
+  isRemovePending,
+  isQuantityPending
+}: FusedPlateArtProps) {
+  const itemsByCategory = new Map<string, QuoteDraftItem[]>();
+  items.forEach((item) => {
+    const categoryItems = itemsByCategory.get(item.category) ?? [];
+    categoryItems.push(item);
+    itemsByCategory.set(item.category, categoryItems);
+  });
+
+  const filledCategories = new Set(items.map((item) => item.category));
+  const ramItems = itemsByCategory.get('RAM') ?? [];
+  const ramSlotCount = Math.min(4, ramItems.reduce((sum, item) => sum + itemStickCount(item), 0));
+  const mountingRamSlots = useMountingRamSlots(ramSlotCount);
+  const ramIncreaseTarget = ramSlotCount < 4 ? findRamIncreaseTarget(ramItems, ramSlotCount) : null;
+  const ramDecreaseAction = ramSlotCount > 1 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
+  const isActionPending = isRemovePending || isQuantityPending;
+  const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
+  const hasHoveredLayer = hoveredCategory
+    ? hoveredCategory === 'RAM'
+      ? ramSlotCount > 0 || selectedCategory === 'RAM'
+      : filledCategories.has(hoveredCategory) || selectedCategory === hoveredCategory
+    : false;
+  const spotlightCategory = hasHoveredLayer ? hoveredCategory : null;
+
+  useEffect(() => {
+    FUSED_PRELOAD_URLS.forEach((src) => {
+      const image = new Image();
+      image.src = src;
+    });
+  }, []);
+
+  const clearHoverIfLeavingArea = (category: PartCategory) => {
+    setHoveredCategory((current) => current === category ? null : current);
+  };
+
+  const clearHoverIfFocusLeavesArea = (category: PartCategory, event: FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    clearHoverIfLeavingArea(category);
+  };
+
+  const removeCategoryItems = (categoryItems: QuoteDraftItem[]) => {
+    if (isActionPending || categoryItems.length === 0) {
+      return;
+    }
+    categoryItems.forEach((item) => onRemoveItem(item.partId));
+  };
+
+  const decreaseRam = () => {
+    if (isActionPending || !ramDecreaseAction) {
+      return;
+    }
+    if (ramDecreaseAction.type === 'quantity') {
+      onUpdateQuantity(ramDecreaseAction.item.partId, ramDecreaseAction.quantity);
+      return;
+    }
+    onRemoveItem(ramDecreaseAction.item.partId);
+  };
+
+  const increaseRam = () => {
+    if (isActionPending || !ramIncreaseTarget) {
+      return;
+    }
+    onUpdateQuantity(ramIncreaseTarget.partId, ramIncreaseTarget.quantity + 1);
+  };
+
+  return (
+    <div data-testid="slot-board-fused-plate" className="absolute inset-0 hidden items-center justify-center bg-[#f6f7f9] lg:flex">
+      <div className="relative aspect-[1672/941] w-full max-h-full">
+        <img
+          src={FUSED_PLATE_BG}
+          alt=""
+          aria-hidden="true"
+          data-dimmed={spotlightCategory ? 'true' : 'false'}
+          className="fused-plate-bg pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+        />
+        {FUSED_PART_LAYERS.map((layer) => {
+          const visible = layer.category === 'RAM'
+            ? (layer.slotIndex ?? 0) < ramSlotCount
+            : filledCategories.has(layer.category);
+          const focused = selectedCategory === layer.category;
+          const hovered = spotlightCategory === layer.category;
+          const dimmed = Boolean(spotlightCategory && !hovered);
+          const mounting = visible && (
+            layer.category === 'RAM'
+              ? layer.slotIndex !== undefined && mountingRamSlots.has(layer.slotIndex)
+              : flashingCategories.has(layer.category)
+          );
+          const status = statusByCategory.get(layer.category) ?? 'PASS';
+          return (
+            <img
+              key={layer.src}
+              data-testid={`slot-fused-layer-${layer.category}${layer.slotIndex !== undefined ? `-${layer.slotIndex + 1}` : ''}`}
+              data-visible={visible ? 'true' : 'false'}
+              data-hovered={hovered ? 'true' : 'false'}
+              data-dimmed={dimmed ? 'true' : 'false'}
+              data-mounting={mounting ? 'true' : 'false'}
+              data-status={status}
+              src={layer.src}
+              alt=""
+              aria-hidden="true"
+              className={`fused-part-layer pointer-events-none absolute inset-0 h-full w-full select-none object-contain ${
+                visible ? 'opacity-100' : 'opacity-0'
+              } ${focused ? 'z-20' : 'z-10'}`}
+            />
+          );
+        })}
+        {FUSED_PART_AREAS.map((area) => {
+          const categoryItems = itemsByCategory.get(area.category) ?? [];
+          const filled = area.category === 'RAM' ? ramSlotCount > 0 : categoryItems.length > 0;
+          const hovered = hoveredCategory === area.category;
+          const status = statusByCategory.get(area.category) ?? 'PASS';
+          return (
+            <div
+              key={area.category}
+              data-testid={`slot-fused-area-wrap-${area.category}`}
+              data-filled={filled ? 'true' : 'false'}
+              data-hovered={hovered ? 'true' : 'false'}
+              data-status={status}
+              onPointerEnter={() => setHoveredCategory(area.category)}
+              onPointerLeave={() => clearHoverIfLeavingArea(area.category)}
+              onFocus={() => setHoveredCategory(area.category)}
+              onBlur={(event) => clearHoverIfFocusLeavesArea(area.category, event)}
+              className="fused-part-hitbox absolute z-30 rounded"
+              style={fusedAreaStyle(area.box, FUSED_BADGE_ANCHORS[area.category])}
+            >
+              <button
+                type="button"
+                data-testid={`slot-fused-area-${area.category}`}
+                aria-label={`${area.label} select`}
+                aria-pressed={selectedCategory === area.category}
+                onClick={() => onSlotSelect(area.category)}
+                className="fused-part-select-button absolute inset-0 cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+              />
+              {filled && area.category === 'RAM' ? (
+                <>
+                  {hovered ? (
+                    <span data-testid="slot-fused-label-RAM" className="fused-part-hover-label">
+                      {area.label}
+                    </span>
+                  ) : null}
+                  <span data-testid="slot-fused-badge-RAM" className="fused-ram-number-badge">
+                    {slotOrderNumber(area.category)}
+                  </span>
+                  {hovered ? (
+                    <>
+                      <div data-testid="slot-fused-ram-controls" className="fused-ram-quantity-controls" aria-label="RAM quantity controls">
+                        <button
+                          type="button"
+                          data-testid="slot-fused-ram-decrease"
+                          aria-label="Decrease RAM quantity"
+                          disabled={isActionPending || !ramDecreaseAction}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            decreaseRam();
+                          }}
+                        >
+                          -
+                        </button>
+                        <span data-testid="slot-fused-ram-count">{ramSlotCount}</span>
+                        <button
+                          type="button"
+                          data-testid="slot-fused-ram-increase"
+                          aria-label="Increase RAM quantity"
+                          disabled={isActionPending || !ramIncreaseTarget}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            increaseRam();
+                          }}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="slot-fused-remove-RAM"
+                        aria-label="Remove RAM"
+                        disabled={isActionPending}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          removeCategoryItems(categoryItems);
+                        }}
+                        className="fused-ram-remove-button"
+                      >
+                        X
+                      </button>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+              {filled && area.category !== 'RAM' ? (
+                <>
+                  {hovered ? (
+                    <span data-testid={`slot-fused-label-${area.category}`} className="fused-part-hover-label">
+                      {area.label}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    data-testid={`slot-fused-remove-${area.category}`}
+                    aria-label={`Remove ${area.category}`}
+                    disabled={isActionPending}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!hovered) {
+                        return;
+                      }
+                      removeCategoryItems(categoryItems);
+                    }}
+                    className="fused-part-action-button"
+                  >
+                    <span data-testid={`slot-fused-badge-${area.category}`} className="fused-part-action-number">
+                      {slotOrderNumber(area.category)}
+                    </span>
+                    <span className="fused-part-action-x" aria-hidden="true">X</span>
+                  </button>
+                </>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function useMountingRamSlots(ramSlotCount: number) {
+  const previousRamSlotCountRef = useRef<number | null>(null);
+  const [mountingRamSlots, setMountingRamSlots] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    const previousRamSlotCount = previousRamSlotCountRef.current;
+    previousRamSlotCountRef.current = ramSlotCount;
+    if (previousRamSlotCount === null) {
+      return;
+    }
+    if (ramSlotCount <= previousRamSlotCount) {
+      setMountingRamSlots(new Set());
+      return;
+    }
+
+    const nextMountingRamSlots = new Set<number>();
+    for (let slotIndex = previousRamSlotCount; slotIndex < ramSlotCount; slotIndex += 1) {
+      nextMountingRamSlots.add(slotIndex);
+    }
+    setMountingRamSlots(nextMountingRamSlots);
+    const timer = window.setTimeout(() => setMountingRamSlots(new Set()), 900);
+    return () => window.clearTimeout(timer);
+  }, [ramSlotCount]);
+
+  return mountingRamSlots;
+}
+
+type FusedAreaStyle = CSSProperties & {
+  '--fused-badge-left': string;
+  '--fused-badge-top': string;
+};
+
+function fusedAreaStyle(
+  box: { x: number; y: number; w: number; h: number },
+  badgeAnchor: { x: number; y: number }
+): FusedAreaStyle {
+  return {
+    left: `${(box.x / FUSED_BOARD_SIZE.width) * 100}%`,
+    top: `${(box.y / FUSED_BOARD_SIZE.height) * 100}%`,
+    width: `${(box.w / FUSED_BOARD_SIZE.width) * 100}%`,
+    height: `${(box.h / FUSED_BOARD_SIZE.height) * 100}%`,
+    '--fused-badge-left': `${((badgeAnchor.x - box.x) / box.w) * 100}%`,
+    '--fused-badge-top': `${((badgeAnchor.y - box.y) / box.h) * 100}%`
+  };
+}
+
+type RamDecreaseAction =
+  | { type: 'quantity'; item: QuoteDraftItem; quantity: number }
+  | { type: 'remove'; item: QuoteDraftItem };
+
+function findRamIncreaseTarget(ramItems: QuoteDraftItem[], ramSlotCount: number): QuoteDraftItem | null {
+  let target: QuoteDraftItem | null = null;
+  let targetModuleCount = Number.POSITIVE_INFINITY;
+  for (const item of ramItems) {
+    if (item.quantity >= 9) {
+      continue;
+    }
+    const moduleCount = ramModuleCount(item);
+    if (ramSlotCount + moduleCount > 4 || moduleCount >= targetModuleCount) {
+      continue;
+    }
+    target = item;
+    targetModuleCount = moduleCount;
+  }
+  return target;
+}
+
+function findRamDecreaseAction(ramItems: QuoteDraftItem[], ramSlotCount: number): RamDecreaseAction | null {
+  let quantityTarget: QuoteDraftItem | null = null;
+  let quantityTargetModuleCount = Number.POSITIVE_INFINITY;
+  for (const item of ramItems) {
+    if (item.quantity <= 1) {
+      continue;
+    }
+    const moduleCount = ramModuleCount(item);
+    if (ramSlotCount - moduleCount < 1 || moduleCount >= quantityTargetModuleCount) {
+      continue;
+    }
+    quantityTarget = item;
+    quantityTargetModuleCount = moduleCount;
+  }
+  if (quantityTarget) {
+    return { type: 'quantity', item: quantityTarget, quantity: quantityTarget.quantity - 1 };
+  }
+
+  if (ramItems.length <= 1) {
+    return null;
+  }
+
+  for (let index = ramItems.length - 1; index >= 0; index -= 1) {
+    const item = ramItems[index];
+    if (ramSlotCount - ramModuleCount(item) >= 1) {
+      return { type: 'remove', item };
+    }
+  }
+
+  return null;
+}
+
+function ramModuleCount(item: QuoteDraftItem): number {
+  const quantity = Math.max(1, item.quantity);
+  return Math.max(1, Math.round(itemStickCount(item) / quantity));
+}

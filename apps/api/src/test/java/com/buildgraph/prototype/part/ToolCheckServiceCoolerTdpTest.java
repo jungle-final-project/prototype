@@ -46,7 +46,7 @@ class ToolCheckServiceCoolerTdpTest {
 
         assertThat(result.get("status")).isEqualTo("FAIL");
         assertThat(String.valueOf(result.get("summary")))
-                .contains("쿨러 TDP 대응(65W)이 CPU TDP(170W)에 못 미쳐");
+                .contains("쿨러 TDP (65W)이 CPU TDP(170W)에 못 미쳐");
         assertThat(details(result).get("coolerTdpChecked")).isEqualTo(true);
         assertThat(details(result).get("coolerTdpMatched")).isEqualTo(false);
         assertThat(details(result).get("cpuTdpW")).isEqualTo(170);

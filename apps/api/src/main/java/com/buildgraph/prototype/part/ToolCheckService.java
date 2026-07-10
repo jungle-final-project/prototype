@@ -137,14 +137,14 @@ public class ToolCheckService {
                         ? "쿨러 TDP 여유가 20% 미만이라 고부하 시 냉각 여유가 빠듯합니다."
                         : "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다."
                 : !coolerTdpMatched
-                        ? "쿨러 TDP 대응(" + coolerTdpW + "W)이 CPU TDP(" + cpuTdpW + "W)에 못 미쳐 냉각이 부족합니다."
+                        ? "쿨러 TDP (" + coolerTdpW + "W)이 CPU TDP(" + cpuTdpW + "W)에 못 미쳐 냉각이 부족합니다"
                         : !ramFormFactorMatched
-                                ? "데스크탑 보드에 장착할 수 없는 RAM 폼팩터(" + String.join(", ", ramBadFormFactors) + ")입니다."
+                                ? "데스크탑 보드에 장착할 수 없는 RAM (" + String.join(", ", ramBadFormFactors) + ")입니다"
                                 : !ramSlotsMatched
-                                        ? "RAM 스틱 수(" + ramSticksTotal + "개)가 메인보드 메모리 슬롯(" + memorySlots + "개)을 초과합니다."
+                                        ? "RAM 스틱 수(" + ramSticksTotal + "개)가 메인보드 슬롯(" + memorySlots + "개)을 초과합니다"
                                         : !m2SlotsMatched
-                                                ? "M.2 SSD 수(" + m2StorageTotal + "개)가 메인보드 M.2 슬롯(" + m2Slots + "개)을 초과합니다."
-                                                : "소켓 또는 메모리 호환성 확인이 필요합니다.";
+                                                ? "M.2 SSD 수(" + m2StorageTotal + "개)가 메인보드 M.2 슬롯(" + m2Slots + "개)을 초과합니다"
+                                                : "소켓 또는 메모리 호환성 확인이 필요합니다";
         // status는 PASS/FAIL 2-상태를 유지한다 — TDP 마진 WARN을 툴 status로 올리면 compatibility를
         // 구독하는 RAM/메인보드 후보 전체가 후보와 무관한 쿨러 마진으로 '간섭 주의'가 된다.
         // 마진 경고는 details(coolerTdpMarginLow)와 summary로 내리고, CPU-쿨러 엣지가 WARN을 그린다.
@@ -213,8 +213,8 @@ public class ToolCheckService {
                 pass
                         ? "PSU 정격 출력이 예상 지속 부하와 GPU 권장 정격 파워를 충족합니다."
                         : warn
-                                ? "PSU 정격 출력이 GPU 권장 파워는 충족하지만 지속 부하 대비 여유가 넉넉하지 않아 상위 용량을 검토하면 좋습니다."
-                                : "PSU 정격 출력이 예상 부하와 GPU 권장 파워에 못 미쳐 상위 용량이 필요합니다.",
+                                ? "PSU 정격 출력이 권장 파워는 충족하나, 여유가 고려해 상위 용량을 검토하면 좋습니다"
+                                : "PSU 정격 출력이 예상 부하와 권장 파워에 못 미쳐 상위 용량이 필요합니다",
                 MockData.map(
                         "estimatedContinuousLoadW", estimatedWattage,
                         "psuRatedCapacityW", psuCapacity,
@@ -287,13 +287,13 @@ public class ToolCheckService {
                 fail ? "FAIL" : warn ? "WARN" : "PASS",
                 fail ? "HIGH" : "MEDIUM",
                 fail ? radiatorExceeded
-                        ? "케이스가 라디에이터 " + radiatorSizeMm + "mm 장착을 지원하지 않습니다."
+                        ? "케이스가 라디에이터 " + radiatorSizeMm + "mm 장착을 지원하지 않습니다"
                         : boardFormFactorExceeded
-                                ? "케이스가 " + formFactorLabel(boardFormFactorRank) + " 규격 메인보드 장착을 지원하지 않습니다(최대 " + formFactorLabel(caseMaxFormFactorRank) + ")."
+                                ? "케이스가 " + formFactorLabel(boardFormFactorRank) + " 규격 메인보드 장착을 지원하지 않습니다(최대 " + formFactorLabel(caseMaxFormFactorRank) + ")"
                                 : psuExceeded
-                                        ? "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다."
+                                        ? "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다"
                                         : "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
-                        : warn ? "케이스 장착 여유가 낮거나 일부 치수 근거가 부족해 추가 확인이 필요합니다."
+                        : warn ? "케이스 장착 여유가 낮거나 일부 치수 근거가 부족해 추가 확인이 필요합니다"
                         : "GPU 길이, 쿨러 장착, 파워 깊이, 보드 규격이 케이스 제약 안에 있습니다.",
                 // 결측(0)은 null로 내린다 — 0을 그대로 실으면 엣지가 'max-0' 여유로 초록을 그려
                 // "근거 없는 통과"처럼 보인다(190 기본값 제거와 같은 원칙).
@@ -394,7 +394,7 @@ public class ToolCheckService {
                 benchmarkBacked ? "HIGH" : "MEDIUM",
                 pass
                         ? "공개 벤치마크/공식 스펙 기반 적합도 점수상 요구 작업에 무리가 적은 조합입니다. 점수는 참고용이며 실제 성능을 보장하지 않습니다."
-                        : "성능 또는 작업 적합도 여유가 낮아 상위 부품을 검토해야 합니다. 점수는 참고용이며 실제 성능을 보장하지 않습니다.",
+                        : "성능 또는 작업 적합도 여유가 낮아 상위 부품을 검토해야 합니다",
                 details);
     }
 
@@ -404,7 +404,7 @@ public class ToolCheckService {
         return tool("price",
                 total <= budget ? "PASS" : total <= Math.round(budget * 1.08) ? "WARN" : "FAIL",
                 "HIGH",
-                total <= budget ? "저장된 현재가 기준 예산 안에 들어옵니다." : "저장된 현재가 기준 예산을 초과합니다.",
+                total <= budget ? "저장된 현재가 기준 예산 안에 들어옵니다." : "저장된 현재가 기준 예산을 초과합니다",
                 MockData.map("budget", budget, "totalPrice", total, "priceDiff", total - budget));
     }
 
