@@ -1386,9 +1386,20 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
   }
 }
 
-/* 탭 전환: 콘텐츠 영역 가벼운 페이드만 — 과한 슬라이드 금지. */
-.perf-tab-fade-in {
-  animation: perf-fade-in 150ms ease-out;
+/* 후보 선택 팝오버: 콤보 아래에서 가볍게 떠오른다 — 과한 슬라이드 금지. */
+@keyframes perf-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.perf-popover-in {
+  animation: perf-popover-in 150ms ease-out;
 }
 
 /* 비교 블록(범위 바·비용 대비 효과) 등장: 살짝 아래에서 떠오른다. */
@@ -1456,7 +1467,7 @@ body.fp-viewing-popular-parts .home-fullpage-shell .fullpage-wrapper {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .perf-tab-fade-in,
+  .perf-popover-in,
   .perf-block-in,
   .perf-bar-grow,
   .perf-pop-in,
