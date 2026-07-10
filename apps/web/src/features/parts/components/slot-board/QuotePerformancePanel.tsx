@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import type { BuildGraphResolveResponse } from '../../../quote/aiSelection';
 import { CompositeScoreGauge } from '../../../quote/components/CompositeScoreGauge';
@@ -105,7 +105,8 @@ export function QuotePerformancePanel({
         </button>
       </div>
 
-      <div data-testid="quote-performance-grid">
+      {/* 탭 전환 모션: key 교체로 콘텐츠만 가볍게 페이드인한다(150ms) — 과한 슬라이드는 쓰지 않는다. */}
+      <div data-testid="quote-performance-grid" key={tab} className="perf-tab-fade-in">
         {tab === 'composite' ? (
           <>
             <div data-testid="quote-composite-score-card" className="mx-auto max-w-sm rounded-lg border border-commerce-line bg-slate-50/70 p-3">
@@ -199,6 +200,30 @@ function GameFpsSection({
   const isCompareReady = Boolean(activeComparison) && hasAvg && hasCompareAvg;
   const isCompareEmpty = Boolean(activeComparison) && !hasCompareAvg && (compareQuery.isError || compareQuery.data !== undefined);
 
+  // 아크 스윕과 중앙 숫자 카운트업이 같은 보간을 공유한다 — 값이 바뀌면 이전 값→새 값으로 rAF easeOut 스윕.
+  const animatedAvg = useAnimatedNumber(hasAvg ? avg : 0);
+  // 변경 조합 값: 비교 전엔 기존 값을 조용히 따라가다가, 비교가 켜지면 기존 값→새 값으로 스윕한다.
+  // 진입 시퀀스: 고스트 fade-in(~300ms)이 끝난 뒤 스윕이 시작되도록 딜레이를 준다. 해제 시엔 즉시 기존 값으로 복귀 스윕.
+  const animatedCompareAvg = useAnimatedNumber(
+    isCompareReady ? compareAvg : hasAvg ? avg : 0,
+    isCompareReady ? COMPARE_SWEEP_DELAY_MS : 0
+  );
+  // 비교 해제 시 파란 아크를 즉시 지우지 않고, 기존 값으로 스윕 복귀 + 페이드아웃이 끝날 때까지 잠깐 유지한다.
+  const [compareLinger, setCompareLinger] = useState(false);
+  const wasCompareReadyRef = useRef(isCompareReady);
+  useEffect(() => {
+    const wasReady = wasCompareReadyRef.current;
+    wasCompareReadyRef.current = isCompareReady;
+    if (isCompareReady) {
+      setCompareLinger(false);
+      return;
+    }
+    if (!wasReady || prefersReducedMotion()) return;
+    setCompareLinger(true);
+    const timer = window.setTimeout(() => setCompareLinger(false), SWEEP_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [isCompareReady]);
+
   return (
     <div data-testid="quote-fps-section" className="rounded-lg border border-commerce-line bg-white p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -284,19 +309,25 @@ function GameFpsSection({
             {/* 위계 1: 곡선(반원 아크) 게이지 — 비교 시 기존은 회색 고스트, 변경은 파랑으로 겹쳐 그린다. */}
             <FpsArcGauge
               avg={avg}
+              displayAvg={animatedAvg}
               low={hasLow ? low : undefined}
+              compareActive={isCompareReady}
               compareAvg={isCompareReady ? compareAvg : undefined}
+              compareDisplay={isCompareReady || compareLinger ? animatedCompareAvg : undefined}
               compareLow={isCompareReady && hasCompareLow ? compareLow : undefined}
             >
               {isCompareReady ? (
                 <>
                   <div className="flex flex-wrap items-baseline justify-center gap-1">
-                    <span data-testid="fps-avg" className="text-xl font-black text-slate-500">{Math.round(avg)}</span>
+                    <span data-testid="fps-avg" className="text-xl font-black text-slate-500">{Math.round(animatedAvg)}</span>
                     <span className="text-sm font-black text-slate-400">→</span>
-                    <span data-testid="fps-compare-avg" className="text-3xl font-black text-brand-blue">{Math.round(compareAvg)}</span>
+                    {/* 변경 숫자만 카운트업 — 아크 스윕과 같은 보간을 공유한다. */}
+                    <span data-testid="fps-compare-avg" className="text-3xl font-black text-brand-blue">{Math.round(animatedCompareAvg)}</span>
+                    {/* 델타 배지: 스윕이 끝날 즈음 팝인. 비교 대상이 바뀌면 key로 다시 재생한다. */}
                     <span
+                      key={activeComparison?.partId}
                       data-testid="fps-compare-delta"
-                      className={`ml-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-black ${deltaBadgeTone(percentDelta(avg, compareAvg))}`}
+                      className={`perf-pop-in ml-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-black ${deltaBadgeTone(percentDelta(avg, compareAvg))}`}
                     >
                       {formatSignedPercent(percentDelta(avg, compareAvg))}
                     </span>
@@ -311,7 +342,7 @@ function GameFpsSection({
                 </>
               ) : (
                 <>
-                  <div data-testid="fps-avg" className="text-3xl font-black leading-none text-commerce-ink">{Math.round(avg)}</div>
+                  <div data-testid="fps-avg" className="text-3xl font-black leading-none text-commerce-ink">{Math.round(animatedAvg)}</div>
                   <div className="mt-1 text-[10px] font-bold text-slate-400">FPS 평균 (참고)</div>
                   <div className={`text-[11px] font-black ${feelTone(avg).text}`}>{feelLabel(avg)}</div>
                 </>
@@ -321,7 +352,7 @@ function GameFpsSection({
             {isCompareReady && activeComparison ? (
               <div className="space-y-2.5">
                 {/* 위계 2: 기존/변경 FPS 범위(1% 최저 ~ 평균) 수평 바 — 두 조합의 흔들림 폭을 나란히 본다. */}
-                <div data-testid="fps-range-bars" className="space-y-1.5 rounded-lg border border-commerce-line bg-white p-2.5">
+                <div data-testid="fps-range-bars" className="perf-block-in space-y-1.5 rounded-lg border border-commerce-line bg-white p-2.5">
                   <FpsRangeBar label="기존" avg={avg} low={hasLow ? low : undefined} tone="base" />
                   <FpsRangeBar label="변경" avg={compareAvg} low={hasCompareLow ? compareLow : undefined} tone="changed" />
                 </div>
@@ -369,23 +400,29 @@ const FPS_ARC_PATH = 'M 24 112 A 86 86 0 0 1 196 112';
 
 // FPS를 체감 경험으로 — 종합점수 게이지와 같은 시각 언어(반원 아크 + 중앙 큰 숫자)의 FPS 버전.
 // CompositeScoreGauge는 홈/견적함 공용이라 손대지 않고 slot-board 로컬로 둔다.
+// displayAvg/compareDisplay는 상위(GameFpsSection)에서 rAF로 보간된 표시값이다 — 아크와 숫자가 같은 보간을 공유한다.
 function FpsArcGauge({
   avg,
+  displayAvg,
   low,
+  compareActive,
   compareAvg,
+  compareDisplay,
   compareLow,
   children
 }: {
   avg: number;
+  displayAvg: number;
   low?: number;
+  compareActive: boolean;
   compareAvg?: number;
+  compareDisplay?: number;
   compareLow?: number;
   children: ReactNode;
 }) {
-  const isCompare = compareAvg !== undefined;
-  const basePercent = fpsPercent(avg);
-  const comparePercent = compareAvg !== undefined ? fpsPercent(compareAvg) : null;
-  const ariaLabel = isCompare && compareAvg !== undefined
+  const basePercent = fpsPercent(displayAvg);
+  const comparePercent = compareDisplay !== undefined ? fpsPercent(compareDisplay) : null;
+  const ariaLabel = compareActive && compareAvg !== undefined
     ? `FPS 평균 기존 약 ${Math.round(avg)}, 변경 약 ${Math.round(compareAvg)}`
     : `FPS 평균 약 ${Math.round(avg)}`;
   return (
@@ -400,22 +437,23 @@ function FpsArcGauge({
             strokeLinecap="butt"
             pathLength={100}
           />
-          {/* 기존 조합: 비교 중엔 회색 반투명 고스트, 평소엔 체감 색. */}
+          {/* 기존 조합: 비교 중엔 회색 반투명 고스트, 평소엔 체감 색 — 전환은 300ms 페이드(perf-arc-transition). */}
           <path
             d={FPS_ARC_PATH}
             fill="none"
-            className={isCompare ? 'stroke-slate-400 opacity-50' : feelStroke(avg)}
+            className={`perf-arc-transition ${compareActive ? 'stroke-slate-400 opacity-50' : feelStroke(avg)}`}
             strokeWidth={18}
             strokeLinecap="butt"
             pathLength={100}
             strokeDasharray={`${basePercent} 100`}
           />
-          {/* 변경 조합: 파랑 아크를 살짝 좁게 겹쳐 위계를 준다. */}
+          {/* 변경 조합: 파랑 아크를 살짝 좁게 겹쳐 위계를 준다. 해제 시엔 기존 값으로 스윕 복귀하며 페이드아웃. */}
           {comparePercent !== null ? (
             <path
               d={FPS_ARC_PATH}
               fill="none"
-              className="stroke-brand-blue"
+              className="perf-compare-arc stroke-brand-blue"
+              style={{ opacity: compareActive ? 1 : 0 }}
               strokeWidth={10}
               strokeLinecap="butt"
               pathLength={100}
@@ -423,8 +461,8 @@ function FpsArcGauge({
             />
           ) : null}
           {/* 1% 최저 마커: 아크 위 눈금 — 수평바 마커의 아크 버전. */}
-          {low !== undefined ? <FpsArcTick value={low} className={isCompare ? 'stroke-slate-500' : 'stroke-slate-600'} /> : null}
-          {isCompare && compareLow !== undefined ? <FpsArcTick value={compareLow} className="stroke-brand-blue" /> : null}
+          {low !== undefined ? <FpsArcTick value={low} className={compareActive ? 'stroke-slate-500' : 'stroke-slate-600'} /> : null}
+          {compareActive && compareLow !== undefined ? <FpsArcTick value={compareLow} className="stroke-brand-blue" /> : null}
         </svg>
         <div className="absolute inset-x-0 bottom-1 px-1">{children}</div>
       </div>
@@ -438,6 +476,83 @@ function FpsArcGauge({
 
 function fpsPercent(fps: number) {
   return Math.min(100, Math.max(0, (fps / FPS_CAP) * 100));
+}
+
+// 값 스윕 길이(~600ms)와, 비교 진입 시 고스트 fade-in(~300ms)이 끝난 뒤 스윕을 시작하는 딜레이.
+const SWEEP_DURATION_MS = 600;
+const COMPARE_SWEEP_DELAY_MS = 300;
+
+function prefersReducedMotion() {
+  return typeof window === 'undefined' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function easeOutCubic(value: number) {
+  return 1 - Math.pow(1 - value, 3);
+}
+
+// 값이 바뀌면 이전 값→새 값으로 rAF easeOut 스윕한다 — CompositeScoreGauge의 게이지 애니메이션과 같은 결.
+// prefers-reduced-motion이면 즉시 반영한다. delayMs만큼 스윕 시작을 늦출 수 있다(비교 진입 시퀀스용).
+function useAnimatedNumber(target: number, delayMs = 0): number {
+  const safeTarget = Number.isFinite(target) ? target : 0;
+  const [value, setValue] = useState(safeTarget);
+  const valueRef = useRef(safeTarget);
+  const frameRef = useRef<number | null>(null);
+  const delayTimerRef = useRef<number | null>(null);
+  const settleTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (safeTarget === valueRef.current) return;
+    if (prefersReducedMotion()) {
+      valueRef.current = safeTarget;
+      setValue(safeTarget);
+      return;
+    }
+    const clearSettle = () => {
+      if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    };
+    const begin = () => {
+      const from = valueRef.current;
+      const startedAt = performance.now();
+      const tick = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / SWEEP_DURATION_MS);
+        const next = from + (safeTarget - from) * easeOutCubic(progress);
+        valueRef.current = next;
+        setValue(next);
+        if (progress < 1) {
+          frameRef.current = requestAnimationFrame(tick);
+        } else {
+          frameRef.current = null;
+          clearSettle();
+        }
+      };
+      frameRef.current = requestAnimationFrame(tick);
+      // 백그라운드 탭 등 rAF가 멈춘 환경에서도 최종값은 보장한다 — 스윕 시간이 지나면 목표값으로 스냅.
+      settleTimerRef.current = window.setTimeout(() => {
+        settleTimerRef.current = null;
+        if (frameRef.current !== null) {
+          cancelAnimationFrame(frameRef.current);
+          frameRef.current = null;
+        }
+        valueRef.current = safeTarget;
+        setValue(safeTarget);
+      }, SWEEP_DURATION_MS + 100);
+    };
+    if (delayMs > 0) {
+      delayTimerRef.current = window.setTimeout(begin, delayMs);
+    } else {
+      begin();
+    }
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      if (delayTimerRef.current !== null) window.clearTimeout(delayTimerRef.current);
+      delayTimerRef.current = null;
+      clearSettle();
+    };
+  }, [safeTarget, delayMs]);
+
+  return value;
 }
 
 // 아크 위 값 위치에 짧은 방사형 눈금을 그린다.
@@ -467,8 +582,9 @@ function FpsRangeBar({ label, avg, low, tone }: { label: string; avg: number; lo
     <div className="grid grid-cols-[30px_1fr_88px] items-center gap-2 text-[11px] font-bold">
       <span className={tone === 'changed' ? 'font-black text-brand-blue' : 'text-slate-500'}>{label}</span>
       <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-100">
+        {/* 등장 시 0→목표 폭으로 자라고(기존 먼저, 변경 120ms 스태거), 값 변화는 transition으로 따라간다. */}
         <div
-          className={`absolute top-0 h-full rounded-full ${barClass}`}
+          className={`absolute top-0 h-full rounded-full ${barClass} perf-bar-grow${tone === 'changed' ? ' perf-bar-stagger' : ''}`}
           style={{ left: `${Math.min(start, 100 - width)}%`, width: `${width}%` }}
         />
       </div>
@@ -500,8 +616,9 @@ function CostEffectBlock({
   const maxPercent = Math.max(Math.abs(pricePercent ?? 0), Math.abs(perfPercent), 1);
   const formatter = new Intl.NumberFormat('ko-KR');
 
+  // 블록 자체는 fade/slide-in — 범위 바(120ms 뒤)보다 한 박자 늦게 떠올라 위→아래로 읽힌다.
   return (
-    <details data-testid="cost-effect-block" open className="rounded-lg border border-commerce-line bg-white p-2.5">
+    <details data-testid="cost-effect-block" open className="perf-block-in rounded-lg border border-commerce-line bg-white p-2.5" style={{ animationDelay: '120ms' }}>
       <summary className="cursor-pointer select-none text-[11px] font-black text-slate-600">비용 대비 효과</summary>
       <div className="mt-2 space-y-1.5">
         <EffectBar
@@ -517,6 +634,7 @@ function CostEffectBlock({
           maxPercent={maxPercent}
           barClass={perfPercent > 0 ? 'bg-emerald-500' : perfPercent < 0 ? 'bg-red-500' : 'bg-slate-300'}
           textClass={perfPercent > 0 ? 'text-emerald-600' : perfPercent < 0 ? 'text-red-600' : 'text-slate-500'}
+          stagger
         />
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] font-bold text-slate-500">
@@ -542,20 +660,22 @@ function EffectBar({
   percent,
   maxPercent,
   barClass,
-  textClass
+  textClass,
+  stagger = false
 }: {
   label: string;
   percent: number | null;
   maxPercent: number;
   barClass: string;
   textClass: string;
+  stagger?: boolean;
 }) {
   const width = percent === null ? 0 : Math.max(3, Math.min(100, (Math.abs(percent) / maxPercent) * 100));
   return (
     <div className="grid grid-cols-[30px_1fr_48px] items-center gap-2 text-[11px] font-bold text-slate-500">
       <span>{label}</span>
       <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
-        <div className={`h-full rounded-full ${barClass}`} style={{ width: `${width}%` }} />
+        <div className={`h-full rounded-full ${barClass} perf-bar-grow${stagger ? ' perf-bar-stagger' : ''}`} style={{ width: `${width}%` }} />
       </div>
       <span className={`text-right font-black ${textClass}`}>{percent === null ? '-' : formatSignedPercent(percent)}</span>
     </div>
