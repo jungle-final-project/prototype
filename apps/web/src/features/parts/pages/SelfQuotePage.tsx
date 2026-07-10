@@ -75,6 +75,7 @@ function SelfQuoteSlotBoardPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
+  const [boardSelectionRequest, setBoardSelectionRequest] = useState(0);
   const { effectiveVisualMode, setVisualMode } = useSlotBoardVisualMode();
   const hasToken = Boolean(getToken());
   const loginHref = `/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
@@ -192,6 +193,11 @@ function SelfQuoteSlotBoardPage() {
       nextParams.set('category', category);
       return nextParams;
     });
+  };
+
+  const selectBoardSlot = (category: PartCategory) => {
+    setBoardSelectionRequest((request) => request + 1);
+    selectSlot(category);
   };
 
   const closePanel = useCallback(() => {
@@ -358,6 +364,7 @@ function SelfQuoteSlotBoardPage() {
             draftItems={draftItems}
             selectedCategory={selectedCategory}
             nextCategory={nextCategory}
+            boardSelectionRequest={boardSelectionRequest}
             onSelect={selectSlot}
             onAddPart={addPart}
             onRemoveItem={removeItem}
@@ -373,7 +380,7 @@ function SelfQuoteSlotBoardPage() {
               visualMode={effectiveVisualMode}
               onVisualModeChange={setVisualMode}
               onClearSelection={closePanel}
-              onSlotSelect={selectSlot}
+              onSlotSelect={selectBoardSlot}
               onRemoveItem={removeItem}
               onUpdateQuantity={updateQuantity}
               isRemovePending={deleteMutation.isPending}
@@ -472,6 +479,7 @@ function QuoteChecklist({
   draftItems,
   selectedCategory,
   nextCategory,
+  boardSelectionRequest,
   onSelect,
   onAddPart,
   onRemoveItem,
@@ -482,6 +490,7 @@ function QuoteChecklist({
   draftItems: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
   nextCategory: PartCategory | null;
+  boardSelectionRequest: number;
   onSelect: (category: PartCategory) => void;
   onAddPart: (part: PartRow) => void;
   onRemoveItem: (partId: string) => void;
@@ -508,6 +517,12 @@ function QuoteChecklist({
     placeholderData: keepPreviousData,
     staleTime: 30_000
   });
+
+  useEffect(() => {
+    if (selectedCategory) {
+      setExpandedCategory(selectedCategory);
+    }
+  }, [selectedCategory, boardSelectionRequest]);
 
   const openCategory = (category: PartCategory) => {
     setExpandedCategory((current) => current === category ? null : category);
