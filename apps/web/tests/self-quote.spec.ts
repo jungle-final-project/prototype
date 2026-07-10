@@ -1469,7 +1469,8 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   await firstOption.click();
   await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
   await expect(panel.getByTestId('perf-candidate-select')).toContainText('인텔 245K');
-  await expect(workspace.getByTestId('fps-compare-banner')).toContainText('라이젠 9600X → 인텔 245K');
+  // "교체 비교 · A → B" 텍스트 배너는 제거됐다 — 후보명은 헤더 콤보가 보여줘 비교 중에도 배너가 없다.
+  await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
   // 게임 예상 성능이 비교 표시로 전환: 기존→변경 숫자 + 델타 배지 + 기존/변경 범위 바 2줄.
   await expect(workspace.getByTestId('fps-result')).toBeVisible();
   await expect(workspace.getByTestId('fps-avg')).toHaveText('243');
@@ -1477,17 +1478,20 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   await expect(workspace.getByTestId('fps-compare-delta')).toHaveText('+16%');
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('기존');
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
-  // 왼쪽 카드의 아크 옆 = 가격·성능 향상 그래프: 변화 % 막대 + 추가 비용 + 예상 FPS 화살표.
+  // 왼쪽 카드의 아크 옆 = 가격·성능 향상 그래프: 0 기준 분기형 막대(양수는 오른쪽) + 추가 비용 강조 + 예상 FPS 화살표.
   await expect(panel.getByTestId('price-effect-panel')).toContainText('가격·성능 향상');
   await expect(panel.getByTestId('cost-effect-block')).toBeVisible();
-  await expect(panel.getByTestId('cost-effect-price')).toContainText('추가 비용 +50,000원');
+  await expect(panel.getByTestId('effect-bar-price')).toHaveAttribute('data-effect-direction', 'up');
+  await expect(panel.getByTestId('effect-bar-price')).toContainText('+17%');
+  await expect(panel.getByTestId('effect-bar-perf')).toHaveAttribute('data-effect-direction', 'up');
+  await expect(panel.getByTestId('effect-bar-perf')).toContainText('+16%');
+  await expect(panel.getByTestId('cost-effect-extra')).toContainText('추가 비용 +50,000원');
   await expect(panel.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
 
   // 보면서 담기: 패널 하단 전체 폭 액션 줄의 '이 제품으로 교체해 담기' → 실제 교체(PUT) + 비교 해제 + 게이지가 새 조합 값으로 스윕.
   await expect(panel.getByTestId('perf-action-row')).toBeVisible();
   await panel.getByTestId('perf-apply-replace').click();
   await expect(workspace.getByTestId('fps-compare-delta')).toHaveCount(0);
-  await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
   await expect(panel.getByTestId('perf-compare-idle')).toBeVisible();
   expect(replaceRequests).toHaveLength(1);
   expect(replaceRequests[0].url).toContain('/api/quote-drafts/current/items/cand-cpu-1');
@@ -1501,8 +1505,111 @@ test('picks a replacement candidate in the performance panel, compares, and appl
       detail: { category: 'CPU', partId: 'part-perf-cpu', name: '라이젠 9600X', price: 300000 }
     }));
   });
-  await expect(workspace.getByTestId('fps-compare-banner')).toContainText('인텔 245K → 라이젠 9600X');
+  // 배너 없이도 비교가 켜졌는지는 헤더 콤보의 후보명과 비교 델타로 확인한다.
+  await expect(panel.getByTestId('perf-candidate-select')).toContainText('라이젠 9600X');
+  await expect(workspace.getByTestId('fps-compare-avg')).toHaveText('243');
   await expect(panel.getByTestId('perf-candidate-category-CPU')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('overlays a composite ghost arc from the swapped-combo resolve with diverging effect bars', async ({ page }) => {
+  await loginAsUser(page);
+  const draft = {
+    ...emptyDraft,
+    items: [
+      draftItem('part-perf-cpu', 'CPU', '라이젠 9600X', 300000),
+      draftItem('part-perf-gpu', 'GPU', 'RTX 5060', 500000)
+    ],
+    totalPrice: 800000,
+    itemCount: 2
+  };
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+  });
+  // 화면 그래프(QUOTE_DRAFT_CURRENT)는 734, 고스트(AI_BUILD + 치환 items)는 812로 응답을 가른다.
+  const ghostResolveRequests: Array<Record<string, unknown>> = [];
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    const isGhost = body?.source === 'AI_BUILD';
+    if (isGhost) ghostResolveRequests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...buildGraphResponse(),
+        compositeScore: compositeScoreFixture(isGhost ? 812 : 734, isGhost ? '밸런스형' : '기본형')
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    const items = url.searchParams.get('category') === 'GPU'
+      ? [candidatePart('cand-gpu-cheap', 'GPU', 'RTX 5050', { price: 420000 })]
+      : [];
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items, page: 0, size: 20, total: items.length }) });
+  });
+  // 저렴한 후보로 바꾸면 FPS는 내려간다 — 가격·성능 모두 음수(왼쪽 분기) 확인용.
+  await page.route('**/api/tools/performance/check', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    const partIds: string[] = Array.isArray(body?.partIds) ? body.partIds : [];
+    const isChangedBuild = partIds.includes('cand-gpu-cheap');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '',
+        details: {
+          gameFpsEvidence: [{
+            gameTitle: '배틀그라운드',
+            gameKey: 'pubg',
+            resolution: 'QHD',
+            graphicsPreset: 'PC_BUILDS_MEDIUM',
+            avgFps: isChangedBuild ? 117 : 130,
+            onePercentLowFps: isChangedBuild ? 88 : 96,
+            sourceName: 'PC-Builds FPS calculator',
+            confidence: 'MEDIUM',
+            match: { evidenceExactness: 'GPU_CLASS_REFERENCE', gameMatched: true, resolutionMatched: true }
+          }]
+        }
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  // 비교 전: 공용 단일 게이지만 보이고 고스트 아크는 없다.
+  const panel = page.getByTestId('quote-performance-panel');
+  await expect(panel.getByTestId('quote-composite-score-gauge')).toBeVisible();
+  await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
+  await expect(panel.getByTestId('quote-composite-ghost-gauge')).toHaveCount(0);
+
+  // 후보 선택 → 종합점수 자리가 고스트 아크로 전환: 기존 회색/변경 파랑 + 중앙 "734 → 812" + 델타 배지.
+  await panel.getByTestId('perf-candidate-select').click();
+  await panel.getByTestId('perf-candidate-popover').getByTestId('perf-candidate-option-0').click();
+  await expect(panel.getByTestId('quote-composite-ghost-gauge')).toBeVisible();
+  await expect(panel.getByTestId('quote-composite-ghost-base')).toHaveText('734');
+  await expect(panel.getByTestId('quote-composite-compare-score')).toHaveText('812');
+  await expect(panel.getByTestId('quote-composite-compare-delta')).toHaveText('+78점');
+
+  // 고스트 resolve는 기존 계약 그대로: source=AI_BUILD + 현재 드래프트에서 GPU만 후보로 치환한 items.
+  expect(ghostResolveRequests.length).toBeGreaterThanOrEqual(1);
+  expect(ghostResolveRequests[0].items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ partId: 'part-perf-cpu', category: 'CPU' }),
+    expect.objectContaining({ partId: 'cand-gpu-cheap', category: 'GPU' })
+  ]));
+
+  // 분기형 막대: 가격 절감(-16%)과 성능 하락(-10%)이 중앙 0 기준선 왼쪽으로 자라고, 라벨은 정확값을 유지한다.
+  await expect(panel.getByTestId('cost-effect-block')).toBeVisible();
+  await expect(panel.getByTestId('effect-bar-price')).toHaveAttribute('data-effect-direction', 'down');
+  await expect(panel.getByTestId('effect-bar-price')).toContainText('-16%');
+  await expect(panel.getByTestId('effect-bar-perf')).toHaveAttribute('data-effect-direction', 'down');
+  await expect(panel.getByTestId('effect-bar-perf')).toContainText('-10%');
+  // 추가 비용 강조 줄: 절감이면 에메랄드 큰 숫자 + (절감) 라벨.
+  await expect(panel.getByTestId('cost-effect-extra')).toContainText('추가 비용 -80,000원 (절감)');
+
+  // 비교 해제 → 고스트 아크가 내려가고 공용 단일 게이지로 복귀한다(비교 강제 금지).
+  await panel.getByTestId('compare-clear').click();
+  await expect(panel.getByTestId('quote-composite-ghost-gauge')).toHaveCount(0);
+  await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
 });
 
 test('drives the candidate popover: open, dismiss without picking, pick WARN, and clear', async ({ page }) => {
@@ -1577,7 +1684,10 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
   await expect(workspace).toBeVisible();
   await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
   await expect(page.getByTestId('cost-effect-empty')).toBeVisible();
-  await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
+  // 빈 상태에도 분기형 트랙과 "추가 비용 —" 자리가 고정으로 보인다.
+  await expect(page.getByTestId('cost-effect-empty').getByTestId('effect-bar-price')).toHaveAttribute('data-effect-direction', 'empty');
+  await expect(panel.getByTestId('cost-effect-extra')).toContainText('추가 비용');
+  await expect(panel.getByTestId('cost-effect-extra')).toContainText('—');
   await expect(panel.getByTestId('perf-action-row')).toHaveCount(0);
 
   // 헤더 콤보 열기 → Escape로 닫기: 선택 없이 닫혀도 빈 상태가 유지된다.
@@ -1602,13 +1712,13 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
   await expect(warnOption).toBeEnabled();
   await warnOption.click();
   await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
-  await expect(workspace.getByTestId('fps-compare-banner')).toContainText('RTX 5060 → 대형 3팬 GPU');
+  // 배너 없이 헤더 콤보가 비교 중인 후보명을 보여준다.
+  await expect(panel.getByTestId('perf-candidate-select')).toContainText('대형 3팬 GPU');
   await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
   await expect(page.getByTestId('fps-compare-avg')).toHaveText('152');
 
   // 비교 해제(하단 액션 줄) → 다시 미선택 빈 상태로 복귀하고 게이지도 기존 값만 남는다.
   await panel.getByTestId('compare-clear').click();
-  await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
   await expect(panel.getByTestId('perf-action-row')).toHaveCount(0);
   await expect(page.getByTestId('perf-compare-idle')).toBeVisible();
   await expect(page.getByTestId('fps-avg')).toHaveText('130');

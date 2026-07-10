@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown } from 'lucide-react';
-import { PART_CATEGORY_LABELS, type BuildGraphResolveResponse } from '../../../quote/aiSelection';
+import { PART_CATEGORY_LABELS, type BuildGraphResolveResponse, type PartCategory } from '../../../quote/aiSelection';
 import { CompositeScoreGauge } from '../../../quote/components/CompositeScoreGauge';
 import type { PerfCompareTarget } from '../../../../lib/events';
-import { checkBuildPerformance, type GameFpsEvidence } from '../../../quote/quoteApi';
+import { checkBuildPerformance, resolveBuildGraph, type GameFpsEvidence } from '../../../quote/quoteApi';
 import { listParts } from '../../partsApi';
 import type { PartCompatibility } from '../../types';
 import { withObjectParticle } from './koreanParticle';
@@ -30,12 +30,15 @@ const FPS_CAP = 165;
 // 단일 1000점 종합점수로 표시한다. CPU/GPU 카테고리 내부 점수는 더 이상 사용자 대표 점수로 노출하지 않는다.
 // 셀프견적 드래프트·저장 견적 어디서든 재사용할 수 있게 최소 필드(category, partId)만 받는다.
 // name/currentPrice는 교체 비교(가격·성능 향상)에만 쓰는 선택 필드다 — 없으면 비용 문구만 생략된다.
-type PerfItem = { category: string; partId: string; name?: string; currentPrice?: number };
+// quantity는 종합점수 고스트 비교 resolve에만 쓰고 없으면 1로 본다.
+type PerfItem = { category: string; partId: string; name?: string; currentPrice?: number; quantity?: number };
 
 // 팀장 확정 설계(최종 개편): 헤더 한 줄 + 데이터 시각화 본문 + 하단 액션 줄.
 // 헤더 = 타이틀·적합 배지(왼쪽) + [CPU|GPU 토글 + 교체 후보 선택 ▾] 콤보(오른쪽 끝, 팝오버).
-// 본문 = 왼쪽 카드 [종합점수 아크 | 가격·성능 향상(비교 미선택 시에도 빈 막대 구조 고정)],
+// 본문 = 왼쪽 카드 [종합점수 아크(비교 시 기존 회색/변경 파랑 고스트 아크) | 가격·성능 향상
+//        (0 기준 분기형 막대 + 추가 비용 강조, 미선택 시에도 빈 구조 고정, 칸 높이 기준 세로 중앙 정렬)],
 //        오른쪽 [게임 예상 성능 수평 막대 + 게임 칩·해상도, 비교 시 기존/변경 범위 바 2줄 + 델타].
+//        "교체 비교 · A → B" 배너는 없다 — 후보명은 헤더 콤보가 보여준다.
 // 액션 줄 = 비교 활성 시에만 패널 하단 전체 폭([이 제품으로 교체해 담기] + [비교 해제]).
 // onStartComparison이 없으면(저장 견적 등) 헤더 콤보·향상 그래프 없이 [종합점수 | 게임 예상 성능]으로 렌더된다.
 export function QuotePerformancePanel({
@@ -66,6 +69,7 @@ export function QuotePerformancePanel({
       <PerfPanelBody
         compositeScore={compositeScore}
         perfItems={perfItems}
+        allItems={items}
         hasGpu={hasGpu}
         comparison={comparison}
         onClearComparison={onClearComparison}
@@ -81,6 +85,7 @@ export function QuotePerformancePanel({
 function PerfPanelBody({
   compositeScore,
   perfItems,
+  allItems,
   hasGpu,
   comparison,
   onClearComparison,
@@ -89,6 +94,7 @@ function PerfPanelBody({
 }: {
   compositeScore: NonNullable<BuildGraphResolveResponse['compositeScore']>;
   perfItems: PerfItem[];
+  allItems: PerfItem[];
   hasGpu: boolean;
   comparison: PerfCompareTarget | null;
   onClearComparison?: () => void;
@@ -127,6 +133,34 @@ function PerfPanelBody({
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000
   });
+
+  // 종합점수 고스트 비교 — 현재 드래프트 items에서 비교 카테고리 partId만 후보로 치환한 조합을
+  // 기존 resolve 계약(source=AI_BUILD + items, SelfQuotePage·홈이 쓰는 것과 동일)으로 조회해 compositeScore만 쓴다.
+  // 로딩 중엔 단일값을 유지하고, 실패하거나 compositeScore가 없으면 조용히 단일값으로 폴백한다(비교 강제 금지).
+  const ghostItems = activeComparison
+    ? allItems
+        .filter((item) => Boolean(item.partId) && isPartCategory(item.category))
+        .map((item) => ({
+          partId: item.category === activeComparison.category ? activeComparison.partId : item.partId,
+          category: item.category as PartCategory,
+          quantity: item.quantity ?? 1
+        }))
+    : [];
+  const ghostKey = ghostItems.map((item) => `${item.category}:${item.partId}x${item.quantity}`).sort().join(',');
+  const ghostQuery = useQuery({
+    queryKey: ['build-graph', 'perf-compare-composite', ghostKey],
+    queryFn: () => resolveBuildGraph({
+      source: 'AI_BUILD',
+      view: 'FOCUSED',
+      items: ghostItems,
+      focus: { mode: 'BUILD_OVERVIEW', tool: 'price' }
+    }),
+    enabled: Boolean(activeComparison) && ghostItems.length > 0,
+    staleTime: 5 * 60 * 1000,
+    retry: false
+  });
+  const ghostScore = activeComparison ? ghostQuery.data?.compositeScore?.score : undefined;
+  const hasGhostScore = typeof ghostScore === 'number' && Number.isFinite(ghostScore);
 
   // 가장 근접한 근거(정렬 1순위)를 대표값으로 쓴다 — 서버가 exactness 순으로 정렬해 내려준다.
   const evidence: GameFpsEvidence | undefined = data?.details?.gameFpsEvidence?.[0];
@@ -174,20 +208,30 @@ function PerfPanelBody({
 
   const hasWorkspace = Boolean(onStartComparison);
 
-  // 종합점수 아크 — 왼쪽 카드 첫 칸.
+  // 종합점수 아크 — 왼쪽 카드 첫 칸. 비교 활성 + 변경 조합 점수가 준비되면
+  // CompositeScoreGauge(공용, 수정 금지) 대신 패널 로컬 고스트 아크로 기존(회색)/변경(파랑)을 겹쳐 보여준다.
   const compositeCard = (
     <div data-testid="quote-composite-score-card">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
         <span className="font-black text-slate-600">종합 점수</span>
         <span className="font-bold text-slate-400">호환·성능·여유 종합 1000점</span>
       </div>
-      <CompositeScoreGauge
-        score={compositeScore}
-        size="large"
-        className="mx-auto"
-        scoreTestId="quote-composite-score"
-        gaugeTestId="quote-composite-score-gauge"
-      />
+      {activeComparison && hasGhostScore ? (
+        <CompositeGhostArc
+          baseScore={compositeScore.score}
+          compareScore={ghostScore as number}
+          maxScore={compositeScore.maxScore}
+          compareKey={activeComparison.partId}
+        />
+      ) : (
+        <CompositeScoreGauge
+          score={compositeScore}
+          size="large"
+          className="mx-auto"
+          scoreTestId="quote-composite-score"
+          gaugeTestId="quote-composite-score-gauge"
+        />
+      )}
       {compositeScore.requestFit ? (
         <div className={`mt-2 rounded px-2 py-1 text-[10px] font-black ${requestFitTone(compositeScore.requestFit.status)}`}>
           {requestFitLabel(compositeScore.requestFit)}
@@ -365,49 +409,57 @@ function PerfPanelBody({
           {hasWorkspace ? (
             <div className="grid gap-3 sm:grid-cols-2">
               {compositeCard}
-              <div data-testid="price-effect-panel" className="border-t border-commerce-line pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+              {/* 칸 전체를 flex 열로 만들고 헤더 아래 콘텐츠(막대 + 추가 비용 강조 + 예상 FPS 줄)를
+                  grow + justify-center로 칸 높이 기준 세로 중앙에 앉힌다 — 빈 상태도 동일. */}
+              <div data-testid="price-effect-panel" className="flex flex-col border-t border-commerce-line pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
                 <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
                   <span className="font-black text-slate-600">가격·성능 향상</span>
                   <span className="font-bold text-slate-400">교체 비교 기준</span>
                 </div>
-                {isCompareReady && activeComparison ? (
-                  <>
-                    {/* 가격 변화 % vs 성능(FPS 평균) 변화 % — "돈을 더 내면 얼마나 좋아지나"를 한눈에. */}
-                    <div data-testid="cost-effect-block" className="perf-block-in rounded-lg border border-commerce-line bg-slate-50/60 p-2.5">
-                      <CostEffectBars
-                        currentPrice={currentPart?.currentPrice}
-                        targetPrice={activeComparison.price}
-                        baseAvg={avg}
-                        compareAvg={compareAvg}
-                      />
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] font-bold text-slate-500">
-                      <span data-testid="cost-effect-price">{priceDiffText(currentPart?.currentPrice, activeComparison.price)}</span>
-                      <span data-testid="cost-effect-fps">
-                        예상 FPS {fpsRangeText(avg, hasLow ? low : undefined)} → {fpsRangeText(compareAvg, hasCompareLow ? compareLow : undefined)}
-                      </span>
-                    </div>
-                  </>
-                ) : isCompareLoading ? (
-                  <div className="h-20 animate-pulse rounded-lg bg-slate-100" />
-                ) : (
-                  <>
-                    {/* 빈 구조 고정: 비교 미선택(또는 자료 없음)에도 회색 트랙 빈 막대·라벨이 그대로 보여
-                        자리가 흔들리지 않고, 값 영역은 미묘한 placeholder만 둔다. 후보를 고르면 grow 모션으로 채워진다. */}
-                    <div data-testid="cost-effect-empty" className="rounded-lg border border-dashed border-slate-200 bg-slate-50/40 p-2.5">
-                      <div className="space-y-1.5">
-                        <EffectBar label="가격" percent={null} maxPercent={1} barClass="bg-slate-300" textClass="text-slate-400" />
-                        <EffectBar label="성능" percent={null} maxPercent={1} barClass="bg-slate-300" textClass="text-slate-400" />
+                <div className="flex min-h-0 grow flex-col justify-center">
+                  {isCompareReady && activeComparison ? (
+                    <>
+                      {/* 가격 변화 % vs 성능(FPS 평균) 변화 % — 0 기준선을 가운데 둔 분기형 막대. */}
+                      <div data-testid="cost-effect-block" className="perf-block-in rounded-lg border border-commerce-line bg-slate-50/60 p-2.5">
+                        <CostEffectBars
+                          currentPrice={currentPart?.currentPrice}
+                          targetPrice={activeComparison.price}
+                          baseAvg={avg}
+                          compareAvg={compareAvg}
+                        />
                       </div>
-                    </div>
-                    <p
-                      data-testid={activeComparison ? 'perf-compare-no-data' : 'perf-compare-idle'}
-                      className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400"
-                    >
-                      {activeComparison ? '변경 조합 자료가 없어 향상 폭을 계산할 수 없어요.' : '교체 후보를 고르면 채워져요.'}
-                    </p>
-                  </>
-                )}
+                      {/* 추가 비용이 이 블록의 결론 — 막대 아래 가장 큰 숫자로 강조하고, 예상 FPS는 보조 텍스트로 받친다. */}
+                      <div className="perf-block-in mt-2">
+                        <CostEffectEmphasis {...costEffectDisplay(currentPart?.currentPrice, activeComparison.price)} />
+                        <div data-testid="cost-effect-fps" className="mt-1 text-[10px] font-bold text-slate-500">
+                          예상 FPS {fpsRangeText(avg, hasLow ? low : undefined)} → {fpsRangeText(compareAvg, hasCompareLow ? compareLow : undefined)}
+                        </div>
+                      </div>
+                    </>
+                  ) : isCompareLoading ? (
+                    <div className="h-24 animate-pulse rounded-lg bg-slate-100" />
+                  ) : (
+                    <>
+                      {/* 빈 구조 고정: 비교 미선택(또는 자료 없음)에도 중앙 기준선 트랙·라벨·추가 비용 자리가 그대로 보여
+                          자리가 흔들리지 않고, 값 영역은 미묘한 placeholder만 둔다. 후보를 고르면 grow 모션으로 채워진다. */}
+                      <div data-testid="cost-effect-empty" className="rounded-lg border border-dashed border-slate-200 bg-slate-50/40 p-2.5">
+                        <div className="space-y-1.5">
+                          <EffectBar testId="effect-bar-price" label="가격" percent={null} scale={EFFECT_SCALE_MIN} barClass="bg-slate-300" textClass="text-slate-400" />
+                          <EffectBar testId="effect-bar-perf" label="성능" percent={null} scale={EFFECT_SCALE_MIN} barClass="bg-slate-300" textClass="text-slate-400" />
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <CostEffectEmphasis value="—" tone="text-slate-300" />
+                      </div>
+                      <p
+                        data-testid={activeComparison ? 'perf-compare-no-data' : 'perf-compare-idle'}
+                        className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400"
+                      >
+                        {activeComparison ? '변경 조합 자료가 없어 향상 폭을 계산할 수 없어요.' : '교체 후보를 고르면 채워져요.'}
+                      </p>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
@@ -415,19 +467,10 @@ function PerfPanelBody({
           )}
         </div>
 
-        {/* 오른쪽 열: 게임 예상 성능 작업창 — 선택기는 헤더 콤보로 올라갔고, 여기는 비교 배너 + 데이터 시각화만 남는다. */}
+        {/* 오른쪽 열: 게임 예상 성능 작업창 — 선택기는 헤더 콤보로 올라갔고, 여기는 데이터 시각화만 남는다.
+            "교체 비교 · A → B" 텍스트 배너는 제거 — 후보명은 헤더 콤보가 이미 보여줘 중복이었다. */}
         {hasWorkspace ? (
           <div data-testid="perf-compare-workspace" className="rounded-lg border border-commerce-line bg-white p-3">
-            {activeComparison ? (
-              <div data-testid="fps-compare-banner" className="mb-2.5 flex min-w-0 flex-wrap items-center gap-1 rounded-md border border-blue-100 bg-blue-50/60 px-2.5 py-1.5 text-[11px] font-bold text-slate-600">
-                <span className="font-black text-brand-blue">교체 비교</span>
-                <span aria-hidden="true">·</span>
-                <span className="min-w-0 truncate">
-                  {currentPart?.name ?? '지금 담긴 부품'} → {activeComparison.name}
-                </span>
-              </div>
-            ) : null}
-
             {fpsSection}
           </div>
         ) : (
@@ -670,6 +713,99 @@ function candidateStatusTone(status: PartCompatibility['status'] | undefined, is
   return 'text-slate-400';
 }
 
+// 드래프트 카테고리 문자열이 resolve 계약의 PartCategory인지 확인한다 — 미지 카테고리는 고스트 조합에서 제외.
+function isPartCategory(category: string): category is PartCategory {
+  return category in PART_CATEGORY_LABELS;
+}
+
+// CompositeScoreGauge와 같은 반원 아크 경로(공용 컴포넌트는 수정 금지라 패널 로컬로 둔다).
+const COMPOSITE_ARC_PATH = 'M 24 112 A 86 86 0 0 1 196 112';
+
+// 종합점수 고스트 비교 아크 — 기존 점수는 회색 반투명 아크, 변경 조합 점수는 파랑 아크(살짝 좁게 겹쳐 위계),
+// 중앙 "기존 → 변경" 숫자 + 델타 배지(하락 빨강). 변경 점수는 기존 값에서 rAF easeOut 스윕으로 차오르며
+// 아크와 숫자가 같은 보간을 공유한다(reduced-motion 즉시 반영).
+function CompositeGhostArc({
+  baseScore,
+  compareScore,
+  maxScore,
+  compareKey
+}: {
+  baseScore: number;
+  compareScore: number;
+  maxScore: number;
+  compareKey: string;
+}) {
+  const safeMax = Math.max(1, maxScore);
+  const displayCompare = useAnimatedNumber(compareScore, baseScore);
+  const basePercent = Math.max(0, Math.min(100, (Math.max(0, baseScore) / safeMax) * 100));
+  const comparePercent = Math.max(0, Math.min(100, (Math.max(0, displayCompare) / safeMax) * 100));
+  const delta = Math.round(compareScore) - Math.round(baseScore);
+  return (
+    <div
+      data-testid="quote-composite-ghost-gauge"
+      className="mx-auto max-w-[280px] text-center"
+      aria-label={`종합 점수 기존 ${Math.round(baseScore).toLocaleString('ko-KR')}점 → 변경 ${Math.round(compareScore).toLocaleString('ko-KR')}점`}
+    >
+      <div className="relative">
+        <svg className="h-[150px] w-full overflow-visible" viewBox="0 0 220 132" role="img" aria-hidden="true">
+          <path
+            d={COMPOSITE_ARC_PATH}
+            fill="none"
+            className="stroke-slate-200"
+            strokeWidth={18}
+            strokeLinecap="butt"
+            pathLength={100}
+          />
+          {/* 기존 점수: 회색 반투명 고스트 */}
+          <path
+            d={COMPOSITE_ARC_PATH}
+            fill="none"
+            className="stroke-slate-400 opacity-50"
+            strokeWidth={18}
+            strokeLinecap="butt"
+            pathLength={100}
+            strokeDasharray={`${basePercent} 100`}
+          />
+          {/* 변경 조합 점수: 파랑 아크를 살짝 좁게 겹쳐 위계를 준다 */}
+          <path
+            d={COMPOSITE_ARC_PATH}
+            fill="none"
+            className="stroke-brand-blue"
+            strokeWidth={10}
+            strokeLinecap="butt"
+            pathLength={100}
+            strokeDasharray={`${comparePercent} 100`}
+          />
+        </svg>
+        <div className="absolute inset-x-0 bottom-3 px-1">
+          <div className="flex flex-wrap items-baseline justify-center gap-1 font-black leading-none">
+            <span data-testid="quote-composite-ghost-base" className="text-lg text-slate-400">
+              {Math.round(baseScore).toLocaleString('ko-KR')}
+            </span>
+            <span aria-hidden="true" className="text-sm text-slate-400">→</span>
+            <span data-testid="quote-composite-compare-score" className="text-3xl text-brand-blue">
+              {Math.round(displayCompare).toLocaleString('ko-KR')}
+            </span>
+          </div>
+          <div className="mt-1.5 flex justify-center">
+            <span
+              key={compareKey}
+              data-testid="quote-composite-compare-delta"
+              className={`perf-pop-in rounded-full border px-1.5 py-0.5 text-[10px] font-black ${deltaBadgeTone(delta)}`}
+            >
+              {delta > 0 ? '+' : ''}{delta}점
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="-mt-3 flex items-center justify-between px-4 text-[10px] font-bold text-slate-400" aria-hidden="true">
+        <span>0</span>
+        <span>{safeMax.toLocaleString('ko-KR')}</span>
+      </div>
+    </div>
+  );
+}
+
 // FPS를 체감 경험으로 — 그라데이션 트랙 위 체감 색 채움 + 1% low 마커(원래 수평 막대 스타일).
 function FpsGauge({ avg, low }: { avg: number; low?: number }) {
   const avgPct = Math.max(3, fpsPercent(avg));
@@ -706,11 +842,12 @@ function easeOutCubic(value: number) {
 }
 
 // 값이 바뀌면 이전 값→새 값으로 rAF easeOut 스윕한다 — CompositeScoreGauge의 게이지 애니메이션과 같은 결.
-// prefers-reduced-motion이면 즉시 반영한다.
-function useAnimatedNumber(target: number): number {
+// prefers-reduced-motion이면 즉시 반영한다. initial을 주면 마운트 직후 initial→target으로 스윕한다(고스트 아크 진입 모션).
+function useAnimatedNumber(target: number, initial?: number): number {
   const safeTarget = Number.isFinite(target) ? target : 0;
-  const [value, setValue] = useState(safeTarget);
-  const valueRef = useRef(safeTarget);
+  const initialValue = typeof initial === 'number' && Number.isFinite(initial) ? initial : safeTarget;
+  const [value, setValue] = useState(initialValue);
+  const valueRef = useRef(initialValue);
   const frameRef = useRef<number | null>(null);
   const settleTimerRef = useRef<number | null>(null);
 
@@ -782,7 +919,13 @@ function FpsRangeBar({ label, avg, low, tone }: { label: string; avg: number; lo
   );
 }
 
+// 분기형 막대 대칭 스케일: 두 지표 절대값의 최대치 기준, 최소 ±25% 범위 보장.
+// 극단값(예: +260%)은 반폭 끝까지만 시각적으로 캡하고 숫자 라벨은 정확값을 유지한다.
+const EFFECT_SCALE_MIN = 25;
+const EFFECT_SCALE_CAP = 100;
+
 // 가격·성능 향상: 가격 변화 %와 성능(FPS 평균) 변화 %를 나란히 — "돈을 더 내면 얼마나 좋아지나"를 한눈에.
+// 비교는 음수(절감·성능 하락)일 수 있어 기준점 0을 트랙 가운데 둔 분기형 막대로 그린다.
 function CostEffectBars({
   currentPrice,
   targetPrice,
@@ -797,21 +940,23 @@ function CostEffectBars({
   const hasPrice = typeof currentPrice === 'number' && currentPrice > 0 && targetPrice > 0;
   const pricePercent = hasPrice ? percentDelta(currentPrice as number, targetPrice) : null;
   const perfPercent = percentDelta(baseAvg, compareAvg);
-  const maxPercent = Math.max(Math.abs(pricePercent ?? 0), Math.abs(perfPercent), 1);
+  const scale = Math.min(EFFECT_SCALE_CAP, Math.max(EFFECT_SCALE_MIN, Math.abs(pricePercent ?? 0), Math.abs(perfPercent)));
 
   return (
     <div className="space-y-1.5">
       <EffectBar
+        testId="effect-bar-price"
         label="가격"
         percent={pricePercent}
-        maxPercent={maxPercent}
+        scale={scale}
         barClass="bg-slate-400"
         textClass="text-slate-600"
       />
       <EffectBar
+        testId="effect-bar-perf"
         label="성능"
         percent={perfPercent}
-        maxPercent={maxPercent}
+        scale={scale}
         barClass={perfPercent > 0 ? 'bg-emerald-500' : perfPercent < 0 ? 'bg-red-500' : 'bg-slate-300'}
         textClass={perfPercent > 0 ? 'text-emerald-600' : perfPercent < 0 ? 'text-red-600' : 'text-slate-500'}
         stagger
@@ -820,38 +965,66 @@ function CostEffectBars({
   );
 }
 
-// 추가 비용 요약 문구 — 기존 부품 가격이 없으면 그 사실을 밝힌다.
-function priceDiffText(currentPrice: number | undefined, targetPrice: number): string {
+// 추가 비용 강조 표시값 — 증가는 빨강, 절감은 에메랄드, 차이 없음·정보 없음은 슬레이트.
+function costEffectDisplay(currentPrice: number | undefined, targetPrice: number): { value: string; tone: string; note?: string } {
   const hasPrice = typeof currentPrice === 'number' && currentPrice > 0 && targetPrice > 0;
-  if (!hasPrice) return '기존 부품 가격 정보 없음';
+  if (!hasPrice) return { value: '—', tone: 'text-slate-300', note: '기존 부품 가격 정보 없음' };
   const formatter = new Intl.NumberFormat('ko-KR');
   const priceDiff = targetPrice - (currentPrice as number);
-  if (priceDiff > 0) return `추가 비용 +${formatter.format(priceDiff)}원`;
-  if (priceDiff < 0) return `추가 비용 -${formatter.format(Math.abs(priceDiff))}원 (절감)`;
-  return '가격 차이 없음';
+  if (priceDiff > 0) return { value: `+${formatter.format(priceDiff)}원`, tone: 'text-red-600' };
+  if (priceDiff < 0) return { value: `-${formatter.format(Math.abs(priceDiff))}원`, tone: 'text-emerald-600', note: '(절감)' };
+  return { value: '0원', tone: 'text-slate-500', note: '(가격 차이 없음)' };
 }
 
+// 추가 비용은 이 블록의 결론이라 블록 내 최대 급 텍스트로 강조한다 — 빈 상태에서도 "추가 비용 —" 자리를 고정한다.
+function CostEffectEmphasis({ value, tone, note }: { value: string; tone: string; note?: string }) {
+  return (
+    <div data-testid="cost-effect-extra" className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+      <span className="text-[10px] font-black text-slate-500">추가 비용</span>{' '}
+      <span className={`text-xl font-black leading-none ${tone}`}>{value}</span>
+      {note ? <> <span className="text-[10px] font-bold text-slate-400">{note}</span></> : null}
+    </div>
+  );
+}
+
+// 분기형(diverging) 막대: 트랙 중앙의 얇은 0 기준선에서 양수는 오른쪽, 음수는 왼쪽으로 자란다.
+// grow 모션도 중앙 기준(양수는 left:50%, 음수는 right:50% 앵커)에서 좌/우로 퍼진다.
 function EffectBar({
   label,
   percent,
-  maxPercent,
+  scale,
   barClass,
   textClass,
-  stagger = false
+  stagger = false,
+  testId
 }: {
   label: string;
   percent: number | null;
-  maxPercent: number;
+  scale: number;
   barClass: string;
   textClass: string;
   stagger?: boolean;
+  testId?: string;
 }) {
-  const width = percent === null ? 0 : Math.max(3, Math.min(100, (Math.abs(percent) / maxPercent) * 100));
+  // 절대값을 대칭 스케일로 반폭(50%) 안에 매핑 — 스케일을 넘는 극단값은 반폭 끝에서 캡된다.
+  const magnitude = percent === null || percent === 0
+    ? 0
+    : Math.max(3, Math.min(50, (Math.min(Math.abs(percent), scale) / Math.max(1, scale)) * 50));
+  const isNegative = (percent ?? 0) < 0;
+  const direction = percent === null ? 'empty' : percent > 0 ? 'up' : percent < 0 ? 'down' : 'zero';
   return (
-    <div className="grid grid-cols-[30px_1fr_48px] items-center gap-2 text-[11px] font-bold text-slate-500">
+    <div data-testid={testId} data-effect-direction={direction} className="grid grid-cols-[30px_1fr_48px] items-center gap-2 text-[11px] font-bold text-slate-500">
       <span>{label}</span>
-      <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
-        <div className={`h-full rounded-full ${barClass} perf-bar-grow${stagger ? ' perf-bar-stagger' : ''}`} style={{ width: `${width}%` }} />
+      <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-100">
+        <span aria-hidden="true" className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-slate-300" />
+        {magnitude > 0 ? (
+          <div
+            // 부호가 뒤집히면 반대쪽 앵커에서 다시 자라도록 재마운트한다.
+            key={direction}
+            className={`absolute top-0 h-full ${barClass} ${isNegative ? 'rounded-l-full' : 'rounded-r-full'} perf-bar-grow${stagger ? ' perf-bar-stagger' : ''}`}
+            style={isNegative ? { right: '50%', width: `${magnitude}%` } : { left: '50%', width: `${magnitude}%` }}
+          />
+        ) : null}
       </div>
       <span className={`text-right font-black ${textClass}`}>{percent === null ? '—' : formatSignedPercent(percent)}</span>
     </div>
