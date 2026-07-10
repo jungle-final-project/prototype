@@ -1471,13 +1471,15 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   await expect(panel.getByTestId('perf-candidate-select')).toContainText('인텔 245K');
   // "교체 비교 · A → B" 텍스트 배너는 제거됐다 — 후보명은 헤더 콤보가 보여줘 비교 중에도 배너가 없다.
   await expect(workspace.getByTestId('fps-compare-banner')).toHaveCount(0);
-  // 게임 예상 성능이 비교 표시로 전환: 기존→변경 숫자 + 델타 배지 + 기존/변경 범위 바 2줄.
+  // 게임 예상 성능이 비교 표시로 전환: 기존→변경 숫자 + 델타 배지 + 기존/변경 0→값 게이지 바 2줄(약 N FPS 라벨).
   await expect(workspace.getByTestId('fps-result')).toBeVisible();
   await expect(workspace.getByTestId('fps-avg')).toHaveText('243');
   await expect(workspace.getByTestId('fps-compare-avg')).toHaveText('281');
   await expect(workspace.getByTestId('fps-compare-delta')).toHaveText('+16%');
-  await expect(workspace.getByTestId('fps-range-bars')).toContainText('기존');
-  await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
+  await expect(workspace.getByTestId('fps-compare-gauge-base')).toContainText('기존');
+  await expect(workspace.getByTestId('fps-compare-gauge-base')).toContainText('약 243 FPS');
+  await expect(workspace.getByTestId('fps-compare-gauge-changed')).toContainText('변경');
+  await expect(workspace.getByTestId('fps-compare-gauge-changed')).toContainText('약 281 FPS');
   // 왼쪽 카드의 아크 옆 = 가격·성능 향상 그래프: 0 기준 분기형 막대(양수는 오른쪽) + 추가 비용 강조 + 예상 FPS 화살표.
   await expect(panel.getByTestId('price-effect-panel')).toContainText('가격·성능 향상');
   await expect(panel.getByTestId('cost-effect-block')).toBeVisible();
@@ -1714,7 +1716,7 @@ test('drives the candidate popover: open, dismiss without picking, pick WARN, an
   await expect(panel.getByTestId('perf-candidate-popover')).toHaveCount(0);
   // 배너 없이 헤더 콤보가 비교 중인 후보명을 보여준다.
   await expect(panel.getByTestId('perf-candidate-select')).toContainText('대형 3팬 GPU');
-  await expect(workspace.getByTestId('fps-range-bars')).toContainText('변경');
+  await expect(workspace.getByTestId('fps-compare-gauge-changed')).toContainText('약 152 FPS');
   await expect(page.getByTestId('fps-compare-avg')).toHaveText('152');
 
   // 비교 해제(하단 액션 줄) → 다시 미선택 빈 상태로 복귀하고 게이지도 기존 값만 남는다.

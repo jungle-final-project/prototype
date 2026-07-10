@@ -37,7 +37,7 @@ type PerfItem = { category: string; partId: string; name?: string; currentPrice?
 // 헤더 = 타이틀·적합 배지(왼쪽) + [CPU|GPU 토글 + 교체 후보 선택 ▾] 콤보(오른쪽 끝, 팝오버).
 // 본문 = 왼쪽 카드 [종합점수 아크(비교 시 기존 회색/변경 파랑 고스트 아크) | 가격·성능 향상
 //        (0 기준 분기형 막대 + 추가 비용 강조, 미선택 시에도 빈 구조 고정, 칸 높이 기준 세로 중앙 정렬)],
-//        오른쪽 [게임 예상 성능 수평 막대 + 게임 칩·해상도, 비교 시 기존/변경 범위 바 2줄 + 델타].
+//        오른쪽 [게임 예상 성능 수평 막대 + 게임 칩·해상도, 비교 시 기존/변경 0→값 게이지 바 2줄 + 델타].
 //        "교체 비교 · A → B" 배너는 없다 — 후보명은 헤더 콤보가 보여준다.
 // 액션 줄 = 비교 활성 시에만 패널 하단 전체 폭([이 제품으로 교체해 담기] + [비교 해제]).
 // onStartComparison이 없으면(저장 견적 등) 헤더 콤보·향상 그래프 없이 [종합점수 | 게임 예상 성능]으로 렌더된다.
@@ -244,7 +244,7 @@ function PerfPanelBody({
   );
 
   // 게임 예상 성능 — 원래 수평 막대 스타일(큰 FPS 숫자 + 그라데이션 바 + 1% low 마커 + 체감 라벨).
-  // 비교 중엔 기존/변경 범위 바 2줄로 두 조합의 흔들림 폭을 나란히 본다(아크 고스트 없이 두 줄이면 충분).
+  // 비교 중엔 단일 모드와 같은 결의 0→값 게이지 바 2줄(기존 회색/변경 파랑)로 두 조합을 나란히 본다.
   const fpsSection = hasGpu ? (
     <div data-testid="quote-fps-section">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -326,10 +326,10 @@ function PerfPanelBody({
                 </span>
                 <span className="text-[11px] font-bold text-slate-500">FPS 평균 (참고)</span>
               </div>
-              {/* 기존/변경 FPS 범위(1% 최저 ~ 평균) 수평 바 2줄. */}
-              <div data-testid="fps-range-bars" className="mt-2 space-y-1.5">
-                <FpsRangeBar label="기존" avg={avg} low={hasLow ? low : undefined} tone="base" />
-                <FpsRangeBar label="변경" avg={compareAvg} low={hasCompareLow ? compareLow : undefined} tone="changed" />
+              {/* 기존/변경 평균 FPS 게이지 바 2줄 — 단일 모드처럼 0→값 채움, 1% 최저는 채움 위 눈금. */}
+              <div data-testid="fps-compare-gauges" className="mt-2 space-y-1.5">
+                <FpsCompareGaugeBar label="기존" avg={avg} low={hasLow ? low : undefined} tone="base" />
+                <FpsCompareGaugeBar label="변경" avg={compareAvg} low={hasCompareLow ? compareLow : undefined} tone="changed" />
               </div>
             </>
           ) : (
@@ -345,7 +345,9 @@ function PerfPanelBody({
           <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 text-[10px]">
             <span className="font-bold text-slate-500">
               {isCompareReady
-                ? '범위는 순간 최저(하위 1% 평균)~평균입니다'
+                ? hasLow || hasCompareLow
+                  ? '눈금은 순간 최저(하위 1% 평균) 지점입니다'
+                  : '최저값 자료 없음'
                 : hasLow
                   ? `최저 약 ${Math.round(low)} FPS (하위 1% 평균)`
                   : '최저값 자료 없음'}
@@ -897,24 +899,31 @@ function useAnimatedNumber(target: number, initial?: number): number {
   return value;
 }
 
-// 기존/변경 조합의 [1% 최저 ~ 평균] 범위를 수평 바로 나란히 — 최저값이 없으면 평균 단일점.
-function FpsRangeBar({ label, avg, low, tone }: { label: string; avg: number; low?: number; tone: 'base' | 'changed' }) {
-  const end = fpsPercent(avg);
-  const start = low !== undefined ? fpsPercent(Math.min(low, avg)) : end;
-  const width = Math.max(1.5, end - start);
+// 기존/변경 조합의 평균 FPS를 단일 모드 FpsGauge처럼 0→값 채움 게이지 바로 나란히 —
+// 기존은 회색(슬레이트), 변경은 파랑 채움, 1% 최저는 채움 위 눈금으로 남긴다(165 상한 스케일 공유).
+function FpsCompareGaugeBar({ label, avg, low, tone }: { label: string; avg: number; low?: number; tone: 'base' | 'changed' }) {
+  const avgPct = Math.max(3, fpsPercent(avg));
+  const lowPct = low !== undefined ? fpsPercent(Math.min(low, avg)) : null;
   const barClass = tone === 'changed' ? 'bg-brand-blue' : 'bg-slate-400';
-  const text = low !== undefined ? `${Math.round(low)}~${Math.round(avg)} FPS` : `약 ${Math.round(avg)} FPS`;
   return (
-    <div className="grid grid-cols-[30px_1fr_88px] items-center gap-2 text-[11px] font-bold">
+    <div
+      data-testid={tone === 'changed' ? 'fps-compare-gauge-changed' : 'fps-compare-gauge-base'}
+      className="grid grid-cols-[30px_1fr_88px] items-center gap-2 text-[11px] font-bold"
+    >
       <span className={tone === 'changed' ? 'font-black text-brand-blue' : 'text-slate-500'}>{label}</span>
       <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-100">
-        {/* 등장 시 0→목표 폭으로 자라고(기존 먼저, 변경 120ms 스태거), 값 변화는 transition으로 따라간다. */}
-        <div
-          className={`absolute top-0 h-full rounded-full ${barClass} perf-bar-grow${tone === 'changed' ? ' perf-bar-stagger' : ''}`}
-          style={{ left: `${Math.min(start, 100 - width)}%`, width: `${width}%` }}
-        />
+        {/* 등장 시 0→목표 폭으로 자라고(기존 먼저, 변경 120ms 스태거), 값 변화는 transition으로 따라간다. reduced-motion이면 즉시. */}
+        <div className={`perf-bar-grow h-full rounded-full ${barClass}${tone === 'changed' ? ' perf-bar-stagger' : ''}`} style={{ width: `${avgPct}%` }} />
+        {/* 1% low 눈금 — 채움 위에 실제 체감 하한을 표시한다(단일 모드 마커와 동일한 결). */}
+        {lowPct !== null ? (
+          <span
+            aria-hidden="true"
+            className="absolute top-1/2 h-3.5 w-0.5 -translate-y-1/2 rounded-full bg-slate-600"
+            style={{ left: `${lowPct}%` }}
+          />
+        ) : null}
       </div>
-      <span className="text-right text-slate-600">{text}</span>
+      <span className="text-right text-slate-600">약 {Math.round(avg)} FPS</span>
     </div>
   );
 }
