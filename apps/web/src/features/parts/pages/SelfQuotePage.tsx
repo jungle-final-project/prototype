@@ -234,6 +234,7 @@ function SelfQuoteSlotBoardPage() {
 
   const isMutating = addMutation.isPending || updateQuantityMutation.isPending || deleteMutation.isPending;
   const hasCompatibilityFail = quoteHasCompatibilityFail(graphQuery.data, draftItems);
+  const statusByCategory = quoteStatusByCategory(graphQuery.data);
 
   const filledCount = SLOT_CONFIGS.filter((slot) => draftItems.some((item) => item.category === slot.category)).length;
   // 순차 가이드: 권장 순서에서 아직 비어 있는 첫 카테고리를 "다음 선택"으로 안내한다(강제 아님).
@@ -371,6 +372,7 @@ function SelfQuoteSlotBoardPage() {
             onUpdateQuantity={updateQuantity}
             isMutating={isMutating}
             isRemovePending={deleteMutation.isPending}
+            statusByCategory={statusByCategory}
           />
           <div className="min-h-0 lg:h-[800px]">
             <SlotBoard
@@ -485,7 +487,8 @@ function QuoteChecklist({
   onRemoveItem,
   onUpdateQuantity,
   isMutating,
-  isRemovePending
+  isRemovePending,
+  statusByCategory
 }: {
   draftItems: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -497,6 +500,7 @@ function QuoteChecklist({
   onUpdateQuantity: (partId: string, quantity: number) => void;
   isMutating: boolean;
   isRemovePending: boolean;
+  statusByCategory: Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>;
 }) {
   const [expandedCategory, setExpandedCategory] = useState<PartCategory | null>(() => selectedCategory ?? nextCategory ?? 'CPU');
   const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
@@ -508,7 +512,7 @@ function QuoteChecklist({
     queryFn: () => listParts({
       category: activeCategory,
       page: 0,
-      size: 24,
+      size: 100,
       sort: 'compatibility',
       compatibilitySource: 'QUOTE_DRAFT_CURRENT',
       compatibilityMode: activeIsMulti ? 'ADD' : undefined
@@ -583,6 +587,9 @@ function QuoteChecklist({
           const isSelected = category === selectedCategory;
           const lineTotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
           const label = PART_CATEGORY_LABELS[category] ?? category;
+          const slotStatus = statusByCategory.get(category);
+          const hasFail = filled && slotStatus === 'FAIL';
+          const hasWarn = filled && slotStatus === 'WARN';
           return (
             <li key={category}>
               <div
@@ -597,9 +604,17 @@ function QuoteChecklist({
                 onKeyDown={(event) => openCategoryFromKeyboard(event, category)}
                 className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
                   isSelected || expandedCategory === category
-                    ? 'border-brand-blue bg-white ring-2 ring-blue-100'
+                    ? hasFail
+                      ? 'border-red-300 bg-red-50/60 ring-2 ring-red-100'
+                      : hasWarn
+                        ? 'border-amber-300 bg-amber-50/60 ring-2 ring-amber-100'
+                        : 'border-brand-blue bg-white ring-2 ring-blue-100'
                     : filled
-                      ? 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
+                      ? hasFail
+                        ? 'border-red-200 bg-red-50/50 hover:border-red-400'
+                        : hasWarn
+                          ? 'border-amber-200 bg-amber-50/50 hover:border-amber-400'
+                          : 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
                       : isNext
                         ? 'slot-empty-pulse slot-hint-shimmer border-brand-blue bg-blue-50/50'
                         : 'border-dashed border-slate-300 bg-white hover:border-slate-400'
@@ -611,7 +626,9 @@ function QuoteChecklist({
                   </span>
                   {filled ? (
                     <span className="flex shrink-0 items-center gap-1.5">
-                      <span className="text-[10px] font-black text-emerald-700">✓ 완료</span>
+                      <span className={`text-[10px] font-black ${hasFail ? 'text-red-700' : hasWarn ? 'text-amber-700' : 'text-emerald-700'}`}>
+                        {hasFail ? '경고' : hasWarn ? '주의' : '✓ 완료'}
+                      </span>
                       <button
                         type="button"
                         disabled={isRemovePending}
@@ -674,11 +691,11 @@ function QuoteChecklist({
                           <button
                             key={part.id}
                             type="button"
-                            disabled={isMutating || isAlreadySelected || isFail}
+                            disabled={isMutating || isAlreadySelected}
                             onClick={() => choosePart(category, part)}
                             className={`w-full rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
                               isFail
-                                ? 'border-slate-200 opacity-55'
+                                ? 'border-red-100 bg-red-50/40 hover:border-red-300'
                                 : isAlreadySelected
                                   ? 'border-emerald-200 bg-emerald-50'
                                   : 'border-commerce-line hover:border-brand-blue hover:bg-white'
@@ -965,6 +982,56 @@ function quoteHasCompatibilityFail(graph: BuildGraphResolveResponse | undefined,
       && filledCategories.has(sourceCategory) && filledCategories.has(targetCategory);
   });
   return nodeFail || edgeFail || blockingToolFailures(graph, items).length > 0;
+}
+
+function quoteStatusByCategory(graph: BuildGraphResolveResponse | undefined) {
+  const statusMap = new Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>();
+  if (!graph) {
+    return statusMap;
+  }
+  const categoryByNodeId = new Map<string, PartCategory>();
+  const promote = (category: PartCategory | undefined, status: string) => {
+    if (!category || (status !== 'PASS' && status !== 'WARN' && status !== 'FAIL')) {
+      return;
+    }
+    const current = statusMap.get(category);
+    if (!current || statusRank(status) > statusRank(current)) {
+      statusMap.set(category, status);
+    }
+  };
+
+  graph.nodes.forEach((node) => {
+    const category = typeof node.category === 'string' && isSlotCategory(node.category) ? node.category : undefined;
+    if (category) {
+      categoryByNodeId.set(node.id, category);
+    }
+    if (node.type === 'PART') {
+      promote(category, node.status);
+    }
+  });
+
+  graph.edges.forEach((edge) => {
+    if (edge.status !== 'WARN' && edge.status !== 'FAIL') {
+      return;
+    }
+    promote(categoryByNodeId.get(edge.source), edge.status);
+    promote(categoryByNodeId.get(edge.target), edge.status);
+  });
+
+  graph.insights.forEach((insight) => {
+    if (insight.status !== 'WARN' && insight.status !== 'FAIL') {
+      return;
+    }
+    insight.relatedNodeIds.forEach((nodeId) => promote(categoryByNodeId.get(nodeId), insight.status));
+  });
+
+  return statusMap;
+}
+
+function statusRank(status: 'PASS' | 'WARN' | 'FAIL') {
+  if (status === 'FAIL') return 3;
+  if (status === 'WARN') return 2;
+  return 1;
 }
 
 function graphToolForCategory(category: PartCategory): BuildGraphFocus['tool'] {

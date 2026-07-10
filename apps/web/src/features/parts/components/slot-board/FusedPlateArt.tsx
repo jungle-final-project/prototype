@@ -167,6 +167,11 @@ export function FusedPlateArt({
               />
               {filled && area.category === 'RAM' ? (
                 <>
+                  {hovered ? (
+                    <span data-testid="slot-fused-label-RAM" className="fused-part-hover-label">
+                      {area.label}
+                    </span>
+                  ) : null}
                   <span data-testid="slot-fused-badge-RAM" className="fused-ram-number-badge">
                     {slotOrderNumber(area.category)}
                   </span>
@@ -220,26 +225,33 @@ export function FusedPlateArt({
                 </>
               ) : null}
               {filled && area.category !== 'RAM' ? (
-                <button
-                  type="button"
-                  data-testid={`slot-fused-remove-${area.category}`}
-                  aria-label={`Remove ${area.category}`}
-                  disabled={isActionPending}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (!hovered) {
-                      return;
-                    }
-                    removeCategoryItems(categoryItems);
-                  }}
-                  className="fused-part-action-button"
-                >
-                  <span data-testid={`slot-fused-badge-${area.category}`} className="fused-part-action-number">
-                    {slotOrderNumber(area.category)}
-                  </span>
-                  <span className="fused-part-action-x" aria-hidden="true">X</span>
-                </button>
+                <>
+                  {hovered ? (
+                    <span data-testid={`slot-fused-label-${area.category}`} className="fused-part-hover-label">
+                      {area.label}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    data-testid={`slot-fused-remove-${area.category}`}
+                    aria-label={`Remove ${area.category}`}
+                    disabled={isActionPending}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!hovered) {
+                        return;
+                      }
+                      removeCategoryItems(categoryItems);
+                    }}
+                    className="fused-part-action-button"
+                  >
+                    <span data-testid={`slot-fused-badge-${area.category}`} className="fused-part-action-number">
+                      {slotOrderNumber(area.category)}
+                    </span>
+                    <span className="fused-part-action-x" aria-hidden="true">X</span>
+                  </button>
+                </>
               ) : null}
             </div>
           );
