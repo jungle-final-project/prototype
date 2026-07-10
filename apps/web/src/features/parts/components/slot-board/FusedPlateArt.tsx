@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FocusEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FocusEvent } from 'react';
 import type { PartCategory } from '../../../quote/aiSelection';
 import type { QuoteDraftItem } from '../../types';
 import {
@@ -46,6 +46,7 @@ export function FusedPlateArt({
   const filledCategories = new Set(items.map((item) => item.category));
   const ramItems = itemsByCategory.get('RAM') ?? [];
   const ramSlotCount = Math.min(4, ramItems.reduce((sum, item) => sum + itemStickCount(item), 0));
+  const mountingRamSlots = useMountingRamSlots(ramSlotCount);
   const ramIncreaseTarget = ramSlotCount < 4 ? findRamIncreaseTarget(ramItems, ramSlotCount) : null;
   const ramDecreaseAction = ramSlotCount > 1 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
   const isActionPending = isRemovePending || isQuantityPending;
@@ -118,7 +119,11 @@ export function FusedPlateArt({
           const focused = selectedCategory === layer.category;
           const hovered = spotlightCategory === layer.category;
           const dimmed = Boolean(spotlightCategory && !hovered);
-          const mounting = visible && flashingCategories.has(layer.category);
+          const mounting = visible && (
+            layer.category === 'RAM'
+              ? layer.slotIndex !== undefined && mountingRamSlots.has(layer.slotIndex)
+              : flashingCategories.has(layer.category)
+          );
           const status = statusByCategory.get(layer.category) ?? 'PASS';
           return (
             <img
@@ -259,6 +264,33 @@ export function FusedPlateArt({
       </div>
     </div>
   );
+}
+
+function useMountingRamSlots(ramSlotCount: number) {
+  const previousRamSlotCountRef = useRef<number | null>(null);
+  const [mountingRamSlots, setMountingRamSlots] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    const previousRamSlotCount = previousRamSlotCountRef.current;
+    previousRamSlotCountRef.current = ramSlotCount;
+    if (previousRamSlotCount === null) {
+      return;
+    }
+    if (ramSlotCount <= previousRamSlotCount) {
+      setMountingRamSlots(new Set());
+      return;
+    }
+
+    const nextMountingRamSlots = new Set<number>();
+    for (let slotIndex = previousRamSlotCount; slotIndex < ramSlotCount; slotIndex += 1) {
+      nextMountingRamSlots.add(slotIndex);
+    }
+    setMountingRamSlots(nextMountingRamSlots);
+    const timer = window.setTimeout(() => setMountingRamSlots(new Set()), 900);
+    return () => window.clearTimeout(timer);
+  }, [ramSlotCount]);
+
+  return mountingRamSlots;
 }
 
 type FusedAreaStyle = CSSProperties & {
