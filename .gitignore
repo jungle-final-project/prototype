@@ -32,6 +32,8 @@ buildgraph-before-*.sql
 .github/hooks/
 .github/skills/
 .impeccable/
+.qa-results/
+.codex-qa/
 
 # 기획 및 디자인 문서 무시
 DESIGN.md

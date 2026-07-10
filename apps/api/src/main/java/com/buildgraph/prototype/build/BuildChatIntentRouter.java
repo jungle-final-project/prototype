@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
 /**
@@ -21,6 +22,12 @@ public class BuildChatIntentRouter {
     private static final String[] CORE_BUILD_NOUNS = {
             "pc", "피시", "컴퓨터", "본체", "데스크탑", "데스크톱", "워크스테이션", "조립컴", "조립pc", "견적", "머신"
     };
+    private static final Pattern GPU_MODEL_SIGNAL = Pattern.compile(
+            "(?i)(?:rtx|geforce|지포스|rx)?\\s*(?:40[6-9]0|50[6-9]0|6[4-9]\\d0|7[4-9]\\d0|9[0-9]\\d0)(?:\\s*(?:ti|super|xt|xtx))?"
+    );
+    private static final Pattern CPU_MODEL_SIGNAL = Pattern.compile(
+            "(?i)(?:\\d{4,5}x3d|\\d{4,5}(?:x|xt|g)|i[3579]-?\\d{4,5}(?:k|kf|f|ks)?|(?:core)?ultra[3579]?\\d{3}k|\\d{3}k)"
+    );
 
     public BuildChatIntentDecision decide(Map<String, Object> request, String message) {
         Map<String, Object> body = request == null ? Map.of() : request;
@@ -69,11 +76,14 @@ public class BuildChatIntentRouter {
         if (normalized.isBlank()
                 || containsAny(normalized, "컴퓨터하나", "아무거나", "뭐사지")
                 || isMissingMonitorContext(normalized)
-                || isVaguePurchaseIntent(normalized, category)) {
+                || isVaguePurchaseIntent(message, normalized, category)) {
             List<String> clarificationReasons = new ArrayList<>(List.of("LOW_INFORMATION"));
             // "해상도 좋은"처럼 해상도 언급만 있고 FHD/QHD/4K가 특정되지 않은 요청은 해상도 되묻기로 특화한다
             if (containsAny(normalized, "해상도", "화질")) {
                 clarificationReasons.add("RESOLUTION_CONTEXT");
+            }
+            if (hasBuildUseCaseSignal(normalized) && BuildChatService.parseBudgetWon(message) == null) {
+                clarificationReasons.add("USAGE_ONLY");
             }
             return decision(BuildChatIntent.ASK_CLARIFICATION, "LOW", "NONE", category, partQuery, "FAST_CLARIFICATION", "NONE", null,
                     clarificationReasons);
@@ -92,8 +102,8 @@ public class BuildChatIntentRouter {
 
     // 구매 의향/견적 관심은 있지만 예산·용도가 없는 요청 — 차단 대신 되묻기로 대화를 잇는다.
     // 부품 카테고리가 특정되거나(단일 부품 추천은 미지원) 모델 번호가 있으면 제외한다.
-    private static boolean isVaguePurchaseIntent(String normalized, String category) {
-        if (category != null || normalized.matches(".*\\d{3,5}.*")) {
+    private static boolean isVaguePurchaseIntent(String message, String normalized, String category) {
+        if (category != null || hasSpecificPartSignal(message)) {
             return false;
         }
         return isRecommendationVerb(normalized)
@@ -161,7 +171,8 @@ public class BuildChatIntentRouter {
         // "구성"은 mutation veto("이 구성에서 램만 올려줘")가 먼저 걸러주기 때문에 동사로 안전하게 쓸 수 있다
         return containsAny(normalized,
                 "추천", "맞춰", "맞추", "짜줘", "짜주", "짜봐", "구성", "골라", "뽑아", "조립해", "조립하",
-                "만들어", "구해줘", "세팅", "내줘", "부탁", "필요", "알려줘", "사고싶", "사면", "원해", "가보자");
+                "만들어", "구해줘", "세팅", "내줘", "부탁", "필요", "알려줘", "사고싶", "사면", "원해", "가보자",
+                "봐줘", "봐주", "알아봐", "찾아줘", "찾아주", "살펴줘", "살펴주");
     }
 
     private static boolean hasBuildNoun(String normalized) {
@@ -170,24 +181,66 @@ public class BuildChatIntentRouter {
 
     private static boolean isBuildRecommend(String normalized, String message, String category) {
         Integer budget = BuildChatService.parseBudgetWon(message);
+        boolean budgetWithCompositionConstraint = budget != null && hasBuildCompositionConstraint(normalized);
+        boolean budgetWithUseCase = budget != null && hasBuildUseCaseSignal(normalized);
+        boolean recommendVerb = isRecommendationVerb(normalized);
+        boolean openBudget = hasOpenBudgetSignal(normalized);
+        boolean openBudgetMultiPartRecommend = openBudget && recommendVerb && hasMultiplePartCategories(normalized);
+        boolean categoryBoundBuildUseCase = budgetWithUseCase && budget >= 1_000_000 && !recommendVerb;
         // 부품 카테고리가 특정되고 본체 신호가 없으면 부품 한정 질문이다
         // ("쿨러 추천해줘", "30만원대 CPU 골라줘" — 예산이 있어도 단일 부품 추천은 미지원)
-        if (category != null && !containsAny(normalized, CORE_BUILD_NOUNS)) {
+        if (category != null
+                && !containsAny(normalized, CORE_BUILD_NOUNS)
+                && !budgetWithCompositionConstraint
+                && !openBudgetMultiPartRecommend
+                && !categoryBoundBuildUseCase) {
             return false;
         }
-        boolean recommendVerb = isRecommendationVerb(normalized);
         // 동사+본체 명사만으로는("피시 맞춰줘") 견적을 세울 근거가 없다 — 용도/예산/구체 모델 번호 중
-        // 하나는 있어야 추천으로 보내고, 아니면 모호 분기(되묻기)로 흘린다.
-        boolean specificPartSignal = normalized.matches(".*\\d{3,5}.*");
+        // 예산 또는 구체 모델 번호가 있어야 추천으로 보내고, 용도만 있으면 예산을 되묻는다.
+        // 단, 예산 무관/끝판왕처럼 open budget을 명시한 경우는 즉시 추천한다.
+        boolean specificPartSignal = hasSpecificPartSignal(message);
         boolean explicitRecommend = recommendVerb
-                && (hasBuildUseCaseSignal(normalized) || budget != null || specificPartSignal);
-        boolean budgetWithUseCase = budget != null && hasBuildUseCaseSignal(normalized);
+                && (budget != null || specificPartSignal || openBudget);
         boolean budgetWithBuildNoun = budget != null && hasBuildNoun(normalized);
-        // "디아블로4 돌릴 사양으로 견적 좀"처럼 동사 없이 용도+본체 명사만으로도 견적 요청으로 본다
-        boolean useCaseWithBuildNoun = hasBuildUseCaseSignal(normalized) && hasBuildNoun(normalized);
+        boolean openBudgetWithBuildNoun = openBudget && hasBuildNoun(normalized);
+        boolean openBudgetWithUseCase = openBudget && hasBuildUseCaseSignal(normalized);
         // "2500만원 잡았는데 뭐부터 넣어야 돼?" — 예산이 명확하면 모호한 의향도 견적 추천으로 흡수한다
         boolean budgetWithPurchaseIntent = budget != null && isLowInfoPurchaseIntent(normalized);
-        return explicitRecommend || budgetWithUseCase || budgetWithBuildNoun || useCaseWithBuildNoun || budgetWithPurchaseIntent;
+        return explicitRecommend || budgetWithUseCase || budgetWithBuildNoun || openBudgetWithBuildNoun
+                || openBudgetWithUseCase || openBudgetMultiPartRecommend
+                || budgetWithCompositionConstraint || budgetWithPurchaseIntent;
+    }
+
+    private static boolean hasBuildCompositionConstraint(String normalized) {
+        if (containsAny(normalized, "포함", "들어간", "들어가는", "장착", "조합")) {
+            return true;
+        }
+        return hasMultiplePartCategories(normalized);
+    }
+
+    private static boolean hasMultiplePartCategories(String normalized) {
+        int categories = 0;
+        categories += containsAny(normalized, "cpu", "씨피유", "라이젠", "ryzen", "인텔코어", "coreultra") ? 1 : 0;
+        categories += containsAny(normalized, "메인보드", "마더보드", "보드") ? 1 : 0;
+        categories += containsAny(normalized, "ram", "램", "메모리") ? 1 : 0;
+        categories += containsAny(normalized, "gpu", "그래픽카드", "글카", "지포스", "rtx", "라데온") ? 1 : 0;
+        categories += containsAny(normalized, "ssd", "저장장치", "nvme") ? 1 : 0;
+        categories += containsAny(normalized, "psu", "파워", "전원") ? 1 : 0;
+        categories += containsAny(normalized, "케이스", "case") ? 1 : 0;
+        categories += containsAny(normalized, "쿨러", "cooler", "수랭", "공랭") ? 1 : 0;
+        return categories >= 2;
+    }
+
+    private static boolean hasOpenBudgetSignal(String normalized) {
+        return containsAny(normalized,
+                "예산무관", "예산상관없이", "돈상관없이", "가격제한없이", "가격상관없이", "가격보다성능",
+                "끝판왕", "최고사양", "최고급", "최상급", "하이엔드", "풀스펙", "최강", "괴물");
+    }
+
+    private static boolean hasSpecificPartSignal(String message) {
+        String compact = message == null ? "" : message.replaceAll("\\s+", "");
+        return GPU_MODEL_SIGNAL.matcher(compact).find() || CPU_MODEL_SIGNAL.matcher(compact).find();
     }
 
     private static boolean isDraftCompletionIntent(String normalized, boolean hasDraftItems) {

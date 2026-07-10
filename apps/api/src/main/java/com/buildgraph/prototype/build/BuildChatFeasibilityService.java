@@ -195,6 +195,39 @@ public class BuildChatFeasibilityService {
     }
 
     /**
+     * 사용자가 명시한 모델명/제조사 토큰을 만족하는 ACTIVE 부품만 조회한다.
+     * LLM이 만든 추천 문구와 무관하게 실제 후보는 DB의 이름·제조사·GPU class로 다시 제한한다.
+     */
+    public List<PartOption> matchingSelection(
+            String category,
+            String gpuClass,
+            String modelOrVendorToken,
+            int limit
+    ) {
+        if (category == null || (gpuClass == null && modelOrVendorToken == null)) {
+            return List.of();
+        }
+        String searchable = "regexp_replace(upper(coalesce(p.manufacturer, '') || ' ' || p.name), '[^A-Z0-9가-힣]', '', 'g')";
+        StringBuilder where = new StringBuilder();
+        List<Object> params = new ArrayList<>();
+        params.add(category);
+        if (gpuClass != null) {
+            where.append(" AND (upper(coalesce(p.attributes->>'gpuClass', '')) = ? OR ")
+                    .append(searchable).append(" LIKE ?)");
+            params.add(gpuClass.toUpperCase(java.util.Locale.ROOT));
+            params.add("%" + normalizeSearchToken(gpuClass) + "%");
+        } else {
+            String normalizedToken = normalizeSearchToken(modelOrVendorToken);
+            if (normalizedToken.isBlank()) {
+                return List.of();
+            }
+            where.append(" AND ").append(searchable).append(" LIKE ?");
+            params.add("%" + normalizedToken + "%");
+        }
+        return queryOptions(where.toString(), "price ASC, name ASC", params, limit);
+    }
+
+    /**
      * 용도 인지 최소 구성가: 각 카테고리 최저가 합(RAM은 2개). GPU 필수 용도는 GPU를 포함하며
      * AI_DEV는 VRAM 하한을 적용한다. 자산이 비어 계산 불가면 0을 반환한다(호출측이 고지 생략).
      */
@@ -281,5 +314,11 @@ public class BuildChatFeasibilityService {
     // "50"이 되므로(세대 비교 부적합), 여기서는 첫 정수 그룹만 뽑는다.
     private static String pcieGenerationAttribute() {
         return "coalesce(NULLIF(substring(coalesce(p.attributes->>'generation', ''), '[0-9]+'), '')::int, 0)";
+    }
+
+    private static String normalizeSearchToken(String value) {
+        return value == null
+                ? ""
+                : value.toUpperCase(java.util.Locale.ROOT).replaceAll("[^A-Z0-9가-힣]", "");
     }
 }
