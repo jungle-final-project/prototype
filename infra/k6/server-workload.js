@@ -15,6 +15,8 @@ const SOAK_WINDOW_COUNT = Number(__ENV.SOAK_WINDOW_COUNT || '12');
 const contractErrors = new Rate('contract_errors');
 const soakWindowDurations = [];
 const soakWindowFailures = [];
+let vuAccessToken = null;
+let vuRefreshToken = null;
 for (let index = 0; index < SOAK_WINDOW_COUNT; index += 1) {
   const suffix = String(index + 1).padStart(2, '0');
   soakWindowDurations.push(new Trend(`soak_window_${suffix}_duration`, true));
@@ -93,6 +95,7 @@ export const options = {
     'http_req_duration{endpoint:health}': ['p(95)<300'],
     'http_req_duration{endpoint:parts}': ['p(95)<800'],
     'http_req_duration{endpoint:auth}': ['p(95)<1200'],
+    'http_req_duration{endpoint:auth_refresh}': ['p(95)<1200'],
     'http_req_duration{endpoint:ai_fast}': ['p(95)<800'],
     'http_req_duration{endpoint:home_recommendations}': ['p(95)<1500'],
     'http_req_duration{endpoint:quote_draft}': ['p(95)<1000'],
@@ -113,29 +116,30 @@ export function setup() {
   if (!payload || !payload.accessToken) {
     fail('setup login response did not contain accessToken');
   }
-  return { accessToken: payload.accessToken };
+  return {};
 }
 
-export default function (data) {
+export default function () {
+  ensureSession();
   const roll = Math.random();
   if (roll < 0.05) {
     exerciseLogin();
   } else if (roll < 0.15) {
     exerciseHealth();
   } else if (roll < 0.40) {
-    exerciseParts(data.accessToken);
+    exerciseParts();
   } else if (roll < 0.52) {
-    exerciseHomeRecommendations(data.accessToken);
+    exerciseHomeRecommendations();
   } else if (roll < 0.62) {
-    exerciseDraft(data.accessToken);
+    exerciseDraft();
   } else if (roll < 0.70) {
-    exerciseBuildHistory(data.accessToken);
+    exerciseBuildHistory();
   } else if (roll < 0.77) {
-    exercisePriceAlerts(data.accessToken);
+    exercisePriceAlerts();
   } else if (roll < 0.92) {
-    exerciseAssemblyRequests(data.accessToken);
+    exerciseAssemblyRequests();
   } else {
-    exerciseFastAi(data.accessToken);
+    exerciseFastAi();
   }
   if (THINK_TIME_SECONDS > 0) {
     sleep(THINK_TIME_SECONDS * (0.75 + Math.random() * 0.5));
@@ -159,54 +163,116 @@ function exerciseHealth() {
   verify(response, 'health', (body) => body.status === 'UP' && body.database === 'UP');
 }
 
-function exerciseParts(token) {
+function exerciseParts() {
   const category = ['CPU', 'GPU', 'RAM', 'STORAGE', 'PSU', 'CASE'][Math.floor(Math.random() * 6)];
-  const response = http.get(
+  const response = authorizedGet(
     `${BASE_URL}/api/parts?category=${category}&page=0&size=20`,
-    authParams(token, 'parts'),
+    'parts',
   );
   verify(response, 'parts', (body) => Array.isArray(body.items));
 }
 
-function exerciseHomeRecommendations(token) {
-  const response = http.get(
+function exerciseHomeRecommendations() {
+  const response = authorizedGet(
     `${BASE_URL}/api/recommendations/home-parts?limit=8`,
-    authParams(token, 'home_recommendations'),
+    'home_recommendations',
   );
   verify(response, 'home_recommendations', (body) => Array.isArray(body.items));
 }
 
-function exerciseDraft(token) {
-  const response = http.get(`${BASE_URL}/api/quote-drafts/current`, authParams(token, 'quote_draft'));
+function exerciseDraft() {
+  const response = authorizedGet(`${BASE_URL}/api/quote-drafts/current`, 'quote_draft');
   verify(response, 'quote_draft', (body) => typeof body.status === 'string');
 }
 
-function exerciseBuildHistory(token) {
-  const response = http.get(`${BASE_URL}/api/builds/history?page=0&size=20`, authParams(token, 'build_history'));
+function exerciseBuildHistory() {
+  const response = authorizedGet(`${BASE_URL}/api/builds/history?page=0&size=20`, 'build_history');
   verify(response, 'build_history', (body) => Array.isArray(body.items));
 }
 
-function exercisePriceAlerts(token) {
-  const response = http.get(`${BASE_URL}/api/price-alerts?page=0&size=20`, authParams(token, 'price_alerts'));
+function exercisePriceAlerts() {
+  const response = authorizedGet(`${BASE_URL}/api/price-alerts?page=0&size=20`, 'price_alerts');
   verify(response, 'price_alerts', (body) => Array.isArray(body.items));
 }
 
-function exerciseAssemblyRequests(token) {
-  const response = http.get(`${BASE_URL}/api/assembly-requests`, authParams(token, 'assembly_requests'));
+function exerciseAssemblyRequests() {
+  const response = authorizedGet(`${BASE_URL}/api/assembly-requests`, 'assembly_requests');
   verify(response, 'assembly_requests', (body) => Array.isArray(body.items));
 }
 
-function exerciseFastAi(token) {
-  const response = http.post(`${BASE_URL}/api/ai/build-chat`, JSON.stringify({
+function exerciseFastAi() {
+  const response = authorizedPost(`${BASE_URL}/api/ai/build-chat`, JSON.stringify({
     message: '램 위치가 어디 있어?',
     uiContext: { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] },
-  }), authJsonParams(token, 'ai_fast'));
+  }), 'ai_fast');
   verify(response, 'ai_fast', (body) => (
     body.boardFocus
     && body.boardFocus.type === 'PART_LOCATION'
     && Array.isArray(body.boardFocus.categories)
     && body.boardFocus.categories.includes('RAM')
   ));
+}
+
+function ensureSession() {
+  if (vuAccessToken) {
+    return true;
+  }
+  return authenticateSession();
+}
+
+function authenticateSession() {
+  return updateSession(login());
+}
+
+function refreshSession() {
+  if (!vuRefreshToken) {
+    return authenticateSession();
+  }
+  const response = http.post(`${BASE_URL}/api/auth/refresh`, JSON.stringify({
+    refreshToken: vuRefreshToken,
+  }), jsonParams('auth_refresh'));
+  if (updateSession(response)) {
+    return true;
+  }
+  vuAccessToken = null;
+  vuRefreshToken = null;
+  return authenticateSession();
+}
+
+function updateSession(response) {
+  if (!response || response.status !== 200) {
+    return false;
+  }
+  let payload = null;
+  try {
+    payload = response.json();
+  } catch (_) {
+    return false;
+  }
+  if (!payload || !payload.accessToken) {
+    return false;
+  }
+  vuAccessToken = payload.accessToken;
+  if (payload.refreshToken) {
+    vuRefreshToken = payload.refreshToken;
+  }
+  return true;
+}
+
+function authorizedGet(url, endpoint) {
+  let response = http.get(url, authParams(vuAccessToken, endpoint));
+  if (response.status === 401 && refreshSession()) {
+    response = http.get(url, authParams(vuAccessToken, endpoint));
+  }
+  return response;
+}
+
+function authorizedPost(url, body, endpoint) {
+  let response = http.post(url, body, authJsonParams(vuAccessToken, endpoint));
+  if (response.status === 401 && refreshSession()) {
+    response = http.post(url, body, authJsonParams(vuAccessToken, endpoint));
+  }
+  return response;
 }
 
 function verify(response, endpoint, contract) {
