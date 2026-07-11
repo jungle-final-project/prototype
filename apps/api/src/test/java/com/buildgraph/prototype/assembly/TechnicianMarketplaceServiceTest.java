@@ -1,6 +1,7 @@
 package com.buildgraph.prototype.assembly;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -31,5 +32,15 @@ class TechnicianMarketplaceServiceTest {
                 });
 
         verifyNoInteractions(jdbcTemplate);
+    }
+
+    @Test
+    void detailAccessAllowsTechnicianToReloadOwnAvailableOffer() {
+        String condition = TechnicianMarketplaceService.detailAccessCondition();
+
+        assertThat(condition)
+                .contains("own_offer.id IS NOT NULL")
+                .doesNotContain("own_offer.status = 'SELECTED'")
+                .contains("own_offer.id IS NULL");
     }
 }
