@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.part.PartAliasReviewService;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -739,6 +740,18 @@ class DefaultAiChatEngineTest {
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode())
                 .isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
         verifyNoJdbcWrites();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void boardFocusStructuredOutputSchemaUsesOnlySupportedArrayKeywords() throws Exception {
+        Method schemaMethod = DefaultAiChatEngine.class.getDeclaredMethod("boardFocusIntentSchema");
+        schemaMethod.setAccessible(true);
+
+        Map<String, Object> schema = (Map<String, Object>) schemaMethod.invoke(null);
+        String serialized = schema.toString();
+
+        assertThat(serialized).doesNotContain("uniqueItems", "maxItems", "minItems");
     }
 
     @Test

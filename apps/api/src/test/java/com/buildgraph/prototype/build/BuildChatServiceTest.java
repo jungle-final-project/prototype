@@ -126,6 +126,9 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.detectPartCategory("GPU 추천해줘")).isEqualTo("GPU");
         assertThat(BuildChatService.detectPartCategory("CPU는 뭐가 좋아?")).isEqualTo("CPU");
         assertThat(BuildChatService.detectPartCategory("쿨러 추천")).isEqualTo("COOLER");
+        assertThat(BuildChatService.detectPartCategory("360 수랭 장착 케이스")).isEqualTo("CASE");
+        assertThat(BuildChatService.detectPartCategory("케이스에 맞는 수랭 쿨러 추천")).isEqualTo("COOLER");
+        assertThat(BuildChatService.detectPartCategory("수랭 쿨러가 들어가는 케이스 추천")).isEqualTo("CASE");
     }
 
     @Test
@@ -282,6 +285,51 @@ class BuildChatServiceTest {
             assertThat(build.get("badges")).asList().contains("TARGET");
         });
         verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void minBudgetLadderNeverReturnsCardsBelowRequestedFloor() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of("message", "400만원 이상으로 4K 게임 PC 추천해줘"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> builds = (List<Map<String, Object>>) response.get("builds");
+        assertThat(builds).isNotEmpty();
+        assertThat(builds).allSatisfy(build ->
+                assertThat((Integer) build.get("totalPrice")).isGreaterThanOrEqualTo(4_000_000));
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void minBudgetRequestDoesNotServeSnapshotBelowRequestedFloor() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+        BuildChatTierSnapshotStore store = new BuildChatTierSnapshotStore();
+        store.put(new BuildChatTierSnapshotStore.TierSnapshot(
+                4_000_000,
+                List.of(Map.of("id", "tier-below-min", "tier", "balanced", "totalPrice", 4_200_000)),
+                List.of(),
+                java.time.Instant.now()
+        ));
+        service.setTierSnapshotStore(store);
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class))).thenReturn(buildResponse());
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of());
+
+        Map<String, Object> response = service.chat(Map.of("message", "450만원 이상으로 PC 추천해줘"));
+
+        assertThat(response.get("builds")).asList()
+                .noneMatch(build -> "tier-below-min".equals(((Map<?, ?>) build).get("id")));
+        verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
     }
 
     @Test

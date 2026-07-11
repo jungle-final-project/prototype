@@ -35,6 +35,9 @@ buildgraph-before-*.sql
 .qa-results/
 .codex-qa/
 
+# 로컬 부하/내구 테스트 원시 로그(runId별 누적, 요약 보고서만 docs에 커밋)
+infra/k6/reports/
+
 # 기획 및 디자인 문서 무시
 DESIGN.md
 PRODUCT.md

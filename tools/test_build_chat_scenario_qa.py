@@ -84,8 +84,9 @@ class BuildChatScenarioQaTest(unittest.TestCase):
     def test_fixed_corpus_contract(self):
         cases = json.loads(Path("tools/build_chat_scenario_qa_cases.json").read_text(encoding="utf-8"))
         qa.validate_cases(cases)
-        self.assertEqual(600, len(cases))
+        self.assertEqual(700, len(cases))
         self.assertEqual(200, sum(case["stage"] == "gate" for case in cases))
+        self.assertEqual(100, sum(case["group"] == "BOARD_FOCUS" for case in cases))
 
     def test_latest_response_schema(self):
         self.assertTrue(qa.response_schema_valid(build_response()))
@@ -237,6 +238,71 @@ class BuildChatScenarioQaTest(unittest.TestCase):
         response["simulation"] = {"category": "GPU", "summary": "비교"}
         failures, _ = qa.outcome_failures(response, {"outcome": "SIMULATION"})
         self.assertIn("SIMULATION_MUTATION", failures)
+
+    def test_board_focus_contract_checks_categories_and_read_only_shape(self):
+        response = {
+            "answerType": "GENERAL",
+            "message": "CPU · RAM 위치를 현재 구성도에서 강조했습니다.",
+            "builds": [],
+            "warnings": [],
+            "boardFocus": {
+                "type": "PART_LOCATION",
+                "categories": ["CPU", "RAM"],
+                "label": "CPU · RAM 위치",
+            },
+        }
+        failures, metrics = qa.outcome_failures(
+            response,
+            {"outcome": "BOARD_FOCUS", "expectedBoardFocusCategories": ["CPU", "RAM"]},
+        )
+        self.assertEqual([], failures)
+        self.assertTrue(metrics["boardFocus"])
+
+        mismatched = copy.deepcopy(response)
+        mismatched["boardFocus"]["categories"] = ["RAM"]
+        failures, _ = qa.outcome_failures(
+            mismatched,
+            {"outcome": "BOARD_FOCUS", "expectedBoardFocusCategories": ["CPU", "RAM"]},
+        )
+        self.assertIn("BOARD_FOCUS_CATEGORY_MISMATCH", failures)
+
+    def test_board_focus_veto_and_mutation_are_blocking(self):
+        response = {
+            "answerType": "GENERAL",
+            "message": "RAM 위치를 강조했습니다.",
+            "builds": [],
+            "warnings": [],
+            "boardFocus": {
+                "type": "PART_LOCATION",
+                "categories": ["RAM"],
+                "label": "RAM 위치",
+            },
+        }
+        failures, _ = qa.outcome_failures(response, {"outcome": "NEXT_ACTION", "forbidBoardFocus": True})
+        self.assertIn("BOARD_FOCUS_FALSE_POSITIVE", failures)
+
+        response["builds"] = build_response()["builds"]
+        failures, _ = qa.outcome_failures(response, {"outcome": "BOARD_FOCUS"})
+        self.assertIn("BOARD_FOCUS_MUTATION", failures)
+
+    def test_clarification_category_can_be_verified_from_echoed_original_message(self):
+        response = {
+            "answerType": "GENERAL",
+            "message": "리안리 216과 현재 4000D의 쿨링 차이를 더 확인해볼게요.",
+            "builds": [],
+            "warnings": [],
+            "clarification": {
+                "missingSlots": [],
+                "originalMessage": "현재 견적의 케이스를 리안리 216 케이스로 바꾸면?",
+            },
+        }
+
+        failures, _ = qa.outcome_failures(
+            response,
+            {"outcome": "SIMULATION_OR_CLARIFICATION", "expectedCategory": "CASE"},
+        )
+
+        self.assertEqual([], failures)
 
     def test_explicit_part_constraint_must_hold_for_every_candidate_chip(self):
         response = {

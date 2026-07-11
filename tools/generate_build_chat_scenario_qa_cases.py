@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the fixed 600-case Build Chat scenario QA corpus."""
+"""Generate the fixed 700-case Build Chat scenario QA corpus."""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "tools" / "build_chat_scenario_qa_cases.json"
+BOARD_UI_CONTEXT = {
+    "surface": "SELF_QUOTE",
+    "capabilities": ["BOARD_PART_FOCUS"],
+}
 
 
 def turn(message: str | None = None, outcome: str = "NEXT_ACTION", **expect: object) -> dict:
@@ -27,6 +31,7 @@ def scenario(
     risk: str = "NORMAL",
     pair_group: str | None = None,
     cache_expectation: str = "NONE",
+    ui_context: dict | None = None,
 ) -> dict:
     row = {
         "id": case_id,
@@ -40,6 +45,8 @@ def scenario(
     if pair_group:
         row["minimalPairGroup"] = pair_group
         row["cacheExpectation"] = cache_expectation
+    if ui_context:
+        row["uiContext"] = ui_context
     return row
 
 
@@ -296,6 +303,122 @@ def simulation_cases() -> list[dict]:
     return rows
 
 
+def board_focus_cases() -> list[dict]:
+    single_prompts = {
+        "CPU": [
+            "CPU 위치가 어디야?", "프로세서 장착 위치 보여줘", "CPU 소켓 있는 곳 표시해줘",
+            "구성도에서 CPU 찾아줘", "프로세서가 어디에 달려 있어?",
+        ],
+        "MOTHERBOARD": [
+            "메인보드 위치가 어디야?", "마더보드 장착 위치 보여줘", "보드 전체가 있는 곳 표시해줘",
+            "구성도에서 메인보드 찾아줘", "motherboard가 어디에 달려 있어?",
+        ],
+        "RAM": [
+            "램 위치가 어디야?", "RAM 장착 위치 보여줘", "메모리 꽂는 곳 표시해줘",
+            "구성도에서 DIMM 찾아줘", "램이 어디에 달려 있어?",
+        ],
+        "GPU": [
+            "그래픽카드 위치가 어디야?", "GPU 장착 위치 보여줘", "글카 꽂는 곳 표시해줘",
+            "구성도에서 VGA 찾아줘", "그래픽 카드가 어디에 달려 있어?",
+        ],
+        "STORAGE": [
+            "SSD 위치가 어디야?", "M.2 장착 위치 보여줘", "NVMe 꽂는 곳 표시해줘",
+            "구성도에서 저장장치 찾아줘", "스토리지가 어디에 달려 있어?",
+        ],
+        "PSU": [
+            "파워 위치가 어디야?", "PSU 장착 위치 보여줘", "전원공급장치 넣는 곳 표시해줘",
+            "구성도에서 파워 찾아줘", "파워서플라이가 어디에 달려 있어?",
+        ],
+        "CASE": [
+            "케이스 위치가 어디야?", "PC 케이스 위치 보여줘", "case 부분을 표시해줘",
+            "구성도에서 케이스 찾아줘", "케이스가 어느 부분이야?",
+        ],
+        "COOLER": [
+            "쿨러 위치가 어디야?", "CPU 쿨러 장착 위치 보여줘", "수랭 꽂는 곳 표시해줘",
+            "구성도에서 공랭 쿨러 찾아줘", "cooler가 어디에 달려 있어?",
+        ],
+    }
+    rows: list[dict] = []
+    for category, prompts in single_prompts.items():
+        for message in prompts:
+            rows.append(scenario(
+                f"board-focus-single-{len(rows)+1:03d}", "BOARD_FOCUS",
+                [turn(message, "BOARD_FOCUS", answerTypes=["GENERAL"],
+                      expectedBoardFocusCategories=[category])],
+                risk="HIGH", ui_context=BOARD_UI_CONTEXT,
+            ))
+
+    pairs = [
+        ("CPU", "RAM", "CPU", "RAM"),
+        ("MOTHERBOARD", "RAM", "메인보드", "램"),
+        ("GPU", "PSU", "그래픽카드", "파워"),
+        ("STORAGE", "MOTHERBOARD", "SSD", "메인보드"),
+        ("COOLER", "CPU", "쿨러", "CPU"),
+        ("CASE", "PSU", "케이스", "파워"),
+        ("GPU", "CASE", "GPU", "케이스"),
+        ("RAM", "STORAGE", "메모리", "NVMe"),
+        ("CPU", "GPU", "프로세서", "글카"),
+        ("MOTHERBOARD", "GPU", "마더보드", "그래픽 카드"),
+    ]
+    for first, second, first_text, second_text in pairs:
+        for template in ("{a}랑 {b} 위치 보여줘", "{a}하고 {b}가 어디에 있어?"):
+            rows.append(scenario(
+                f"board-focus-multi-{len(rows)-39:03d}", "BOARD_FOCUS",
+                [turn(template.format(a=first_text, b=second_text), "BOARD_FOCUS",
+                      answerTypes=["GENERAL"], expectedBoardFocusCategories=[first, second])],
+                risk="HIGH", ui_context=BOARD_UI_CONTEXT,
+            ))
+
+    indirect = [
+        ("메모리 꽂는 슬롯이 어느 쪽이야?", ["RAM"]),
+        ("M.2 슬롯 자리를 가리켜줘", ["STORAGE"]),
+        ("그래픽카드가 들어가는 PCIe 자리를 표시해줘", ["GPU"]),
+        ("프로세서 소켓 위치를 강조해줘", ["CPU"]),
+        ("전원공급장치 넣는 하단 자리가 어디야?", ["PSU"]),
+        ("수랭 라디에이터 다는 자리 보여줘", ["COOLER"]),
+        ("본체 케이스 부분을 가리켜줘", ["CASE"]),
+        ("기판 전체가 어느 부분인지 알려줘", ["MOTHERBOARD"]),
+        ("NVMe 장착 자리가 어디쯤이야?", ["STORAGE"]),
+        ("DIMM 슬롯 위치를 강조해줘", ["RAM"]),
+    ]
+    for index, (message, categories) in enumerate(indirect, 1):
+        rows.append(scenario(
+            f"board-focus-indirect-{index:03d}", "BOARD_FOCUS",
+            [turn(message, "BOARD_FOCUS", answerTypes=["GENERAL"],
+                  expectedBoardFocusCategories=categories)],
+            risk="HIGH", ui_context=BOARD_UI_CONTEXT,
+        ))
+
+    negative_prompts: list[tuple[str, str, str, str]] = []
+    category_names = {
+        "CPU": "CPU", "MOTHERBOARD": "메인보드", "RAM": "RAM", "GPU": "그래픽카드",
+        "STORAGE": "SSD", "PSU": "파워", "CASE": "케이스", "COOLER": "쿨러",
+    }
+    for category, name in category_names.items():
+        negative_prompts.append((f"{name} 추천해줘", category, "NEXT_ACTION", "NONE"))
+    for category, name in category_names.items():
+        negative_prompts.append((f"현재 견적 {name}를 더 좋은 걸로 바꿔줘", category, "PREVIEW_OR_NEXT_ACTION", "CURRENT_DRAFT"))
+    for category, name in category_names.items():
+        negative_prompts.append((f"현재 견적 {name}를 바꾸면 성능이 어떻게 돼?", category, "SIMULATION_OR_CLARIFICATION", "CURRENT_DRAFT"))
+    negative_prompts.extend([
+        ("RAM 어디서 사?", "RAM", "NEXT_ACTION", "NONE"),
+        ("GPU 가격 어디서 봐?", "GPU", "NEXT_ACTION", "NONE"),
+        ("SSD를 견적에 담아줘", "STORAGE", "NEXT_ACTION", "NONE"),
+        ("현재 견적 파워를 빼줘", "PSU", "PREVIEW_OR_NEXT_ACTION", "CURRENT_DRAFT"),
+        ("쿨러 성능 설명해줘", "COOLER", "NEXT_ACTION", "NONE"),
+        ("메인보드 호환성 비교해줘", "MOTHERBOARD", "NEXT_ACTION", "CURRENT_DRAFT"),
+    ])
+    for index, (message, category, outcome, context) in enumerate(negative_prompts, 1):
+        rows.append(scenario(
+            f"board-focus-veto-{index:03d}", "BOARD_FOCUS",
+            [turn(message, outcome, answerTypes=["PART", "GENERAL", "BUDGET"],
+                  expectedCategory=category, forbidBoardFocus=True)],
+            context=context, risk="HIGH", ui_context=BOARD_UI_CONTEXT,
+        ))
+    assert len(rows) == 100
+    return rows
+
+
 def clarification_cases() -> list[dict]:
     rows: list[dict] = []
     vague_prompts = [
@@ -459,9 +582,9 @@ def cache_cases() -> list[dict]:
 
 def assign_gate(cases: list[dict]) -> None:
     quotas = {
-        "BUDGET_BUILD": 35, "PART_RECOMMEND": 35, "DRAFT_PREVIEW": 35,
-        "SIMULATION": 30, "CLARIFICATION": 25, "ROBUSTNESS": 20,
-        "CACHE_MINIMAL_PAIR": 20,
+        "BUDGET_BUILD": 30, "PART_RECOMMEND": 30, "DRAFT_PREVIEW": 30,
+        "SIMULATION": 25, "CLARIFICATION": 20, "ROBUSTNESS": 20,
+        "CACHE_MINIMAL_PAIR": 15, "BOARD_FOCUS": 30,
     }
     used = {key: 0 for key in quotas}
     for row in cases:
@@ -475,10 +598,10 @@ def assign_gate(cases: list[dict]) -> None:
 def main() -> int:
     cases = (
         budget_cases() + part_cases() + draft_cases() + simulation_cases()
-        + clarification_cases() + robustness_cases() + cache_cases()
+        + clarification_cases() + robustness_cases() + cache_cases() + board_focus_cases()
     )
-    assert len(cases) == 600
-    assert len({row["id"] for row in cases}) == 600
+    assert len(cases) == 700
+    assert len({row["id"] for row in cases}) == 700
     assign_gate(cases)
     OUTPUT.write_text(json.dumps(cases, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Generated {len(cases)} Build Chat QA scenarios: {OUTPUT}")

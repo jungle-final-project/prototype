@@ -219,6 +219,14 @@ class BuildChatIntentRouterTest {
         assertThat(userPhrase.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
         assertThat(userPhrase.targetCategories()).containsExactly("MOTHERBOARD", "RAM");
 
+        BuildChatIntentDecision findOnBoard = router.decide(
+                boardRequest("구성도에서 CPU 찾아줘"),
+                "구성도에서 CPU 찾아줘"
+        );
+        assertThat(findOnBoard.intent()).isEqualTo(BuildChatIntent.LOCATE_BOARD_PART);
+        assertThat(findOnBoard.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
+        assertThat(findOnBoard.targetCategories()).containsExactly("CPU");
+
         BuildChatIntentDecision compoundPartName = router.decide(
                 boardRequest("CPU 쿨러 위치가 어딜까?"),
                 "CPU 쿨러 위치가 어딜까?"

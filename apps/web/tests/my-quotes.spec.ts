@@ -263,6 +263,7 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(page.getByTestId('my-quotes-build-count')).toContainText('2개');
   await expect(page.getByTestId('my-quotes-alert-count')).toContainText('2개');
   await expect(page.getByTestId('my-quotes-achieved-count')).toContainText('1개');
+  await expect(page.getByTestId('my-assembly-requests-link')).toHaveAttribute('href', '/my/assembly-requests');
 
   const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
   await expect(firstBuild).toContainText('QHD 균형 저장 견적');

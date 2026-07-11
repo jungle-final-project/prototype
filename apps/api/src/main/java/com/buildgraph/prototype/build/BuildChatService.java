@@ -570,6 +570,9 @@ public class BuildChatService {
             if ("MAX".equals(mode) && totalPrice > budgetWon) {
                 return false;
             }
+            if ("MIN".equals(mode) && totalPrice < budgetWon) {
+                return false;
+            }
             if ("TARGET".equals(mode) && !withinTargetBudgetBand(totalPrice, budgetWon)) {
                 return false;
             }
@@ -735,6 +738,16 @@ public class BuildChatService {
 
     static String detectPartCategory(String message) {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        // 수랭/공랭은 쿨러 자체를 뜻하기도 하고 케이스의 장착 지원 조건을 수식하기도 한다.
+        // 명시적 핵심 명사(쿨러/케이스)가 함께 나오면 한국어 수식 구조상 뒤쪽 대상을 우선한다.
+        int caseIndex = Math.max(normalized.lastIndexOf("케이스"), normalized.lastIndexOf("case"));
+        int coolerIndex = Math.max(normalized.lastIndexOf("쿨러"), normalized.lastIndexOf("cooler"));
+        if (caseIndex >= 0 && caseIndex > coolerIndex) {
+            return "CASE";
+        }
+        if (coolerIndex >= 0) {
+            return "COOLER";
+        }
         List<CategoryKeywords> checks = List.of(
                 new CategoryKeywords("MOTHERBOARD", List.of("메인보드", "마더보드", "보드", "motherboard")),
                 new CategoryKeywords("COOLER", List.of("쿨러", "cooler", "수랭", "공랭")),
@@ -2538,29 +2551,14 @@ public class BuildChatService {
 
         int budgetWon = rawBudgetIntent.budget();
         if ("MIN".equals(rawBudgetIntent.mode())) {
-            // "이상" 요청: 예산 하한을 지키는 조합을 우선 찾고, 없으면 이하 최대 구성으로 완화한다
-            Optional<GreedyBuild> aboveBudget = greedyTargetBuild(
-                    (int) Math.min(Integer.MAX_VALUE, Math.round(budgetWon * 1.15)),
-                    (int) Math.min(Integer.MAX_VALUE, Math.round(budgetWon * 1.5)),
-                    true
-            );
-            if (aboveBudget.isPresent()
-                    && aboveBudget.get().parts().stream().mapToLong(BuildChatService::completionCandidatePrice).sum() >= budgetWon) {
-                GreedyBuild greedy = aboveBudget.get();
-                Map<String, Object> build = budgetFallbackBuildMap(
-                        TIERS.get(2), greedy.parts(), rawBudgetIntent, 2, greedy.toolResults(), greedy.warnings(), engineResponse.evidenceIds());
-                warnings.add("명시 예산 범위에 맞춰 내부 자산 기준 보조 견적을 재구성했습니다.");
-                if (guardStats != null) {
-                    guardStats.routeFallbackUsed = true;
-                }
-                return List.of(build);
+            List<Map<String, Object>> minimumBuilds = nearBudgetLadderBuilds(
+                    budgetWon, "MIN", engineResponse.evidenceIds(), warnings, guardStats);
+            if (minimumBuilds.isEmpty()) {
+                warnings.add("요청 예산 하한 이상의 자동 검증 통과 조합을 내부 자산에서 찾지 못했습니다.");
+            } else {
+                warnings.add("요청 예산 하한을 지키도록 내부 자산 기준 보조 견적을 재구성했습니다.");
             }
-            // MIN 완화는 "예산 이하에서 최대 구성" 의미이므로 TARGET 밴드가 아니라 MAX 사다리를 유지한다
-            List<Map<String, Object>> relaxed = nearBudgetLadderBuilds(budgetWon, "MAX", engineResponse.evidenceIds(), warnings, guardStats);
-            if (!relaxed.isEmpty()) {
-                warnings.add("요청 예산 하한 이상의 조합을 내부 자산으로 구성하지 못해, 예산 이하에서 구성 가능한 최대 조합을 추천합니다.");
-            }
-            return relaxed;
+            return minimumBuilds;
         }
 
         // TARGET: 계약 밴드(±12.5%) 안 조합만 / MAX: 예산을 넘지 않으면서 최대한 근접한 조합을 사다리로 찾는다
@@ -2579,6 +2577,9 @@ public class BuildChatService {
     // TARGET(명시 예산) 모드 타깃 비율: 계약(docs/API_CONTRACT.md)이 총액을 예산의 87.5%~112.5%로
     // 규정하므로, 다양성은 가격 분산이 아니라 밴드 안 구성 차이로 만든다.
     private static final double[] TARGET_BAND_TIER_TARGETS = {0.90, 1.0, 1.08};
+    // MIN(이상/최소/부터)은 하한만 강제한다. 고가 부품 간 가격 간격이 큰 경우에도 하한을
+    // 넘는 조합을 찾을 수 있도록 상향 탐색하되, 하한 미달 조합은 절대 반환하지 않는다.
+    private static final double[] MIN_BUDGET_TIER_TARGETS = {1.0, 1.25, 1.5, 2.0};
     // 명시 예산 target 모드 계약 밴드(±12.5%) — LLM 경로 최종 필터(withinBudgetGuard),
     // 결정적 사다리, 티어 스냅샷 서빙 게이트가 같은 값을 공유한다.
     static final double TARGET_BUDGET_BAND_LOWER = 0.875;
@@ -2599,7 +2600,10 @@ public class BuildChatService {
     ) {
         // TARGET 모드는 계약 밴드(±12.5%) 밖 카드를 반환하지 않는다 — 밴드 밖 3장보다 밴드 안 2장이 낫다.
         boolean targetBand = "TARGET".equals(budgetMode);
-        double[] tierTargets = targetBand ? TARGET_BAND_TIER_TARGETS : NEAR_BUDGET_TIER_TARGETS;
+        boolean minimumFloor = "MIN".equals(budgetMode);
+        double[] tierTargets = targetBand
+                ? TARGET_BAND_TIER_TARGETS
+                : minimumFloor ? MIN_BUDGET_TIER_TARGETS : NEAR_BUDGET_TIER_TARGETS;
         // 타깃 예산별로 1개씩 뽑아 구성 다양성을 확보한다
         LinkedHashMap<String, Map<String, Object>> byComposition = new LinkedHashMap<>();
         for (double targetRatio : tierTargets) {
@@ -2608,6 +2612,9 @@ public class BuildChatService {
             if (!targetResult.isEmpty()) {
                 Map<String, Object> build = targetResult.get(0);
                 if (targetBand && !withinTargetBudgetBand(numberValue(build.get("totalPrice")), budgetWon)) {
+                    continue;
+                }
+                if (minimumFloor && numberValue(build.get("totalPrice")) < budgetWon) {
                     continue;
                 }
                 byComposition.putIfAbsent(buildItemsKey(build), build);
@@ -2619,7 +2626,9 @@ public class BuildChatService {
         if (byComposition.size() < 3) {
             int supplementTarget = targetBand
                     ? (int) Math.floor(budgetWon * TARGET_BUDGET_BAND_UPPER)
-                    : budgetWon;
+                    : minimumFloor
+                            ? (int) Math.min(Integer.MAX_VALUE, Math.floor(budgetWon * 2.5))
+                            : budgetWon;
             for (Map<String, Object> build : singleTargetLadderBuilds(supplementTarget, budgetMode, budgetWon, evidenceIds)) {
                 if (byComposition.size() >= 3) {
                     break;
@@ -2627,11 +2636,17 @@ public class BuildChatService {
                 if (targetBand && !withinTargetBudgetBand(numberValue(build.get("totalPrice")), budgetWon)) {
                     continue;
                 }
+                if (minimumFloor && numberValue(build.get("totalPrice")) < budgetWon) {
+                    continue;
+                }
                 byComposition.putIfAbsent(buildItemsKey(build), build);
             }
         }
 
         if (byComposition.isEmpty()) {
+            if (minimumFloor) {
+                return List.of();
+            }
             // 사다리가 전부 빈손이어도 예산이 최소 구성가 이상이면, 이미 검증된 최소 구성 경로로
             // '가능한 최소 구성' 카드 1개는 제공해 빈 화면을 막는다.
             int minimumTotal = minimumBuildTotal();
@@ -2667,7 +2682,7 @@ public class BuildChatService {
                 .mapToInt(Integer::intValue)
                 .max()
                 .orElse(0);
-        if (bestTotal < Math.floor(budgetWon * TARGET_BUDGET_BAND_LOWER)) {
+        if (!minimumFloor && bestTotal < Math.floor(budgetWon * TARGET_BUDGET_BAND_LOWER)) {
             warnings.add("예산에 근접한 조합을 내부 자산으로 구성하지 못해, 구성 가능한 범위에서 예산 이하 최대 조합을 추천합니다.");
         }
         if (guardStats != null) {

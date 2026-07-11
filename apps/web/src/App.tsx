@@ -2,12 +2,13 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AdminLoginPage, AuthCallbackPage, LoginPage, SignupPage } from './features/auth/AuthPages';
 import { RequireAdmin } from './features/auth/RequireAdmin';
 import { RequireUser } from './features/auth/RequireUser';
-import { AllPartsPage, CheckoutCompletePage, CheckoutPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
+import { AllPartsPage, AssemblyRequestDetailPage, AssemblyRequestHistoryPage, CheckoutCompletePage, CheckoutOffersPage, CheckoutPage, CheckoutPaymentPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
 import { BuildResultPage, ChangePartPage, HomePage, LatestBuildResultPage, MyQuotesPage, RequirementPage } from './features/quote/QuotePages';
 import { AsChatPage, SupportNewPage, SupportTicketPage } from './features/support/SupportPages';
 import { SupportChatWidget } from './features/support/SupportChatWidget';
-import { AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminSupportChatSessionsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
+import { AdminAssemblyPage, AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminSupportChatSessionsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
 import { AiBuildAssistant } from './features/quote/components/AiBuildAssistant';
+import { TechnicianApplyPage, TechnicianDashboardPage, TechnicianJobsPage, TechnicianRequestDetailPage } from './features/technician/TechnicianPages';
 
 export default function App() {
   return (
@@ -19,11 +20,21 @@ export default function App() {
         <Route path="/builds/:buildId" element={<RequireUser><BuildResultPage /></RequireUser>} />
         <Route path="/self-quote" element={<RequireUser><SelfQuotePage /></RequireUser>} />
         <Route path="/checkout" element={<RequireUser><CheckoutPage /></RequireUser>} />
-        <Route path="/checkout/complete" element={<RequireUser><CheckoutCompletePage /></RequireUser>} />
+        <Route path="/checkout/offers/:requestId" element={<RequireUser><CheckoutOffersPage /></RequireUser>} />
+        <Route path="/checkout/payment/:requestId" element={<RequireUser><CheckoutPaymentPage /></RequireUser>} />
+        <Route path="/checkout/complete/:requestId" element={<RequireUser><CheckoutCompletePage /></RequireUser>} />
+        <Route path="/checkout/offers" element={<Navigate to="/my/assembly-requests" replace />} />
+        <Route path="/checkout/complete" element={<Navigate to="/my/assembly-requests" replace />} />
         <Route path="/parts" element={<RequireUser><AllPartsPage /></RequireUser>} />
         <Route path="/parts/:partId" element={<RequireUser><PartDetailPage /></RequireUser>} />
         <Route path="/builds/:buildId/change-part" element={<RequireUser><ChangePartPage /></RequireUser>} />
         <Route path="/my/quotes" element={<RequireUser><MyQuotesPage /></RequireUser>} />
+        <Route path="/my/assembly-requests" element={<RequireUser><AssemblyRequestHistoryPage /></RequireUser>} />
+        <Route path="/my/assembly-requests/:requestId" element={<RequireUser><AssemblyRequestDetailPage /></RequireUser>} />
+        <Route path="/technician/apply" element={<RequireUser><TechnicianApplyPage /></RequireUser>} />
+        <Route path="/technician" element={<RequireUser><TechnicianDashboardPage /></RequireUser>} />
+        <Route path="/technician/jobs" element={<RequireUser><TechnicianJobsPage /></RequireUser>} />
+        <Route path="/technician/requests/:requestId" element={<RequireUser><TechnicianRequestDetailPage /></RequireUser>} />
         <Route path="/support/new" element={<RequireUser><SupportNewPage /></RequireUser>} />
         <Route path="/support/ai-chat" element={<RequireUser><AsChatPage /></RequireUser>} />
         <Route path="/support/:ticketId" element={<RequireUser><SupportTicketPage /></RequireUser>} />
@@ -39,6 +50,7 @@ export default function App() {
         <Route path="/admin/rag-evidence" element={<RequireAdmin><RagEvidenceListAdminPage /></RequireAdmin>} />
         <Route path="/admin/rag-evidence/:id" element={<RequireAdmin><RagEvidenceAdminPage /></RequireAdmin>} />
         <Route path="/admin/parts" element={<RequireAdmin><AdminPartsPage /></RequireAdmin>} />
+        <Route path="/admin/assembly" element={<RequireAdmin><AdminAssemblyPage /></RequireAdmin>} />
         <Route path="/admin/price-jobs" element={<RequireAdmin><AdminPriceJobsPage /></RequireAdmin>} />
         <Route path="/admin/build-graph-layouts" element={<RequireAdmin><AdminBuildGraphLayoutsPage /></RequireAdmin>} />
         <Route path="/admin/load-tests" element={<RequireAdmin><AdminLoadTestsPage /></RequireAdmin>} />
@@ -55,7 +67,7 @@ export default function App() {
 
 function GlobalSupportChatWidget() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname === '/support/new') {
+  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/support/new') {
     return null;
   }
   return <SupportChatWidget />;
@@ -63,7 +75,7 @@ function GlobalSupportChatWidget() {
 
 function GlobalAiBuildAssistant() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname === '/self-quote') {
+  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/self-quote') {
     return null;
   }
   return <AiBuildAssistant surface="home" />;

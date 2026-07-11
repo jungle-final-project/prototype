@@ -12,7 +12,7 @@
 - 내부 DB `BIGINT id`는 frontend에 노출하지 않는다.
 - Auth 기능 owner와 Auth 공통/관리자 권한 owner는 분리한다.
 - AdminShell owner와 각 admin page 내부 owner는 분리한다.
-- 실제 주문, 결제, 배송, 재고 차감, 타임세일은 V1 route/API에 포함하지 않는다. 프론트 데모 checkout route는 서버 주문/결제 상태를 만들지 않는다.
+- 조립 기사 중개 요청·제안·가상 결제 상태·진행 상태는 V1에 포함한다. 실제 주문, PG 결제, 배송사 연동, 재고 차감, 타임세일은 포함하지 않는다.
 - 직접 Tool check는 `tool_invocations`에 저장하지 않는다. Agent/recommend 내부 Tool 호출만 저장한다.
 - 관리자 API는 `ADMIN` 권한 필요 여부를 명확히 유지한다.
 
@@ -23,7 +23,7 @@ MVP 기준 결정값:
 - 세 문서의 API path, enum/status, owner, DB table, `public_id` 규칙은 기능 구현 전에 동결한다.
 - path의 `{id}`와 route param의 `:buildId`, `:ticketId`, `:agentSessionId`는 모두 `public_id` 문자열이다.
 - 내부 DB `BIGINT id`는 public API, route, frontend DTO, audit log `target_id`에 노출하지 않는다.
-- `products`, 실제 주문, 결제, 배송, 재고 차감, 타임세일 도메인은 V1에서 추가하지 않는다.
+- `products`, 실제 주문, PG 결제, 배송사 연동, 재고 차감, 타임세일 도메인은 V1에서 추가하지 않는다. `assembly_payments`는 실제 결제가 아닌 가상 상태 기록이다.
 - owner 변경, API path 변경, enum/status 변경, table 추가/삭제는 이 문서, `DB_SCHEMA.md`, `API_CONTRACT.md`를 같은 PR에서 동시에 수정해야 한다.
 - 병렬 개발 중 임시 필드가 필요하면 public DTO에 노출하지 말고 feature 내부 mock이나 테스트 fixture로만 둔다.
 
@@ -167,8 +167,16 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts` |
 | `/self-quote` | 2번 | 1번, 3번, 5번 | `GET /api/parts`(후보 패널은 `compatibilitySource=QUOTE_DRAFT_CURRENT`), `POST /api/parts/compatible-candidates`(슬롯보드 개편 후 이 route에서 미사용 — 홈/빌드 상세 그래프 전용), `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat`, `POST /api/ai/build-chat`(`uiContext.capabilities=[BOARD_PART_FOCUS]`, optional read-only `boardFocus` 소비), `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, 5개 Tool API |
 | `/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/quote-drafts/current`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/parts/{id}/price-history` |
-| `/checkout` | 2번 | 1번, 5번 | `GET /api/quote-drafts/current` |
-| `/checkout/complete` | 2번 | 1번, 5번 | 프론트 `sessionStorage` 데모 상태 |
+| `/checkout` | 2번 | 1번, 5번 | `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/assembly-requests` |
+| `/checkout/offers/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/offers/{offerId}/select` |
+| `/checkout/payment/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/payments/confirm-virtual` |
+| `/checkout/complete/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}` |
+| `/my/assembly-requests` | 2번 | 1번, 5번 | `GET /api/assembly-requests` |
+| `/my/assembly-requests/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/cancel` |
+| `/technician/apply` | 2번 | 5번 | `POST /api/technician/applications`, `GET/PATCH /api/technician/profile` |
+| `/technician` | 2번 | 5번 | `GET /api/technician/profile`, `GET /api/technician/assembly-requests?scope=OPEN` |
+| `/technician/requests/:requestId` | 2번 | 5번 | `GET /api/technician/assembly-requests/{id}`, `POST /api/technician/assembly-requests/{id}/offers`, `PATCH /api/technician/offers/{id}`, `POST /api/technician/offers/{id}/withdraw` |
+| `/technician/jobs` | 2번 | 5번 | `GET /api/technician/assembly-requests?scope=SELECTED`, `GET /api/technician/assembly-requests/{id}` |
 | `/parts/:partId` | 2번 | 5번 | `GET /api/parts/{id}`, `PUT /api/quote-drafts/current/items/{partId}`, `POST /api/recommendation-events` |
 | `/login` | 1번 | 5번 | `POST /api/auth/login`, `GET /api/auth/google/start` |
 | `/signup` | 1번 | 5번 | `POST /api/users`, `GET /api/auth/google/start` |
@@ -179,6 +187,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `/support/:ticketId` | 4번 | - | `GET /api/as-tickets/{id}`, 전역 위젯 `GET /api/support/chat-sessions/current?asTicketId={id}` |
 | `/admin` | 5번 | 2번, 3번, 4번 | `GET /api/admin/dashboard`, `GET /api/admin/audit-logs/recent` |
 | `/admin/parts` | 2번 | 5번, 3번 | `GET/POST /api/admin/parts`, `GET /api/admin/parts/quality-report`, `GET/PATCH/DELETE /api/admin/parts/{id}`, `POST /api/admin/parts/{id}/restore`, `POST /api/admin/parts/{id}/manual-price`, `PATCH /api/admin/parts/{id}/external-offer`, `GET /api/parts/{id}/price-history`, `POST /api/admin/parts/catalog/refresh`, `POST /api/admin/parts/external-offers/refresh`, `POST /api/admin/parts/danawa-price-snapshots/refresh`, `POST /api/admin/parts/danawa-price-trends/refresh`, source/post/candidate CRUD under `/api/admin/manufacturer-*`, `POST /api/admin/manufacturer-sources/{id}/scan`, `POST /api/admin/manufacturer-sources/scan`, `POST /api/admin/manufacturer-posts/{id}/ai-asset-draft`, `POST /api/admin/part-catalog-candidates/{id}/approve|reject|refresh-offers`, `GET/POST /api/admin/part-alias-rules`, `GET /api/admin/part-alias-review-items`, `GET /api/admin/part-alias-review-items/summary`, `POST /api/admin/part-alias-review-items/{id}/resolve|ignore` |
+| `/admin/assembly` | 2번 | 5번 | 내부 기사 CRUD, 외부 기사 신청 승인·거절·정지 `/api/admin/technicians*`, 요청·제안·상태 운영 `/api/admin/assembly-requests*` |
 | `/admin/price-jobs` | 2번 | 5번 | `GET /api/admin/price-jobs`, `POST /api/admin/price-jobs/run`, `GET /api/admin/pipeline-job-runs` |
 | `/admin/build-graph-layouts` | 1번 | 5번 | `GET/PUT/DELETE /api/admin/build-graph-layouts/default` |
 | `/admin/load-tests` | 5번 | 2번, 3번, 4번 | k6 smoke/load report, `GET /api/health` smoke |
@@ -394,7 +403,7 @@ checked:
 
 - 다른 담당자 feature 폴더를 임의로 리팩터링하지 않는다.
 - `products` 도메인 파일/문서를 추가하지 않는다.
-- 실제 주문, 결제, 배송, 재고 차감, 타임세일 관련 API/route/table을 V1에 추가하지 않는다.
+- 조립 기사 중개와 가상 결제 상태 외의 실제 주문, PG 결제, 배송사 연동, 재고 차감, 타임세일 API/route/table은 V1에 추가하지 않는다.
 - public route/API에서 내부 `BIGINT id`를 노출하지 않는다.
 - AWS 공용 DB에서 직접 DDL을 수정하지 않는다.
 

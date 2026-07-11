@@ -1108,6 +1108,578 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QuoteDraftDto"
+  /api/assembly-requests:
+    get:
+      summary: 현재 사용자의 조립 요청 이력
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 조립 요청 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestPage"
+    post:
+      summary: 현재 견적초안으로 조립 요청 생성
+      description: 현재 quote draft와 Tool 호환성 결과를 서버에서 다시 검증해 snapshot으로 저장하고, 조건에 맞는 INTERNAL 기사 제안을 최대 2건 생성한다. 외부 파트너 제안은 이후 최대 3건까지 추가될 수 있다.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            maxLength: 120
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyRequestCreateRequest"
+      responses:
+        "200":
+          description: 생성되거나 같은 idempotency key로 이미 생성된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+        "409":
+          description: 호환성 FAIL, 빈 견적 또는 idempotency 충돌
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/assembly-requests/{id}:
+    get:
+      summary: 본인 조립 요청 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 요청·부품 snapshot·제안·결제·상태 이력
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+        "404":
+          description: 존재하지 않거나 타인 소유 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/assembly-requests/{id}/offers/{offerId}/select:
+    post:
+      summary: 기사 제안 선택
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+        - in: path
+          name: offerId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: MATCHED 요청과 PENDING 가상 결제
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+        "409":
+          description: 선택 불가 상태 또는 이미 다른 제안 선택
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/assembly-requests/{id}/payments/confirm-virtual:
+    post:
+      summary: 가상 결제 완료 처리
+      description: 실제 결제 정보나 금전 거래 없이 PENDING 결제를 PAID로 변경한다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 가상 결제 완료 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+        "409":
+          description: 매칭 전이거나 결제 불가 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/assembly-requests/{id}/cancel:
+    post:
+      summary: 본인 조립 요청 취소
+      description: ASSEMBLING 전까지만 허용하며 PAID 가상 결제는 REFUNDED로 변경한다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyCancelRequest"
+      responses:
+        "200":
+          description: 취소된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+        "409":
+          description: 사용자 취소 가능 시점 경과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/applications:
+    post:
+      summary: 외부 기사 신청 또는 거절 후 재신청
+      description: 기존 USER 계정에 EXTERNAL 기사 프로필을 1:1로 연결한다. 신규 신청과 재신청은 PENDING/INACTIVE 상태다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianApplicationRequest"
+      responses:
+        "200":
+          description: 접수된 외부 기사 프로필
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+        "409":
+          description: 이미 처리 중이거나 승인된 기사 프로필 존재
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/profile:
+    get:
+      summary: 본인 외부 기사 프로필
+      responses:
+        "200":
+          description: 기사 신청·승인 상태와 프로필
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+        "404":
+          description: 기사 프로필 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      summary: 본인 외부 기사 프로필 보정
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianApplicationRequest"
+      responses:
+        "200":
+          description: 수정된 기사 프로필
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+        "409":
+          description: 거절 상태는 재신청 API 사용 필요
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/assembly-requests:
+    get:
+      summary: 외부 기사 요청함 또는 낙찰 작업 목록
+      description: OPEN은 APPROVED, ACTIVE, 표준 AS 동의 외부 기사만 접근하고 개인정보를 포함하지 않는다. SELECTED는 승인 후 정지된 기사도 본인 제안이 선택된 기존 작업을 조회할 수 있다.
+      parameters:
+        - in: query
+          name: scope
+          schema: { type: string, enum: [OPEN, SELECTED], default: OPEN }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 기사 요청 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianRequestPage"
+        "403":
+          description: OPEN 입찰 자격 또는 SELECTED 승인 기사 조건 미충족
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/assembly-requests/{id}:
+    get:
+      summary: 외부 기사 요청 상세
+      description: 입찰 전에는 지역·일정·부품 snapshot만 제공하며, 본인 제안 선택과 가상 결제가 모두 완료된 뒤에만 연락처·주소·메모를 제공한다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 익명 요청 또는 낙찰 작업 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianRequestDto"
+        "404":
+          description: 조건 불일치, 타 기사 요청 또는 마감된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/assembly-requests/{id}/offers:
+    post:
+      summary: 외부 기사 직접 제안 제출
+      description: 요청 row를 잠근 뒤 외부 AVAILABLE 제안이 3건 미만인지 확인한다. 기사당 요청별 제안은 1건이다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianOfferRequest"
+      responses:
+        "200":
+          description: 본인 AVAILABLE 제안을 포함한 요청 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianRequestDto"
+        "409":
+          description: 외부 제안 3건 도달, 중복 제안 또는 마감 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/offers/{id}:
+    patch:
+      summary: 본인 AVAILABLE 제안 수정
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianOfferRequest"
+      responses:
+        "200":
+          description: 수정된 본인 제안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianOwnOfferDto"
+        "404":
+          description: 타 기사 제안 또는 존재하지 않는 제안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: 선택·철회·마감 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/offers/{id}/withdraw:
+    post:
+      summary: 본인 AVAILABLE 제안 철회
+      description: 철회 후 같은 요청에는 재입찰할 수 없다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyCancelRequest"
+      responses:
+        "200":
+          description: 철회된 본인 제안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianOwnOfferDto"
+        "404":
+          description: 타 기사 제안 또는 존재하지 않는 제안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/technicians:
+    get:
+      summary: 관리자 기사 목록
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
+        - in: query
+          name: region
+          schema: { type: string }
+        - in: query
+          name: providerType
+          schema: { type: string, enum: [INTERNAL, EXTERNAL] }
+        - in: query
+          name: verificationStatus
+          schema: { type: string, enum: [PENDING, APPROVED, REJECTED] }
+        - in: query
+          name: includeDeleted
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 기사 운영 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianPage"
+    post:
+      summary: 관리자 기사 생성
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianMutationRequest"
+      responses:
+        "200":
+          description: 생성된 기사
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+  /api/admin/technicians/{id}:
+    get:
+      summary: 관리자 기사 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 기사 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+    patch:
+      summary: 관리자 기사 수정
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianMutationRequest"
+      responses:
+        "200":
+          description: 수정된 기사
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+    delete:
+      summary: 관리자 기사 soft delete
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 삭제 결과
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/admin/technicians/{id}/restore:
+    post:
+      summary: 관리자 기사 복구
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: INACTIVE로 복구된 기사
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+  /api/admin/technicians/{id}/approve:
+    post:
+      summary: 외부 기사 신청 승인
+      description: 기사 프로필을 APPROVED/ACTIVE로 전환한다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 승인된 외부 기사
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+        "409":
+          description: 내부 기사이거나 표준 AS 미동의
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/technicians/{id}/reject:
+    post:
+      summary: 외부 기사 신청 거절
+      description: 사유를 기록하고 REJECTED/INACTIVE로 전환하며 미선택 제안을 철회한다.
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TechnicianRejectRequest"
+      responses:
+        "200":
+          description: 거절된 외부 기사
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianDto"
+        "409":
+          description: 내부 기사 또는 잘못된 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/assembly-requests:
+    get:
+      summary: 관리자 조립 요청 목록
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: region
+          schema: { type: string }
+        - in: query
+          name: q
+          schema: { type: string }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 사용자 정보가 포함된 조립 요청 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestPage"
+  /api/admin/assembly-requests/{id}:
+    get:
+      summary: 관리자 조립 요청 상세
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 조립 요청 운영 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+  /api/admin/assembly-requests/{id}/status:
+    patch:
+      summary: 관리자 조립 진행 상태 변경
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyStatusUpdateRequest"
+      responses:
+        "200":
+          description: 변경된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+        "409":
+          description: 금지 상태 전이 또는 결제 미완료
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/admin/assembly-requests/{id}/offers:
+    post:
+      summary: 관리자 기사 제안 추가
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyOfferCreateRequest"
+      responses:
+        "200":
+          description: 제안이 추가된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+  /api/admin/assembly-requests/{id}/offers/{offerId}:
+    patch:
+      summary: AVAILABLE 기사 제안 보정
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+        - in: path
+          name: offerId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyOfferUpdateRequest"
+      responses:
+        "200":
+          description: 보정된 요청과 제안
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
+  /api/admin/assembly-requests/{id}/offers/{offerId}/withdraw:
+    post:
+      summary: AVAILABLE 기사 제안 철회
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+        - in: path
+          name: offerId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssemblyCancelRequest"
+      responses:
+        "200":
+          description: 제안이 철회된 요청
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssemblyRequestDto"
   /api/price-alerts:
     get:
       summary: 목표가 알림 목록
@@ -7399,3 +7971,344 @@ components:
           type: integer
         total:
           type: integer
+    AssemblyRequestCreateRequest:
+      type: object
+      required: [serviceType, region, preferredDate, deliveryMethod, contactName, contactPhone, asPolicyAccepted]
+      properties:
+        serviceType:
+          type: string
+          enum: [FULL_SERVICE, ASSEMBLY_ONLY]
+        region:
+          type: string
+          enum: [서울, 경기, 인천, 대전, 대구, 부산, 광주]
+        preferredDate:
+          type: string
+          format: date
+        deliveryMethod:
+          type: string
+          enum: [DELIVERY, PICKUP]
+        note:
+          type: string
+          maxLength: 1000
+        contactName:
+          type: string
+          maxLength: 100
+        contactPhone:
+          type: string
+          maxLength: 40
+        postalCode:
+          type: string
+          maxLength: 20
+        addressLine1:
+          type: string
+          maxLength: 255
+          description: deliveryMethod=DELIVERY이면 필수
+        addressLine2:
+          type: string
+          maxLength: 255
+        asPolicyAccepted:
+          type: boolean
+          enum: [true]
+    AssemblyCancelRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+    AssemblyRequestDto:
+      type: object
+      required: [id, requestNo, status, serviceType, region, preferredDate, deliveryMethod, estimatedPartsPrice, itemCount, items, offers, statusHistory, canCancel]
+      properties:
+        id: { type: string, format: uuid }
+        requestNo: { type: string }
+        status:
+          type: string
+          enum: [REQUESTED, OFFERED, MATCHED, CONFIRMED, ASSEMBLING, SHIPPED, COMPLETED, CANCELLED]
+        serviceType: { type: string, enum: [FULL_SERVICE, ASSEMBLY_ONLY] }
+        region: { type: string }
+        preferredDate: { type: string, format: date }
+        deliveryMethod: { type: string, enum: [DELIVERY, PICKUP] }
+        note: { type: string, nullable: true }
+        contact:
+          allOf:
+            - $ref: "#/components/schemas/AssemblyContactDto"
+          nullable: true
+        asPolicyAccepted: { type: boolean }
+        estimatedPartsPrice: { type: integer, format: int64 }
+        itemCount: { type: integer }
+        selectedOfferId: { type: string, format: uuid, nullable: true }
+        cancellationReason: { type: string, nullable: true }
+        canCancel: { type: boolean }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssemblyRequestItemDto"
+        offers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssemblyOfferDto"
+        payment:
+          allOf:
+            - $ref: "#/components/schemas/AssemblyPaymentDto"
+          nullable: true
+        statusHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssemblyStatusHistoryDto"
+        createdAt: { type: string, format: date-time, nullable: true }
+        updatedAt: { type: string, format: date-time, nullable: true }
+    AssemblyContactDto:
+      type: object
+      required: [name, phone]
+      properties:
+        name: { type: string }
+        phone: { type: string }
+        postalCode: { type: string, nullable: true }
+        addressLine1: { type: string, nullable: true }
+        addressLine2: { type: string, nullable: true }
+    AssemblyRequestItemDto:
+      type: object
+      required: [partId, category, name, quantity, unitPrice, lineTotal]
+      properties:
+        partId: { type: string, format: uuid }
+        category: { type: string }
+        name: { type: string }
+        manufacturer: { type: string, nullable: true }
+        quantity: { type: integer }
+        unitPrice: { type: integer, format: int64 }
+        lineTotal: { type: integer, format: int64 }
+        externalOffer: { type: object, nullable: true, additionalProperties: true }
+    AssemblyOfferDto:
+      type: object
+      required: [id, technicianId, technicianName, status, confirmedPartsPrice, assemblyFee, deliveryFee, finalPrice, leadTimeDays, stockStatus]
+      properties:
+        id: { type: string, format: uuid }
+        technicianId: { type: string, format: uuid }
+        technicianName: { type: string }
+        initials: { type: string }
+        rating: { type: number, format: double }
+        completedJobs: { type: integer }
+        responseMinutes: { type: integer }
+        specialties: { type: array, items: { type: string } }
+        standardAsAccepted: { type: boolean }
+        providerType: { type: string, enum: [INTERNAL, EXTERNAL] }
+        verified: { type: boolean }
+        status: { type: string, enum: [AVAILABLE, SELECTED, WITHDRAWN, EXPIRED] }
+        confirmedPartsPrice: { type: integer, format: int64 }
+        assemblyFee: { type: integer, format: int64 }
+        deliveryFee: { type: integer, format: int64 }
+        finalPrice: { type: integer, format: int64 }
+        leadTimeDays: { type: integer }
+        stockStatus: { type: string }
+        adminNote: { type: string, nullable: true }
+        submittedAt: { type: string, format: date-time, nullable: true }
+    AssemblyPaymentDto:
+      type: object
+      required: [id, amount, method, status]
+      properties:
+        id: { type: string, format: uuid }
+        amount: { type: integer, format: int64 }
+        method: { type: string, enum: [VIRTUAL] }
+        status: { type: string, enum: [PENDING, PAID, CANCELLED, REFUNDED] }
+        paidAt: { type: string, format: date-time, nullable: true }
+        refundedAt: { type: string, format: date-time, nullable: true }
+    AssemblyStatusHistoryDto:
+      type: object
+      required: [toStatus]
+      properties:
+        fromStatus: { type: string, nullable: true }
+        toStatus: { type: string }
+        note: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+    AssemblyRequestPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+    AssemblyStatusUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [CONFIRMED, ASSEMBLING, SHIPPED, COMPLETED, CANCELLED]
+        note:
+          type: string
+          maxLength: 1000
+    AssemblyOfferCreateRequest:
+      type: object
+      required: [technicianId]
+      properties:
+        technicianId: { type: string, format: uuid }
+        confirmedPartsPrice: { type: integer, format: int64, minimum: 0 }
+        assemblyFee: { type: integer, format: int64, minimum: 0 }
+        deliveryFee: { type: integer, format: int64, minimum: 0 }
+        leadTimeDays: { type: integer, minimum: 1 }
+        stockStatus: { type: string }
+        adminNote: { type: string }
+    AssemblyOfferUpdateRequest:
+      type: object
+      properties:
+        confirmedPartsPrice: { type: integer, format: int64, minimum: 0 }
+        assemblyFee: { type: integer, format: int64, minimum: 0 }
+        deliveryFee: { type: integer, format: int64, minimum: 0 }
+        leadTimeDays: { type: integer, minimum: 1 }
+        stockStatus: { type: string }
+        adminNote: { type: string, nullable: true }
+    TechnicianMutationRequest:
+      type: object
+      required: [displayName, status, serviceRegions, serviceTypes, standardAsAccepted]
+      properties:
+        displayName: { type: string, maxLength: 120 }
+        initials: { type: string, maxLength: 12 }
+        profileImageUrl: { type: string, nullable: true }
+        status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
+        serviceRegions: { type: array, items: { type: string } }
+        serviceTypes: { type: array, items: { type: string, enum: [FULL_SERVICE, ASSEMBLY_ONLY] } }
+        specialties: { type: array, items: { type: string } }
+        rating: { type: number, minimum: 0, maximum: 5 }
+        completedJobs: { type: integer, minimum: 0 }
+        avgResponseMinutes: { type: integer, minimum: 0 }
+        assemblyFee: { type: integer, format: int64, minimum: 0 }
+        deliveryFee: { type: integer, format: int64, minimum: 0 }
+        leadTimeDays: { type: integer, minimum: 1 }
+        partsPriceAdjustment: { type: integer, format: int64 }
+        sortPriority: { type: integer }
+        standardAsAccepted: { type: boolean }
+    TechnicianApplicationRequest:
+      type: object
+      required: [displayName, contactPhone, serviceRegions, serviceTypes, specialties, assemblyFee, deliveryFee, leadTimeDays, standardAsAccepted]
+      properties:
+        displayName: { type: string, maxLength: 120 }
+        initials: { type: string, maxLength: 12 }
+        profileImageUrl: { type: string, nullable: true }
+        businessName: { type: string, maxLength: 160, nullable: true }
+        contactPhone: { type: string, maxLength: 40 }
+        serviceRegions: { type: array, minItems: 1, items: { type: string } }
+        serviceTypes:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [FULL_SERVICE, ASSEMBLY_ONLY] }
+        specialties: { type: array, items: { type: string } }
+        assemblyFee: { type: integer, format: int64, minimum: 0 }
+        deliveryFee: { type: integer, format: int64, minimum: 0 }
+        leadTimeDays: { type: integer, minimum: 1 }
+        standardAsAccepted: { type: boolean, enum: [true] }
+    TechnicianRejectRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    TechnicianOfferRequest:
+      type: object
+      required: [confirmedPartsPrice, assemblyFee, deliveryFee, leadTimeDays, stockStatus]
+      properties:
+        confirmedPartsPrice: { type: integer, format: int64, minimum: 0 }
+        assemblyFee: { type: integer, format: int64, minimum: 0 }
+        deliveryFee: { type: integer, format: int64, minimum: 0 }
+        leadTimeDays: { type: integer, minimum: 1 }
+        stockStatus: { type: string, minLength: 1, maxLength: 255 }
+        note: { type: string, maxLength: 1000, nullable: true }
+    TechnicianOwnOfferDto:
+      type: object
+      required: [id, status, confirmedPartsPrice, assemblyFee, deliveryFee, finalPrice, leadTimeDays, stockStatus]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [AVAILABLE, SELECTED, WITHDRAWN, EXPIRED] }
+        confirmedPartsPrice: { type: integer, format: int64 }
+        assemblyFee: { type: integer, format: int64 }
+        deliveryFee: { type: integer, format: int64 }
+        finalPrice: { type: integer, format: int64 }
+        leadTimeDays: { type: integer }
+        stockStatus: { type: string }
+        note: { type: string, nullable: true }
+        submittedAt: { type: string, format: date-time, nullable: true }
+        updatedAt: { type: string, format: date-time, nullable: true }
+    TechnicianRequestSummaryDto:
+      type: object
+      required: [id, requestNo, status, serviceType, region, preferredDate, deliveryMethod, estimatedPartsPrice, itemCount]
+      properties:
+        id: { type: string, format: uuid }
+        requestNo: { type: string }
+        status: { type: string, enum: [REQUESTED, OFFERED, MATCHED, CONFIRMED, ASSEMBLING, SHIPPED, COMPLETED, CANCELLED] }
+        serviceType: { type: string, enum: [FULL_SERVICE, ASSEMBLY_ONLY] }
+        region: { type: string }
+        preferredDate: { type: string, format: date }
+        deliveryMethod: { type: string, enum: [DELIVERY, PICKUP] }
+        estimatedPartsPrice: { type: integer, format: int64 }
+        itemCount: { type: integer }
+        ownOfferId: { type: string, format: uuid, nullable: true }
+        ownOfferStatus: { type: string, enum: [AVAILABLE, SELECTED, WITHDRAWN, EXPIRED], nullable: true }
+        paymentStatus: { type: string, enum: [PENDING, PAID, CANCELLED, REFUNDED], nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+    TechnicianRequestDto:
+      type: object
+      required: [id, requestNo, status, serviceType, region, preferredDate, deliveryMethod, estimatedPartsPrice, itemCount, items]
+      properties:
+        id: { type: string, format: uuid }
+        requestNo: { type: string }
+        status: { type: string, enum: [REQUESTED, OFFERED, MATCHED, CONFIRMED, ASSEMBLING, SHIPPED, COMPLETED, CANCELLED] }
+        serviceType: { type: string, enum: [FULL_SERVICE, ASSEMBLY_ONLY] }
+        region: { type: string }
+        preferredDate: { type: string, format: date }
+        deliveryMethod: { type: string, enum: [DELIVERY, PICKUP] }
+        estimatedPartsPrice: { type: integer, format: int64 }
+        itemCount: { type: integer }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssemblyRequestItemDto"
+        ownOffer:
+          allOf:
+            - $ref: "#/components/schemas/TechnicianOwnOfferDto"
+          nullable: true
+        paymentStatus: { type: string, enum: [PENDING, PAID, CANCELLED, REFUNDED], nullable: true }
+        contact:
+          allOf:
+            - $ref: "#/components/schemas/AssemblyContactDto"
+          nullable: true
+          description: 본인 제안이 선택되고 가상 결제가 PAID인 경우에만 반환
+        note: { type: string, nullable: true, description: 본인 제안이 선택되고 가상 결제가 PAID인 경우에만 반환 }
+        createdAt: { type: string, format: date-time, nullable: true }
+    TechnicianRequestPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/TechnicianRequestSummaryDto"
+    TechnicianDto:
+      allOf:
+        - $ref: "#/components/schemas/TechnicianMutationRequest"
+        - type: object
+          required: [id, seeded]
+          properties:
+            id: { type: string, format: uuid }
+            providerType: { type: string, enum: [INTERNAL, EXTERNAL] }
+            verificationStatus: { type: string, enum: [PENDING, APPROVED, REJECTED] }
+            businessName: { type: string, nullable: true }
+            contactPhone: { type: string, nullable: true }
+            rejectionReason: { type: string, nullable: true }
+            approvedAt: { type: string, format: date-time, nullable: true }
+            seeded: { type: boolean }
+            deletedAt: { type: string, format: date-time, nullable: true }
+            createdAt: { type: string, format: date-time, nullable: true }
+            updatedAt: { type: string, format: date-time, nullable: true }
+    TechnicianPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/TechnicianDto"
