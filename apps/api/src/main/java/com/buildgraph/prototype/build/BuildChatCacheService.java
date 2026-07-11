@@ -11,6 +11,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -160,6 +161,7 @@ public class BuildChatCacheService {
         fingerprint.put("userId", sharedRecommendation ? "shared" : (userId == null ? "anonymous" : userId));
         fingerprint.put("message", normalizeText(body.get("message")));
         fingerprint.put("selectedCategory", normalizeText(body.get("selectedCategory")));
+        fingerprint.put("uiContext", uiContextFingerprint(body.get("uiContext")));
         fingerprint.put("cacheMode", sharedRecommendation ? "SHARED_STANDALONE_RECOMMENDATION" : scope.name());
         fingerprint.put("currentQuoteDraft", quoteDraftFingerprint(body.get("currentQuoteDraft")));
         if (scope != CacheScope.RECOMMENDATION) {
@@ -167,7 +169,20 @@ public class BuildChatCacheService {
         }
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        return "buildgraph:build-chat:v29:" + sha256(json);
+        return "buildgraph:build-chat:v30:" + sha256(json);
+    }
+
+    private static Map<String, Object> uiContextFingerprint(Object value) {
+        Map<String, Object> uiContext = objectMap(value);
+        List<String> capabilities = stringList(uiContext.get("capabilities")).stream()
+                .map(BuildChatCacheService::normalizeText)
+                .filter(Objects::nonNull)
+                .sorted()
+                .toList();
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        normalized.put("surface", normalizeText(uiContext.get("surface")));
+        normalized.put("capabilities", capabilities);
+        return normalized;
     }
 
     private static CacheScope scopeFor(Map<String, Object> request) {
@@ -424,5 +439,15 @@ public class BuildChatCacheService {
             result.add(objectMap(item));
         }
         return result;
+    }
+
+    private static List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .map(item -> item == null ? null : item.toString())
+                    .filter(Objects::nonNull)
+                    .toList();
+        }
+        return List.of();
     }
 }

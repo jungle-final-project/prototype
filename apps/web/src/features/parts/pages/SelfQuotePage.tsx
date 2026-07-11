@@ -16,6 +16,7 @@ import {
   recentBuildsForChatContext,
   saveSelectedAiBuild,
   type AiBuildItem,
+  type AiBoardFocus,
   type AiRecommendedBuild,
   type BuildGraphFocus,
   type BuildGraphResolveResponse,
@@ -76,6 +77,7 @@ function SelfQuoteSlotBoardPage() {
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
   const [boardSelectionRequest, setBoardSelectionRequest] = useState(0);
+  const [aiFocusCategories, setAiFocusCategories] = useState<PartCategory[]>([]);
   // 성능 패널 교체 비교(기존 조합 vs 변경 조합) — 변경 후보 1개를 페이지가 소유하고 패널에 내려준다.
   const [perfComparison, setPerfComparison] = useState<PerfCompareTarget | null>(null);
   const perfPanelRef = useRef<HTMLDivElement | null>(null);
@@ -227,9 +229,18 @@ function SelfQuoteSlotBoardPage() {
   };
 
   const selectBoardSlot = (category: PartCategory) => {
+    setAiFocusCategories([]);
     setBoardSelectionRequest((request) => request + 1);
     selectSlot(category);
   };
+
+  const handleBoardFocus = useCallback((focus: AiBoardFocus) => {
+    setAiFocusCategories(focus.categories);
+  }, []);
+
+  const clearBoardFocus = useCallback(() => {
+    setAiFocusCategories([]);
+  }, []);
 
   const closePanel = useCallback(() => {
     setSearchParams((current) => {
@@ -409,10 +420,12 @@ function SelfQuoteSlotBoardPage() {
             <SlotBoard
               items={draftItems}
               selectedCategory={selectedCategory}
+              aiFocusCategories={aiFocusCategories}
               nextCategory={nextCategory}
               visualMode={effectiveVisualMode}
               onVisualModeChange={setVisualMode}
               onClearSelection={closePanel}
+              onClearAiFocus={clearBoardFocus}
               onSlotSelect={selectBoardSlot}
               onRemoveItem={removeItem}
               onUpdateQuantity={updateQuantity}
@@ -423,7 +436,7 @@ function SelfQuoteSlotBoardPage() {
             />
           </div>
           <div className="min-h-0 lg:h-[800px]">
-            <AiBuildAssistant surface="self-quote" variant="embedded" />
+            <AiBuildAssistant surface="self-quote" variant="embedded" onBoardFocus={handleBoardFocus} />
           </div>
         </div>
 

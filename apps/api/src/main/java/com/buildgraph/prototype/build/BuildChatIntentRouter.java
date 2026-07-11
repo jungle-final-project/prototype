@@ -10,11 +10,11 @@ import org.springframework.stereotype.Service;
 
 /**
  * Build Chat 축소 정책(2026-07 회의)의 intent 라우터.
- * 지원 범위는 예산/그래프 기반 견적 추천, 부품 교체 성능 시뮬레이션, 명확화 질문뿐이다.
- * 화면 이동, 장바구니 조작, 단일 부품 추천, 일반 상담은 UNSUPPORTED로 고정 안내한다.
+ * 지원 범위는 예산/그래프 기반 견적 추천, 부품 교체 성능 시뮬레이션, 셀프 견적 보드 위치 강조,
+ * 명확화 질문이다. 화면 이동, 장바구니 조작, 단일 부품 추천, 일반 상담은 UNSUPPORTED로 고정 안내한다.
  *
  * 분기 순서가 오탐 방어의 핵심이다:
- * 시뮬레이션 → 견적 완성 → 장바구니 조작 veto → 주변기기 veto → 견적 추천 → 명확화 → UNSUPPORTED
+ * 시뮬레이션 → 견적 완성 → 장바구니 조작 veto → 주변기기 veto → 견적 추천 → 보드 위치 → 명확화 → UNSUPPORTED
  */
 @Service
 public class BuildChatIntentRouter {
@@ -27,6 +27,16 @@ public class BuildChatIntentRouter {
     );
     private static final Pattern CPU_MODEL_SIGNAL = Pattern.compile(
             "(?i)(?:\\d{4,5}x3d|\\d{4,5}(?:x|xt|g)|i[3579]-?\\d{4,5}(?:k|kf|f|ks)?|(?:core)?ultra[3579]?\\d{3}k|\\d{3}k)"
+    );
+    private static final List<LocationCategoryKeywords> LOCATION_CATEGORIES = List.of(
+            new LocationCategoryKeywords("MOTHERBOARD", List.of("메인보드", "마더보드", "motherboard")),
+            new LocationCategoryKeywords("COOLER", List.of("쿨러", "cooler", "수랭", "공랭")),
+            new LocationCategoryKeywords("STORAGE", List.of("m.2", "m2슬롯", "ssd", "스토리지", "저장장치", "nvme")),
+            new LocationCategoryKeywords("PSU", List.of("파워", "psu", "전원공급장치", "전원공급")),
+            new LocationCategoryKeywords("CASE", List.of("케이스", "case")),
+            new LocationCategoryKeywords("GPU", List.of("그래픽카드", "그래픽 카드", "글카", "지피유", "gpu", "vga")),
+            new LocationCategoryKeywords("CPU", List.of("씨피유", "씨퓨", "cpu", "프로세서")),
+            new LocationCategoryKeywords("RAM", List.of("dimm", "메모리", "memory", "ram", "램"))
     );
 
     public BuildChatIntentDecision decide(Map<String, Object> request, String message) {
@@ -66,6 +76,11 @@ public class BuildChatIntentRouter {
             return decision(BuildChatIntent.BUILD_RECOMMEND, "HIGH", "NONE", category, partQuery, "LLM_OR_DETERMINISTIC",
                     standaloneContext(body) ? "SEMANTIC_READ_ONLY" : "EXACT_ONLY",
                     semanticSignature(BuildChatIntent.BUILD_RECOMMEND, category, partQuery, budgetSignature(message)), List.of());
+        }
+
+        BuildChatIntentDecision boardLocation = boardLocationDecision(body, normalized, partQuery);
+        if (boardLocation != null) {
+            return boardLocation;
         }
 
         // 화면 이동/탐색과 설명 요청은 축소 정책상 미지원 — 모호 구매의향(명확화)으로 흡수되지 않게 먼저 자른다
@@ -129,6 +144,129 @@ public class BuildChatIntentRouter {
     ) {
         return new BuildChatIntentDecision(intent, confidence, sideEffectRisk, category, partQuery, preferredPath, cachePolicy,
                 semanticConstraintSignature, ambiguityReasons == null ? List.of() : ambiguityReasons);
+    }
+
+    private static BuildChatIntentDecision decision(
+            BuildChatIntent intent,
+            String confidence,
+            String sideEffectRisk,
+            List<String> categories,
+            String partQuery,
+            String preferredPath,
+            String cachePolicy,
+            String semanticConstraintSignature,
+            List<String> ambiguityReasons
+    ) {
+        List<String> safeCategories = categories == null ? List.of() : List.copyOf(categories);
+        String category = safeCategories.isEmpty() ? null : safeCategories.get(0);
+        return new BuildChatIntentDecision(
+                intent,
+                confidence,
+                sideEffectRisk,
+                category,
+                partQuery,
+                preferredPath,
+                cachePolicy,
+                semanticConstraintSignature,
+                ambiguityReasons,
+                safeCategories
+        );
+    }
+
+    private static BuildChatIntentDecision boardLocationDecision(
+            Map<String, Object> body,
+            String normalized,
+            String partQuery
+    ) {
+        if (!supportsBoardPartFocus(body) || !hasBoardLocationSignal(normalized) || hasBoardLocationVeto(normalized)) {
+            return null;
+        }
+        List<String> categories = locationCategories(normalized);
+        if (!categories.isEmpty()) {
+            return decision(
+                    BuildChatIntent.LOCATE_BOARD_PART,
+                    "HIGH",
+                    "NONE",
+                    categories,
+                    partQuery,
+                    "FAST_BOARD_FOCUS",
+                    "NONE",
+                    null,
+                    List.of()
+            );
+        }
+        return decision(
+                BuildChatIntent.LOCATE_BOARD_PART,
+                "MEDIUM",
+                "NONE",
+                categories,
+                partQuery,
+                "LLM_BOARD_FOCUS",
+                "EXACT_ONLY",
+                null,
+                List.of("BOARD_FOCUS_CATEGORY_MISSING")
+        );
+    }
+
+    private static boolean supportsBoardPartFocus(Map<String, Object> body) {
+        Map<String, Object> uiContext = objectMap(body.get("uiContext"));
+        if (!"SELF_QUOTE".equalsIgnoreCase(firstText(text(uiContext.get("surface")), ""))) {
+            return false;
+        }
+        return stringList(uiContext.get("capabilities")).stream()
+                .anyMatch(capability -> "BOARD_PART_FOCUS".equalsIgnoreCase(capability));
+    }
+
+    private static boolean hasBoardLocationSignal(String normalized) {
+        return containsAny(normalized,
+                "위치", "어디", "어딜", "어느곳", "어디쯤", "자리", "슬롯", "꽂는곳", "꽂을곳", "장착하는곳", "장착할곳",
+                "가리켜", "표시해", "강조해", "어느부분", "어느쪽", "어디에달려", "어디에장착");
+    }
+
+    private static boolean hasBoardLocationVeto(String normalized) {
+        return containsAny(normalized,
+                "추천", "후보", "최저가", "가격", "구매", "판매", "어디서사", "어디서구해", "쇼핑",
+                "바꿔", "교체", "빼줘", "삭제", "제거", "담아", "넣어줘", "추가해", "수량",
+                "프레임", "fps", "성능", "벤치", "비교", "업그레이드", "다운그레이드",
+                "상세페이지", "상품페이지", "제품페이지", "목록");
+    }
+
+    private static List<String> locationCategories(String normalized) {
+        List<LocationCategoryMatch> matches = new ArrayList<>();
+        for (LocationCategoryKeywords check : LOCATION_CATEGORIES) {
+            String searchText = locationCategorySearchText(normalized, check.category());
+            int firstIndex = check.keywords().stream()
+                    .map(BuildChatIntentRouter::normalize)
+                    .mapToInt(searchText::indexOf)
+                    .filter(index -> index >= 0)
+                    .min()
+                    .orElse(-1);
+            if (firstIndex >= 0) {
+                matches.add(new LocationCategoryMatch(check.category(), firstIndex));
+            }
+        }
+        if (matches.isEmpty() && normalized.contains("보드")) {
+            matches.add(new LocationCategoryMatch("MOTHERBOARD", normalized.indexOf("보드")));
+        }
+        return matches.stream()
+                .sorted(java.util.Comparator.comparingInt(LocationCategoryMatch::index))
+                .map(LocationCategoryMatch::category)
+                .distinct()
+                .toList();
+    }
+
+    private static String locationCategorySearchText(String normalized, String category) {
+        if (!"CPU".equals(category)) {
+            return normalized;
+        }
+        return normalized
+                .replace("cpu쿨러", "쿨러")
+                .replace("cpucooler", "cooler")
+                .replace("씨피유쿨러", "쿨러")
+                .replace("씨퓨쿨러", "쿨러")
+                .replace("프로세서쿨러", "쿨러")
+                .replace("cpu수랭", "수랭")
+                .replace("cpu공랭", "공랭");
     }
 
     private static boolean isSimulationIntent(String normalized, String category) {
@@ -349,5 +487,18 @@ public class BuildChatIntentRouter {
                     .toList();
         }
         return List.of();
+    }
+
+    private static List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(BuildChatIntentRouter::text).filter(java.util.Objects::nonNull).toList();
+        }
+        return List.of();
+    }
+
+    private record LocationCategoryKeywords(String category, List<String> keywords) {
+    }
+
+    private record LocationCategoryMatch(String category, int index) {
     }
 }

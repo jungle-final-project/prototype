@@ -21,17 +21,20 @@ import {
   saveAssistantSession,
   saveSelectedAiBuild,
   type AiChatMessage,
+  type AiBoardFocus,
   type AiPerformanceSimulation,
   type AiQuickReplyCommand,
   type AiRecommendedBuild,
   type AiToolResult,
-  type BuildGraphFocus
+  type BuildGraphFocus,
+  type PartCategory
 } from '../aiSelection';
 import { buildChat, resolveBuildGraph } from '../quoteApi';
 
 type AiBuildAssistantProps = {
   surface?: 'home' | 'self-quote';
   variant?: 'floating' | 'embedded';
+  onBoardFocus?: (focus: AiBoardFocus) => void;
 };
 
 type AiChatMessageSize = 'default' | 'large';
@@ -57,7 +60,7 @@ const CENTER_SCROLLBAR_TRACK_BOTTOM = 12;
 const CENTER_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
 const CENTER_SCROLLBAR_HIDE_DELAY_MS = 700;
 
-export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiBuildAssistantProps) {
+export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoardFocus }: AiBuildAssistantProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -332,8 +335,15 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
         message: nextPrompt,
         currentBuilds: recentBuildsForChatContext(baseSession),
         currentQuoteDraft,
+        uiContext: surface === 'self-quote'
+          ? { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] }
+          : { surface: 'HOME', capabilities: [] },
         clarificationContext: pendingClarification ?? undefined
       });
+      const boardFocus = normalizeBoardFocus(response.boardFocus);
+      if (boardFocus && onBoardFocus) {
+        onBoardFocus(boardFocus);
+      }
       setPendingClarification(
         response.clarification?.originalMessage
           ? { originalMessage: response.clarification.originalMessage }
@@ -788,6 +798,18 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating' }: AiB
   );
 
   return panel;
+}
+
+function normalizeBoardFocus(value: AiBoardFocus | null | undefined): AiBoardFocus | null {
+  if (!value || value.type !== 'PART_LOCATION') return null;
+  const categories = value.categories.filter((category): category is PartCategory => category in PART_CATEGORY_LABELS);
+  const uniqueCategories = [...new Set(categories)];
+  if (uniqueCategories.length === 0) return null;
+  return {
+    type: 'PART_LOCATION',
+    categories: uniqueCategories,
+    label: value.label || `${uniqueCategories.map((category) => PART_CATEGORY_LABELS[category]).join(' · ')} 위치`
+  };
 }
 
 // 서버가 현재 견적(드래프트) 문맥을 실제로 쓰는 요청만 draft를 먼저 확보한다.

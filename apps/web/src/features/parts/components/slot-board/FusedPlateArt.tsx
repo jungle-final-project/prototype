@@ -16,6 +16,7 @@ import './FusedPlateArt.css';
 type FusedPlateArtProps = {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  aiFocusCategories: PartCategory[];
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
   onSlotSelect: (category: PartCategory) => void;
@@ -28,6 +29,7 @@ type FusedPlateArtProps = {
 export function FusedPlateArt({
   items,
   selectedCategory,
+  aiFocusCategories,
   statusByCategory,
   flashingCategories,
   onSlotSelect,
@@ -51,12 +53,17 @@ export function FusedPlateArt({
   const ramDecreaseAction = ramSlotCount > 1 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
   const isActionPending = isRemovePending || isQuantityPending;
   const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
+  const aiFocusSet = new Set(aiFocusCategories);
+  const hasAiFocus = aiFocusSet.size > 0;
   const hasHoveredLayer = hoveredCategory
     ? hoveredCategory === 'RAM'
       ? ramSlotCount > 0 || selectedCategory === 'RAM'
       : filledCategories.has(hoveredCategory) || selectedCategory === hoveredCategory
     : false;
   const spotlightCategory = hasHoveredLayer ? hoveredCategory : null;
+  const spotlightCategories = hasAiFocus
+    ? aiFocusSet
+    : new Set<PartCategory>(spotlightCategory ? [spotlightCategory] : []);
 
   useEffect(() => {
     FUSED_PRELOAD_URLS.forEach((src) => {
@@ -109,7 +116,7 @@ export function FusedPlateArt({
           src={FUSED_PLATE_BG}
           alt=""
           aria-hidden="true"
-          data-dimmed={spotlightCategory ? 'true' : 'false'}
+          data-dimmed={spotlightCategories.size > 0 ? 'true' : 'false'}
           className="fused-plate-bg pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
         />
         {FUSED_PART_LAYERS.map((layer) => {
@@ -117,8 +124,10 @@ export function FusedPlateArt({
             ? (layer.slotIndex ?? 0) < ramSlotCount
             : filledCategories.has(layer.category);
           const focused = selectedCategory === layer.category;
-          const hovered = spotlightCategory === layer.category;
-          const dimmed = Boolean(spotlightCategory && !hovered);
+          const hovered = !hasAiFocus && spotlightCategory === layer.category;
+          const spotlighted = spotlightCategories.has(layer.category);
+          const aiSpotlighted = aiFocusSet.has(layer.category);
+          const dimmed = spotlightCategories.size > 0 && !spotlighted;
           const mounting = visible && (
             layer.category === 'RAM'
               ? layer.slotIndex !== undefined && mountingRamSlots.has(layer.slotIndex)
@@ -133,17 +142,21 @@ export function FusedPlateArt({
                 data-testid={`${testId}-problem-blur`}
                 data-visible={visible ? 'true' : 'false'}
                 data-hovered={hovered ? 'true' : 'false'}
+                data-spotlight={spotlighted ? 'true' : 'false'}
+                data-ai-spotlight={aiSpotlighted ? 'true' : 'false'}
                 data-dimmed={dimmed ? 'true' : 'false'}
                 data-status={status}
                 src={layer.src}
                 alt=""
                 className="fused-part-problem-blur fused-part-problem-glow pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
-                style={{ zIndex: focused ? 19 : 9 }}
+                style={{ zIndex: focused || aiSpotlighted ? 19 : 9 }}
               />
               <img
                 data-testid={testId}
                 data-visible={visible ? 'true' : 'false'}
                 data-hovered={hovered ? 'true' : 'false'}
+                data-spotlight={spotlighted ? 'true' : 'false'}
+                data-ai-spotlight={aiSpotlighted ? 'true' : 'false'}
                 data-dimmed={dimmed ? 'true' : 'false'}
                 data-mounting={mounting ? 'true' : 'false'}
                 data-status={status}
@@ -152,7 +165,7 @@ export function FusedPlateArt({
                 aria-hidden="true"
                 className={`fused-part-layer pointer-events-none absolute inset-0 h-full w-full select-none object-contain ${
                   visible ? 'opacity-100' : 'opacity-0'
-                } ${focused ? 'z-20' : 'z-10'}`}
+                } ${focused || aiSpotlighted ? 'z-20' : 'z-10'}`}
               />
             </Fragment>
           );
@@ -160,7 +173,9 @@ export function FusedPlateArt({
         {FUSED_PART_AREAS.map((area) => {
           const categoryItems = itemsByCategory.get(area.category) ?? [];
           const filled = area.category === 'RAM' ? ramSlotCount > 0 : categoryItems.length > 0;
-          const hovered = hoveredCategory === area.category;
+          const hovered = !hasAiFocus && hoveredCategory === area.category;
+          const aiSpotlighted = aiFocusSet.has(area.category);
+          const aiDimmed = hasAiFocus && !aiSpotlighted;
           const status = statusByCategory.get(area.category) ?? 'PASS';
           return (
             <div
@@ -168,6 +183,9 @@ export function FusedPlateArt({
               data-testid={`slot-fused-area-wrap-${area.category}`}
               data-filled={filled ? 'true' : 'false'}
               data-hovered={hovered ? 'true' : 'false'}
+              data-ai-spotlight={aiSpotlighted ? 'true' : 'false'}
+              data-ai-dimmed={aiDimmed ? 'true' : 'false'}
+              data-mounted={filled ? 'true' : 'false'}
               data-status={status}
               onPointerEnter={() => setHoveredCategory(area.category)}
               onPointerLeave={() => clearHoverIfLeavingArea(area.category)}
@@ -184,6 +202,14 @@ export function FusedPlateArt({
                 onClick={() => onSlotSelect(area.category)}
                 className="fused-part-select-button absolute inset-0 cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
               />
+              {aiSpotlighted && !filled ? (
+                <span
+                  data-testid={`slot-fused-ai-unmounted-${area.category}`}
+                  className="pointer-events-none absolute bottom-1 right-1 z-40 rounded border border-blue-200 bg-blue-50/95 px-1.5 py-0.5 text-[9px] font-black text-brand-blue shadow-sm"
+                >
+                  미장착
+                </span>
+              ) : null}
               {filled && area.category === 'RAM' ? (
                 <>
                   {hovered ? (

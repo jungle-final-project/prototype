@@ -85,6 +85,18 @@ class BuildChatIntentRouterTest {
                 draft("9700X 대신 9900X 꽂으면 멀티코어 얼마나 차이나요", BuildChatIntent.SIMULATE_REPLACEMENT),
                 draft("5080에서 5090으로 넘어가면 4K에서 몇 프레임 더 나와?", BuildChatIntent.SIMULATE_REPLACEMENT),
                 draft("지피유 한 단계 윗급으로 교체하면 가성비 나올까", BuildChatIntent.SIMULATE_REPLACEMENT),
+                // 셀프 견적 구성도 위치 강조 — 명시된 단일/복수 카테고리는 fast path
+                board("램 위치가 어디 있어?", BuildChatIntent.LOCATE_BOARD_PART),
+                board("메모리 꽂는 곳 표시해줘", BuildChatIntent.LOCATE_BOARD_PART),
+                board("M.2 슬롯 어디야?", BuildChatIntent.LOCATE_BOARD_PART),
+                board("파워 장착 위치 보여줘", BuildChatIntent.LOCATE_BOARD_PART),
+                board("CPU랑 RAM 위치 보여줘", BuildChatIntent.LOCATE_BOARD_PART),
+                board("메인보드랑 램 위치가 어딜까", BuildChatIntent.LOCATE_BOARD_PART),
+                // 위치와 비슷한 어휘가 있어도 구매·추천·변경·성능이면 강조하지 않는다
+                board("램 어디서 사?", BuildChatIntent.UNSUPPORTED),
+                board("RAM 추천해줘", BuildChatIntent.UNSUPPORTED),
+                boardDraft("RAM 64GB로 바꿔줘", BuildChatIntent.UNSUPPORTED),
+                boardDraft("CPU를 9700X로 바꾸면?", BuildChatIntent.SIMULATE_REPLACEMENT),
                 // 명확화 (유지 + 모호 구매의향 확대)
                 c("게임용인데 모니터는 아직 안 정했어", BuildChatIntent.ASK_CLARIFICATION),
                 c("아무거나 좋은 걸로", BuildChatIntent.ASK_CLARIFICATION),
@@ -179,12 +191,83 @@ class BuildChatIntentRouterTest {
         assertThat(completion.intent()).isEqualTo(BuildChatIntent.BUILD_RECOMMEND);
     }
 
+    @Test
+    void boardFocusRequiresCapabilityAndUsesFastPathForExplicitCategories() {
+        BuildChatIntentDecision single = router.decide(
+                boardRequest("램 위치가 어디 있어?"),
+                "램 위치가 어디 있어?"
+        );
+        assertThat(single.intent()).isEqualTo(BuildChatIntent.LOCATE_BOARD_PART);
+        assertThat(single.confidence()).isEqualTo("HIGH");
+        assertThat(single.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
+        assertThat(single.targetCategories()).containsExactly("RAM");
+
+        BuildChatIntentDecision multiple = router.decide(
+                boardRequest("CPU랑 RAM 위치 보여줘"),
+                "CPU랑 RAM 위치 보여줘"
+        );
+        assertThat(multiple.intent()).isEqualTo(BuildChatIntent.LOCATE_BOARD_PART);
+        assertThat(multiple.confidence()).isEqualTo("HIGH");
+        assertThat(multiple.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
+        assertThat(multiple.targetCategories()).containsExactly("CPU", "RAM");
+
+        BuildChatIntentDecision userPhrase = router.decide(
+                boardRequest("메인보드랑 램 위치가 어딜까"),
+                "메인보드랑 램 위치가 어딜까"
+        );
+        assertThat(userPhrase.confidence()).isEqualTo("HIGH");
+        assertThat(userPhrase.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
+        assertThat(userPhrase.targetCategories()).containsExactly("MOTHERBOARD", "RAM");
+
+        BuildChatIntentDecision compoundPartName = router.decide(
+                boardRequest("CPU 쿨러 위치가 어딜까?"),
+                "CPU 쿨러 위치가 어딜까?"
+        );
+        assertThat(compoundPartName.targetCategories()).containsExactly("COOLER");
+
+        BuildChatIntentDecision requestedOrder = router.decide(
+                boardRequest("CPU와 그래픽카드 위치 보여줘"),
+                "CPU와 그래픽카드 위치 보여줘"
+        );
+        assertThat(requestedOrder.targetCategories()).containsExactly("CPU", "GPU");
+
+        BuildChatIntentDecision separateCpuAndCooler = router.decide(
+                boardRequest("CPU랑 쿨러 위치 보여줘"),
+                "CPU랑 쿨러 위치 보여줘"
+        );
+        assertThat(separateCpuAndCooler.targetCategories()).containsExactly("CPU", "COOLER");
+
+        BuildChatIntentDecision withoutCapability = router.decide(
+                Map.of("message", "램 위치가 어디 있어?"),
+                "램 위치가 어디 있어?"
+        );
+        assertThat(withoutCapability.intent()).isEqualTo(BuildChatIntent.UNSUPPORTED);
+    }
+
     private static Case c(String message, BuildChatIntent intent) {
         return new Case(message, Map.of("message", message), intent);
     }
 
     private static Case draft(String message, BuildChatIntent intent) {
         return new Case(message, draftRequest(message), intent);
+    }
+
+    private static Case board(String message, BuildChatIntent intent) {
+        return new Case(message, boardRequest(message), intent);
+    }
+
+    private static Case boardDraft(String message, BuildChatIntent intent) {
+        Map<String, Object> request = new java.util.LinkedHashMap<>(draftRequest(message));
+        request.put("uiContext", boardUiContext());
+        return new Case(message, request, intent);
+    }
+
+    private static Map<String, Object> boardRequest(String message) {
+        return Map.of("message", message, "uiContext", boardUiContext());
+    }
+
+    private static Map<String, Object> boardUiContext() {
+        return Map.of("surface", "SELF_QUOTE", "capabilities", List.of("BOARD_PART_FOCUS"));
     }
 
     private static Map<String, Object> draftRequest(String message) {

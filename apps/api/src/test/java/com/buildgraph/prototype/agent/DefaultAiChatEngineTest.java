@@ -1101,6 +1101,85 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredStructuresMultipleBoardPartLocationsWithoutInventingParts() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "EXPLAIN",
+                  "assistantMessage": "CPU와 RAM 위치를 구성도에서 강조하겠습니다.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": false,
+                    "routeType": "NONE",
+                    "category": null,
+                    "partQuery": null,
+                    "confidence": "LOW",
+                    "reason": null
+                  },
+                  "boardFocusIntent": {
+                    "shouldFocus": true,
+                    "categories": ["CPU", "RAM"],
+                    "confidence": "HIGH",
+                    "reason": "사용자가 두 부품의 물리적 위치를 요청했습니다."
+                  },
+                  "partConstraint": {
+                    "category": null,
+                    "minCapacityGb": null,
+                    "minVramGb": null,
+                    "minWattageW": null,
+                    "quantity": null,
+                    "maxBudgetWon": null,
+                    "coolingType": null,
+                    "pcieGeneration": null,
+                    "airflowFocused": null
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "CPU랑 RAM 위치 보여줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                null,
+                Map.of("uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("BOARD_PART_FOCUS")
+                )),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.EXPLAIN);
+        assertThat(response.parsedContext().get("boardFocusIntent"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("shouldFocus", true)
+                .containsEntry("categories", List.of("CPU", "RAM"))
+                .containsEntry("confidence", "HIGH");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredPartDetailRouteUsesSingleHighConfidenceActivePartMatch() {
         stubBuildChatPlan("""
                 {
