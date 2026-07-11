@@ -47,17 +47,47 @@
   transform: perspective(900px) translate3d(0, -4px, 20px) scale(1.004);
 }
 
-.fused-part-layer[data-visible='true'][data-status='WARN'] {
+.fused-part-problem-blur {
+  opacity: 0;
   filter:
-    drop-shadow(0 12px 16px rgba(15, 23, 42, 0.16))
-    drop-shadow(0 0 16px rgba(245, 158, 11, 0.36));
+    brightness(0)
+    saturate(100%)
+    invert(24%)
+    sepia(95%)
+    saturate(4260%)
+    hue-rotate(353deg)
+    brightness(103%)
+    contrast(92%)
+    blur(8px);
+  transform: scale(1.008);
+  transform-origin: 50% 54%;
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.fused-part-layer[data-visible='true'][data-status='FAIL'] {
-  filter:
-    drop-shadow(0 12px 16px rgba(15, 23, 42, 0.18))
-    drop-shadow(0 0 18px rgba(239, 68, 68, 0.58))
-    drop-shadow(0 0 34px rgba(248, 113, 113, 0.32));
+@keyframes fused-part-problem-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.66;
+  }
+}
+
+.fused-part-problem-glow[data-visible='true'][data-status='WARN'],
+.fused-part-problem-glow[data-visible='true'][data-status='FAIL'] {
+  animation: fused-part-problem-glow-pulse 2s ease-in-out infinite;
+}
+
+.fused-part-problem-blur[data-visible='true'][data-dimmed='true'] {
+  opacity: 0.16;
+}
+
+.fused-part-problem-blur[data-visible='true'][data-hovered='true'][data-status='WARN'],
+.fused-part-problem-blur[data-visible='true'][data-hovered='true'][data-status='FAIL'] {
+  transform: perspective(900px) translate3d(0, -4px, 20px) scale(1.012);
 }
 
 .fused-part-layer[data-visible='true'][data-mounting='true'] {
@@ -165,13 +195,13 @@
 }
 
 .fused-part-hitbox[data-hovered='true'] .fused-part-action-button {
-  border-color: var(--fused-status-border);
+  border-color: rgba(255, 255, 255, 0.9);
   background: #000000;
   color: #ffffff;
   transform: translate(-50%, calc(-50% - 2px));
   box-shadow:
-    0 0 0 3px var(--fused-status-soft),
-    0 10px 20px var(--fused-status-glow);
+    0 0 0 3px rgba(148, 163, 184, 0.18),
+    0 10px 20px rgba(15, 23, 42, 0.28);
 }
 
 .fused-part-hitbox[data-hovered='true'] .fused-part-action-number {
@@ -189,11 +219,11 @@
 }
 
 .fused-part-hitbox[data-hovered='true'] .fused-ram-number-badge {
-  border-color: var(--fused-status-border);
+  border-color: rgba(255, 255, 255, 0.9);
   transform: translate(-50%, calc(-50% - 2px));
   box-shadow:
-    0 0 0 3px var(--fused-status-soft),
-    0 10px 20px var(--fused-status-glow);
+    0 0 0 3px rgba(148, 163, 184, 0.18),
+    0 10px 20px rgba(15, 23, 42, 0.28);
 }
 
 .fused-ram-quantity-controls {
@@ -263,8 +293,15 @@
   .fused-part-action-button,
   .fused-part-action-number,
   .fused-part-action-x,
+  .fused-part-problem-glow,
   .fused-ram-quantity-controls button {
     transition: none;
+  }
+
+  .fused-part-problem-glow[data-visible='true'][data-status='WARN'],
+  .fused-part-problem-glow[data-visible='true'][data-status='FAIL'] {
+    animation: none;
+    opacity: 0.42;
   }
 
   .fused-part-layer[data-visible='true'][data-mounting='true'] {

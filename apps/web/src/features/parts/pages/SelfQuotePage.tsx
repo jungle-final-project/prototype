@@ -651,6 +651,8 @@ function QuoteChecklist({
                 onClick={() => openCategory(category)}
                 onKeyDown={(event) => openCategoryFromKeyboard(event, category)}
                 className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
+                  hasFail || hasWarn ? 'checklist-problem-fill-pulse' : ''
+                } ${
                   isSelected || expandedCategory === category
                     ? hasFail
                       ? 'border-red-300 bg-red-50/60 ring-2 ring-red-100'

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type FocusEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type FocusEvent } from 'react';
 import type { PartCategory } from '../../../quote/aiSelection';
 import type { QuoteDraftItem } from '../../types';
 import {
@@ -125,22 +125,36 @@ export function FusedPlateArt({
               : flashingCategories.has(layer.category)
           );
           const status = statusByCategory.get(layer.category) ?? 'PASS';
+          const testId = `slot-fused-layer-${layer.category}${layer.slotIndex !== undefined ? `-${layer.slotIndex + 1}` : ''}`;
           return (
-            <img
-              key={layer.src}
-              data-testid={`slot-fused-layer-${layer.category}${layer.slotIndex !== undefined ? `-${layer.slotIndex + 1}` : ''}`}
-              data-visible={visible ? 'true' : 'false'}
-              data-hovered={hovered ? 'true' : 'false'}
-              data-dimmed={dimmed ? 'true' : 'false'}
-              data-mounting={mounting ? 'true' : 'false'}
-              data-status={status}
-              src={layer.src}
-              alt=""
-              aria-hidden="true"
-              className={`fused-part-layer pointer-events-none absolute inset-0 h-full w-full select-none object-contain ${
-                visible ? 'opacity-100' : 'opacity-0'
-              } ${focused ? 'z-20' : 'z-10'}`}
-            />
+            <Fragment key={layer.src}>
+              <img
+                aria-hidden="true"
+                data-testid={`${testId}-problem-blur`}
+                data-visible={visible ? 'true' : 'false'}
+                data-hovered={hovered ? 'true' : 'false'}
+                data-dimmed={dimmed ? 'true' : 'false'}
+                data-status={status}
+                src={layer.src}
+                alt=""
+                className="fused-part-problem-blur fused-part-problem-glow pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+                style={{ zIndex: focused ? 19 : 9 }}
+              />
+              <img
+                data-testid={testId}
+                data-visible={visible ? 'true' : 'false'}
+                data-hovered={hovered ? 'true' : 'false'}
+                data-dimmed={dimmed ? 'true' : 'false'}
+                data-mounting={mounting ? 'true' : 'false'}
+                data-status={status}
+                src={layer.src}
+                alt=""
+                aria-hidden="true"
+                className={`fused-part-layer pointer-events-none absolute inset-0 h-full w-full select-none object-contain ${
+                  visible ? 'opacity-100' : 'opacity-0'
+                } ${focused ? 'z-20' : 'z-10'}`}
+              />
+            </Fragment>
           );
         })}
         {FUSED_PART_AREAS.map((area) => {
