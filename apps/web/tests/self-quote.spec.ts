@@ -2854,38 +2854,151 @@ test('saves current self quote slots into my quotes', async ({ page }) => {
   await expect(statusBar.getByRole('link', { name: '내 견적함 보기' })).toHaveAttribute('href', '/my/quotes');
 });
 
-test('renders checkout from current quote draft and completes demo payment snapshot', async ({ page }) => {
+test('persists an assembly request, selects an offer, completes virtual payment, and reloads from the API', async ({ page }) => {
+  const quoteDraftMethods: string[] = [];
+  const requestId = '00000000-0000-4000-8000-000000020001';
+  let requestStatus = 'OFFERED';
+  let selectedOfferId: string | null = null;
+  let paymentStatus: string | null = null;
+  const assemblyResponse = () => ({
+    id: requestId,
+    requestNo: 'ASM-20990720-TEST0001',
+    status: requestStatus,
+    serviceType: 'FULL_SERVICE',
+    region: '서울',
+    preferredDate: '2099-07-20',
+    deliveryMethod: 'DELIVERY',
+    note: '',
+    asPolicyAccepted: true,
+    estimatedPartsPrice: 1_400_000,
+    itemCount: 2,
+    selectedOfferId,
+    canCancel: true,
+    items: checkoutDraft.items.map((item) => ({ partId: item.partId, category: item.category, name: item.name, manufacturer: item.manufacturer, quantity: item.quantity, unitPrice: item.currentPrice, lineTotal: item.lineTotal, externalOffer: item.externalOffer })),
+    offers: [
+      { id: 'offer-balanced', technicianId: 'tech-1', technicianName: '박준호 기사', initials: '박', rating: 4.9, completedJobs: 184, responseMinutes: 12, specialties: ['고성능 게이밍 PC'], standardAsAccepted: true, providerType: 'INTERNAL', verified: true, status: selectedOfferId === 'offer-balanced' ? 'SELECTED' : selectedOfferId ? 'EXPIRED' : 'AVAILABLE', confirmedPartsPrice: 1_405_000, assemblyFee: 65_000, deliveryFee: 0, finalPrice: 1_470_000, leadTimeDays: 2, stockStatus: '주요 부품 재고 확인' },
+      { id: 'offer-fast', technicianId: 'tech-2', technicianName: '김도윤 기사', initials: '김', rating: 4.8, completedJobs: 132, responseMinutes: 8, specialties: ['당일 조립'], standardAsAccepted: true, providerType: 'INTERNAL', verified: true, status: selectedOfferId ? 'EXPIRED' : 'AVAILABLE', confirmedPartsPrice: 1_415_000, assemblyFee: 80_000, deliveryFee: 15_000, finalPrice: 1_510_000, leadTimeDays: 1, stockStatus: '주요 부품 재고 확인' },
+      { id: 'offer-silent', technicianId: 'tech-3', technicianName: '최민석 기사', initials: '최', rating: 5, completedJobs: 96, responseMinutes: 18, specialties: ['저소음'], standardAsAccepted: true, providerType: 'EXTERNAL', verified: true, status: selectedOfferId ? 'EXPIRED' : 'AVAILABLE', confirmedPartsPrice: 1_388_000, assemblyFee: 95_000, deliveryFee: 20_000, finalPrice: 1_503_000, leadTimeDays: 3, stockStatus: '주요 부품 재고 확인' }
+    ],
+    payment: paymentStatus ? { id: 'payment-1', amount: 1_470_000, method: 'VIRTUAL', status: paymentStatus } : null,
+    statusHistory: [{ fromStatus: null, toStatus: 'REQUESTED', note: '조립 요청 등록' }]
+  });
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
-    sessionStorage.clear();
   });
 
   await page.route('**/api/quote-drafts/current**', async (route) => {
+    quoteDraftMethods.push(route.request().method());
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(checkoutDraft)
     });
   });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'BUILD_OVERVIEW', summary: '호환 가능', nodes: [], edges: [], focusNodeIds: [], insights: [], toolResults: [] })
+    });
+  });
+  await page.route('**/api/assembly-requests**', async (route) => {
+    const url = route.request().url();
+    const method = route.request().method();
+    if (method === 'POST' && url.endsWith('/api/assembly-requests')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
+      return;
+    }
+    if (method === 'POST' && url.endsWith('/offers/offer-balanced/select')) {
+      selectedOfferId = 'offer-balanced';
+      requestStatus = 'MATCHED';
+      paymentStatus = 'PENDING';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
+      return;
+    }
+    if (method === 'POST' && url.endsWith('/payments/confirm-virtual')) {
+      paymentStatus = 'PAID';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
+  });
 
   await page.goto('/checkout');
 
-  await expect(page.getByRole('heading', { name: '구매 전 확인' })).toBeVisible();
-  await expect(page.getByText('주문 부품 2개')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '조립 견적 요청' })).toBeVisible();
+  await expect(page.getByText('예상가', { exact: true })).toBeVisible();
+  await expect(page.getByText('최종 견적 금액', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('조립 대상 부품 2개')).toBeVisible();
   await expect(page.getByText('RTX 5070 구매 테스트')).toBeVisible();
   await expect(page.getByText('Ryzen 7 구매 테스트')).toBeVisible();
   await expect(page.getByText('1,400,000원').first()).toBeVisible();
   await expect(page.getByRole('link', { name: 'RTX 5070 구매 테스트 구매처 이동' })).toHaveAttribute('href', 'https://example.test/checkout-gpu');
   await expect(page.getByRole('button', { name: 'Ryzen 7 구매 테스트 구매처 정보 없음' })).toBeDisabled();
 
-  await page.getByRole('button', { name: '1,400,000원 데모 결제하기' }).click();
+  await page.getByLabel('조립 지역').selectOption('서울');
+  await page.getByLabel('희망 일정').fill('2099-07-20');
+  await page.getByLabel('수령인').fill('데모 사용자');
+  await page.getByLabel('연락처').fill('010-1234-5678');
+  await page.getByLabel('주소', { exact: true }).fill('서울시 강남구 테헤란로 1');
+  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await page.getByRole('button', { name: '기사 제안 요청하기' }).click();
 
-  await expect(page).toHaveURL('/checkout/complete');
-  await expect(page.getByRole('heading', { name: '데모 결제 완료' })).toBeVisible();
-  await expect(page.getByText('RTX 5070 구매 테스트')).toBeVisible();
-  await expect(page.getByText('Ryzen 7 구매 테스트')).toBeVisible();
-  await expect(page.getByText(/BG-\d{8}-/).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: '구매처 링크 다시 확인' })).toHaveAttribute('href', '/checkout');
+  await expect(page).toHaveURL(`/checkout/offers/${requestId}`);
+  await expect(page.getByRole('heading', { name: '기사 제안 3건' })).toBeVisible();
+  await expect(page.getByText('박준호 기사')).toBeVisible();
+  await expect(page.getByText('김도윤 기사')).toBeVisible();
+  await expect(page.getByText('최민석 기사')).toBeVisible();
+  await expect(page.getByText('BuildGraph 기사 2/2')).toBeVisible();
+  await expect(page.getByText('외부 파트너 1/3')).toBeVisible();
+
+  const balancedOffer = page.locator('article').filter({ hasText: '박준호 기사' });
+  await balancedOffer.getByRole('button', { name: '이 기사 선택' }).click();
+  await expect(balancedOffer.getByRole('button', { name: '선택됨' })).toBeVisible();
+  await page.getByRole('button', { name: '선택한 제안 승인' }).click();
+  await expect(page).toHaveURL(`/checkout/payment/${requestId}`);
+  await page.reload();
+  await expect(page.getByText('박준호 기사')).toBeVisible();
+  await page.getByRole('button', { name: '가상 결제 완료' }).click();
+
+  await expect(page).toHaveURL(`/checkout/complete/${requestId}`);
+  await expect(page.getByRole('heading', { name: '조립 요청 진행 상태' })).toBeVisible();
+  await expect(page.getByText('ASM-20990720-TEST0001')).toBeVisible();
+  await expect(page.getByText('1,470,000원')).toBeVisible();
+  await expect(page.getByText('BuildGraph 표준 AS 적용')).toBeVisible();
+  expect(quoteDraftMethods.every((method) => method === 'GET')).toBe(true);
+});
+
+test('blocks an incompatible assembly request and does not expose a demo bypass', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    sessionStorage.clear();
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(checkoutDraft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'ISSUE_PATH', summary: '장착 불가', focusNodeIds: [], insights: [], edges: [], toolResults: [],
+        nodes: [{ id: 'part-cpu', type: 'PART', category: 'CPU', status: 'FAIL', label: 'CPU' }]
+      })
+    });
+  });
+
+  await page.goto('/checkout');
+  await page.getByLabel('조립 지역').selectOption('경기');
+  await page.getByLabel('희망 일정').fill('2099-08-01');
+  await page.getByLabel('수령인').fill('데모 사용자');
+  await page.getByLabel('연락처').fill('010-1234-5678');
+  await page.getByLabel('주소', { exact: true }).fill('경기도 성남시 분당구 1');
+  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await expect(page.getByText('장착 불가 항목이 있어 실제 조립 요청을 만들 수 없습니다.')).toBeVisible();
+  await expect(page.getByRole('button', { name: '기사 제안 요청하기' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '데모 제안 보기' })).toHaveCount(0);
+  await expect(page).toHaveURL('/checkout');
 });
 
 test('shows checkout empty state and keeps mobile layout within viewport', async ({ page }) => {
@@ -2912,7 +3025,7 @@ test('shows checkout empty state and keeps mobile layout within viewport', async
 
   await page.goto('/checkout');
 
-  await expect(page.getByRole('heading', { name: '구매할 부품이 없습니다' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '조립할 부품이 없습니다' })).toBeVisible();
   await expect(page.getByRole('link', { name: '셀프 견적으로 돌아가기' })).toHaveAttribute('href', '/self-quote');
 
   const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);

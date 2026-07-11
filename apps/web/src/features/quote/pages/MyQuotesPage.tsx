@@ -1,7 +1,7 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellRing, Check, CheckCircle2, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
+import { BellRing, Check, CheckCircle2, ClipboardList, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
@@ -153,6 +153,14 @@ export function MyQuotesPage() {
               <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-slate-600">
                 저장한 견적을 확인하고, 관심 부품의 현재가가 목표가에 가까워지는지 한 화면에서 추적합니다.
               </p>
+              <Link
+                to="/my/assembly-requests"
+                data-testid="my-assembly-requests-link"
+                className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 text-sm font-black text-commerce-ink transition hover:border-brand-blue hover:text-brand-blue"
+              >
+                <ClipboardList size={16} />
+                조립 요청 진행
+              </Link>
             </div>
             <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[520px]">
               <SummaryMetric testId="my-quotes-build-count" icon={<FileText size={17} />} label="저장 견적" value={`${builds.length}개`} />

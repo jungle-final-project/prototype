@@ -1,16 +1,18 @@
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FileText, LifeBuoy, LogIn, LogOut, Search, ShieldCheck, UserRound } from 'lucide-react';
+import { FileText, LifeBuoy, LogIn, LogOut, Search, ShieldCheck, UserRound, Wrench } from 'lucide-react';
 import { getCurrentUser, logout as logoutApi, type CurrentUser } from '../../features/auth/authApi';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getCachedAuthUser, getRefreshToken, getToken } from '../../lib/api';
 import { openAiAssistant } from '../../lib/events';
 import { PrimaryNav } from './PrimaryNav';
+import { getTechnicianProfile } from '../../features/parts/assemblyApi';
 
 export function AppHeader() {
   const navigate = useNavigate();
   const [user, setUser] = useState<CurrentUser | null>(() => readCachedCurrentUser());
   const [checkingUser, setCheckingUser] = useState(() => Boolean(getToken() && !readCachedCurrentUser()));
   const [searchInput, setSearchInput] = useState('');
+  const [hasTechnicianProfile, setHasTechnicianProfile] = useState(false);
 
   // 검색창 placeholder가 AI 프롬프트 예시("QHD 게임용 200만원 PC")다 — 제출하면 AI 챗봇에 그대로 묻는다.
   function submitSearch(event: FormEvent<HTMLFormElement>) {
@@ -74,6 +76,18 @@ export function AppHeader() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!user || user.role !== 'USER') {
+      setHasTechnicianProfile(false);
+      return;
+    }
+    getTechnicianProfile()
+      .then(() => { if (!cancelled) setHasTechnicianProfile(true); })
+      .catch(() => { if (!cancelled) setHasTechnicianProfile(false); });
+    return () => { cancelled = true; };
+  }, [user?.id, user?.role]);
+
   async function logout() {
     const refreshToken = getRefreshToken();
     try {
@@ -120,6 +134,7 @@ export function AppHeader() {
           <div className="col-start-2 row-start-1 flex flex-wrap items-center justify-end gap-2 xl:col-start-3 xl:flex-nowrap">
             <HeaderButton to="/my/quotes" icon={<FileText size={15} />} label="내 견적함" dark />
             <HeaderButton to="/support/new" icon={<LifeBuoy size={15} />} label="AS 접수" quiet />
+            {user?.role === 'USER' ? <HeaderButton to={hasTechnicianProfile ? '/technician' : '/technician/apply'} icon={<Wrench size={15} />} label={hasTechnicianProfile ? '기사 포털' : '기사로 참여'} quiet /> : null}
             {user ? (
               <>
                 <div className="flex h-9 max-w-[170px] items-center gap-2 rounded-md px-2 text-xs font-semibold text-slate-600 sm:max-w-none">
