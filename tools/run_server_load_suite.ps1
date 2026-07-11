@@ -110,8 +110,14 @@ foreach ($profile in $Profiles) {
         "run", "--quiet", "infra/k6/server-workload.js"
     )
 
+    # Windows PowerShell 5.1 wraps native stderr as non-terminating ErrorRecord objects.
+    # k6 writes request timeout warnings to stderr even when the profile should continue,
+    # so temporarily relax ErrorActionPreference and use the native exit code as truth.
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & docker @dockerArgs 2>&1 | Tee-Object -FilePath $consoleLog
     $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
     Stop-ResourceMonitor -Job $monitorJob
     $health = "UNKNOWN"
     try {
