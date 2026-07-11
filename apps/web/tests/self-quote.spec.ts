@@ -294,7 +294,7 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
   const board = page.getByTestId('slot-board');
   await expect(board).toBeVisible();
   // 슬롯 카드 8개는 실장도 보기에서 검증한다(기본 배치도는 배치판 아트 + 클릭 영역).
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
   for (const category of ['CPU', 'MOTHERBOARD', 'RAM', 'GPU', 'STORAGE', 'PSU', 'CASE', 'COOLER']) {
     await expect(page.getByTestId(`slot-${category}`)).toBeVisible();
   }
@@ -393,7 +393,7 @@ test('AI part location focus spotlights all 8 categories across fused, motherboa
     await expect(fusedLayer).toHaveCSS('outline-style', 'none');
     await expect(page.getByTestId(`slot-fused-area-wrap-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
 
-    await page.getByRole('radio', { name: '실장도' }).click();
+    await page.getByRole('button', { name: '실장도 보기' }).click();
     await expect(page.getByTestId(`slot-${item.category}`)).toHaveAttribute('data-ai-spotlight', 'true');
     await expect(page.getByTestId(`slot-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
 
@@ -464,7 +464,7 @@ test('AI location focus marks an empty mounting position and clears on a board p
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('파워 장착 위치 보여줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
 
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
   await expect(page.getByTestId('slot-PSU')).toHaveAttribute('data-mounted', 'false');
   await expect(page.getByTestId('slot-PSU')).toHaveAttribute('data-ai-spotlight', 'true');
   await expect(page.getByTestId('slot-ai-unmounted-PSU')).toContainText('미장착');
@@ -497,7 +497,7 @@ test('fills all 8 slots from the current quote draft and shows mini slot overflo
 
   await page.goto('/self-quote');
   // 장착 카드·미니 슬롯 표기는 실장도 보기에서 검증한다.
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
 
   // 상품명·가격 전문은 체크리스트(품목 지도)가 담당하고, 보드 카드는 이미지+카테고리 요약 카드다.
   await expect(page.getByTestId('checklist-CPU')).toContainText('풀보드 CPU');
@@ -609,7 +609,7 @@ test('renders the slot board as an information-first compatibility diagram with 
   await expect(board).toHaveAttribute('data-visual-mode', 'fused');
   const modeGroup = page.getByRole('radiogroup', { name: '보드 보기 방식' });
   await expect(modeGroup.getByRole('radio', { name: '배치도' })).toHaveAttribute('aria-checked', 'true');
-  await modeGroup.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
   await expect(board).toHaveAttribute('data-visual-mode', 'motherboard');
   await expect(page.getByRole('switch', { name: '보드 정보 표시' })).toHaveCount(0);
   // 장식용 배경 평면도는 리디자인에서 제거됨 — 범례가 색 체계를 설명한다.
@@ -649,7 +649,6 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   const board = page.getByTestId('slot-board');
   const modeGroup = page.getByRole('radiogroup', { name: '보드 보기 방식' });
   const fusedRadio = modeGroup.getByRole('radio', { name: '배치도' });
-  const motherboardRadio = modeGroup.getByRole('radio', { name: '실장도' });
   const isometricRadio = modeGroup.getByRole('radio', { name: '3D' });
 
   // 기본값은 배치도(fused): 배치판 아트가 보이고, 실장도 평면도/3D 부품은 없다.
@@ -664,8 +663,8 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   }
 
   // 실장도: 복원된 평면도 관계선이 보이고 배치판은 사라진다.
-  await motherboardRadio.click();
-  await expect(motherboardRadio).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('button', { name: '실장도 보기' }).click();
+  await expect(page.getByRole('button', { name: '실장도 접기' })).toBeVisible();
   await expect(board).toHaveAttribute('data-visual-mode', 'motherboard');
   await expect(page.getByTestId('slot-board-fused-plate')).toHaveCount(0);
   await expect(page.getByTestId('slot-board-edges')).toBeVisible();
@@ -866,7 +865,8 @@ test('draws a card-to-part elbow connector only for the selected card in 3D view
   await expect(connector).toHaveCount(1);
 
   // 3D를 끄면 연결선도 사라진다(IsometricSlotBoardBody 안에만 존재).
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('radio', { name: '배치도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'motherboard');
   await expect(connector).toHaveCount(0);
 });
@@ -1252,7 +1252,7 @@ test('shows graph edge labels on the fallback topology relationships', async ({ 
 
   await page.goto('/self-quote');
   // 관계선(엣지)은 실장도 보기 전용이다.
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
 
   const edges = page.getByTestId('slot-board-edges');
   await expect(edges).toBeVisible();
@@ -1287,7 +1287,7 @@ test('keeps fallback topology edges when the graph api fails', async ({ page }) 
 
   // graph API가 실패해도 슬롯 보드와 기본 topology 관계선(상태 점)은 항상 렌더링된다.
   await expect(page.getByTestId('slot-board')).toBeVisible();
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
   await expect(page.getByTestId('slot-edge-CPU-MOTHERBOARD')).toHaveAttribute('data-status', 'BASE');
   await expect(page.getByTestId('slot-edge-MOTHERBOARD-RAM')).toHaveAttribute('data-status', 'BASE');
   // P1-1: 보드 규격 vs 케이스 지원 — 실장 관계(implied)라 선 없이 상태 점으로 표시된다.
@@ -1976,7 +1976,7 @@ test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', as
   });
 
   await page.goto('/self-quote');
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
 
   // 문제 슬롯 강조: FAIL은 숨기지 않고 표시한다. 장착된 박스는 상태색으로 칠해진다(빨강/주황).
   const gpuSlot = page.getByTestId('slot-GPU');
@@ -2020,7 +2020,7 @@ test('keeps purchase enabled when the current quote has only WARN issues', async
   });
 
   await page.goto('/self-quote');
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
 
   const psuSlot = page.getByTestId('slot-PSU');
   await expect(psuSlot).toHaveAttribute('data-status', 'WARN');
@@ -2040,7 +2040,7 @@ test('marks fallback topology edges as pending while a related slot is empty', a
   });
 
   await page.goto('/self-quote');
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
 
   await expect(page.getByTestId('slot-edge-CPU-MOTHERBOARD')).toHaveAttribute('data-status', 'PENDING');
   await expect(page.getByTestId('slot-edge-GPU-PSU')).toHaveAttribute('data-status', 'PENDING');
@@ -2069,7 +2069,7 @@ test('removes a single-part slot item from the slot board', async ({ page }) => 
 
   await page.goto('/self-quote');
   // 슬롯 카드의 빼기 버튼은 실장도 보기에서 노출된다(배치도는 hover X 버튼이 담당).
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
 
   await page.getByTestId('slot-GPU').hover();
   await page.getByRole('button', { name: '풀보드 RTX GPU 견적에서 제거' }).click();
