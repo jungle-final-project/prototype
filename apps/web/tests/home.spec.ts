@@ -1423,7 +1423,7 @@ test('selects a chatbot recommendation and shows the applied cart without a late
   await expect(page.getByTestId('slot-status-bar').getByText(`${expectedTotal}원`)).toBeVisible();
   await expect(page.getByText('서버 반영 RTX 5070 서버 GPU').first()).toBeVisible();
   // 슬롯 카드의 제거 버튼은 실장도 보기에서 노출된다(기본 배치도는 hover X 버튼이 담당).
-  await page.getByRole('radio', { name: '실장도' }).click();
+  await page.getByRole('button', { name: '실장도 보기' }).click();
   await expect(page.getByRole('button', { name: /서버 반영 RTX 5070 서버 GPU 견적에서 제거/ })).toBeVisible();
 });
 
