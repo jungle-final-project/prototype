@@ -220,7 +220,7 @@ public class BuildChatIntentRouter {
     private static boolean hasBoardLocationSignal(String normalized) {
         return containsAny(normalized,
                 "위치", "어디", "어딜", "어느곳", "어디쯤", "자리", "슬롯", "꽂는곳", "꽂을곳", "장착하는곳", "장착할곳",
-                "가리켜", "표시해", "강조해", "어느부분", "어느쪽", "어디에달려", "어디에장착");
+                "가리켜", "표시해", "강조해", "찾아", "짚어", "어느부분", "어느쪽", "어디에달려", "어디에장착");
     }
 
     private static boolean hasBoardLocationVeto(String normalized) {

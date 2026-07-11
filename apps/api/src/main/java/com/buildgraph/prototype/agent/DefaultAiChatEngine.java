@@ -1594,9 +1594,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         "shouldFocus", MockData.map("type", "boolean"),
                         "categories", MockData.map(
                                 "type", "array",
-                                "items", MockData.map("type", "string", "enum", BUILD_CATEGORIES),
-                                "uniqueItems", true,
-                                "maxItems", BUILD_CATEGORIES.size()
+                                "items", MockData.map("type", "string", "enum", BUILD_CATEGORIES)
                         ),
                         "confidence", MockData.map("type", "string", "enum", List.of("HIGH", "MEDIUM", "LOW")),
                         "reason", MockData.map("type", List.of("string", "null"))
