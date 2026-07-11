@@ -234,8 +234,18 @@ export type AiBuildChatRequest = {
   message: string;
   currentBuilds?: AiRecommendedBuild[];
   currentQuoteDraft?: QuoteDraft;
+  uiContext?: {
+    surface: 'HOME' | 'SELF_QUOTE';
+    capabilities: Array<'BOARD_PART_FOCUS'>;
+  };
   /** 직전 되묻기(clarification)에 대한 답변임을 알리는 에코 — 서버가 원 요청과 합성한다. */
   clarificationContext?: { originalMessage: string };
+};
+
+export type AiBoardFocus = {
+  type: 'PART_LOCATION';
+  categories: PartCategory[];
+  label: string;
 };
 
 export type AiBuildChatResponse = {
@@ -251,6 +261,8 @@ export type AiBuildChatResponse = {
    * 기존 변경 미리보기 흐름을 유지한다.
    */
   quickReplyCommands?: AiQuickReplyCommand[];
+  /** 셀프 견적 구성도에서만 소비하는 읽기 전용 부품 위치 강조 명령. */
+  boardFocus?: AiBoardFocus | null;
   clarification?: { missingSlots: string[]; originalMessage: string } | null;
 };
 

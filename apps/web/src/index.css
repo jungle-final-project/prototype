@@ -468,6 +468,57 @@ background:
   opacity: 1;
 }
 
+/* AI 부품 위치 강조: 선택/호환 상태와 분리된 읽기 전용 시각 상태다. */
+.slot-board-focus-scope[data-ai-focus-active='true'][data-ai-focus-motherboard='false'] > svg,
+.slot-board-focus-scope[data-ai-focus-active='true'][data-ai-focus-motherboard='false'] > [data-testid='slot-board-motherboard-art'],
+.slot-board-focus-scope[data-ai-focus-active='true'][data-ai-focus-motherboard='false'] > [data-testid='slot-board-motherboard-highlight'] {
+  opacity: 0.3;
+  filter: grayscale(1) saturate(0.1);
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+.slot-board-focus-scope:not([data-visual-mode='fused']) [data-ai-dimmed='true'],
+.slot-board-focus-scope[data-visual-mode='fused'] [data-testid='slot-board-mobile-slots'] [data-ai-dimmed='true'] {
+  opacity: 0.18;
+  filter: grayscale(1) saturate(0.08) brightness(0.82);
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+.slot-board-focus-scope:not([data-visual-mode='fused']) [data-ai-spotlight='true'],
+.slot-board-focus-scope[data-visual-mode='fused'] [data-testid='slot-board-mobile-slots'] [data-ai-spotlight='true'] {
+  opacity: 1;
+  outline: 2px solid rgba(37, 99, 235, 0.92);
+  outline-offset: 2px;
+  filter: drop-shadow(0 0 10px rgba(37, 99, 235, 0.5));
+  animation: slot-board-ai-focus-pulse 700ms ease-out 1;
+}
+
+.slot-board-focus-scope .iso-part[data-ai-dimmed='true'] {
+  opacity: 0.16;
+  filter: grayscale(1) saturate(0.08) brightness(0.75);
+}
+
+.slot-board-focus-scope .iso-part[data-ai-spotlight='true'] {
+  opacity: 1;
+  outline: 0;
+  filter:
+    drop-shadow(0 6px 16px rgba(37, 99, 235, 0.58))
+    drop-shadow(0 0 8px rgba(37, 99, 235, 0.82));
+}
+
+@keyframes slot-board-ai-focus-pulse {
+  0% { outline-color: rgba(37, 99, 235, 0.25); filter: drop-shadow(0 0 0 rgba(37, 99, 235, 0)); }
+  55% { outline-color: rgba(37, 99, 235, 1); filter: drop-shadow(0 0 15px rgba(37, 99, 235, 0.7)); }
+  100% { outline-color: rgba(37, 99, 235, 0.92); filter: drop-shadow(0 0 10px rgba(37, 99, 235, 0.5)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot-board-focus-scope:not([data-visual-mode='fused']) [data-ai-spotlight='true'],
+  .slot-board-focus-scope[data-visual-mode='fused'] [data-testid='slot-board-mobile-slots'] [data-ai-spotlight='true'] {
+    animation: none;
+  }
+}
+
 .iso-part-img {
   transition: filter 0.25s ease;
 }

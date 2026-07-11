@@ -35,6 +35,60 @@ import org.springframework.web.server.ResponseStatusException;
 
 class BuildChatServiceTest {
     @Test
+    void boardLocationFastPathReturnsReadOnlyFocusWithoutCallingLlm() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                toolCheckService,
+                aiChatEngine,
+                BuildChatCacheService.disabled()
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "램 위치가 어디 있어?",
+                "uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("BOARD_PART_FOCUS")
+                )
+        ));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response).doesNotContainKey("simulation");
+        assertThat(response.get("boardFocus")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("type", "PART_LOCATION")
+                .containsEntry("categories", List.of("RAM"));
+        verifyNoInteractions(aiChatEngine, jdbcTemplate, toolCheckService);
+    }
+
+    @Test
+    void explicitMultipleBoardLocationsUseFastPathWithoutCallingLlm() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                toolCheckService,
+                aiChatEngine,
+                BuildChatCacheService.disabled()
+        );
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "메인보드랑 램 위치가 어딜까",
+                "uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("BOARD_PART_FOCUS")
+                )
+        ));
+
+        assertThat(response.get("boardFocus")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("categories", List.of("MOTHERBOARD", "RAM"));
+        assertThat(response.get("builds")).asList().isEmpty();
+        verifyNoInteractions(aiChatEngine, jdbcTemplate, toolCheckService);
+    }
+
+    @Test
     void parsesBudgetWonFromCommonKoreanInputs() {
         assertThat(BuildChatService.parseBudgetWon("200만원 PC 추천")).isEqualTo(200 * 10_000);
         assertThat(BuildChatService.parseBudgetWon("3백만원 PC 추천")).isEqualTo(300 * 10_000);
