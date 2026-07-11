@@ -10,7 +10,7 @@
 | Soak | 장시간 반복 시 누수·고갈 징후 확인 | 20 VU, 연구 실행 60분 |
 | Capacity | 일정 도착률을 높이며 처리 가능한 RPS 확인 | 50→100→200→300→400 iteration/s |
 
-혼합 요청은 인증, 부품, 홈 추천부품/XGBoost, 견적초안, 견적 이력, 가격 알림, 읽기 전용 AI 위치 강조를 포함한다. 외부 OpenAI 호출은 대량 부하에서 제외해 BuildGraph API·DB·Redis·scorer의 용량을 측정하며, 실제 LLM 병렬 결과는 별도 Build Chat QA 보고서에서 관리한다.
+혼합 요청은 인증, 부품, 홈 추천부품/XGBoost, 견적초안, 견적 이력, 가격 알림, 조립 요청 이력, 읽기 전용 AI 위치 강조를 포함한다. 외부 OpenAI 호출은 대량 부하에서 제외해 BuildGraph API·DB·Redis·scorer의 용량을 측정하며, 실제 LLM 병렬 결과는 별도 Build Chat QA 보고서에서 관리한다.
 
 Docker Desktop 기준 실행 예시:
 

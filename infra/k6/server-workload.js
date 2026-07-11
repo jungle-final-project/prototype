@@ -98,6 +98,7 @@ export const options = {
     'http_req_duration{endpoint:quote_draft}': ['p(95)<1000'],
     'http_req_duration{endpoint:build_history}': ['p(95)<1000'],
     'http_req_duration{endpoint:price_alerts}': ['p(95)<1000'],
+    'http_req_duration{endpoint:assembly_requests}': ['p(95)<1000'],
   },
   userAgent: `BuildGraph-k6/${TEST_TYPE}`,
   noConnectionReuse: false,
@@ -121,16 +122,18 @@ export default function (data) {
     exerciseLogin();
   } else if (roll < 0.15) {
     exerciseHealth();
-  } else if (roll < 0.45) {
+  } else if (roll < 0.40) {
     exerciseParts(data.accessToken);
-  } else if (roll < 0.60) {
+  } else if (roll < 0.52) {
     exerciseHomeRecommendations(data.accessToken);
-  } else if (roll < 0.72) {
+  } else if (roll < 0.62) {
     exerciseDraft(data.accessToken);
-  } else if (roll < 0.82) {
+  } else if (roll < 0.70) {
     exerciseBuildHistory(data.accessToken);
-  } else if (roll < 0.92) {
+  } else if (roll < 0.77) {
     exercisePriceAlerts(data.accessToken);
+  } else if (roll < 0.92) {
+    exerciseAssemblyRequests(data.accessToken);
   } else {
     exerciseFastAi(data.accessToken);
   }
@@ -186,6 +189,11 @@ function exerciseBuildHistory(token) {
 function exercisePriceAlerts(token) {
   const response = http.get(`${BASE_URL}/api/price-alerts?page=0&size=20`, authParams(token, 'price_alerts'));
   verify(response, 'price_alerts', (body) => Array.isArray(body.items));
+}
+
+function exerciseAssemblyRequests(token) {
+  const response = http.get(`${BASE_URL}/api/assembly-requests`, authParams(token, 'assembly_requests'));
+  verify(response, 'assembly_requests', (body) => Array.isArray(body.items));
 }
 
 function exerciseFastAi(token) {
