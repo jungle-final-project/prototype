@@ -315,6 +315,176 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
   await expect(page.getByTestId('graph-flow-canvas')).toHaveCount(0);
 });
 
+test('AI part location focus spotlights all 8 categories across fused, motherboard, and 3D views', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'user-board-focus',
+      email: 'user@example.com',
+      name: 'Board Focus User',
+      role: 'USER'
+    }));
+  });
+  const draftMutationMethods: string[] = [];
+  const buildChatBodies: Array<Record<string, unknown>> = [];
+  const focusCases = [
+    { category: 'CPU', prompt: 'CPU 위치가 어디 있어?' },
+    { category: 'MOTHERBOARD', prompt: '메인보드 위치 표시해줘' },
+    { category: 'RAM', prompt: '램 위치가 어디 있어?' },
+    { category: 'GPU', prompt: '그래픽카드가 어디 달려 있어?' },
+    { category: 'STORAGE', prompt: 'M.2 슬롯 어디야?' },
+    { category: 'PSU', prompt: '파워 장착 위치 보여줘' },
+    { category: 'CASE', prompt: '케이스 위치 강조해줘' },
+    { category: 'COOLER', prompt: '쿨러 자리가 어디야?' }
+  ] as const;
+  const promptCategories = new Map<string, string[]>(
+    focusCases.map((item) => [item.prompt, [item.category]])
+  );
+  promptCategories.set('CPU랑 RAM 위치 보여줘', ['CPU', 'RAM']);
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    if (route.request().method() !== 'GET') draftMutationMethods.push(route.request().method());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes('/price-history')) {
+      await mockEmptyPriceHistory(route, 'board-focus-part');
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
+    buildChatBodies.push(body);
+    const message = String(body.message ?? '');
+    const categories = promptCategories.get(message) ?? [];
+    const label = `${categories.join(' · ')} 위치`;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: `${label}를 현재 구성도에서 강조했습니다.`,
+        builds: [],
+        warnings: [],
+        boardFocus: { type: 'PART_LOCATION', categories, label }
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  const input = page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' });
+  const send = page.getByRole('button', { name: '질문 보내기' });
+
+  for (const item of focusCases) {
+    await page.getByRole('radio', { name: '배치도' }).click();
+    await input.fill(item.prompt);
+    await send.click();
+    await expect(page.getByTestId('slot-board-ai-focus-status')).toContainText('위치 강조 중');
+
+    const otherCategory = item.category === 'GPU' ? 'CPU' : 'GPU';
+    const fusedArea = page.getByTestId(`slot-fused-area-wrap-${item.category}`);
+    const fusedLayer = page.getByTestId(
+      item.category === 'RAM' ? 'slot-fused-layer-RAM-1' : `slot-fused-layer-${item.category}`
+    );
+    await expect(fusedArea).toHaveAttribute('data-ai-spotlight', 'true');
+    await expect(fusedArea).toHaveCSS('outline-style', 'none');
+    await expect(fusedLayer).toHaveCSS('outline-style', 'none');
+    await expect(page.getByTestId(`slot-fused-area-wrap-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
+
+    await page.getByRole('radio', { name: '실장도' }).click();
+    await expect(page.getByTestId(`slot-${item.category}`)).toHaveAttribute('data-ai-spotlight', 'true');
+    await expect(page.getByTestId(`slot-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
+
+    await page.getByRole('radio', { name: '3D' }).click();
+    await expect(page.getByTestId(`slot-${item.category}`)).toHaveAttribute('data-ai-spotlight', 'true');
+    await expect(page.getByTestId(`slot-${item.category}`)).toHaveCSS('outline-style', 'solid');
+    await expect(page.getByTestId(`slot-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
+  }
+
+  await input.fill('CPU랑 RAM 위치 보여줘');
+  await send.click();
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-ai-spotlight', 'true');
+  await expect(page.getByTestId('slot-RAM')).toHaveAttribute('data-ai-spotlight', 'true');
+  await expect(page.getByTestId('slot-GPU')).toHaveAttribute('data-ai-dimmed', 'true');
+  await expect(page).toHaveURL('/self-quote');
+  expect(draftMutationMethods).toHaveLength(0);
+  expect(buildChatBodies).toHaveLength(focusCases.length + 1);
+  for (const body of buildChatBodies) {
+    expect(body.uiContext).toEqual({ surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] });
+  }
+
+  await page.getByTestId('slot-board-ai-focus-clear').click();
+  await expect(page.getByTestId('slot-board-ai-focus-status')).toHaveCount(0);
+
+  await input.fill('램 위치가 어디 있어?');
+  await send.click();
+  await expect(page.getByTestId('slot-board-ai-focus-status')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('slot-board-ai-focus-status')).toHaveCount(0);
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await input.fill('램 위치가 어디 있어?');
+  await send.click();
+  await expect(page.getByTestId('slot-RAM')).toHaveCSS('animation-name', 'none');
+  await expect(page.getByTestId('slot-RAM')).toHaveCSS('outline-style', 'solid');
+  await page.getByTestId('slot-board').click({ position: { x: 5, y: 5 } });
+  await expect(page.getByTestId('slot-board-ai-focus-status')).toHaveCount(0);
+});
+
+test('AI location focus marks an empty mounting position and clears on a board part click', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'user-empty-board-focus', email: 'user@example.com', name: 'Empty Focus User', role: 'USER'
+    }));
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '파워 위치를 현재 구성도에서 강조했습니다.',
+        builds: [],
+        warnings: [],
+        boardFocus: { type: 'PART_LOCATION', categories: ['PSU'], label: '파워 위치' }
+      })
+    });
+  });
+
+  await page.goto('/self-quote?category=CPU');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('파워 장착 위치 보여줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await page.getByRole('radio', { name: '실장도' }).click();
+  await expect(page.getByTestId('slot-PSU')).toHaveAttribute('data-mounted', 'false');
+  await expect(page.getByTestId('slot-PSU')).toHaveAttribute('data-ai-spotlight', 'true');
+  await expect(page.getByTestId('slot-ai-unmounted-PSU')).toContainText('미장착');
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-selected', 'false');
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-next', 'false');
+  await expect(page).toHaveURL('/self-quote?category=CPU');
+
+  await page.getByTestId('slot-board-ai-focus-clear').click();
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-next', 'true');
+
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('파워 장착 위치 보여줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-selected', 'false');
+
+  await page.getByTestId('slot-GPU').getByRole('button', { name: 'GPU 슬롯 열기' }).click();
+  await expect(page.getByTestId('slot-board-ai-focus-status')).toHaveCount(0);
+  await expect(page).toHaveURL('/self-quote?category=GPU');
+});
+
 test('fills all 8 slots from the current quote draft and shows mini slot overflow', async ({ page }) => {
   await loginAsUser(page);
 

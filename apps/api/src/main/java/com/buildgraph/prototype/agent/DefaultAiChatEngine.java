@@ -64,6 +64,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
             확신이 낮거나 복합 명령이면 routeIntent.shouldNavigate=false, routeType=NONE, confidence=LOW로 두십시오.
+            uiContext.surface=SELF_QUOTE이고 capabilities에 BOARD_PART_FOCUS가 있을 때, 사용자가 현재 구성도에서 부품의 물리적 위치를 묻는 순수 위치 질문이면 boardFocusIntent를 구조화하십시오.
+            위치 질문은 “RAM 위치가 어디야”, “CPU와 RAM 자리 표시해줘”, “M.2 슬롯이 어디 있어”처럼 부품과 공간 의도가 함께 있는 경우입니다.
+            추천·가격·구매·교체·담기·삭제·성능 비교가 섞인 요청은 위치 강조가 아니며 boardFocusIntent.shouldFocus=false로 두십시오.
+            여러 부품 위치를 요청하면 categories에 요청된 모든 카테고리를 넣으십시오. 확신이 HIGH일 때만 shouldFocus=true이고, 이때 intent=EXPLAIN으로 두십시오.
             예산이 없으면 budget은 null입니다. 일반 성능 목표는 budgetPolicy=UNSPECIFIED이고, 예산 없는 최고급/끝판왕/명시 5090 의도만 OPEN_BUDGET입니다.
             명시 예산이 있으면 “최고급” 표현이 있어도 budgetPolicy=USER_BUDGET이며, “이하/안으로/넘지 않게”는 budgetMode=MAX, “이상/최소/부터”는 MIN, 일반 “으로/짜리/정도”는 TARGET입니다.
             context.serverFacts.budgetWon이 없고 현재 견적(드래프트)도 없이 용도만 있는 요청은 조합을 지어내지 말고 intent=ASK_FOLLOW_UP으로 예산대를 되물으십시오. 단 예산 무관·끝판왕·명시적 고성능 요청이면 FULL_BUILD_RECOMMEND로 바로 추천하십시오.
@@ -185,6 +189,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
         EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
+        }
+        Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
+        if (!boardFocusIntent.isEmpty()) {
+            parsedContext.put("boardFocusIntent", boardFocusIntent);
+            intent = AiChatIntent.EXPLAIN;
         }
         AiChatEngineResponse base = switch (intent) {
             case FULL_BUILD_RECOMMEND -> fullBuildResponse(message, parsedContext);
@@ -596,6 +605,27 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 "resolvedRoute", route,
                 "reason", reason
         ));
+    }
+
+    private static Map<String, Object> normalizeBoardFocusIntent(Map<String, Object> source) {
+        if (!Boolean.TRUE.equals(source.get("shouldFocus")) || !"HIGH".equals(text(source.get("confidence")))) {
+            return Map.of();
+        }
+        List<String> categories = stringList(source.get("categories")).stream()
+                .map(DefaultAiChatEngine::categoryFrom)
+                .filter(Objects::nonNull)
+                .distinct()
+                .limit(BUILD_CATEGORIES.size())
+                .toList();
+        if (categories.isEmpty()) {
+            return Map.of();
+        }
+        return MockData.map(
+                "shouldFocus", true,
+                "categories", categories,
+                "confidence", "HIGH",
+                "reason", text(source.get("reason"))
+        );
     }
 
     private static boolean isAllowedRoute(String route) {
@@ -1485,9 +1515,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         "parsedContext", requirementParseSchema(),
                         "draftEdit", draftEditSchema(),
                         "routeIntent", routeIntentSchema(),
+                        "boardFocusIntent", boardFocusIntentSchema(),
                         "partConstraint", partConstraintSchema()
                 ),
-                "required", List.of("intent", "assistantMessage", "selectedCategory", "parsedContext", "draftEdit", "routeIntent", "partConstraint")
+                "required", List.of("intent", "assistantMessage", "selectedCategory", "parsedContext", "draftEdit", "routeIntent", "boardFocusIntent", "partConstraint")
         );
     }
 
@@ -1552,6 +1583,25 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         "reason", MockData.map("type", List.of("string", "null"))
                 ),
                 "required", List.of("shouldNavigate", "routeType", "category", "partQuery", "confidence", "reason")
+        );
+    }
+
+    private static Map<String, Object> boardFocusIntentSchema() {
+        return MockData.map(
+                "type", "object",
+                "additionalProperties", false,
+                "properties", MockData.map(
+                        "shouldFocus", MockData.map("type", "boolean"),
+                        "categories", MockData.map(
+                                "type", "array",
+                                "items", MockData.map("type", "string", "enum", BUILD_CATEGORIES),
+                                "uniqueItems", true,
+                                "maxItems", BUILD_CATEGORIES.size()
+                        ),
+                        "confidence", MockData.map("type", "string", "enum", List.of("HIGH", "MEDIUM", "LOW")),
+                        "reason", MockData.map("type", List.of("string", "null"))
+                ),
+                "required", List.of("shouldFocus", "categories", "confidence", "reason")
         );
     }
 

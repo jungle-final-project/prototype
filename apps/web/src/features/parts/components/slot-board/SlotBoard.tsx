@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { X } from 'lucide-react';
 import type { BuildGraphResolveResponse, PartCategory } from '../../../quote/aiSelection';
 import { partShortSpec } from '../../partDisplay';
 import type { QuoteDraftItem } from '../../types';
@@ -37,10 +38,12 @@ const SLOT_BOARD_LEGACY_DISPLAY_STORAGE_KEYS = [
 type SlotBoardProps = {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  aiFocusCategories?: PartCategory[];
   nextCategory?: PartCategory | null;
   visualMode?: SlotBoardVisualMode;
   onVisualModeChange?: (mode: SlotBoardVisualMode) => void;
   onClearSelection?: () => void;
+  onClearAiFocus?: () => void;
   onSlotSelect: (category: PartCategory) => void;
   onRemoveItem: (partId: string) => void;
   onUpdateQuantity: (partId: string, quantity: number) => void;
@@ -53,10 +56,12 @@ type SlotBoardProps = {
 export function SlotBoard({
   items,
   selectedCategory,
+  aiFocusCategories = [],
   nextCategory,
   visualMode = 'fused',
   onVisualModeChange,
   onClearSelection,
+  onClearAiFocus,
   onSlotSelect,
   onRemoveItem,
   onUpdateQuantity,
@@ -72,6 +77,11 @@ export function SlotBoard({
   const flashingCategories = useAttachFlashByCategory(items);
   const isIsometric = visualMode === 'isometric';
   const isMotherboard = visualMode === 'motherboard';
+  const aiFocusSet = new Set(aiFocusCategories);
+  const hasAiFocus = aiFocusSet.size > 0;
+  const aiFocusLabel = aiFocusCategories
+    .map((category) => slotConfigFor(category)?.label ?? category)
+    .join(' · ');
 
   useEffect(() => {
     if (isIsometric) {
@@ -79,12 +89,41 @@ export function SlotBoard({
     }
   }, [isIsometric, overlaysVisible]);
 
+  useEffect(() => {
+    if (!hasAiFocus || !onClearAiFocus) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClearAiFocus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasAiFocus, onClearAiFocus]);
+
   return (
     <div className="panel slot-board-panel flex h-full min-h-0 flex-col overflow-hidden">
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
       <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
+          {hasAiFocus ? (
+            <span
+              data-testid="slot-board-ai-focus-status"
+              className="ml-auto inline-flex min-w-0 items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue"
+            >
+              <span className="truncate">{aiFocusLabel} 위치 강조 중</span>
+              <button
+                type="button"
+                data-testid="slot-board-ai-focus-clear"
+                aria-label="부품 위치 강조 해제"
+                title="강조 해제"
+                onClick={onClearAiFocus}
+                className="grid h-4 w-4 shrink-0 place-items-center rounded-full transition hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+              >
+                <X size={11} aria-hidden="true" />
+              </button>
+            </span>
+          ) : null}
           <SlotBoardModeSegments value={visualMode} onChange={onVisualModeChange} />
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-end gap-3 text-[10px] font-bold text-slate-500">
@@ -119,9 +158,11 @@ export function SlotBoard({
         <IsometricSlotBoardBody
           items={items}
           selectedCategory={selectedCategory}
+          aiFocusCategories={aiFocusCategories}
           nextCategory={nextCategory}
           onSlotSelect={onSlotSelect}
           onClearSelection={onClearSelection}
+          onClearAiFocus={onClearAiFocus}
           onRemoveItem={onRemoveItem}
           isRemovePending={isRemovePending}
           graph={graph}
@@ -135,8 +176,10 @@ export function SlotBoard({
         <MotherboardSlotBoardBody
           items={items}
           selectedCategory={selectedCategory}
+          aiFocusCategories={aiFocusCategories}
           nextCategory={nextCategory}
           onSlotSelect={onSlotSelect}
+          onClearAiFocus={onClearAiFocus}
           onRemoveItem={onRemoveItem}
           isRemovePending={isRemovePending}
           graph={graph}
@@ -147,8 +190,10 @@ export function SlotBoard({
         <FusedSlotBoardBody
           items={items}
           selectedCategory={selectedCategory}
+          aiFocusCategories={aiFocusCategories}
           nextCategory={nextCategory}
           onSlotSelect={onSlotSelect}
+          onClearAiFocus={onClearAiFocus}
           onRemoveItem={onRemoveItem}
           onUpdateQuantity={onUpdateQuantity}
           isRemovePending={isRemovePending}
@@ -248,8 +293,10 @@ function SlotBoardDisplaySwitch({
 function FusedSlotBoardBody({
   items,
   selectedCategory,
+  aiFocusCategories,
   nextCategory,
   onSlotSelect,
+  onClearAiFocus,
   onRemoveItem,
   onUpdateQuantity,
   isRemovePending,
@@ -261,8 +308,10 @@ function FusedSlotBoardBody({
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  aiFocusCategories: PartCategory[];
   nextCategory?: PartCategory | null;
   onSlotSelect: (category: PartCategory) => void;
+  onClearAiFocus?: () => void;
   onRemoveItem: (partId: string) => void;
   onUpdateQuantity: (partId: string, quantity: number) => void;
   isRemovePending: boolean;
@@ -278,11 +327,16 @@ function FusedSlotBoardBody({
     <div
       data-testid="slot-board"
       data-visual-mode="fused"
-      className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
+      data-ai-focus-active={aiFocusCategories.length > 0 ? 'true' : 'false'}
+      onClickCapture={() => {
+        if (aiFocusCategories.length > 0) onClearAiFocus?.();
+      }}
+      className="slot-board-focus-scope slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
     >
       <FusedPlateArt
         items={items}
         selectedCategory={selectedCategory}
+        aiFocusCategories={aiFocusCategories}
         statusByCategory={statusByCategory}
         flashingCategories={flashingCategories}
         onSlotSelect={onSlotSelect}
@@ -292,7 +346,7 @@ function FusedSlotBoardBody({
         isQuantityPending={isQuantityPending}
       />
       <SlotBoardProblemBanner problem={boardProblem} />
-      <div className="flex flex-col gap-2 lg:hidden">
+      <div data-testid="slot-board-mobile-slots" className="flex flex-col gap-2 lg:hidden">
         {SLOT_CONFIGS.map((slot) => (
           <MotherboardSlot
             key={slot.category}
@@ -300,8 +354,10 @@ function FusedSlotBoardBody({
             layout={slot.layout}
             items={items.filter((item) => item.category === slot.category)}
             problemStatus={statusByCategory.get(slot.category)}
-            isSelected={selectedCategory === slot.category}
-            isNext={nextCategory === slot.category}
+            isSelected={aiFocusCategories.length === 0 && selectedCategory === slot.category}
+            isAiSpotlighted={aiFocusCategories.includes(slot.category)}
+            isAiDimmed={aiFocusCategories.length > 0 && !aiFocusCategories.includes(slot.category)}
+            isNext={aiFocusCategories.length === 0 && nextCategory === slot.category}
             isFlashing={flashingCategories.has(slot.category)}
             onSelect={() => onSlotSelect(slot.category)}
             onRemoveItem={onRemoveItem}
@@ -316,8 +372,10 @@ function FusedSlotBoardBody({
 function MotherboardSlotBoardBody({
   items,
   selectedCategory,
+  aiFocusCategories,
   nextCategory,
   onSlotSelect,
+  onClearAiFocus,
   onRemoveItem,
   isRemovePending,
   graph,
@@ -326,8 +384,10 @@ function MotherboardSlotBoardBody({
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  aiFocusCategories: PartCategory[];
   nextCategory?: PartCategory | null;
   onSlotSelect: (category: PartCategory) => void;
+  onClearAiFocus?: () => void;
   onRemoveItem: (partId: string) => void;
   isRemovePending: boolean;
   graph?: BuildGraphResolveResponse;
@@ -340,13 +400,18 @@ function MotherboardSlotBoardBody({
     <div
       data-testid="slot-board"
       data-visual-mode="motherboard"
-      className="slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
+      data-ai-focus-active={aiFocusCategories.length > 0 ? 'true' : 'false'}
+      data-ai-focus-motherboard={aiFocusCategories.includes('MOTHERBOARD') ? 'true' : 'false'}
+      onClickCapture={() => {
+        if (aiFocusCategories.length > 0) onClearAiFocus?.();
+      }}
+      className="slot-board-focus-scope slot-board-tray relative min-h-0 flex-1 flex-col gap-2 p-3 lg:block lg:overflow-hidden lg:p-0"
     >
       <BoardPlanArt />
       <SlotBoardEdges
         items={items}
         graph={graph}
-        selectedCategory={selectedCategory}
+        selectedCategory={aiFocusCategories.length > 0 ? null : selectedCategory}
         hoveredCategory={null}
         flashingCategories={flashingCategories}
         visualMode="motherboard"
@@ -358,8 +423,10 @@ function MotherboardSlotBoardBody({
           layout={slot.layout}
           items={items.filter((item) => item.category === slot.category)}
           problemStatus={statusByCategory.get(slot.category)}
-          isSelected={selectedCategory === slot.category}
-          isNext={nextCategory === slot.category}
+          isSelected={aiFocusCategories.length === 0 && selectedCategory === slot.category}
+          isAiSpotlighted={aiFocusCategories.includes(slot.category)}
+          isAiDimmed={aiFocusCategories.length > 0 && !aiFocusCategories.includes(slot.category)}
+          isNext={aiFocusCategories.length === 0 && nextCategory === slot.category}
           isFlashing={flashingCategories.has(slot.category)}
           onSelect={() => onSlotSelect(slot.category)}
           onRemoveItem={onRemoveItem}
@@ -373,9 +440,11 @@ function MotherboardSlotBoardBody({
 function IsometricSlotBoardBody({
   items,
   selectedCategory,
+  aiFocusCategories,
   nextCategory,
   onSlotSelect,
   onClearSelection,
+  onClearAiFocus,
   onRemoveItem,
   isRemovePending,
   graph,
@@ -387,9 +456,11 @@ function IsometricSlotBoardBody({
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
+  aiFocusCategories: PartCategory[];
   nextCategory?: PartCategory | null;
   onSlotSelect: (category: PartCategory) => void;
   onClearSelection?: () => void;
+  onClearAiFocus?: () => void;
   onRemoveItem: (partId: string) => void;
   isRemovePending: boolean;
   graph?: BuildGraphResolveResponse;
@@ -402,8 +473,13 @@ function IsometricSlotBoardBody({
   const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
   const [activeProblemCategory, setActiveProblemCategory] = useState<PartCategory | null>(null);
   const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
-  const focusCategory = hoveredCategory ?? selectedCategory;
-  const isMotherboardSceneFocused = focusCategory === 'MOTHERBOARD' || selectedCategory === 'MOTHERBOARD';
+  const aiFocusSet = new Set(aiFocusCategories);
+  const hasAiFocus = aiFocusSet.size > 0;
+  const fallbackFocusCategory = hoveredCategory ?? selectedCategory;
+  const focusCategories = hasAiFocus
+    ? aiFocusSet
+    : new Set<PartCategory>(fallbackFocusCategory ? [fallbackFocusCategory] : []);
+  const isMotherboardSceneFocused = focusCategories.has('MOTHERBOARD');
   const celebrating = useCompletionCelebration(items, statusByCategory);
   const activeProblem = activeProblemCategory ? problemDetailsByCategory.get(activeProblemCategory) : undefined;
 
@@ -441,13 +517,18 @@ function IsometricSlotBoardBody({
     <div
       data-testid="slot-board"
       data-visual-mode="isometric"
+      data-ai-focus-active={hasAiFocus ? 'true' : 'false'}
+      data-ai-focus-motherboard={aiFocusSet.has('MOTHERBOARD') ? 'true' : 'false'}
       data-celebrating={celebrating ? 'true' : 'false'}
+      onClickCapture={() => {
+        if (hasAiFocus) onClearAiFocus?.();
+      }}
       onClick={(event) => {
         if (event.target === event.currentTarget && selectedCategory) {
           onClearSelection?.();
         }
       }}
-      className="relative min-h-0 flex-1 flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:overflow-hidden lg:bg-[#f6fbff] lg:p-4"
+      className="slot-board-focus-scope relative min-h-0 flex-1 flex-col gap-2 bg-slate-50/60 p-3 lg:block lg:overflow-hidden lg:bg-[#f6fbff] lg:p-4"
     >
       <div
         data-testid="slot-board-motherboard-art"
@@ -469,14 +550,15 @@ function IsometricSlotBoardBody({
         problemDetailsByCategory={problemDetailsByCategory}
         hoveredCategory={hoveredCategory}
         selectedCategory={selectedCategory}
-        focusCategory={focusCategory}
+        focusCategories={focusCategories}
+        aiFocusCategories={aiFocusSet}
         onHoverChange={setHoveredCategory}
         onSlotSelect={onSlotSelect}
         onProblemOpen={openProblemDetail}
       />
       <IsoCardConnector
-        selectedCategory={selectedCategory}
-        status={selectedCategory ? statusByCategory.get(selectedCategory) ?? 'PENDING' : 'PENDING'}
+        selectedCategory={hasAiFocus ? null : selectedCategory}
+        status={!hasAiFocus && selectedCategory ? statusByCategory.get(selectedCategory) ?? 'PENDING' : 'PENDING'}
         anchors={connectorAnchors}
       />
       {SLOT_CONFIGS.map((slot) => (
@@ -487,11 +569,13 @@ function IsometricSlotBoardBody({
           items={items.filter((item) => item.category === slot.category)}
           problemStatus={statusByCategory.get(slot.category)}
           problemDetail={problemDetailsByCategory.get(slot.category)}
-          isSelected={selectedCategory === slot.category}
-          isNext={nextCategory === slot.category}
+          isSelected={!hasAiFocus && selectedCategory === slot.category}
+          isAiSpotlighted={aiFocusSet.has(slot.category)}
+          isAiDimmed={hasAiFocus && !aiFocusSet.has(slot.category)}
+          isNext={!hasAiFocus && nextCategory === slot.category}
           isFlashing={flashingCategories.has(slot.category)}
-          isHovered={hoveredCategory === slot.category}
-          cardsVisible={overlaysVisible}
+          isHovered={!hasAiFocus && hoveredCategory === slot.category}
+          cardsVisible={overlaysVisible || aiFocusSet.has(slot.category)}
           onHoverChange={setHoveredCategory}
           onSelect={() => onSlotSelect(slot.category)}
           onProblemOpen={openProblemDetail}
@@ -548,6 +632,8 @@ function IsometricSlotCard({
   problemStatus,
   problemDetail,
   isSelected,
+  isAiSpotlighted,
+  isAiDimmed,
   isNext,
   isFlashing,
   isHovered,
@@ -564,6 +650,8 @@ function IsometricSlotCard({
   problemStatus?: 'PASS' | 'WARN' | 'FAIL';
   problemDetail?: SlotProblemDetail;
   isSelected: boolean;
+  isAiSpotlighted: boolean;
+  isAiDimmed: boolean;
   isNext: boolean;
   isFlashing: boolean;
   isHovered: boolean;
@@ -611,6 +699,9 @@ function IsometricSlotCard({
     <div
       data-testid={`slot-${slot.category}`}
       data-selected={isSelected ? 'true' : 'false'}
+      data-ai-spotlight={isAiSpotlighted ? 'true' : 'false'}
+      data-ai-dimmed={isAiDimmed ? 'true' : 'false'}
+      data-mounted={filled ? 'true' : 'false'}
       data-status={slotStatus}
       data-flash={isFlashing ? 'true' : 'false'}
       style={layoutVars}
@@ -635,6 +726,14 @@ function IsometricSlotCard({
         onBlur={() => onHoverChange(null)}
         className="absolute inset-0 z-0 h-full w-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       />
+      {isAiSpotlighted && !filled ? (
+        <span
+          data-testid={`slot-ai-unmounted-${slot.category}`}
+          className="pointer-events-none absolute bottom-1 right-1 z-30 rounded border border-blue-200 bg-blue-50/95 px-1.5 py-0.5 text-[9px] font-black text-brand-blue shadow-sm"
+        >
+          미장착
+        </span>
+      ) : null}
       {filled ? (
         <img
           data-testid="slot-part-image"
@@ -742,7 +841,8 @@ function IsoPartLayer({
   problemDetailsByCategory,
   hoveredCategory,
   selectedCategory,
-  focusCategory,
+  focusCategories,
+  aiFocusCategories,
   onHoverChange,
   onSlotSelect,
   onProblemOpen
@@ -753,17 +853,22 @@ function IsoPartLayer({
   problemDetailsByCategory: Map<PartCategory, SlotProblemDetail>;
   hoveredCategory: PartCategory | null;
   selectedCategory: PartCategory | null;
-  focusCategory: PartCategory | null;
+  focusCategories: Set<PartCategory>;
+  aiFocusCategories: Set<PartCategory>;
   onHoverChange: (category: PartCategory | null) => void;
   onSlotSelect: (category: PartCategory) => void;
   onProblemOpen: (category: PartCategory) => void;
 }) {
+  const partFocusCategories = new Set<PartCategory>(
+    [...focusCategories].filter((category) => category !== 'MOTHERBOARD')
+  );
+  const motherboardSceneFocused = focusCategories.has('MOTHERBOARD');
+
   return (
     <div className="pointer-events-none absolute inset-2 z-[5] hidden lg:block">
       {SLOT_CONFIGS.map((slot) => {
-        const isMotherboardFocused = focusCategory === 'MOTHERBOARD';
-        const partFocusCategory = isMotherboardFocused ? null : focusCategory;
-        const isSpotlighted = partFocusCategory ? slot.category === partFocusCategory : false;
+        const isSpotlighted = partFocusCategories.has(slot.category);
+        const isAiPartSpotlighted = aiFocusCategories.has(slot.category) && slot.category !== 'MOTHERBOARD';
         const isSelected = selectedCategory === slot.category && slot.category !== 'MOTHERBOARD';
         return (
           <IsoPart
@@ -772,9 +877,11 @@ function IsoPartLayer({
             items={items.filter((item) => item.category === slot.category)}
             isMounting={flashingCategories.has(slot.category)}
             status={statusByCategory.get(slot.category)}
-            isHovered={hoveredCategory === slot.category && slot.category !== 'MOTHERBOARD'}
-            isDimmed={isMotherboardFocused || (partFocusCategory ? !isSpotlighted : false)}
+            isHovered={aiFocusCategories.size === 0 && hoveredCategory === slot.category && slot.category !== 'MOTHERBOARD'}
+            isDimmed={partFocusCategories.size > 0 ? !isSpotlighted : motherboardSceneFocused}
             isSpotlighted={isSpotlighted}
+            isAiSpotlighted={isAiPartSpotlighted}
+            isAiDimmed={aiFocusCategories.size > 0 && !isAiPartSpotlighted}
             isSelected={isSelected}
             problemDetail={problemDetailsByCategory.get(slot.category)}
             onHoverChange={onHoverChange}
@@ -795,6 +902,8 @@ function IsoPart({
   isHovered,
   isDimmed,
   isSpotlighted,
+  isAiSpotlighted,
+  isAiDimmed,
   isSelected,
   problemDetail,
   onHoverChange,
@@ -808,6 +917,8 @@ function IsoPart({
   isHovered: boolean;
   isDimmed: boolean;
   isSpotlighted: boolean;
+  isAiSpotlighted: boolean;
+  isAiDimmed: boolean;
   isSelected: boolean;
   problemDetail?: SlotProblemDetail;
   onHoverChange: (category: PartCategory | null) => void;
@@ -828,6 +939,8 @@ function IsoPart({
       data-hovered={isHovered ? 'true' : 'false'}
       data-dimmed={isDimmed ? 'true' : 'false'}
       data-spotlight={isSpotlighted ? 'true' : 'false'}
+      data-ai-spotlight={isAiSpotlighted ? 'true' : 'false'}
+      data-ai-dimmed={isAiDimmed ? 'true' : 'false'}
       data-selected={isSelected ? 'true' : 'false'}
       className="iso-part pointer-events-auto absolute cursor-pointer"
       style={{ left: `${iso.x}%`, top: `${iso.y}%`, width: `${iso.w}%`, zIndex: iso.z, ['--iso-z' as string]: iso.z }}
@@ -1058,6 +1171,8 @@ function MotherboardSlot({
   items,
   problemStatus,
   isSelected,
+  isAiSpotlighted,
+  isAiDimmed,
   isNext,
   isFlashing,
   onSelect,
@@ -1069,6 +1184,8 @@ function MotherboardSlot({
   items: QuoteDraftItem[];
   problemStatus?: 'PASS' | 'WARN' | 'FAIL';
   isSelected: boolean;
+  isAiSpotlighted: boolean;
+  isAiDimmed: boolean;
   isNext: boolean;
   isFlashing: boolean;
   onSelect: () => void;
@@ -1127,6 +1244,9 @@ function MotherboardSlot({
     <div
       data-testid={`slot-${slot.category}`}
       data-selected={isSelected ? 'true' : 'false'}
+      data-ai-spotlight={isAiSpotlighted ? 'true' : 'false'}
+      data-ai-dimmed={isAiDimmed ? 'true' : 'false'}
+      data-mounted={filled ? 'true' : 'false'}
       data-status={slotStatus}
       data-flash={isFlashing ? 'true' : 'false'}
       style={layoutVars}
@@ -1145,6 +1265,14 @@ function MotherboardSlot({
         onClick={onSelect}
         className="absolute inset-0 z-0 h-full w-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       />
+      {isAiSpotlighted && !filled ? (
+        <span
+          data-testid={`slot-ai-unmounted-${slot.category}`}
+          className="pointer-events-none absolute bottom-1 right-1 z-30 rounded border border-blue-200 bg-blue-50/95 px-1.5 py-0.5 text-[9px] font-black text-brand-blue shadow-sm"
+        >
+          미장착
+        </span>
+      ) : null}
       {/* 장착 시: 에셋이 박스를 가득 채우고 크롬(카테고리·뱃지·요약)은 위에 얇게 얹는다. */}
       {filled ? (
         <img

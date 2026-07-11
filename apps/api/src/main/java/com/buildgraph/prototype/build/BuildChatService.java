@@ -212,6 +212,13 @@ public class BuildChatService {
                 requestedAiProfile,
                 buildChatCacheService.getClass().getName()
         );
+        if (intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART
+                && "HIGH".equals(intentDecision.confidence())
+                && !intentDecision.targetCategories().isEmpty()) {
+            Map<String, Object> response = boardFocusResponse(intentDecision.targetCategories());
+            logBuildChatPath("FAST_BOARD_FOCUS", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
+            return response;
+        }
         if (intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT) {
             Optional<Map<String, Object>> simulationCard = performanceSimulationResponse(body, message);
             // 카드가 못 나왔고(교체 대상 미해상) 속성 요청 가능성이 있으면 dead-end로 끝내지 않고 LLM 경로로
@@ -329,12 +336,14 @@ public class BuildChatService {
         // LLM 프롬프트에 주입한다 — LLM이 이미 아는 사실을 되묻거나("예산이 빠졌어요")
         // 사실과 다른 캔드 답("찾지 못했다")을 쓰는 것을 원천 차단한다.
         Map<String, Object> engineBody = new LinkedHashMap<>(body);
-        engineBody.put("serverFacts", buildServerFacts(message, rawBudgetIntent, body));
+        engineBody.put("serverFacts", intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART
+                ? Map.of()
+                : buildServerFacts(message, rawBudgetIntent, body));
         AiChatEngineResponse engineResponse;
         try {
             engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
                     message,
-                    "HOME",
+                    chatSurface(body),
                     firstText(text(body.get("selectedCategory")), detectPartCategory(message)),
                     text(body.get("buildId")),
                     text(body.get("draftId")),
@@ -355,8 +364,19 @@ public class BuildChatService {
         long engineMs = elapsedMs(stageStartNanos);
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
         Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
+        if (intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART) {
+            List<String> focusCategories = llmBoardFocusCategories(engineResponse.parsedContext(), body);
+            if (!focusCategories.isEmpty()) {
+                Map<String, Object> focusResponse = boardFocusResponse(focusCategories);
+                buildChatCacheService.storeAsync(body, requestedAiProfile, userId, focusResponse);
+                logBuildChatPath("LLM_BOARD_FOCUS", startedNanos, userId, requestedAiProfile, false, guardStats,
+                        "redisMs=" + redisMs + " engineMs=" + engineMs);
+                return focusResponse;
+            }
+        }
         boolean readOnlySimulationFlow = intentDecision.intent() == BuildChatIntent.SIMULATE_REPLACEMENT;
-        if (readOnlySimulationFlow) {
+        boolean readOnlyBoardFocusFlow = intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART;
+        if (readOnlySimulationFlow || readOnlyBoardFocusFlow) {
             response.put("builds", List.of());
         }
         // 라우터가 전체 견적(BUILD_RECOMMEND)으로 판정했는데 LLM 엔진이 내부적으로 부품 추천으로
@@ -400,14 +420,16 @@ public class BuildChatService {
         // 범용 역제안 후처리 — LLM이 구조화한 제약을 부품 DB와 대조해, 불가능한 요청이면
         // dead-end 대신 실데이터 숫자(최저가·부족액·최소 구성가)와 다음 행동 칩을 제시한다.
         // 미리보기(변경)를 먼저 시도하고, 미리보기가 못 만들어진 변경 요청은 부품 제약 역제안이 이어받는다.
-        if (!readOnlySimulationFlow) {
+        if (!readOnlySimulationFlow && !readOnlyBoardFocusFlow) {
             applyDraftEditPreview(response, engineResponse, body);
         }
-        // 속성 요청(수랭/PCIe 세대/통풍) + 드래프트에 같은 카테고리 존재 → 1:1 스펙비교 카드로 답한다.
-        // 카드가 못 나오면(비교 대상 없음·후보 없음) 아래 역제안이 후보 나열로 이어받는다.
-        applyAttributeSimulationCard(response, engineResponse, message, body);
-        applyPartConstraintCounterProposal(response, engineResponse, message, body);
-        applyUsageMinimumCounterProposal(response, engineResponse, rawBudgetIntent);
+        if (!readOnlyBoardFocusFlow) {
+            // 속성 요청(수랭/PCIe 세대/통풍) + 드래프트에 같은 카테고리 존재 → 1:1 스펙비교 카드로 답한다.
+            // 카드가 못 나오면(비교 대상 없음·후보 없음) 아래 역제안이 후보 나열로 이어받는다.
+            applyAttributeSimulationCard(response, engineResponse, message, body);
+            applyPartConstraintCounterProposal(response, engineResponse, message, body);
+            applyUsageMinimumCounterProposal(response, engineResponse, rawBudgetIntent);
+        }
         if (recommendFlow
                 && objectMaps(response.get("builds")).isEmpty()
                 && response.get("simulation") == null
@@ -458,6 +480,58 @@ public class BuildChatService {
 
     private static long elapsedMs(long startNanos) {
         return Math.max(0, (System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    private static String chatSurface(Map<String, Object> body) {
+        String surface = text(objectMap(body.get("uiContext")).get("surface"));
+        return "SELF_QUOTE".equalsIgnoreCase(surface) ? "SELF_QUOTE" : "HOME";
+    }
+
+    private static List<String> llmBoardFocusCategories(Map<String, Object> parsedContext, Map<String, Object> body) {
+        if (!supportsBoardPartFocus(body)) {
+            return List.of();
+        }
+        Map<String, Object> focus = objectMap(parsedContext == null ? null : parsedContext.get("boardFocusIntent"));
+        if (!Boolean.TRUE.equals(focus.get("shouldFocus")) || !"HIGH".equals(text(focus.get("confidence")))) {
+            return List.of();
+        }
+        return stringList(focus.get("categories")).stream()
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .filter(CATEGORY_LABELS::containsKey)
+                .distinct()
+                .limit(CATEGORY_LABELS.size())
+                .toList();
+    }
+
+    private static boolean supportsBoardPartFocus(Map<String, Object> body) {
+        Map<String, Object> uiContext = objectMap(body.get("uiContext"));
+        if (!"SELF_QUOTE".equalsIgnoreCase(text(uiContext.get("surface")))) {
+            return false;
+        }
+        return stringList(uiContext.get("capabilities")).stream()
+                .anyMatch(capability -> "BOARD_PART_FOCUS".equalsIgnoreCase(capability));
+    }
+
+    private Map<String, Object> boardFocusResponse(List<String> categories) {
+        List<String> safeCategories = categories == null ? List.of() : categories.stream()
+                .map(value -> value == null ? null : value.toUpperCase(Locale.ROOT))
+                .filter(Objects::nonNull)
+                .filter(CATEGORY_LABELS::containsKey)
+                .distinct()
+                .limit(CATEGORY_LABELS.size())
+                .toList();
+        String label = safeCategories.stream().map(CATEGORY_LABELS::get).collect(java.util.stream.Collectors.joining(" · ")) + " 위치";
+        Map<String, Object> response = fastResponse(
+                "GENERAL",
+                label + "를 현재 구성도에서 강조했습니다.",
+                List.of()
+        );
+        response.put("boardFocus", MockData.map(
+                "type", "PART_LOCATION",
+                "categories", safeCategories,
+                "label", label
+        ));
+        return response;
     }
 
     // 종단 칩 플로어: 카드·칩·되묻기·시뮬레이션이 전부 빈 dead-end 응답에는 다음 행동 칩만 보강한다

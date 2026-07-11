@@ -214,6 +214,33 @@ class BuildChatCacheServiceTest {
         assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 7L)).isPresent();
     }
 
+    @Test
+    void boardFocusCapabilityIsPartOfTheCacheFingerprint() {
+        Map<String, String> redisStore = new LinkedHashMap<>();
+        TestCache cache = cache(redisStore);
+        Map<String, Object> selfQuoteRequest = Map.of(
+                "message", "CPU랑 RAM 위치 보여줘",
+                "uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("BOARD_PART_FOCUS")
+                )
+        );
+        Map<String, Object> homeRequest = Map.of(
+                "message", "CPU랑 RAM 위치 보여줘",
+                "uiContext", Map.of("surface", "HOME", "capabilities", List.of())
+        );
+        Map<String, Object> response = Map.of(
+                "answerType", "GENERAL",
+                "message", "CPU · RAM 위치를 강조했습니다.",
+                "boardFocus", Map.of("type", "PART_LOCATION", "categories", List.of("CPU", "RAM"))
+        );
+
+        cache.service.store(selfQuoteRequest, "BUILD_CHAT_54_MINI_FAST", 42L, response);
+
+        assertThat(cache.service.lookup(selfQuoteRequest, "BUILD_CHAT_54_MINI_FAST", 42L)).isPresent();
+        assertThat(cache.service.lookup(homeRequest, "BUILD_CHAT_54_MINI_FAST", 42L)).isEmpty();
+    }
+
     private static TestCache cache(Map<String, String> redisStore) {
         @SuppressWarnings("unchecked")
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
