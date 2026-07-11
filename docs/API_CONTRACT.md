@@ -300,6 +300,53 @@ Google OAuth 정책:
 - 단일 구성 카테고리의 `quantity`는 1만 허용한다. `RAM`, `STORAGE`의 `quantity`는 1~9만 허용한다.
 - `totalPrice`와 `lineTotal`은 현재 `parts.price` 기준으로 계산한다. `unitPriceAtAdd`는 담은 시점 추적용이다.
 
+### Assembly Brokerage
+
+조립 중개는 현재 견적을 변경하지 않고 요청 시점의 부품, 가격, 구매처, Tool 호환성 결과를 별도 snapshot으로 저장한다. 내부 기사는 관리자가 운영하고, 승인된 외부 파트너 기사는 기존 USER 계정에 1:1 기사 프로필을 연결해 직접 제안할 수 있다. 조립·배송 상태 변경은 계속 관리자가 담당한다.
+
+| Method | Path | Auth | Owner | Request | Response | 관련 DB table |
+|---|---|---|---|---|---|---|
+| `POST` | `/api/assembly-requests` | USER | 2번 | `Idempotency-Key` + `{ "serviceType":"FULL_SERVICE", "region":"서울", "preferredDate":"2026-07-20", "deliveryMethod":"DELIVERY", "contactName":"홍길동", "contactPhone":"010-1234-5678", "postalCode":"04524", "addressLine1":"서울시 중구 ...", "note":"선정리", "asPolicyAccepted":true }` | `AssemblyRequestDto` | `assembly_requests`, `assembly_request_items`, `assembly_offers`, `technicians`, `assembly_request_status_history` |
+| `GET` | `/api/assembly-requests` | USER | 2번 | `?page=0&size=20` | `AssemblyRequestPage` | `assembly_requests`, `assembly_offers`, `assembly_payments` |
+| `GET` | `/api/assembly-requests/{id}` | USER | 2번 | - | `AssemblyRequestDto` | 조립 중개 전체 table |
+| `POST` | `/api/assembly-requests/{id}/offers/{offerId}/select` | USER | 2번 | - | `status=MATCHED`, `payment.status=PENDING` | `assembly_requests`, `assembly_offers`, `assembly_payments`, 상태 이력 |
+| `POST` | `/api/assembly-requests/{id}/payments/confirm-virtual` | USER | 2번 | - | `payment.status=PAID` | `assembly_payments` |
+| `POST` | `/api/assembly-requests/{id}/cancel` | USER | 2번 | `{ "reason":"일정 변경" }` | `status=CANCELLED`, 결제 후면 `REFUNDED` | 조립 중개 전체 table |
+| `POST` | `/api/technician/applications` | USER | 2번 | 기본 프로필, 지역, 서비스 방식, 전문 분야, 요금, 소요일, 표준 AS 동의 | `verificationStatus=PENDING` 기사 프로필 | `technicians` |
+| `GET/PATCH` | `/api/technician/profile` | USER | 2번 | 본인 외부 기사 프로필 조회·보정 | `TechnicianDto` | `technicians` |
+| `GET` | `/api/technician/assembly-requests` | 승인 기사 USER | 2번 | `?scope=OPEN|SELECTED&page=0&size=20` | 익명 공개 요청 또는 낙찰 작업 목록 | `assembly_requests`, `assembly_offers`, `assembly_payments` |
+| `GET` | `/api/technician/assembly-requests/{id}` | 승인 기사 USER | 2번 | - | 익명 요청 상세. 본인 제안 선택 + 가상 결제 완료 후에만 연락처·주소·메모 포함 | 조립 중개 전체 table |
+| `POST` | `/api/technician/assembly-requests/{id}/offers` | 승인 기사 USER | 2번 | 부품 확인가, 조립비, 배송비, 소요일, 재고 문구, 메모 | 본인 `AVAILABLE` 제안을 포함한 익명 요청 | `assembly_offers`, `assembly_offer_activities` |
+| `PATCH` | `/api/technician/offers/{id}` | 제안 소유 기사 USER | 2번 | 가격·소요일·재고 문구 보정 | `AVAILABLE` 본인 제안 | `assembly_offers`, `assembly_offer_activities` |
+| `POST` | `/api/technician/offers/{id}/withdraw` | 제안 소유 기사 USER | 2번 | `{ "reason":"일정 불가" }` | `WITHDRAWN` 본인 제안 | `assembly_offers`, `assembly_offer_activities` |
+| `GET/POST` | `/api/admin/technicians` | ADMIN | 2번 | `providerType`, `verificationStatus` 필터 또는 내부 기사 생성 | `TechnicianPage` / `TechnicianDto` | `technicians`, `admin_audit_logs` |
+| `GET/PATCH/DELETE` | `/api/admin/technicians/{id}` | ADMIN | 2번 | 기사 수정 | `TechnicianDto` 또는 soft delete 결과 | `technicians`, `admin_audit_logs` |
+| `POST` | `/api/admin/technicians/{id}/restore` | ADMIN | 2번 | - | 복구 후 `status=INACTIVE` | `technicians`, `admin_audit_logs` |
+| `POST` | `/api/admin/technicians/{id}/approve` | ADMIN | 2번 | - | 외부 기사 `APPROVED/ACTIVE` | `technicians`, `admin_audit_logs` |
+| `POST` | `/api/admin/technicians/{id}/reject` | ADMIN | 2번 | `{ "reason":"연락처 확인 필요" }` | 외부 기사 `REJECTED/INACTIVE` | `technicians`, `assembly_offers`, `assembly_offer_activities`, `admin_audit_logs` |
+| `GET` | `/api/admin/assembly-requests` | ADMIN | 2번 | `?status=OFFERED&region=서울&q=...` | 사용자 정보가 포함된 `AssemblyRequestPage` | 조립 중개 전체 table |
+| `GET` | `/api/admin/assembly-requests/{id}` | ADMIN | 2번 | - | `AssemblyRequestDto` | 조립 중개 전체 table |
+| `PATCH` | `/api/admin/assembly-requests/{id}/status` | ADMIN | 2번 | `{ "status":"ASSEMBLING", "note":"조립 시작" }` | `AssemblyRequestDto` | `assembly_requests`, 상태 이력, audit |
+| `POST` | `/api/admin/assembly-requests/{id}/offers` | ADMIN | 2번 | `{ "technicianId":"..." }` | 제안이 추가된 `AssemblyRequestDto` | `assembly_offers`, audit |
+| `PATCH` | `/api/admin/assembly-requests/{id}/offers/{offerId}` | ADMIN | 2번 | 가격·소요일·재고 문구 | `AssemblyRequestDto` | `assembly_offers`, audit |
+| `POST` | `/api/admin/assembly-requests/{id}/offers/{offerId}/withdraw` | ADMIN | 2번 | `{ "reason":"일정 불가" }` | `AssemblyRequestDto` | `assembly_offers`, audit |
+
+조립 중개 규칙:
+
+- 생성 API는 current quote draft를 서버에서 다시 읽으며 클라이언트가 보낸 부품이나 가격을 신뢰하지 않는다.
+- `compatibility`, `power`, `size` Tool FAIL이나 graph FAIL이 있으면 아무 row도 만들지 않고 `409 CONFLICT_STATE`를 반환한다.
+- 같은 사용자와 `Idempotency-Key`는 하나의 요청만 만들며 fingerprint가 다르면 409다.
+- 신규 요청에는 ACTIVE, APPROVED, non-deleted, 표준 AS 동의, 지역·서비스 일치 `INTERNAL` 기사 제안을 최대 2건 자동 생성한다. 대상이 없으면 `REQUESTED`로 남긴다.
+- 승인된 `EXTERNAL` 기사는 지역·서비스 방식이 맞고 외부 `AVAILABLE` 제안이 3건 미만인 요청에 직접 제안할 수 있다. 기사당 요청별 1건이며 철회 후 재입찰은 허용하지 않는다.
+- 외부 기사 제안은 별도 관리자 승인을 거치지 않고 사용자 제안 비교 화면에 즉시 노출된다. 사용자가 하나를 선택하면 나머지 내부·외부 제안은 `EXPIRED`가 된다.
+- 입찰 전에는 기사에게 지역, 일정, 서비스 방식, 부품 snapshot만 공개한다. 선택된 제안의 가상 결제가 `PAID`가 된 뒤에만 선택 기사에게 연락처, 주소, 자유 메모를 공개한다.
+- 외부 기사 프로필은 `PENDING/APPROVED/REJECTED` 검증 상태를 가진다. `APPROVED + ACTIVE + 표준 AS 동의`만 신규 요청함과 입찰 API를 이용할 수 있으며, 정지·거절·삭제 시 미선택 제안은 즉시 철회한다. 승인 후 정지된 기사는 기존에 선택된 작업 조회는 계속할 수 있다.
+- 요청 snapshot은 생성 후 수정하지 않는다. 사용자는 `ASSEMBLING` 전까지 취소한 뒤 새 요청을 만든다.
+- 요청 상태는 `REQUESTED → OFFERED → MATCHED → CONFIRMED → ASSEMBLING → SHIPPED → COMPLETED`이며 종료 상태는 `CANCELLED`다.
+- 제안 상태는 `AVAILABLE/SELECTED/WITHDRAWN/EXPIRED`다. 한 요청에는 `SELECTED`가 최대 한 건이며 선택 후 가격 수정은 금지한다.
+- 가상 결제는 `PENDING/PAID/CANCELLED/REFUNDED` 상태만 기록하며 실제 PG, 카드·계좌 정보, 금전 거래는 없다.
+- 타인 요청은 소유권 정보 노출을 막기 위해 404로 처리한다.
+
 ### Parts/Price
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
@@ -914,7 +961,7 @@ PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/
 |---|---|
 | `POST /api/price-snapshots/collect` | 공개 API가 아니라 내부 service 처리 |
 | `PATCH /api/price-alerts/{id}` | V1 새 기능 추가 금지에 따라 제외 |
-| 주문/결제/배송/재고/타임세일 API | MVP 범위 아님 |
+| 실제 상품 주문/PG 결제/배송사 연동/재고 차감/타임세일 API | 조립 중개 요청과 가상 결제 상태를 제외하고 MVP 범위 아님 |
 | Google 외 OAuth provider API | V1은 Google 1개 provider만 구현 |
 | 관리자 룰/벤치마크 편집 API | V1은 seed read-only |
 | 전체 audit 검색/필터 API | V1은 최근 이력 조회만 |
