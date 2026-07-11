@@ -722,7 +722,7 @@
   {
     "id": "budget-target-031",
     "group": "BUDGET_BUILD",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "NORMAL",
     "draftInvariant": true,
@@ -746,7 +746,7 @@
   {
     "id": "budget-target-032",
     "group": "BUDGET_BUILD",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "NORMAL",
     "draftInvariant": true,
@@ -770,7 +770,7 @@
   {
     "id": "budget-target-033",
     "group": "BUDGET_BUILD",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -794,7 +794,7 @@
   {
     "id": "budget-target-034",
     "group": "BUDGET_BUILD",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -818,7 +818,7 @@
   {
     "id": "budget-target-035",
     "group": "BUDGET_BUILD",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -2979,7 +2979,7 @@
   {
     "id": "part-ram-031",
     "group": "PART_RECOMMEND",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "NORMAL",
     "draftInvariant": true,
@@ -3000,7 +3000,7 @@
   {
     "id": "part-ram-032",
     "group": "PART_RECOMMEND",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -3021,7 +3021,7 @@
   {
     "id": "part-ram-033",
     "group": "PART_RECOMMEND",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "NORMAL",
     "draftInvariant": true,
@@ -3042,7 +3042,7 @@
   {
     "id": "part-ram-034",
     "group": "PART_RECOMMEND",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "NORMAL",
     "draftInvariant": true,
@@ -3063,7 +3063,7 @@
   {
     "id": "part-ram-035",
     "group": "PART_RECOMMEND",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "NORMAL",
     "draftInvariant": true,
@@ -5109,7 +5109,7 @@
   {
     "id": "draft-ram-031",
     "group": "DRAFT_PREVIEW",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -5131,7 +5131,7 @@
   {
     "id": "draft-ram-032",
     "group": "DRAFT_PREVIEW",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -5153,7 +5153,7 @@
   {
     "id": "draft-ram-033",
     "group": "DRAFT_PREVIEW",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -5175,7 +5175,7 @@
   {
     "id": "draft-ram-034",
     "group": "DRAFT_PREVIEW",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -5197,7 +5197,7 @@
   {
     "id": "draft-ram-035",
     "group": "DRAFT_PREVIEW",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -7170,7 +7170,7 @@
   {
     "id": "simulation-cpu-026",
     "group": "SIMULATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -7191,7 +7191,7 @@
   {
     "id": "simulation-cpu-027",
     "group": "SIMULATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -7212,7 +7212,7 @@
   {
     "id": "simulation-cpu-028",
     "group": "SIMULATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -7233,7 +7233,7 @@
   {
     "id": "simulation-ram-029",
     "group": "SIMULATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -7254,7 +7254,7 @@
   {
     "id": "simulation-ram-030",
     "group": "SIMULATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "CURRENT_DRAFT",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -9195,7 +9195,7 @@
   {
     "id": "clarification-021",
     "group": "CLARIFICATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -9228,7 +9228,7 @@
   {
     "id": "clarification-022",
     "group": "CLARIFICATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -9261,7 +9261,7 @@
   {
     "id": "clarification-023",
     "group": "CLARIFICATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -9294,7 +9294,7 @@
   {
     "id": "clarification-024",
     "group": "CLARIFICATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -9327,7 +9327,7 @@
   {
     "id": "clarification-025",
     "group": "CLARIFICATION",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -13012,7 +13012,7 @@
   {
     "id": "cache-same_allowed-08-b",
     "group": "CACHE_MINIMAL_PAIR",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -13036,7 +13036,7 @@
   {
     "id": "cache-same_allowed-09-a",
     "group": "CACHE_MINIMAL_PAIR",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -13060,7 +13060,7 @@
   {
     "id": "cache-same_allowed-09-b",
     "group": "CACHE_MINIMAL_PAIR",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -13084,7 +13084,7 @@
   {
     "id": "cache-same_allowed-10-a",
     "group": "CACHE_MINIMAL_PAIR",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -13108,7 +13108,7 @@
   {
     "id": "cache-same_allowed-10-b",
     "group": "CACHE_MINIMAL_PAIR",
-    "stage": "gate",
+    "stage": "full",
     "contextMode": "NONE",
     "risk": "HIGH",
     "draftInvariant": true,
@@ -14109,5 +14109,2855 @@
     ],
     "minimalPairGroup": "cache-different_required-15",
     "cacheExpectation": "DIFFERENT_REQUIRED"
+  },
+  {
+    "id": "board-focus-single-001",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU"
+          ]
+        },
+        "message": "CPU 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-002",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU"
+          ]
+        },
+        "message": "프로세서 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-003",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU"
+          ]
+        },
+        "message": "CPU 소켓 있는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-004",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU"
+          ]
+        },
+        "message": "구성도에서 CPU 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-005",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU"
+          ]
+        },
+        "message": "프로세서가 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-006",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "메인보드 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-007",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "마더보드 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-008",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "보드 전체가 있는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-009",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "구성도에서 메인보드 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-010",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "motherboard가 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-011",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "램 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-012",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "RAM 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-013",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "메모리 꽂는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-014",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "구성도에서 DIMM 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-015",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "램이 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-016",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU"
+          ]
+        },
+        "message": "그래픽카드 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-017",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU"
+          ]
+        },
+        "message": "GPU 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-018",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU"
+          ]
+        },
+        "message": "글카 꽂는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-019",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU"
+          ]
+        },
+        "message": "구성도에서 VGA 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-020",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU"
+          ]
+        },
+        "message": "그래픽 카드가 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-021",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "SSD 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-022",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "M.2 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-023",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "NVMe 꽂는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-024",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "구성도에서 저장장치 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-025",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "스토리지가 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-026",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "PSU"
+          ]
+        },
+        "message": "파워 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-027",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "PSU"
+          ]
+        },
+        "message": "PSU 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-028",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "PSU"
+          ]
+        },
+        "message": "전원공급장치 넣는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-029",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "PSU"
+          ]
+        },
+        "message": "구성도에서 파워 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-030",
+    "group": "BOARD_FOCUS",
+    "stage": "gate",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "PSU"
+          ]
+        },
+        "message": "파워서플라이가 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-031",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE"
+          ]
+        },
+        "message": "케이스 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-032",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE"
+          ]
+        },
+        "message": "PC 케이스 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-033",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE"
+          ]
+        },
+        "message": "case 부분을 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-034",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE"
+          ]
+        },
+        "message": "구성도에서 케이스 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-035",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE"
+          ]
+        },
+        "message": "케이스가 어느 부분이야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-036",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER"
+          ]
+        },
+        "message": "쿨러 위치가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-037",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER"
+          ]
+        },
+        "message": "CPU 쿨러 장착 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-038",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER"
+          ]
+        },
+        "message": "수랭 꽂는 곳 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-039",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER"
+          ]
+        },
+        "message": "구성도에서 공랭 쿨러 찾아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-single-040",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER"
+          ]
+        },
+        "message": "cooler가 어디에 달려 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-001",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU",
+            "RAM"
+          ]
+        },
+        "message": "CPU랑 RAM 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-002",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU",
+            "RAM"
+          ]
+        },
+        "message": "CPU하고 RAM가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-003",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD",
+            "RAM"
+          ]
+        },
+        "message": "메인보드랑 램 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-004",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD",
+            "RAM"
+          ]
+        },
+        "message": "메인보드하고 램가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-005",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU",
+            "PSU"
+          ]
+        },
+        "message": "그래픽카드랑 파워 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-006",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU",
+            "PSU"
+          ]
+        },
+        "message": "그래픽카드하고 파워가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-007",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE",
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "SSD랑 메인보드 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-008",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE",
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "SSD하고 메인보드가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-009",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER",
+            "CPU"
+          ]
+        },
+        "message": "쿨러랑 CPU 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-010",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER",
+            "CPU"
+          ]
+        },
+        "message": "쿨러하고 CPU가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-011",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE",
+            "PSU"
+          ]
+        },
+        "message": "케이스랑 파워 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-012",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE",
+            "PSU"
+          ]
+        },
+        "message": "케이스하고 파워가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-013",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU",
+            "CASE"
+          ]
+        },
+        "message": "GPU랑 케이스 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-014",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU",
+            "CASE"
+          ]
+        },
+        "message": "GPU하고 케이스가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-015",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM",
+            "STORAGE"
+          ]
+        },
+        "message": "메모리랑 NVMe 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-016",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM",
+            "STORAGE"
+          ]
+        },
+        "message": "메모리하고 NVMe가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-017",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU",
+            "GPU"
+          ]
+        },
+        "message": "프로세서랑 글카 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-018",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU",
+            "GPU"
+          ]
+        },
+        "message": "프로세서하고 글카가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-019",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD",
+            "GPU"
+          ]
+        },
+        "message": "마더보드랑 그래픽 카드 위치 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-multi-020",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD",
+            "GPU"
+          ]
+        },
+        "message": "마더보드하고 그래픽 카드가 어디에 있어?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-001",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "메모리 꽂는 슬롯이 어느 쪽이야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-002",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "M.2 슬롯 자리를 가리켜줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-003",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "GPU"
+          ]
+        },
+        "message": "그래픽카드가 들어가는 PCIe 자리를 표시해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-004",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CPU"
+          ]
+        },
+        "message": "프로세서 소켓 위치를 강조해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-005",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "PSU"
+          ]
+        },
+        "message": "전원공급장치 넣는 하단 자리가 어디야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-006",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "COOLER"
+          ]
+        },
+        "message": "수랭 라디에이터 다는 자리 보여줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-007",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "CASE"
+          ]
+        },
+        "message": "본체 케이스 부분을 가리켜줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-008",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "MOTHERBOARD"
+          ]
+        },
+        "message": "기판 전체가 어느 부분인지 알려줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-009",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "STORAGE"
+          ]
+        },
+        "message": "NVMe 장착 자리가 어디쯤이야?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-indirect-010",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "BOARD_FOCUS",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "expectedBoardFocusCategories": [
+            "RAM"
+          ]
+        },
+        "message": "DIMM 슬롯 위치를 강조해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-001",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "CPU",
+          "forbidBoardFocus": true
+        },
+        "message": "CPU 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-002",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "MOTHERBOARD",
+          "forbidBoardFocus": true
+        },
+        "message": "메인보드 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-003",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "RAM",
+          "forbidBoardFocus": true
+        },
+        "message": "RAM 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-004",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "GPU",
+          "forbidBoardFocus": true
+        },
+        "message": "그래픽카드 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-005",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "STORAGE",
+          "forbidBoardFocus": true
+        },
+        "message": "SSD 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-006",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "PSU",
+          "forbidBoardFocus": true
+        },
+        "message": "파워 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-007",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "CASE",
+          "forbidBoardFocus": true
+        },
+        "message": "케이스 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-008",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "COOLER",
+          "forbidBoardFocus": true
+        },
+        "message": "쿨러 추천해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-009",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "CPU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 CPU를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-010",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "MOTHERBOARD",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 메인보드를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-011",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "RAM",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 RAM를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-012",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "GPU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 그래픽카드를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-013",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "STORAGE",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 SSD를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-014",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "PSU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 파워를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-015",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "CASE",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 케이스를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-016",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "COOLER",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 쿨러를 더 좋은 걸로 바꿔줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-017",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "CPU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 CPU를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-018",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "MOTHERBOARD",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 메인보드를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-019",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "RAM",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 RAM를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-020",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "GPU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 그래픽카드를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-021",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "STORAGE",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 SSD를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-022",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "PSU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 파워를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-023",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "CASE",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 케이스를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-024",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "SIMULATION_OR_CLARIFICATION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "COOLER",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 쿨러를 바꾸면 성능이 어떻게 돼?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-025",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "RAM",
+          "forbidBoardFocus": true
+        },
+        "message": "RAM 어디서 사?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-026",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "GPU",
+          "forbidBoardFocus": true
+        },
+        "message": "GPU 가격 어디서 봐?"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-027",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "STORAGE",
+          "forbidBoardFocus": true
+        },
+        "message": "SSD를 견적에 담아줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-028",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "PREVIEW_OR_NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "PSU",
+          "forbidBoardFocus": true
+        },
+        "message": "현재 견적 파워를 빼줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-029",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "NONE",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "COOLER",
+          "forbidBoardFocus": true
+        },
+        "message": "쿨러 성능 설명해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
+  },
+  {
+    "id": "board-focus-veto-030",
+    "group": "BOARD_FOCUS",
+    "stage": "full",
+    "contextMode": "CURRENT_DRAFT",
+    "risk": "HIGH",
+    "draftInvariant": true,
+    "turns": [
+      {
+        "expect": {
+          "outcome": "NEXT_ACTION",
+          "answerTypes": [
+            "PART",
+            "GENERAL",
+            "BUDGET"
+          ],
+          "expectedCategory": "MOTHERBOARD",
+          "forbidBoardFocus": true
+        },
+        "message": "메인보드 호환성 비교해줘"
+      }
+    ],
+    "uiContext": {
+      "surface": "SELF_QUOTE",
+      "capabilities": [
+        "BOARD_PART_FOCUS"
+      ]
+    }
   }
 ]
