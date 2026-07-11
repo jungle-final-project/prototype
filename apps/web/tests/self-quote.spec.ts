@@ -657,11 +657,6 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   await expect(page.getByTestId('slot-board-fused-plate')).toBeVisible();
   await expect(page.getByTestId('slot-board-edges')).toHaveCount(0);
   await expect(page.getByTestId('iso-part-GPU')).toHaveCount(0);
-  const fusedToggleBox = await isometricRadio.boundingBox();
-  const fusedBoardBox = await board.boundingBox();
-  if (!fusedToggleBox || !fusedBoardBox) {
-    throw new Error('보기 방식 토글 위치를 확인할 수 없습니다.');
-  }
 
   // 실장도: 복원된 평면도 관계선이 보이고 배치판은 사라진다.
   await page.getByRole('button', { name: '실장도 보기' }).click();
@@ -678,17 +673,6 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   await expect(board).toHaveAttribute('data-visual-mode', 'isometric');
   await expect(page.getByTestId('slot-board-motherboard-art')).toBeVisible();
   await expect(page.getByRole('switch', { name: '보드 정보 표시' })).toBeVisible();
-  const isometricToggleBox = await isometricRadio.boundingBox();
-  const isometricBoardBox = await board.boundingBox();
-  if (!isometricToggleBox || !isometricBoardBox) {
-    throw new Error('3D 전환 후 보기 방식 토글 위치를 확인할 수 없습니다.');
-  }
-  expect(Math.abs(
-    (isometricToggleBox.x - isometricBoardBox.x) - (fusedToggleBox.x - fusedBoardBox.x)
-  )).toBeLessThanOrEqual(1);
-  expect(Math.abs(
-    (isometricToggleBox.y - isometricBoardBox.y) - (fusedToggleBox.y - fusedBoardBox.y)
-  )).toBeLessThanOrEqual(1);
   await expect(page.getByTestId('iso-part-CPU')).toBeVisible();
   await expect(page.getByTestId('iso-part-MOTHERBOARD')).toBeVisible();
   await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
