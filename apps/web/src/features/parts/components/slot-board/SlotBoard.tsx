@@ -280,7 +280,7 @@ export function SlotBoard({
         <RelationMapBanner
           problem={boardProblem}
           graph={graph}
-          className="absolute bottom-4 left-40 right-32 z-30 hidden lg:block"
+          className="pointer-events-none absolute inset-x-4 bottom-4 z-[35] flex justify-center lg:bottom-5"
         />
       ) : null}
       {!isIsometric ? (
@@ -496,7 +496,6 @@ function RelationMapBoardBody({
       className="relative min-h-0 flex-1 overflow-auto bg-white px-4 pb-4 pt-3"
     >
       <div className="w-full min-w-[660px]">
-        <RelationMapLegend />
         <div className="mx-auto mt-2 w-full max-w-[1120px]">
           <div className="relative h-[560px] rounded-lg bg-white">
             <RelationMapEdges
@@ -547,49 +546,38 @@ const RELATION_MAP_NODE_ORDER: PartCategory[] = [
 ];
 
 const RELATION_MAP_LAYOUTS: Record<PartCategory, SlotConfig['layout']> = {
-  CPU: { x: 4, y: 21, w: 27, h: 13 },
-  COOLER: { x: 4, y: 37, w: 27, h: 13 },
-  RAM: { x: 4, y: 53, w: 27, h: 13 },
-  STORAGE: { x: 4, y: 69, w: 27, h: 13 },
-  MOTHERBOARD: { x: 37, y: 9, w: 26, h: 13 },
-  GPU: { x: 34.5, y: 35, w: 31, h: 32 },
-  PSU: { x: 69, y: 27, w: 26, h: 15 },
-  CASE: { x: 69, y: 58, w: 26, h: 15 }
+  CPU: { x: 4.8, y: 36.4, w: 26.4, h: 25.2 },
+  COOLER: { x: 4.8, y: 68.4, w: 26.4, h: 25.2 },
+  RAM: { x: 39.6, y: 6.4, w: 22.8, h: 25.2 },
+  STORAGE: { x: 39.6, y: 68.4, w: 22.8, h: 25.2 },
+  MOTHERBOARD: { x: 37.8, y: 36.4, w: 26.4, h: 25.2 },
+  GPU: { x: 71, y: 37.6, w: 24, h: 25.2 },
+  PSU: { x: 71, y: 5.2, w: 24, h: 25.2 },
+  CASE: { x: 71, y: 68.4, w: 24, h: 25.2 }
 };
 
-const RELATION_MAP_CANONICAL_EDGES: Array<{ from: PartCategory; to: PartCategory; lane: 'left' | 'top' | 'right'; label?: string }> = [
-  { from: 'CPU', to: 'GPU', lane: 'left' },
-  { from: 'COOLER', to: 'GPU', lane: 'left' },
-  { from: 'RAM', to: 'GPU', lane: 'left' },
-  { from: 'STORAGE', to: 'GPU', lane: 'left' },
-  { from: 'MOTHERBOARD', to: 'GPU', lane: 'top' },
-  { from: 'GPU', to: 'PSU', lane: 'right', label: '전력 부족' },
-  { from: 'GPU', to: 'CASE', lane: 'right', label: '길이 초과' }
+type RelationMapLane = 'straight' | 'topRail' | 'bottomRail';
+type RelationMapEdgeEmphasis = 'direct' | 'indirect';
+const RELATION_MAP_TOP_RAIL_Y = 2.4;
+const RELATION_MAP_BOTTOM_RAIL_Y = 97.2;
+
+const RELATION_MAP_CANONICAL_EDGES: Array<{
+  from: PartCategory;
+  to: PartCategory;
+  lane: RelationMapLane;
+  emphasis?: RelationMapEdgeEmphasis;
+  label?: string;
+}> = [
+  { from: 'MOTHERBOARD', to: 'CPU', lane: 'straight' },
+  { from: 'MOTHERBOARD', to: 'RAM', lane: 'straight' },
+  { from: 'MOTHERBOARD', to: 'STORAGE', lane: 'straight' },
+  { from: 'MOTHERBOARD', to: 'GPU', lane: 'straight' },
+  { from: 'GPU', to: 'PSU', lane: 'straight', emphasis: 'direct', label: 'GPU 전력' },
+  { from: 'CPU', to: 'PSU', lane: 'topRail', emphasis: 'direct', label: 'CPU 전력' },
+  { from: 'CPU', to: 'COOLER', lane: 'straight', emphasis: 'direct', label: '쿨러 호환' },
+  { from: 'CASE', to: 'COOLER', lane: 'bottomRail', emphasis: 'direct', label: '쿨러 공간' },
+  { from: 'CASE', to: 'GPU', lane: 'straight', emphasis: 'direct', label: 'GPU 장착' }
 ];
-
-function RelationMapLegend() {
-  return (
-    <div className="mt-3 flex justify-center">
-      <div className="inline-flex flex-wrap items-center justify-center gap-4 rounded-md border border-slate-200 bg-white px-5 py-2 text-[10px] font-black text-slate-500 shadow-sm">
-        <LegendLine color="#2563eb" label="선택 부품" />
-        <LegendLine color="#ef4444" label="직접 영향" />
-        <LegendLine color="#3b82f6" dash="4 3" label="간접 영향" />
-        <LegendLine color="#94a3b8" dash="4 3" label="영향 없음" />
-      </div>
-    </div>
-  );
-}
-
-function LegendLine({ color, dash, label }: { color: string; dash?: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <svg width="30" height="6" viewBox="0 0 30 6" aria-hidden="true">
-        <line x1="1" y1="3" x2="29" y2="3" stroke={color} strokeWidth="2.2" strokeDasharray={dash} strokeLinecap="round" />
-      </svg>
-      {label}
-    </span>
-  );
-}
 
 function RelationMapNode({
   slot,
@@ -632,7 +620,6 @@ function RelationMapNode({
     : '부품 선택 필요';
   const fullNameTitle = filled ? items.map((item) => item.name).join('\n') : itemTitle;
   const statusLabel = relationMapNodeStatusLabel(filled, isFocused, status, reason?.label);
-  const isGpuNode = slot.category === 'GPU';
   const layoutVars: CSSProperties = {
     ['--rx' as string]: `${layout.x}%`,
     ['--ry' as string]: `${layout.y}%`,
@@ -665,11 +652,11 @@ function RelationMapNode({
       } ${isAiDimmed ? 'opacity-40' : ''} ${isFlashing ? 'slot-attach-flash' : ''}`}
     >
       {isFocused ? (
-        <span className="absolute -left-2.5 -top-2.5 z-30 grid h-6 w-6 place-items-center rounded-full bg-brand-blue text-[11px] font-black text-white shadow-sm">
+        <span className="absolute -left-3 -top-3 z-30 grid h-7 w-7 place-items-center rounded-full bg-brand-blue text-[13px] font-black text-white shadow-sm">
           {slotOrderNumber(slot.category)}
         </span>
       ) : status === 'FAIL' || status === 'WARN' ? (
-        <span className={`absolute -left-2.5 -top-2.5 z-30 grid h-6 w-6 place-items-center rounded-full text-[11px] font-black text-white shadow-sm ${
+        <span className={`absolute -left-3 -top-3 z-30 grid h-7 w-7 place-items-center rounded-full text-[13px] font-black text-white shadow-sm ${
           status === 'FAIL' ? 'bg-red-500' : 'bg-amber-500'
         }`}>
           {slotOrderNumber(slot.category)}
@@ -681,48 +668,45 @@ function RelationMapNode({
         aria-label={`${slot.label} 선택`}
         aria-pressed={isSelected}
         title={fullNameTitle}
-        className={`flex h-full w-full rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
-          isGpuNode
-            ? 'flex-col items-center justify-start gap-2 px-4 py-3 text-center'
-            : 'items-center gap-3 px-3.5 py-2.5 text-left'
-        }`}
+        className="flex h-full w-full flex-col justify-center gap-1 rounded-md px-3.5 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       >
-        <span className={`shrink-0 rounded ${
-          isGpuNode
-            ? 'flex h-20 w-full max-w-[200px] items-center justify-center overflow-visible'
-            : 'grid h-14 w-14 place-items-center overflow-hidden'
-        } ${
-          filled ? 'border border-slate-100 bg-slate-50' : 'border border-slate-300 bg-slate-50 shadow-inner'
-        }`}>
-          <img
-            src={imageSrc}
-            alt=""
-            aria-hidden="true"
-            onError={(event) => {
-              event.currentTarget.src = slot.glyph;
-            }}
-            className={isGpuNode ? 'block max-h-full max-w-full object-contain p-1' : 'h-full w-full object-contain p-1'}
-          />
-        </span>
-        <span className={`min-w-0 ${isGpuNode ? 'w-full flex-none' : 'flex-1'}`}>
-          <span className="block text-[13px] font-black text-slate-700">{slot.label}</span>
-          <span title={fullNameTitle} className={`mt-0.5 block truncate text-[12px] font-bold ${filled ? 'text-commerce-ink' : 'text-slate-400'}`}>
-            {itemTitle}
+        <span className="flex w-full min-w-0 items-center gap-3">
+          <span className={`grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded ${
+            filled ? 'border border-slate-100 bg-slate-50' : 'border border-slate-300 bg-slate-50 shadow-inner'
+          }`}>
+            <img
+              src={imageSrc}
+              alt=""
+              aria-hidden="true"
+              onError={(event) => {
+                event.currentTarget.src = slot.glyph;
+              }}
+              className="h-full w-full object-contain p-1"
+            />
           </span>
-          <span className={`mt-1 flex ${isGpuNode ? 'justify-center' : 'justify-end'}`}>
-            <span className={`max-w-full truncate rounded px-1.5 py-0.5 text-[11px] font-black ${
-              isFocused
-                ? 'bg-blue-50 text-brand-blue'
-                : status === 'FAIL'
-                  ? 'bg-red-50 text-red-600'
-                  : status === 'WARN'
-                    ? 'bg-amber-50 text-amber-700'
-                    : filled
-                      ? 'bg-slate-50 text-slate-500'
-                      : 'bg-white text-slate-400'
-            }`}>
-              {statusLabel}
-            </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-black leading-tight text-slate-700">{slot.label}</span>
+          </span>
+        </span>
+        <span
+          title={fullNameTitle}
+          className={`block w-full truncate pb-0.5 text-[13px] font-bold leading-5 ${filled ? 'text-commerce-ink' : 'text-slate-400'}`}
+        >
+          {itemTitle}
+        </span>
+        <span className="flex w-full justify-end">
+          <span className={`max-w-full whitespace-nowrap rounded px-2 py-0.5 text-[12px] font-black ${
+            isFocused
+              ? 'bg-blue-50 text-brand-blue'
+              : status === 'FAIL'
+                ? 'bg-red-50 text-red-600'
+                : status === 'WARN'
+                  ? 'bg-amber-50 text-amber-700'
+                  : filled
+                    ? 'bg-slate-50 text-slate-500'
+                    : 'bg-white text-slate-400'
+          }`}>
+            {statusLabel}
           </span>
         </span>
       </button>
@@ -736,7 +720,7 @@ function RelationMapNode({
             event.stopPropagation();
             onRemoveItem(primaryItem.partId);
           }}
-          className="absolute right-1 top-1 z-30 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
+          className="absolute right-1.5 top-1.5 z-30 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
         >
           빼기
         </button>
@@ -766,7 +750,7 @@ function RelationMapEdges({
       edge.from === selectedCategory || edge.to === selectedCategory
         ? status === 'FAIL' || status === 'WARN' ? 'direct' : 'selected'
         : touchesFocus
-          ? edge.lane === 'right' ? 'direct' : 'indirect'
+          ? edge.emphasis === 'direct' ? 'direct' : 'indirect'
           : 'none';
     return {
       ...edge,
@@ -799,12 +783,12 @@ function RelationMapEdges({
           );
         })}
       </svg>
-      {paths.filter((edge) => edge.kind === 'direct' && edge.label).map((edge) => {
-        const label = relationMapLabelPoint(edge.fromLayout, edge.toLayout);
+      {paths.filter((edge) => isProblemStatus(edge.status) && edge.label).map((edge) => {
+        const label = relationMapLabelPoint(edge.lane, edge.fromLayout, edge.toLayout);
         return (
           <span
             key={`label-${edge.from}-${edge.to}`}
-            className="absolute -translate-x-1/2 -translate-y-1/2 rounded border border-red-200 bg-white px-1.5 py-0.5 text-[9px] font-black text-red-500 shadow-sm"
+            className={`absolute -translate-x-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 text-[9px] font-black shadow-sm ${EDGE_LABEL_CLASSES[edge.status]}`}
             style={{ left: `${label.x}%`, top: `${label.y}%` }}
           >
             {edge.label}
@@ -818,7 +802,7 @@ function RelationMapEdges({
 function RelationMapBanner({
   problem,
   graph,
-  className = 'absolute inset-x-3 bottom-4 z-30'
+  className = 'absolute inset-x-3 bottom-4 z-30 flex justify-center'
 }: {
   problem: SlotBoardBannerProblem | null;
   graph?: BuildGraphResolveResponse;
@@ -828,21 +812,26 @@ function RelationMapBanner({
   const count = issues.length;
   const status = problem?.status ?? issues[0]?.status;
   const hasProblem = Boolean(status);
+  const message = hasProblem
+    ? problem?.message ?? issues[0]?.summary ?? `현재 선택한 부품은 바로 적용할 수 없습니다. 문제 ${Math.max(1, count)}개 발생`
+    : '현재 선택한 부품 기준으로 감지된 문제가 없습니다.';
 
   return (
     <div
       data-testid="relation-map-bottom-banner"
-      className={`${className} rounded-md border px-4 py-2 text-center text-[12px] font-black ${
+      className={className}
+    >
+      <p
+        className={`pointer-events-none max-w-[88%] rounded-md border bg-white px-2.5 py-1.5 text-center text-[13.5px] font-semibold shadow-sm sm:text-[16px] ${
         hasProblem
           ? status === 'WARN'
-            ? 'border-amber-200 bg-amber-50 text-amber-700'
-            : 'border-red-200 bg-red-50 text-red-600'
-          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            ? 'border-amber-500 text-amber-500'
+            : 'border-red-500 text-red-500'
+          : 'border-emerald-500 text-emerald-600'
       }`}
-    >
-      {hasProblem
-        ? `현재 선택한 부품은 바로 적용할 수 없습니다. 문제 ${Math.max(1, count)}개 발생`
-        : '현재 선택한 부품 기준으로 감지된 문제가 없습니다.'}
+      >
+        {message}
+      </p>
     </div>
   );
 }
@@ -874,7 +863,6 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
     return reasons;
   }
 
-  const categoryByNodeId = graphCategoryByNodeId(graph);
   const addReason = (
     category: PartCategory | undefined,
     status: string,
@@ -897,31 +885,17 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
     }
   };
 
-  graph.edges.forEach((edge) => {
-    if (!isProblemStatus(edge.status)) {
-      return;
-    }
-    const sourceCategory = categoryByNodeId.get(edge.source);
-    const targetCategory = categoryByNodeId.get(edge.target);
-    const canonicalLabel = relationMapCanonicalLabel(sourceCategory, targetCategory);
-    const detail = edge.summary || edge.label || canonicalLabel;
-    addReason(sourceCategory, edge.status, detail, canonicalLabel, true);
-    addReason(targetCategory, edge.status, detail, canonicalLabel, true);
+  const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
+  problemDetailsByCategory.forEach((detail, category) => {
+    addReason(category, detail.status, detail.reasons[0] ?? detail.title, detail.title, true);
   });
 
-  graph.nodes.forEach((node) => {
-    addReason(slotCategoryFromGraphCategory(node.category), node.status, node.detail || node.label);
-  });
+  if (reasons.size > 0) {
+    return reasons;
+  }
 
-  graph.insights.forEach((insight) => {
-    if (!isProblemStatus(insight.status)) {
-      return;
-    }
-    insight.relatedNodeIds.forEach((nodeId) => {
-      addReason(categoryByNodeId.get(nodeId), insight.status, insight.description || insight.title);
-    });
-  });
-
+  // If the graph only contains broad tool-level results, keep the old category fallback.
+  // Detailed node/edge/insight reasons above are preferred because they match the placement view.
   graph.toolResults.forEach((result) => {
     if (!isProblemStatus(result.status)) {
       return;
@@ -934,20 +908,11 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
   return reasons;
 }
 
-function relationMapCanonicalLabel(first?: PartCategory, second?: PartCategory) {
-  if (!first || !second) {
-    return undefined;
-  }
-  return RELATION_MAP_CANONICAL_EDGES.find((edge) => (
-    (edge.from === first && edge.to === second) || (edge.from === second && edge.to === first)
-  ))?.label;
-}
-
 function relationMapToolCategories(tool: string): PartCategory[] {
   const normalizedTool = tool.toLowerCase();
-  if (normalizedTool === 'power') return ['GPU', 'PSU'];
+  if (normalizedTool === 'power') return ['CPU', 'GPU', 'PSU'];
   if (normalizedTool === 'size') return ['GPU', 'CASE', 'COOLER'];
-  if (normalizedTool === 'compatibility') return ['CPU', 'MOTHERBOARD', 'RAM'];
+  if (normalizedTool === 'compatibility') return ['CPU', 'MOTHERBOARD', 'RAM', 'STORAGE'];
   if (normalizedTool === 'performance') return ['CPU', 'GPU', 'RAM'];
   return [];
 }
@@ -1039,21 +1004,87 @@ function relationStatusBetween(
   if (graphEdge) {
     return graphEdge.status;
   }
+  const toolStatus = relationToolStatusBetween(graph, from, to);
+  if (toolStatus) {
+    return toolStatus;
+  }
   return 'BASE';
 }
 
-function relationMapPath(lane: 'left' | 'top' | 'right', from: SlotConfig['layout'], to: SlotConfig['layout']) {
+function relationToolStatusBetween(
+  graph: BuildGraphResolveResponse | undefined,
+  from: PartCategory,
+  to: PartCategory
+): SlotEdgeStatus | undefined {
+  if (!graph) {
+    return undefined;
+  }
+  const tools = relationMapToolsForPair(from, to);
+  if (tools.length === 0) {
+    return undefined;
+  }
+  let status: 'PASS' | 'WARN' | 'FAIL' | undefined;
+  graph.toolResults.forEach((result) => {
+    const tool = result.tool.toLowerCase();
+    if (!tools.includes(tool) || !isGraphStatus(result.status)) {
+      return;
+    }
+    if (!status || graphStatusRank(result.status) > graphStatusRank(status)) {
+      status = result.status;
+    }
+  });
+  return status;
+}
+
+function relationMapToolsForPair(first: PartCategory, second: PartCategory) {
+  const has = (left: PartCategory, right: PartCategory) =>
+    (first === left && second === right) || (first === right && second === left);
+  if (has('GPU', 'PSU') || has('CPU', 'PSU')) {
+    return ['power'];
+  }
+  if (has('GPU', 'CASE') || has('COOLER', 'CASE')) {
+    return ['size'];
+  }
+  if (
+    has('CPU', 'MOTHERBOARD') ||
+    has('MOTHERBOARD', 'RAM') ||
+    has('MOTHERBOARD', 'STORAGE') ||
+    has('MOTHERBOARD', 'GPU') ||
+    has('CPU', 'COOLER')
+  ) {
+    return ['compatibility'];
+  }
+  return [];
+}
+
+function relationMapPath(lane: RelationMapLane, from: SlotConfig['layout'], to: SlotConfig['layout']) {
+  if (lane === 'topRail') {
+    const start = relationMapSideAnchor(from, 'top');
+    const end = relationMapSideAnchor(to, 'top');
+    return `M ${start.x} ${start.y} V ${RELATION_MAP_TOP_RAIL_Y} H ${end.x} V ${end.y}`;
+  }
+  if (lane === 'bottomRail') {
+    const start = relationMapSideAnchor(from, 'bottom');
+    const end = relationMapSideAnchor(to, 'bottom');
+    return `M ${start.x} ${start.y} V ${RELATION_MAP_BOTTOM_RAIL_Y} H ${end.x} V ${end.y}`;
+  }
   const start = relationMapAnchor(from, to);
   const end = relationMapAnchor(to, from);
-  if (lane === 'left') {
-    const midX = Math.min(start.x + 7, end.x - 3);
-    return `M ${start.x} ${start.y} H ${midX} V ${end.y} H ${end.x}`;
-  }
-  if (lane === 'top') {
+  if (Math.abs(start.x - end.x) < 0.01) {
     return `M ${start.x} ${start.y} V ${end.y}`;
   }
-  const railX = start.x + 5;
-  return `M ${start.x} ${start.y} H ${railX} V ${end.y} H ${end.x}`;
+  if (Math.abs(start.y - end.y) < 0.01) {
+    return `M ${start.x} ${start.y} H ${end.x}`;
+  }
+  return `M ${start.x} ${start.y} H ${end.x} V ${end.y}`;
+}
+
+function relationMapSideAnchor(box: SlotConfig['layout'], side: 'top' | 'bottom') {
+  const center = boxCenter(box);
+  return {
+    x: center.x,
+    y: side === 'top' ? box.y : box.y + box.h
+  };
 }
 
 function relationMapAnchor(box: SlotConfig['layout'], target: SlotConfig['layout']) {
@@ -1071,7 +1102,23 @@ function relationMapAnchor(box: SlotConfig['layout'], target: SlotConfig['layout
   };
 }
 
-function relationMapLabelPoint(from: SlotConfig['layout'], to: SlotConfig['layout']) {
+function relationMapLabelPoint(lane: RelationMapLane, from: SlotConfig['layout'], to: SlotConfig['layout']) {
+  if (lane === 'topRail') {
+    const start = relationMapSideAnchor(from, 'top');
+    const end = relationMapSideAnchor(to, 'top');
+    return {
+      x: start.x + (end.x - start.x) * 0.5,
+      y: RELATION_MAP_TOP_RAIL_Y
+    };
+  }
+  if (lane === 'bottomRail') {
+    const start = relationMapSideAnchor(from, 'bottom');
+    const end = relationMapSideAnchor(to, 'bottom');
+    return {
+      x: start.x + (end.x - start.x) * 0.5,
+      y: RELATION_MAP_BOTTOM_RAIL_Y
+    };
+  }
   const start = relationMapAnchor(from, to);
   const end = relationMapAnchor(to, from);
   return {
@@ -1081,19 +1128,14 @@ function relationMapLabelPoint(from: SlotConfig['layout'], to: SlotConfig['layou
 }
 
 function relationMapEdgeStyle(kind: 'selected' | 'direct' | 'indirect' | 'none', status: SlotEdgeStatus) {
+  const style = EDGE_STROKES[status];
   if (kind === 'none') {
-    return { stroke: '#cbd5e1', dash: '4 4', width: 1.7, opacity: 0.58 };
+    return { stroke: style.stroke, dash: style.dash, width: 1.8, opacity: status === 'WARN' || status === 'FAIL' ? 0.85 : 0.5 };
   }
   if (kind === 'indirect') {
-    return { stroke: '#3b82f6', dash: '4 3', width: 2.1, opacity: 0.75 };
+    return { stroke: style.stroke, dash: style.dash, width: 2.2, opacity: status === 'PENDING' ? 0.72 : 0.82 };
   }
-  if (kind === 'selected') {
-    return { stroke: '#2563eb', dash: undefined, width: 2.5, opacity: 0.9 };
-  }
-  if (status === 'WARN') {
-    return { stroke: '#d97706', dash: undefined, width: 2.5, opacity: 0.95 };
-  }
-  return { stroke: '#ef4444', dash: undefined, width: 2.5, opacity: 0.95 };
+  return { stroke: style.stroke, dash: style.dash, width: status === 'WARN' || status === 'FAIL' ? 3 : 2.6, opacity: 0.95 };
 }
 
 function relationMapIssues(graph?: BuildGraphResolveResponse): RelationMapIssue[] {
