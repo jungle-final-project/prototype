@@ -15,12 +15,14 @@ from typing import Any
 PROFILES = ["load", "stress", "spike", "soak", "capacity"]
 ENDPOINTS = [
     "auth",
+    "auth_refresh",
     "health",
     "parts",
     "home_recommendations",
     "quote_draft",
     "build_history",
     "price_alerts",
+    "assembly_requests",
     "ai_fast",
 ]
 
@@ -158,16 +160,17 @@ def main() -> int:
         "",
         "## 엔드포인트별 p95",
         "",
-        "| 종류 | 인증 | 헬스 | 부품 | 홈 추천 | 견적 초안 | 견적 이력 | 가격 알림 | AI fast |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| 종류 | 로그인 | 토큰 갱신 | 헬스 | 부품 | 홈 추천 | 견적 초안 | 견적 이력 | 가격 알림 | 조립 요청 | AI fast |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ])
     for row in rows:
         endpoint = row["endpointP95Ms"]
         lines.append(
-            f"| {row['profile']} | {endpoint['auth']:.2f} | {endpoint['health']:.2f} | "
+            f"| {row['profile']} | {endpoint['auth']:.2f} | {endpoint['auth_refresh']:.2f} | {endpoint['health']:.2f} | "
             f"{endpoint['parts']:.2f} | {endpoint['home_recommendations']:.2f} | "
             f"{endpoint['quote_draft']:.2f} | {endpoint['build_history']:.2f} | "
-            f"{endpoint['price_alerts']:.2f} | {endpoint['ai_fast']:.2f} |"
+            f"{endpoint['price_alerts']:.2f} | {endpoint['assembly_requests']:.2f} | "
+            f"{endpoint['ai_fast']:.2f} |"
         )
 
     if soak_windows:

@@ -10,7 +10,9 @@
 | Soak | 장시간 반복 시 누수·고갈 징후 확인 | 20 VU, 연구 실행 60분 |
 | Capacity | 일정 도착률을 높이며 처리 가능한 RPS 확인 | 50→100→200→300→400 iteration/s |
 
-혼합 요청은 인증, 부품, 홈 추천부품/XGBoost, 견적초안, 견적 이력, 가격 알림, 읽기 전용 AI 위치 강조를 포함한다. 외부 OpenAI 호출은 대량 부하에서 제외해 BuildGraph API·DB·Redis·scorer의 용량을 측정하며, 실제 LLM 병렬 결과는 별도 Build Chat QA 보고서에서 관리한다.
+혼합 요청은 인증, 부품, 홈 추천부품/XGBoost, 견적초안, 견적 이력, 가격 알림, 조립 요청 이력, 읽기 전용 AI 위치 강조를 포함한다. 외부 OpenAI 호출은 대량 부하에서 제외해 BuildGraph API·DB·Redis·scorer의 용량을 측정하며, 실제 LLM 병렬 결과는 별도 Build Chat QA 보고서에서 관리한다.
+
+각 VU는 독립 access/refresh token을 유지한다. 보호 API가 `401`을 반환하면 `/api/auth/refresh` 후 원 요청을 한 번만 재시도하며, refresh도 실패할 때만 로그인으로 복구한다. 15분 access token TTL보다 긴 Soak에서 setup token 하나를 계속 재사용하면 서버 내구성이 아니라 클라이언트 인증 만료를 측정하게 되므로 금지한다.
 
 Docker Desktop 기준 실행 예시:
 

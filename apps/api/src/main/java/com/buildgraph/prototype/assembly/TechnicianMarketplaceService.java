@@ -277,8 +277,16 @@ public class TechnicianMarketplaceService {
                   ON own_offer.assembly_request_id = ar.id AND own_offer.technician_id = ?
                 LEFT JOIN assembly_payments ap ON ap.assembly_request_id = ar.id
                 WHERE ar.public_id = ?::uuid
+                """ + detailAccessCondition(), technicianId, publicId, allowOpenRequest, userId,
+                toJson(DbValueMapper.json(technician, "service_regions", List.of())),
+                toJson(DbValueMapper.json(technician, "service_types", List.of())));
+        return rows.stream().findFirst().orElseThrow(TechnicianMarketplaceService::notFound);
+    }
+
+    static String detailAccessCondition() {
+        return """
                   AND (
-                    own_offer.status = 'SELECTED'
+                    own_offer.id IS NOT NULL
                     OR (
                       ? AND ar.user_id <> ? AND ar.status IN ('REQUESTED', 'OFFERED')
                       AND jsonb_exists(?::jsonb, ar.region)
@@ -291,10 +299,7 @@ public class TechnicianMarketplaceService {
                              AND ext_tech.provider_type = 'EXTERNAL') < 3
                     )
                   )
-                """, technicianId, publicId, allowOpenRequest, userId,
-                toJson(DbValueMapper.json(technician, "service_regions", List.of())),
-                toJson(DbValueMapper.json(technician, "service_types", List.of())));
-        return rows.stream().findFirst().orElseThrow(TechnicianMarketplaceService::notFound);
+                """;
     }
 
     private Map<String, Object> lockOpenRequest(String publicId, Map<String, Object> technician, Long userId) {
