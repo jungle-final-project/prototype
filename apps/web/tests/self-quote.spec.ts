@@ -312,7 +312,7 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
 
   await page.goto('/self-quote');
 
-  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toHaveCount(0);
   const board = page.getByTestId('slot-board');
   await expect(board).toBeVisible();
   // 슬롯 카드 8개는 실장도 보기에서 검증한다(기본 배치도는 배치판 아트 + 클릭 영역).
@@ -324,11 +324,11 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
   await expect(page.getByTestId('slot-CPU').locator('img')).toHaveAttribute('src', '/slot-board/parts/cpu.svg');
   await expect(page.getByTestId('slot-STORAGE').locator('img')).toHaveAttribute('src', '/slot-board/parts/ssd.svg');
 
-  const statusBar = page.getByTestId('slot-status-bar');
-  await expect(statusBar.getByText('장착 0/8')).toBeVisible();
-  await expect(statusBar.getByText('미장착 슬롯 8개가 있습니다')).toBeVisible();
-  await expect(statusBar.getByText('견적 합계')).toBeVisible();
-  await expect(statusBar.getByRole('button', { name: '구매하기' })).toBeDisabled();
+  const summaryBar = page.getByTestId('quote-summary-bar');
+  await expect(summaryBar).toContainText('0 / 8');
+  await expect(summaryBar).toContainText('부품 없음');
+  await expect(page.getByTestId('slot-status-bar')).toHaveCount(0);
+  await expect(page.getByTestId('quote-checkout-actions')).toHaveCount(0);
 
   // 구 목록/장바구니/노드 그래프 UI는 렌더링하지 않는다.
   await expect(page.getByRole('heading', { name: '견적 장바구니', exact: true })).toHaveCount(0);
@@ -544,10 +544,10 @@ test('fills all 8 slots from the current quote draft and shows mini slot overflo
   await expect(ssdSlot.getByText('+1')).toBeVisible();
   await expect(ssdSlot).toHaveAttribute('title', '풀보드 NVMe SSD 1 외 2개');
 
-  const statusBar = page.getByTestId('slot-status-bar');
-  await expect(statusBar.getByText('장착 8/8')).toBeVisible();
-  await expect(statusBar.getByText(/미장착 슬롯/)).toHaveCount(0);
-  await expect(statusBar.getByText(`${fullDraft.totalPrice.toLocaleString()}원`)).toBeVisible();
+  const summaryBar = page.getByTestId('quote-summary-bar');
+  await expect(summaryBar).toContainText('8 / 8');
+  await expect(summaryBar).toContainText(`${fullDraft.totalPrice.toLocaleString()}원`);
+  await expect(page.getByTestId('slot-status-bar')).toHaveCount(0);
 });
 
 test('renders the slot board as an information-first compatibility diagram with mounted part media', async ({ page }) => {
@@ -637,10 +637,8 @@ test('renders the slot board as an information-first compatibility diagram with 
   // 장식용 배경 평면도는 리디자인에서 제거됨 — 범례가 색 체계를 설명한다.
   await expect(page.getByTestId('slot-board-motherboard-art')).toHaveCount(0);
   await expect(page.getByTestId('iso-part-GPU')).toHaveCount(0);
-  // 범례는 보드 헤더에 있다 ('호환 가능'은 장착 슬롯 뱃지에도 쓰이므로 first = 헤더).
-  await expect(page.getByText('호환 가능', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('장착 불가', { exact: true })).toBeVisible();
-  await expect(page.getByText('미장착', { exact: true })).toBeVisible();
+  // 한 화면 높이를 확보하기 위해 중복 호환 범례는 보드 헤더에서 노출하지 않는다.
+  await expect(page.getByTestId('slot-board-legend')).toHaveCount(0);
 
   // 카드는 카테고리 통일 에셋+짧은 요약(사양) 중심 — 상품명 전문은 hover 툴팁과 체크리스트가 담당한다.
   const gpuSlot = page.getByTestId('slot-GPU');
@@ -1123,7 +1121,13 @@ test('blocks purchase when a tool check fails without a matching edge', async ({
   await page.goto('/self-quote');
 
   await expect(page.getByTestId('quote-summary-bar').getByText('조건 미충족')).toBeVisible();
-  await expect(page.getByText('안 맞는 부품이 있어 구매할 수 없습니다', { exact: false })).toBeVisible();
+  const checkoutActions = page.getByTestId('quote-checkout-actions');
+  await expect(checkoutActions.getByRole('button', { name: '구매하기' })).toBeDisabled();
+  await expect(checkoutActions.getByRole('button', { name: '구매하기' })).toHaveAttribute(
+    'title',
+    '안 맞는 부품이 있어 구매할 수 없습니다. 문제 슬롯을 교체해 주세요.'
+  );
+  await expect(checkoutActions.getByRole('button', { name: '내 견적함에 추가' })).toBeEnabled();
 });
 
 test('does not block purchase for a tool fail about a category that is not mounted', async ({ page }) => {
@@ -1282,11 +1286,42 @@ test('shows graph edge labels on the fallback topology relationships', async ({ 
   await page.getByTestId('relation-map-open').click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'relation-map');
   await expect(page.getByTestId('relation-map-node-CPU')).toBeVisible();
+  await expect(page.locator('[data-testid^="relation-map-node-"]')).toHaveCount(8);
   await expect(page.getByTestId('relation-map-edges')).toBeVisible();
   await expect(page.getByTestId('relation-map-bottom-banner')).toBeVisible();
+  const relationMapFitsBoard = await page.getByTestId('relation-map-stage').evaluate((stage) => {
+    const board = stage.closest('[data-testid="slot-board"]');
+    if (!(board instanceof HTMLElement)) return false;
+    const stageRect = stage.getBoundingClientRect();
+    const nodes = [...stage.querySelectorAll<HTMLElement>('[data-testid^="relation-map-node-"]')];
+    const nodesFitStage = nodes.length === 8 && nodes.every((node) => {
+      const nodeRect = node.getBoundingClientRect();
+      const selectButton = node.querySelector<HTMLElement>('button[aria-label$=" 선택"]');
+      return nodeRect.left >= stageRect.left - 1
+        && nodeRect.top >= stageRect.top - 1
+        && nodeRect.right <= stageRect.right + 1
+        && nodeRect.bottom <= stageRect.bottom + 1
+        && (!selectButton || selectButton.scrollHeight <= selectButton.clientHeight + 2);
+    });
+    return nodesFitStage
+      && stage.scrollWidth <= stage.clientWidth + 2
+      && stage.scrollHeight <= stage.clientHeight + 2
+      && stage.getBoundingClientRect().width <= board.getBoundingClientRect().width + 1
+      && stage.getBoundingClientRect().height <= board.getBoundingClientRect().height + 1;
+  });
+  expect(relationMapFitsBoard).toBe(true);
   await page.getByTestId('relation-map-open').click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'fused');
-  await expect(page.getByTestId('slot-board-fused-plate')).toBeVisible();
+  const fusedPlate = page.getByTestId('slot-board-fused-plate');
+  await expect(fusedPlate).toBeVisible();
+  const fusedArtCoversPlate = await fusedPlate.evaluate((plate) => {
+    const art = plate.firstElementChild;
+    if (!(art instanceof HTMLElement)) return false;
+    const plateRect = plate.getBoundingClientRect();
+    const artRect = art.getBoundingClientRect();
+    return artRect.width >= plateRect.width - 1 && artRect.height >= plateRect.height - 1;
+  });
+  expect(fusedArtCoversPlate).toBe(true);
 });
 
 test('keeps fallback topology edges when the graph api fails', async ({ page }) => {
@@ -1316,7 +1351,7 @@ test('keeps fallback topology edges when the graph api fails', async ({ page }) 
   await expect(page.getByTestId('slot-edge-GPU-PSU')).toHaveAttribute('data-status', 'BASE');
   await expect(page.getByTestId('slot-edge-GPU-CASE')).toHaveAttribute('data-status', 'BASE');
   await expect(page.getByTestId('slot-edge-COOLER-CASE')).toHaveAttribute('data-status', 'BASE');
-  await expect(page.getByTestId('slot-status-bar').getByText('장착 8/8')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('8 / 8');
 
   await page.getByRole('radio', { name: '3D' }).click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
@@ -1387,6 +1422,21 @@ test('shows the current build performance panel from the resolve performance too
   await expect(panel.getByTestId('quote-performance-fit')).toHaveCount(0);
   await expect(panel.getByTestId('quote-composite-score-gauge')).toBeVisible();
   await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
+  const gaugeContainsScore = await panel.getByTestId('quote-composite-score-gauge').evaluate((gauge) => {
+    const svg = gauge.querySelector('svg');
+    const score = gauge.querySelector('[data-testid="quote-composite-score"]');
+    if (!(svg instanceof SVGElement) || !(score instanceof HTMLElement)) return false;
+    const svgRect = svg.getBoundingClientRect();
+    const scoreRect = score.getBoundingClientRect();
+    return svgRect.width >= 160
+      && scoreRect.left >= svgRect.left
+      && scoreRect.right <= svgRect.right
+      && scoreRect.top >= svgRect.top
+      && scoreRect.bottom <= svgRect.bottom;
+  });
+  expect(gaugeContainsScore).toBe(true);
+  await expect(panel.getByTestId('quote-composite-score-title')).toHaveCSS('white-space', 'nowrap');
+  await expect(panel.getByTestId('quote-composite-score-delta')).toHaveCount(0);
   await expect(panel).toContainText('호환·성능·여유 종합 1000점');
   await expect(panel.getByTestId('quote-composite-score-bar')).toHaveCount(0);
   await expect(panel.getByTestId('quote-performance-cpu-score')).toHaveCount(0);
@@ -1397,7 +1447,18 @@ test('shows the current build performance panel from the resolve performance too
   await expect(panel.getByTestId('quote-fps-section')).toContainText('참고 자료 없음');
   // 미선택 상태에서는 중복 설명·빈 비교 그래프를 노출하지 않는다.
   await expect(panel.getByTestId('cost-effect-empty')).toHaveCount(0);
-  await expect(panel.getByTestId('quote-checkout-actions')).toBeVisible();
+  await expect(page.getByTestId('quote-checkout-actions')).toBeVisible();
+  const summarySizing = await page.getByTestId('quote-summary-bar').locator(':scope > .panel').evaluateAll((cards) => {
+    const heights = cards.map((card) => card.getBoundingClientRect().height);
+    const action = cards.find((card) => card.getAttribute('data-testid') === 'quote-checkout-actions');
+    const buttons = action ? [...action.querySelectorAll('button, a')] : [];
+    return {
+      cardCount: cards.length,
+      heightGap: Math.max(...heights) - Math.min(...heights),
+      actionMinHeight: Math.min(...buttons.map((button) => button.getBoundingClientRect().height))
+    };
+  });
+  expect(summarySizing).toMatchObject({ cardCount: 4, heightGap: 0, actionMinHeight: 36 });
 });
 
 test('submits the server-authoritative score explanation and renders the assessment card', async ({ page }) => {
@@ -1891,10 +1952,14 @@ test('picks a replacement candidate in the performance panel, compares, and appl
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
   });
   await page.route('**/api/build-graphs/resolve', async (route) => {
+    const requestBody = JSON.parse(route.request().postData() ?? '{}');
+    const requestedItems = Array.isArray(requestBody?.items) ? requestBody.items : [];
+    const hasReplacement = currentDraft === replacedDraft
+      || requestedItems.some((item: { partId?: string }) => item.partId === 'cand-cpu-1');
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture() })
+      body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture(hasReplacement ? 782 : 734) })
     });
   });
   // 선택기·아코디언이 공유하는 GET /api/parts — 카테고리별 후보를 돌려준다(FAIL 후보는 사유 포함).
@@ -2006,6 +2071,8 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   expect(replaceRequests[0].body).toMatchObject({ quantity: 1 });
   await expect(page.getByTestId('checklist-CPU')).toContainText('인텔 245K');
   await expect(panel.getByTestId('fps-avg')).toHaveText('281 FPS');
+  await expect(panel.getByTestId('quote-composite-score')).toContainText('782');
+  await expect(panel.getByTestId('quote-composite-score-delta')).toContainText('+48');
 
   // AI 변경 미리보기 연동(창 이벤트)은 그대로 유지된다 — 같은 비교 모드가 켜지고 카테고리도 따라간다.
   await page.evaluate(() => {
@@ -2290,17 +2357,19 @@ test('highlights WARN and FAIL slots with edges and blocks purchase on FAIL', as
   await expect(failEdge).toHaveText('전력 150W 부족');
 
   // FAIL이 있으면 구매하기는 비활성화되고 사유를 보여준다.
-  const statusBar = page.getByTestId('slot-status-bar');
   const checkoutActions = page.getByTestId('quote-checkout-actions');
-  await expect(checkoutActions.getByRole('button', { name: '구매하기' })).toBeDisabled();
+  const blockedPurchase = checkoutActions.getByRole('button', { name: '구매하기' });
+  await expect(blockedPurchase).toBeDisabled();
+  await expect(blockedPurchase).toHaveAttribute('title', '안 맞는 부품이 있어 구매할 수 없습니다. 문제 슬롯을 교체해 주세요.');
   await expect(checkoutActions.getByRole('link', { name: '구매하기' })).toHaveCount(0);
-  await expect(statusBar.getByText('안 맞는 부품이 있어 구매할 수 없습니다. 문제 슬롯을 교체해 주세요.')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('장착 불가');
 
   // 내 견적함 저장은 FAIL이 있어도 허용한다.
   const saveButton = checkoutActions.getByRole('button', { name: '내 견적함에 추가' });
   await expect(saveButton).toBeEnabled();
   await saveButton.click();
   await expect.poll(() => saveRequests.length).toBe(1);
+  const statusBar = page.getByTestId('slot-status-bar');
   await expect(statusBar.getByText('내 견적함에 추가했습니다.')).toBeVisible();
 });
 
@@ -2371,8 +2440,8 @@ test('removes a single-part slot item from the slot board', async ({ page }) => 
 
   await expect.poll(() => deletedPartIds).toEqual(['part-gpu-full']);
   await expect(page.getByTestId('slot-GPU')).toContainText('+ 부품 선택');
-  await expect(page.getByTestId('slot-status-bar').getByText('장착 7/8')).toBeVisible();
-  await expect(page.getByTestId('slot-status-bar').getByText('미장착 슬롯 1개가 있습니다')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('7 / 8');
+  await expect(page.getByTestId('quote-checklist-progress')).toHaveText('7/8 완료');
 });
 
 test.skip('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT compatibility in 20 item pages', async ({ page }) => {
@@ -2634,8 +2703,8 @@ test.skip('adds a candidate part into an empty slot from the panel', async ({ pa
   await expect.poll(() => putRequests).toEqual([{ partId: 'part-gpu-pass', quantity: 1 }]);
   await expect(page.getByTestId('checklist-GPU')).toContainText('패스 GPU 후보');
   await expect(page.getByTestId('slot-GPU')).toHaveAttribute('title', '패스 GPU 후보');
-  await expect(page.getByTestId('slot-status-bar').getByText('장착 1/8')).toBeVisible();
-  await expect(page.getByTestId('slot-status-bar').getByText('미장착 슬롯 7개가 있습니다')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('1 / 8');
+  await expect(page.getByTestId('quote-checklist-progress')).toHaveText('1/8 완료');
 });
 
 test.skip('shows a whole FAIL page greyed out with reasons instead of auto-fetching the next page', async ({ page }) => {
@@ -3078,7 +3147,7 @@ test.skip('keeps the slot board usable on mobile width with a bottom sheet panel
   await expect(page.getByTestId('iso-part-GPU')).toHaveCount(0);
   await expect(page.getByTestId('checklist-GPU')).toContainText('모바일 RTX 테스트');
   await expect(page.getByTestId('slot-GPU')).toHaveAttribute('title', '모바일 RTX 테스트');
-  await expect(page.getByTestId('slot-status-bar')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toBeVisible();
 
   await page.getByRole('button', { name: 'GPU 슬롯 열기' }).click();
   const panel = page.getByTestId('slot-candidate-panel');
@@ -3829,7 +3898,7 @@ test('keeps the applied draft visible without rendering a duplicate selected AI 
   await expect(page.getByTestId('ai-chatbot-panel')).toBeVisible();
   await expect(page.getByTestId('checklist-GPU')).toContainText('RTX 4070 SUPER 테스트');
   await expect(page.getByTestId('checklist-CPU')).toContainText('+ 부품 선택');
-  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toHaveCount(0);
   await expect(page.getByTestId('quote-summary-bar')).toContainText('890,000원');
 });
 
@@ -3914,15 +3983,13 @@ test('keeps the current draft total without rendering the removed AI price panel
 
   await page.goto('/self-quote');
 
-  const statusBar = page.getByTestId('slot-status-bar');
-
   await expect(page.getByTestId('ai-selected-build-panel')).toHaveCount(0);
   await expect(page.getByTestId('quote-summary-bar')).toContainText('1,260,000원');
   await expect(page.getByTestId('checklist-GPU')).toContainText('RTX 가격 비교 GPU');
   await expect(page.getByTestId('checklist-CPU')).toContainText('Ryzen 가격 비교 CPU');
-  await expect(statusBar.getByTestId('quote-price-change-summary')).toHaveCount(0);
-  await expect(statusBar.getByTestId('quote-price-change-list')).toHaveCount(0);
-  await expect(statusBar.getByText(/AI 추천 시점 대비/)).toHaveCount(0);
+  await expect(page.getByTestId('quote-price-change-summary')).toHaveCount(0);
+  await expect(page.getByTestId('quote-price-change-list')).toHaveCount(0);
+  await expect(page.getByText(/AI 추천 시점 대비/)).toHaveCount(0);
 });
 
 test('does not show selected AI build increase summary in the slot status bar', async ({ page }) => {
@@ -3992,11 +4059,10 @@ test('does not show selected AI build increase summary in the slot status bar', 
 
   await page.goto('/self-quote');
 
-  const statusBar = page.getByTestId('slot-status-bar');
-  await expect(statusBar).toBeVisible();
-  await expect(statusBar.getByTestId('quote-price-change-summary')).toHaveCount(0);
-  await expect(statusBar.getByTestId('quote-price-change-list')).toHaveCount(0);
-  await expect(statusBar.getByText(/AI 추천 시점 대비/)).toHaveCount(0);
+  await expect(page.getByTestId('quote-summary-bar')).toBeVisible();
+  await expect(page.getByTestId('quote-price-change-summary')).toHaveCount(0);
+  await expect(page.getByTestId('quote-price-change-list')).toHaveCount(0);
+  await expect(page.getByText(/AI 추천 시점 대비/)).toHaveCount(0);
 });
 
 test('does not show selected AI build no-movement summary in the slot status bar', async ({ page }) => {
@@ -4060,11 +4126,10 @@ test('does not show selected AI build no-movement summary in the slot status bar
 
   await page.goto('/self-quote');
 
-  const statusBar = page.getByTestId('slot-status-bar');
-  await expect(statusBar).toBeVisible();
-  await expect(statusBar.getByTestId('quote-price-change-summary')).toHaveCount(0);
-  await expect(statusBar.getByTestId('quote-price-change-list')).toHaveCount(0);
-  await expect(statusBar.getByText(/AI 추천 시점 대비/)).toHaveCount(0);
+  await expect(page.getByTestId('quote-summary-bar')).toBeVisible();
+  await expect(page.getByTestId('quote-price-change-summary')).toHaveCount(0);
+  await expect(page.getByTestId('quote-price-change-list')).toHaveCount(0);
+  await expect(page.getByText(/AI 추천 시점 대비/)).toHaveCount(0);
 });
 
 test('shows the chatbot replacement in the draft without rendering the removed selected panel', async ({ page }) => {

@@ -12,6 +12,8 @@ type CompositeScoreGaugeProps = {
   showLabel?: boolean;
   scoreTestId?: string;
   gaugeTestId?: string;
+  delta?: number | null;
+  deltaTestId?: string;
 };
 
 const GAUGE_ANIMATION_MS = 700;
@@ -53,11 +55,11 @@ const SIZE_STYLES: Record<CompositeScoreGaugeSize, {
     showEndpoints: true
   },
   compact: {
-    shell: 'w-[160px]',
-    svg: 'h-[72px]',
-    strokeWidth: 12,
-    center: 'bottom-0.5',
-    scoreText: 'text-2xl',
+    shell: 'w-[168px]',
+    svg: 'h-[78px]',
+    strokeWidth: 14,
+    center: 'bottom-2',
+    scoreText: 'text-xl',
     maxText: 'text-[10px]',
     labelText: 'text-[10px]',
     endpointText: 'text-[8px]',
@@ -86,7 +88,9 @@ export function CompositeScoreGauge({
   scoreTextClassName,
   showLabel = true,
   scoreTestId,
-  gaugeTestId = 'composite-score-gauge'
+  gaugeTestId = 'composite-score-gauge',
+  delta = null,
+  deltaTestId
 }: CompositeScoreGaugeProps) {
   const styles = SIZE_STYLES[size];
   const maxScore = Math.max(1, score.maxScore);
@@ -104,6 +108,11 @@ export function CompositeScoreGauge({
   const fillClass = score.score <= 0 ? 'stroke-red-500' : highlight ? 'stroke-emerald-500' : 'stroke-brand-blue';
   const textClass = scoreTextClassName
     ?? (score.score <= 0 ? 'text-red-600' : highlight ? 'text-emerald-600' : scoreTextTone(score.score));
+  const roundedDelta = delta === null ? null : Math.round(delta);
+  const deltaLabel = roundedDelta && roundedDelta !== 0
+    ? `${roundedDelta > 0 ? '+' : ''}${roundedDelta}점`
+    : null;
+  const isCompact = size === 'compact';
 
   useEffect(() => {
     const previousTarget = targetRef.current;
@@ -163,10 +172,15 @@ export function CompositeScoreGauge({
     <div
       data-testid={gaugeTestId}
       className={`text-center ${styles.shell} ${className}`}
-      aria-label={`종합 점수 ${displayScore}점 / ${score.maxScore.toLocaleString('ko-KR')}점`}
+      aria-label={`종합 점수 ${displayScore}점 / ${score.maxScore.toLocaleString('ko-KR')}점${deltaLabel ? `, 이전 대비 ${deltaLabel}` : ''}`}
     >
       <div className="relative mx-auto">
-        <svg className={`w-full overflow-visible ${styles.svg}`} viewBox="0 0 220 132" role="img" aria-hidden="true">
+        <svg
+          className={`w-full overflow-visible ${styles.svg}`}
+          viewBox={isCompact ? '0 12 220 108' : '0 0 220 132'}
+          role="img"
+          aria-hidden="true"
+        >
           <path
             d="M 24 112 A 86 86 0 0 1 196 112"
             fill="none"
@@ -190,6 +204,14 @@ export function CompositeScoreGauge({
           <div data-testid={scoreTestId} className={`font-black leading-none ${styles.scoreText} ${textClass}`}>
             {displayScore.toLocaleString('ko-KR')}
             <span className={`ml-1 font-black text-slate-400 ${styles.maxText}`}>/ {score.maxScore.toLocaleString('ko-KR')}</span>
+            {deltaLabel ? (
+              <span
+                data-testid={deltaTestId}
+                className={`ml-1 inline-flex rounded-full border px-1 py-px align-middle text-[9px] font-black ${scoreDeltaTone(roundedDelta ?? 0)}`}
+              >
+                {deltaLabel}
+              </span>
+            ) : null}
           </div>
           {showLabel ? (
             <div className={`mt-1 truncate font-black text-commerce-ink ${styles.labelText}`} title={`${score.grade} · ${score.label}`}>
@@ -223,4 +245,10 @@ function scoreTextTone(score: number) {
   if (score >= 750) return 'text-commerce-ink';
   if (score >= 600) return 'text-amber-600';
   return 'text-red-600';
+}
+
+function scoreDeltaTone(delta: number) {
+  if (delta > 0) return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (delta < 0) return 'border-red-200 bg-red-50 text-red-600';
+  return 'border-slate-200 bg-slate-50 text-slate-500';
 }
