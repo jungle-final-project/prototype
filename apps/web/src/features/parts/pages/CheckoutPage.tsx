@@ -53,8 +53,8 @@ export function CheckoutPage() {
   const addressLine2InputRef = useRef<HTMLInputElement>(null);
   const contactDefaultsAppliedRef = useRef(false);
   const [serviceType, setServiceType] = useState<AssemblyServiceType>('FULL_SERVICE');
-  const [region, setRegion] = useState('');
-  const [preferredDate, setPreferredDate] = useState('');
+  const [region, setRegion] = useState('서울');
+  const [preferredDate, setPreferredDate] = useState(defaultPreferredDate);
   const [deliveryMethod, setDeliveryMethod] = useState<AssemblyDeliveryMethod>('DELIVERY');
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
@@ -139,10 +139,7 @@ export function CheckoutPage() {
   }
 
   const hasCompatibilityFail = graphHasBlockingFail(graphQuery.data);
-  const formComplete = Boolean(
-    region && preferredDate && asPolicyAccepted && contactName.trim() && contactPhone.trim()
-    && (deliveryMethod === 'PICKUP' || (postalCode.trim() && addressLine1.trim()))
-  );
+  const formComplete = Boolean(region && preferredDate && asPolicyAccepted);
   const canSubmit = formComplete && !graphQuery.isLoading && !graphQuery.isError && !hasCompatibilityFail && !createRequestMutation.isPending;
 
   const openPreferredDatePicker = () => {
@@ -179,7 +176,7 @@ export function CheckoutPage() {
 
   const createRequest = () => {
     if (!formComplete) {
-      setFormError('지역, 일정, 연락처, 배송지와 표준 AS 정책 동의를 확인해 주세요.');
+      setFormError('조립 지역, 희망 일정과 표준 AS 정책 동의를 확인해 주세요.');
       return;
     }
     if (graphQuery.isError || hasCompatibilityFail) {
@@ -239,8 +236,8 @@ export function CheckoutPage() {
               <fieldset className="space-y-3">
                 <legend className="text-sm font-black text-commerce-ink">연락 및 수령 정보</legend>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <CheckoutTextInput label="수령인" value={contactName} onChange={setContactName} placeholder="홍길동" required />
-                  <CheckoutTextInput label="연락처" value={contactPhone} onChange={setContactPhone} placeholder="010-1234-5678" required />
+                  <CheckoutTextInput label="수령인" value={contactName} onChange={setContactName} placeholder="선택 입력" />
+                  <CheckoutTextInput label="연락처" value={contactPhone} onChange={setContactPhone} placeholder="선택 입력" />
                 </div>
                 {deliveryMethod === 'DELIVERY' ? (
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
@@ -250,9 +247,8 @@ export function CheckoutPage() {
                         <input
                           id="checkout-postal-code"
                           value={postalCode}
-                          placeholder="주소 찾기로 입력"
+                          placeholder="선택 입력"
                           readOnly
-                          required
                           autoComplete="postal-code"
                           className="h-11 min-w-0 flex-1 rounded-md border border-commerce-line bg-slate-50 px-3 text-sm font-bold text-commerce-ink outline-none focus:border-brand-blue focus:ring-4 focus:ring-blue-100"
                         />
@@ -266,12 +262,11 @@ export function CheckoutPage() {
                       </div>
                     </div>
                     <label className="block text-xs font-black text-slate-600">
-                      주소<span className="ml-1 text-red-500">필수</span>
+                      주소
                       <input
                         value={addressLine1}
-                        placeholder="주소 찾기로 입력"
+                        placeholder="선택 입력"
                         readOnly
-                        required
                         autoComplete="address-line1"
                         className="mt-1.5 h-11 w-full rounded-md border border-commerce-line bg-slate-50 px-3 text-sm font-bold text-commerce-ink outline-none focus:border-brand-blue focus:ring-4 focus:ring-blue-100"
                       />
@@ -282,7 +277,7 @@ export function CheckoutPage() {
                     {addressSearchError ? <p className="text-xs font-bold text-red-600 sm:col-span-2">{addressSearchError}</p> : null}
                   </div>
                 ) : null}
-                <p className="text-xs font-bold leading-5 text-slate-500">연락처와 상세 주소는 선택한 기사에게 가상 결제 완료 후에만 공개됩니다.</p>
+                <p className="text-xs font-bold leading-5 text-slate-500">초기 기사 제안 요청에서는 선택 사항입니다. 입력한 정보는 선택 기사에게 가상 결제 완료 후에만 공개됩니다.</p>
               </fieldset>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -349,7 +344,7 @@ export function CheckoutPage() {
               <SummaryRow label="지역" value={region || '선택 필요'} muted={!region} />
               <SummaryRow label="희망 일정" value={preferredDate || '선택 필요'} muted={!preferredDate} />
               <SummaryRow label="수령" value={deliveryMethod === 'DELIVERY' ? '택배 배송' : '방문 수령'} />
-              <SummaryRow label="연락처" value={contactPhone || '입력 필요'} muted={!contactPhone} />
+              <SummaryRow label="연락처" value={contactPhone || '선택 입력'} muted={!contactPhone} />
               <div className="border-t border-commerce-line pt-4">
                 <SummaryRow label="예상가" value={`${quoteDraft.totalPrice.toLocaleString()}원`} strong />
               </div>
@@ -593,4 +588,11 @@ function todayInputValue() {
   const now = new Date();
   const offset = now.getTimezoneOffset() * 60_000;
   return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function defaultPreferredDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 3);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }

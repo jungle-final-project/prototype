@@ -91,8 +91,8 @@ export type AssemblyRequest = {
 };
 
 export type AssemblyContact = {
-  name: string;
-  phone: string;
+  name?: string | null;
+  phone?: string | null;
   postalCode?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
@@ -104,6 +104,7 @@ export type AssemblyRequestSummary = Pick<AssemblyRequest,
   finalPrice?: number | null;
   technicianName?: string | null;
   paymentStatus?: AssemblyPaymentStatus | null;
+  availableOfferCount?: number;
   userEmail?: string | null;
   userName?: string | null;
 };
@@ -122,8 +123,8 @@ export type CreateAssemblyRequestPayload = {
   deliveryMethod: AssemblyDeliveryMethod;
   note?: string;
   asPolicyAccepted: boolean;
-  contactName: string;
-  contactPhone: string;
+  contactName?: string;
+  contactPhone?: string;
   postalCode?: string;
   addressLine1?: string;
   addressLine2?: string;

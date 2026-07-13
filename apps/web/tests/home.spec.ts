@@ -953,6 +953,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(chatbotPanel.getByRole('button', { name: '200만원 게이밍 PC' })).toBeVisible();
   await expect(chatbotPanel.getByRole('button', { name: '견적 마저 채우기' })).toBeVisible();
   await expect(chatbotPanel.getByRole('button', { name: '성능 비교' })).toBeVisible();
+  await expect(chatbotPanel.getByRole('button', { name: 'PC 문제 상담' })).toBeVisible();
   await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toHaveCount(0);
   await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toHaveCount(0);
   await expect(chatbotPanel.getByRole('button', { name: '내 견적함' })).toHaveCount(0);
@@ -1043,6 +1044,82 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('300만원 실속형');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('300만원 성능형');
   await expect(main.getByTestId('home-ai-recommendations')).not.toContainText('200만원 균형형');
+});
+
+test('chatbot gives symptom-based possibilities and connects to the separate Agent diagnosis entry', async ({ page }) => {
+  let activationRequests = 0;
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '게임·화면 멈춤 증상으로 이해했습니다. 그래픽 드라이버 충돌 등이 원인 후보로 예상됩니다.',
+        builds: [],
+        simulation: null,
+        warnings: [],
+        supportGuidance: {
+          type: 'PC_AGENT_DIAGNOSTIC_ENTRY',
+          scope: 'PRE_DIAGNOSIS',
+          symptomCategory: 'DISPLAY_FREEZE',
+          title: '게임·화면 멈춤 증상',
+          summary: '그래픽 드라이버 충돌, GPU 온도·부하 불안정 등이 원인 후보로 예상됩니다.',
+          possibleCauses: [
+            '그래픽 드라이버 충돌',
+            'GPU 온도 또는 부하 불안정',
+            '메모리 또는 전원 공급 불안정'
+          ],
+          beforeDiagnosisChecks: [
+            '문제가 발생한 게임과 시간을 기록해 주세요.',
+            '재현 직후 PC Agent 진단을 실행해 주세요.'
+          ],
+          agentRecommendation: 'RECOMMENDED',
+          actions: [
+            { type: 'DOWNLOAD_PC_AGENT', label: 'PC Agent 다운로드' },
+            { type: 'OPEN_SUPPORT_NEW', label: 'AS 접수 화면 보기', route: '/support/new' }
+          ],
+          disclaimer: '표시된 원인은 입력한 증상만으로 예상한 일반적인 가능성이며 진단 결과가 아닙니다.'
+        }
+      })
+    });
+  });
+  await page.route('**/api/users/me/agent-activation-token', async (route) => {
+    activationRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ activationToken: 'test-agent-token' })
+    });
+  });
+  await page.route('**/downloads/pc-agent/latest.json', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ version: 'test', downloadUrl: '/downloads/pc-agent/PCAgent.exe' })
+    });
+  });
+  await page.route('**/downloads/pc-agent/PCAgent.exe*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/octet-stream', body: 'test-executable' });
+  });
+  await openHomeAsUser(page);
+  await openDesktopAiAssistant(page);
+
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('게임하다 화면이 자꾸 멈춰');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  const guidance = page.getByTestId('ai-support-guidance');
+  await expect(guidance).toBeVisible();
+  await expect(guidance).toContainText('진단 전 안내');
+  await expect(guidance).toContainText('증상만으로 예상되는 원인');
+  await expect(guidance).toContainText('그래픽 드라이버 충돌');
+  await expect(guidance).toContainText('원인 확정과 지원 방식은 PC Agent');
+  await expect(guidance).not.toContainText('위험도');
+  await guidance.getByTestId('ai-download-pc-agent').click();
+  await expect.poll(() => activationRequests).toBe(1);
+  await expect(guidance).toContainText('PCAgent.zip을 내려받았습니다.');
+
+  await guidance.getByTestId('ai-open-support-new').click();
+  await expect(page).toHaveURL(/\/support\/new$/);
 });
 
 test('toggles the desktop AI assistant drawer from the header button', async ({ page }) => {

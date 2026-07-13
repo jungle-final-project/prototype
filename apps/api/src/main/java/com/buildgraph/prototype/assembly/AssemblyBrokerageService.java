@@ -70,14 +70,14 @@ public class AssemblyBrokerageService {
         }
         String deliveryMethod = allowed(request.get("deliveryMethod"), DELIVERY_METHODS, "지원하지 않는 수령 방식입니다.");
         String note = optionalText(request.get("note"), 1000, "요청사항은 1000자 이하여야 합니다.");
-        String contactName = requiredLimitedText(request.get("contactName"), 100, "수령인 이름이 필요합니다.");
-        String contactPhone = phone(request.get("contactPhone"));
+        String contactName = optionalText(request.get("contactName"), 100, "수령인 이름은 100자 이하여야 합니다.");
+        if (contactName == null) {
+            contactName = user.name() == null || user.name().isBlank() ? user.email() : user.name();
+        }
+        String contactPhone = optionalText(request.get("contactPhone"), 40, "연락처는 40자 이하여야 합니다.");
         String postalCode = optionalText(request.get("postalCode"), 20, "우편번호는 20자 이하여야 합니다.");
         String addressLine1 = optionalText(request.get("addressLine1"), 255, "주소는 255자 이하여야 합니다.");
         String addressLine2 = optionalText(request.get("addressLine2"), 255, "상세 주소는 255자 이하여야 합니다.");
-        if ("DELIVERY".equals(deliveryMethod) && addressLine1 == null) {
-            throw validation("배송을 선택하면 주소가 필요합니다.");
-        }
         if (!Boolean.TRUE.equals(request.get("asPolicyAccepted"))) {
             throw validation("BuildGraph 표준 AS 정책 동의가 필요합니다.");
         }
@@ -152,6 +152,9 @@ public class AssemblyBrokerageService {
                        ar.service_type, ar.region, ar.preferred_date, ar.delivery_method,
                        ar.estimated_parts_price, ar.item_count, ar.selected_offer_id,
                        ar.created_at, ar.updated_at, ao.final_price,
+                       (SELECT count(*) FROM assembly_offers available_offer
+                        WHERE available_offer.assembly_request_id = ar.id
+                          AND available_offer.status = 'AVAILABLE') AS available_offer_count,
                        ao.technician_snapshot, ap.status AS payment_status
                 FROM assembly_requests ar
                 LEFT JOIN assembly_offers ao ON ao.id = ar.selected_offer_id
@@ -633,6 +636,7 @@ public class AssemblyBrokerageService {
                 "deliveryMethod", DbValueMapper.string(row, "delivery_method"),
                 "estimatedPartsPrice", longValue(row, "estimated_parts_price"),
                 "itemCount", DbValueMapper.integer(row, "item_count"),
+                "availableOfferCount", DbValueMapper.integer(row, "available_offer_count"),
                 "finalPrice", nullableLong(row.get("final_price")),
                 "technicianName", text(tech.get("displayName")),
                 "paymentStatus", DbValueMapper.string(row, "payment_status"),
@@ -1000,12 +1004,6 @@ public class AssemblyBrokerageService {
         if (text == null || text.isBlank()) return null;
         if (text.trim().length() > max) throw validation(message);
         return text.trim();
-    }
-
-    private static String phone(Object value) {
-        String phone = requiredLimitedText(value, 40, "연락처가 필요합니다.");
-        if (!phone.matches("[0-9+() -]{8,40}")) throw validation("연락처 형식이 올바르지 않습니다.");
-        return phone;
     }
 
     private static long optionalNonnegativeLong(Object value, long fallback, String label) {

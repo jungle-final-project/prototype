@@ -109,6 +109,10 @@
   pointer-events: auto;
 }
 
+.fused-part-hitbox[data-hovered='true'] {
+  z-index: 40;
+}
+
 .fused-part-hitbox[data-status='WARN'] {
   --fused-status-border: rgba(217, 119, 6, 0.82);
   --fused-status-glow: rgba(217, 119, 6, 0.34);

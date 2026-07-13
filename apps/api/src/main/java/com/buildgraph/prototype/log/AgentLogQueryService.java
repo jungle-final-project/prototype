@@ -13,6 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -22,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AgentLogQueryService {
+    private static final Logger log = LoggerFactory.getLogger(AgentLogQueryService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final long MAX_FILE_SIZE = 10L * 1024L * 1024L;
     private static final int MAX_LINE_COUNT = 20_000;
@@ -118,7 +121,9 @@ public class AgentLogQueryService {
         }
         ValidatedLogFile validated = validateLogFile(file);
         Integer minutes = rangeMinutes == null ? 30 : rangeMinutes;
-        String summary = "Validated JSONL log upload (" + validated.lineCount() + " lines).";
+        String validatedSummary = "Validated JSONL log upload (" + validated.lineCount() + " lines).";
+        Map<String, Object> asRagAnalysis = analyzeForStorage(validated, minutes);
+        String summary = nonBlankString(asRagAnalysis.get("summaryText"), validatedSummary);
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO agent_log_uploads (
                   user_id,
@@ -128,6 +133,7 @@ public class AgentLogQueryService {
                   file_size,
                   storage_path,
                   summary,
+                  as_rag_analysis,
                   consent_accepted_at,
                   delete_after
                 )
@@ -139,12 +145,26 @@ public class AgentLogQueryService {
                   ?,
                   'seed/agent-logs/' || ?,
                   ?,
+                  ?::jsonb,
                   now(),
                   now() + interval '30 days'
                 )
-                RETURNING public_id::text AS id, status, file_name, file_size, range_minutes, summary, created_at, delete_after
-                """, user.internalId(), minutes, validated.fileName(), validated.fileSize(), validated.fileName(), summary);
+                RETURNING public_id::text AS id, status, file_name, file_size, range_minutes, summary, as_rag_analysis::text AS as_rag_analysis, created_at, delete_after
+                """, user.internalId(), minutes, validated.fileName(), validated.fileSize(), validated.fileName(), summary, toJson(asRagAnalysis));
         return logMap(row);
+    }
+
+    private Map<String, Object> analyzeForStorage(ValidatedLogFile validated, Integer minutes) {
+        try {
+            return asLogRagAnalysisService.analyzeText(
+                    validated.fileName(),
+                    validated.sanitizedContent(),
+                    minutes
+            );
+        } catch (RuntimeException exception) {
+            log.warn("AS RAG analysis failed during user log upload; storing the validated log without analysis", exception);
+            return Map.of();
+        }
     }
 
     public Map<String, Object> previewAsRag(MultipartFile file, Integer rangeMinutes) {
@@ -299,6 +319,14 @@ public class AgentLogQueryService {
         } catch (Exception exception) {
             throw new IllegalStateException("JSON serialization failed", exception);
         }
+    }
+
+    private static String nonBlankString(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? fallback : text;
     }
 
     record ValidatedLogFile(String fileName, long fileSize, int lineCount, String sanitizedContent) {

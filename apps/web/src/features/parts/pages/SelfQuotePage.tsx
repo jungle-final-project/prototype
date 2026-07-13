@@ -270,6 +270,10 @@ function SelfQuoteSlotBoardPage() {
       navigate(loginHref);
       return;
     }
+    if (quantity <= 0) {
+      deleteMutation.mutate(partId);
+      return;
+    }
     updateQuantityMutation.mutate({ partId, quantity });
   };
 
@@ -586,13 +590,8 @@ function QuoteChecklist({
     openCategory(category);
   };
 
-  const choosePart = (category: PartCategory, part: PartRow) => {
+  const choosePart = (part: PartRow) => {
     onAddPart(part);
-    const next = RECOMMENDED_SLOT_ORDER.find((candidate) => candidate !== category && !draftItems.some((item) => item.category === candidate));
-    setExpandedCategory(null);
-    if (next) {
-      onSelect(next);
-    }
   };
 
   const removeCategoryItems = (items: QuoteDraftItem[]) => {
@@ -743,7 +742,7 @@ function QuoteChecklist({
                             key={part.id}
                             type="button"
                             disabled={isMutating || isAlreadySelected}
-                            onClick={() => choosePart(category, part)}
+                            onClick={() => choosePart(part)}
                             className={`w-full rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
                               isFail
                                 ? 'border-red-100 bg-red-50/40 hover:border-red-300'

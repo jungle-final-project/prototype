@@ -34,6 +34,9 @@ public class SupportChatService {
         String ticketId = stringOrNull(asTicketId);
         if (ticketId != null) {
             TicketRef ticket = requireUserTicket(ticketId, user);
+            if (TERMINAL_TICKET_STATUSES.contains(ticket.status())) {
+                return empty();
+            }
             RoomRef room = ensureRoom(ticket, user);
             return detail(room.publicId(), user, false);
         }
@@ -154,6 +157,14 @@ public class SupportChatService {
                     WHERE id = ?
                       AND status IN ('OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED')
                     """, nextTicketStatus, room.ticketInternalId());
+            jdbcTemplate.update("""
+                    UPDATE remote_support_sessions
+                    SET status = 'CANCELLED',
+                        ended_at = COALESCE(ended_at, now()),
+                        ended_reason = COALESCE(ended_reason, 'SUPPORT_CHAT_ARCHIVED')
+                    WHERE as_ticket_id = ?
+                      AND status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                    """, room.ticketInternalId());
         }
         return response(archivedRoom(room, nextTicketStatus), messages(room.internalId()));
     }
@@ -200,6 +211,7 @@ public class SupportChatService {
                           AND r.status = 'ACTIVE'
                           AND r.deleted_at IS NULL
                           AND t.deleted_at IS NULL
+                          AND t.status NOT IN ('CLOSED', 'CANCELLED')
                         ORDER BY COALESCE(r.last_message_at, r.updated_at, r.created_at) DESC, r.id DESC
                         LIMIT 1
                         """, user.internalId())

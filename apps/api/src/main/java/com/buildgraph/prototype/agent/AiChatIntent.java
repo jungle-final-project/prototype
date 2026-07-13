@@ -5,6 +5,7 @@ public enum AiChatIntent {
     PART_RECOMMEND,
     BUILD_MODIFY,
     PRICE_ALERT_HELP,
+    SUPPORT_GUIDANCE,
     EXPLAIN,
     ASK_FOLLOW_UP
 }

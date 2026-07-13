@@ -2,6 +2,7 @@ package com.buildgraph.prototype.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -123,9 +124,17 @@ class TicketQueryServiceTest {
                 eq("ticket-public-id")
         );
         verify(jdbcTemplate).update(contains("diagnostic_accuracy"), eq("ACCURATE"), eq("ticket-public-id"));
-        verify(jdbcTemplate).update(contains("remote_support_sessions"), eq("https://support.example/session/1"), eq(1L), eq("ticket-public-id"));
         verify(jdbcTemplate).update(
-                contains("admin_audit_logs"),
+                argThat(sql -> sql.contains("UPDATE remote_support_sessions")
+                        && sql.contains("NOT EXISTS (SELECT 1 FROM updated)")
+                        && sql.contains("'IN_PROGRESS'")),
+                eq("https://support.example/session/1"),
+                eq(1L),
+                eq("ticket-public-id")
+        );
+        verify(jdbcTemplate).update(
+                argThat(sql -> sql.contains("INSERT INTO admin_audit_logs")
+                        && sql.contains("CAST(? AS text)")),
                 eq(1L),
                 eq("ticket-public-id"),
                 eq("OPEN"),
@@ -137,6 +146,45 @@ class TicketQueryServiceTest {
                 isNull(),
                 isNull(),
                 isNull()
+        );
+    }
+
+    @Test
+    void updateCompletesActiveRemoteSupportWhenTicketIsResolved() {
+        when(jdbcTemplate.queryForList(contains("FROM as_tickets"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "user_id", 20L,
+                        "status", "IN_PROGRESS",
+                        "review_status", "APPROVED",
+                        "support_decision", "REMOTE_POSSIBLE"
+                )))
+                .thenReturn(List.of(MockData.map(
+                        "id", "ticket-public-id",
+                        "status", "RESOLVED",
+                        "analysis_status", "RULE_READY",
+                        "review_status", "APPROVED",
+                        "support_decision", "REMOTE_POSSIBLE",
+                        "risk_level", "MEDIUM",
+                        "symptom", "driver issue",
+                        "cause_candidates", "[]",
+                        "upgrade_candidates", "[]",
+                        "remote_support_status", "COMPLETED"
+                )));
+
+        Map<String, Object> response = service.update("ticket-public-id", MockData.map(
+                "status", "RESOLVED"
+        ), admin);
+
+        assertThat(response.get("status")).isEqualTo("RESOLVED");
+        assertThat(response.get("remoteSupportStatus")).isEqualTo("COMPLETED");
+        verify(jdbcTemplate).update(
+                argThat(sql -> sql.contains("UPDATE remote_support_sessions")
+                        && sql.contains("ended_at = COALESCE")),
+                eq("COMPLETED"),
+                eq("TICKET_RESOLVED"),
+                eq("ticket-public-id")
         );
     }
 
