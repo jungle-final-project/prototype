@@ -1611,10 +1611,12 @@ test('keeps the ATX case mismatch warning in a non-overlapping top status row ac
     const statusRegion = page.getByTestId('slot-board-status-region');
     const board = page.getByTestId('slot-board');
     await expect(statusRegion).toHaveAttribute('data-placement', 'top');
-    const [statusBox, boardBox] = await Promise.all([statusRegion.boundingBox(), board.boundingBox()]);
-    expect(statusBox).not.toBeNull();
-    expect(boardBox).not.toBeNull();
-    expect((statusBox?.y ?? 0) + (statusBox?.height ?? 0)).toBeLessThanOrEqual((boardBox?.y ?? 0) + 1);
+    await expect(statusRegion).toBeVisible();
+    await expect(board).toBeVisible();
+    await expect.poll(async () => {
+      const [statusBox, boardBox] = await Promise.all([statusRegion.boundingBox(), board.boundingBox()]);
+      return Boolean(statusBox && boardBox && statusBox.y + statusBox.height <= boardBox.y + 1);
+    }).toBe(true);
   };
 
   const banner = page.getByTestId('slot-board-problem-banner');
@@ -1622,14 +1624,18 @@ test('keeps the ATX case mismatch warning in a non-overlapping top status row ac
   await expect(banner.getByTestId('slot-problem-ai-explain')).toBeVisible();
   await expectStatusAboveBoard();
 
-  const statusBox = await page.getByTestId('slot-board-status-region').boundingBox();
   for (const control of [
     page.getByTestId('relation-map-open'),
     page.getByRole('button', { name: '실장도 보기' })
   ]) {
-    const controlBox = await control.boundingBox();
-    expect(controlBox).not.toBeNull();
-    expect((statusBox?.y ?? 0) + (statusBox?.height ?? 0)).toBeLessThanOrEqual(controlBox?.y ?? 0);
+    await expect(control).toBeVisible();
+    await expect.poll(async () => {
+      const [statusBox, controlBox] = await Promise.all([
+        page.getByTestId('slot-board-status-region').boundingBox(),
+        control.boundingBox()
+      ]);
+      return Boolean(statusBox && controlBox && statusBox.y + statusBox.height <= controlBox.y);
+    }).toBe(true);
   }
 
   await page.getByRole('button', { name: '실장도 보기' }).click();
@@ -1648,10 +1654,16 @@ test('keeps the ATX case mismatch warning in a non-overlapping top status row ac
   await expectStatusAboveBoard();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileStatusBox = await page.getByTestId('slot-board-status-region').boundingBox();
-  expect(mobileStatusBox).not.toBeNull();
-  expect(mobileStatusBox?.x ?? -1).toBeGreaterThanOrEqual(0);
-  expect((mobileStatusBox?.x ?? 0) + (mobileStatusBox?.width ?? 0)).toBeLessThanOrEqual(390);
+  const mobileStatusRegion = page.getByTestId('slot-board-status-region');
+  await expect(mobileStatusRegion).toBeVisible();
+  await expect.poll(async () => {
+    const mobileStatusBox = await mobileStatusRegion.boundingBox();
+    return Boolean(
+      mobileStatusBox
+      && mobileStatusBox.x >= 0
+      && mobileStatusBox.x + mobileStatusBox.width <= 390
+    );
+  }).toBe(true);
 });
 
 test('does not reserve a board status row when the graph has no warning or failure', async ({ page }) => {
