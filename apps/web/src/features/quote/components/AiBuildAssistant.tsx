@@ -678,7 +678,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   }
 
   const panelClassName = isEmbedded
-    ? 'panel flex h-full min-h-[720px] flex-col overflow-hidden bg-[#f8fbff]'
+    ? 'panel flex h-full min-h-0 flex-col overflow-hidden bg-[#f8fbff]'
     : isDesktopAssistant
     ? 'fixed inset-y-0 right-0 z-50 flex h-dvh w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#f8fbff] shadow-2xl'
     : 'fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-2xl border border-slate-200 bg-[#f8fbff] shadow-2xl';
