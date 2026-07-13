@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CircleX, Sparkles, X } from 'lucide-react';
 import {
   PART_CATEGORY_LABELS,
   type BuildGraphFocus,
@@ -78,7 +78,8 @@ export function SlotBoard({
   connectorAnchors
 }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
-  const boardProblem = slotBoardProblemBanner(graph);
+  const boardProblems = slotBoardProblems(graph);
+  const boardProblem = boardProblems[0] ?? null;
   const [overlaysVisible, setOverlaysVisible] = useState(readSlotBoardOverlaysVisible);
   const [isMotherboardClosing, setIsMotherboardClosing] = useState(false);
   const [isRelationMapVisible, setIsRelationMapVisible] = useState(false);
@@ -240,8 +241,8 @@ export function SlotBoard({
         />
       ) : boardProblem ? (
         <SlotBoardProblemBanner
-          problem={boardProblem}
-          onExplain={() => explainIssue(undefined, boardProblem.tool)}
+          problems={boardProblems}
+          onExplain={(problem) => explainIssue(undefined, problem.tool)}
         />
       ) : null}
       {isIsometric ? (
@@ -1746,7 +1747,7 @@ function IsoPartLayer({
             isMounting={flashingCategories.has(slot.category)}
             status={statusByCategory.get(slot.category)}
             isHovered={aiFocusCategories.size === 0 && hoveredCategory === slot.category && slot.category !== 'MOTHERBOARD'}
-            isDimmed={partFocusCategories.size > 0 ? !isSpotlighted : motherboardSceneFocused}
+            isDimmed={hoveredCategory && hoveredCategory !== 'MOTHERBOARD' ? false : partFocusCategories.size > 0 ? !isSpotlighted : motherboardSceneFocused}
             isSpotlighted={isSpotlighted}
             isAiSpotlighted={isAiPartSpotlighted}
             isAiDimmed={aiFocusCategories.size > 0 && !isAiPartSpotlighted}
@@ -1866,21 +1867,158 @@ type SlotProblemReason = {
 type SlotBoardBannerProblem = {
   status: SlotProblemStatus;
   message: string;
+  categories: PartCategory[];
   tool?: BuildGraphFocus['tool'];
 };
 
-function SlotBoardProblemBanner({ problem, onExplain }: { problem: SlotBoardBannerProblem | null; onExplain?: () => void }) {
-  if (!problem) {
+function SlotBoardProblemBanner({
+  problems,
+  onExplain
+}: {
+  problems: SlotBoardBannerProblem[];
+  onExplain?: (problem: SlotBoardBannerProblem) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (problems.length <= 1) {
+      setIsExpanded(false);
+    }
+  }, [problems.length]);
+
+  useEffect(() => {
+    if (!isExpanded) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) {
+        setIsExpanded(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExpanded(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isExpanded]);
+
+  if (problems.length === 0) {
     return null;
   }
 
+  const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
+  const warnCount = problems.length - failCount;
+  const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
+  const sharedCardClass = 'rounded-lg border bg-white px-3.5 py-2 text-[10px] font-black';
+  const statusCardClass = (status: SlotProblemStatus) => status === 'FAIL'
+    ? 'slot-board-fail-banner-pulse border-red-400 text-red-600 shadow-[0_10px_20px_rgba(239,68,68,0.24)]'
+    : 'border-amber-400 text-amber-700 shadow-[0_10px_20px_rgba(245,158,11,0.18)]';
+
+  if (problems.length === 1) {
+    const problem = problems[0];
+    return (
+      <SlotBoardStatusRow
+        bannerTestId="slot-board-problem-banner"
+        status={problem.status}
+        message={problem.message}
+        onExplain={onExplain ? () => onExplain(problem) : undefined}
+      />
+    );
+  }
+
   return (
-    <SlotBoardStatusRow
-      bannerTestId="slot-board-problem-banner"
-      status={problem.status}
-      message={problem.message}
-      onExplain={onExplain}
-    />
+    <div
+      data-testid="slot-board-status-region"
+      data-placement="top"
+      className="w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2"
+    >
+      <div ref={rootRef} className="mx-auto w-full max-w-[576px]">
+        <button
+          type="button"
+          data-testid="slot-board-problem-banner"
+          data-status={overallStatus}
+          aria-expanded={isExpanded}
+          aria-controls="slot-board-problem-list"
+          onClick={() => setIsExpanded((expanded) => !expanded)}
+          className={[
+            sharedCardClass,
+            statusCardClass(overallStatus),
+            'flex w-full items-center justify-between gap-3 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+            overallStatus === 'FAIL'
+              ? 'hover:border-red-500 hover:bg-red-50 focus-visible:ring-red-300'
+              : 'hover:border-amber-500 hover:bg-amber-50 focus-visible:ring-amber-300'
+          ].join(' ')}
+        >
+          <span className="inline-flex min-w-0 items-center gap-2">
+            {overallStatus === 'FAIL'
+              ? <CircleX size={17} aria-hidden="true" className="shrink-0" />
+              : <AlertTriangle size={17} aria-hidden="true" className="shrink-0" />}
+            <span>
+              {failCount > 0 ? <>호환 불가 {failCount}건</> : null}
+              {failCount > 0 && warnCount > 0 ? ' · ' : null}
+              {warnCount > 0 ? <>주의 필요 {warnCount}건</> : null}
+            </span>
+          </span>
+          <ChevronDown
+            size={18}
+            aria-hidden="true"
+            className={['shrink-0 transition-transform', isExpanded ? 'rotate-180' : ''].join(' ')}
+          />
+        </button>
+        {isExpanded ? (
+          <div
+            id="slot-board-problem-list"
+            data-testid="slot-board-problem-list"
+            className={[
+              'mt-2 max-h-60 overflow-y-auto rounded-lg border bg-white',
+              overallStatus === 'FAIL'
+                ? 'border-red-300 shadow-[0_14px_30px_rgba(239,68,68,0.24)]'
+                : 'border-amber-300 shadow-[0_14px_30px_rgba(245,158,11,0.2)]'
+            ].join(' ')}
+          >
+            <ul className="divide-y divide-slate-100">
+              {problems.map((problem, index) => (
+                <li
+                  key={[problem.message, problem.categories.join('-'), index].join('-')}
+                  data-status={problem.status}
+                  className={[
+                    'flex items-center gap-3 px-4 py-3 text-left',
+                    problem.status === 'FAIL' ? 'bg-red-50/30' : 'bg-amber-50/30'
+                  ].join(' ')}
+                >
+                  {problem.status === 'FAIL'
+                    ? <CircleX size={17} aria-hidden="true" className="shrink-0 text-red-500" />
+                    : <AlertTriangle size={17} aria-hidden="true" className="shrink-0 text-amber-500" />}
+                  <span className="min-w-0 flex-1 break-keep text-[10px] font-bold leading-4 text-slate-700">
+                    {problem.message}
+                  </span>
+                  {problem.categories.length > 0 ? (
+                    <span
+                      className={[
+                        'shrink-0 rounded-md border px-2 py-1 text-[10px] font-black',
+                        problem.status === 'FAIL'
+                          ? 'border-red-200 bg-red-50 text-red-600'
+                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                      ].join(' ')}
+                    >
+                      {problem.categories.map((category) => slotConfigFor(category)?.label ?? category).join(' · ')}
+                    </span>
+                  ) : null}
+                  {onExplain ? <ExplainIssueButton onClick={() => onExplain(problem)} /> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -2694,8 +2832,7 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
   graph.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
     if (category && isProblemStatus(node.status)) {
-      // A part node's detail is a neutral spec label (for example, "높이 157mm"),
-      // not the reason why its status was promoted by a relationship edge.
+      // Node detail is a neutral spec value; use relationship summaries as warning reasons.
       ensure(category, node.status, true);
     }
   });
@@ -2743,44 +2880,74 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
   return result;
 }
 
-function slotBoardProblemBanner(graph?: BuildGraphResolveResponse): SlotBoardBannerProblem | null {
+function slotBoardProblems(graph?: BuildGraphResolveResponse): SlotBoardBannerProblem[] {
   if (!graph) {
-    return null;
+    return [];
   }
-  const reasons: SlotProblemReason[] = [];
-  const addReason = (status: string, text?: string, tool?: BuildGraphFocus['tool']) => {
+
+  const categoryByNodeId = graphCategoryByNodeId(graph);
+  const problemsByMessage = new Map<string, SlotBoardBannerProblem>();
+  let detectedStatus: SlotProblemStatus | null = null;
+  const addProblem = (
+    status: string,
+    text?: string,
+    categories: Array<PartCategory | undefined> = [],
+    tool?: BuildGraphFocus['tool']
+  ) => {
     if (!isProblemStatus(status)) {
       return;
     }
-    const trimmed = text?.trim();
-    if (trimmed) {
-      reasons.push({ status, text: trimmed, tool });
+    detectedStatus = detectedStatus ? worstProblemStatus(detectedStatus, status) : status;
+    const message = text?.replace(/\s+/g, ' ').trim();
+    if (!message) {
+      return;
     }
+    const key = message.toLocaleLowerCase();
+    const validCategories = categories.filter((category): category is PartCategory => Boolean(category));
+    const current = problemsByMessage.get(key);
+    if (!current) {
+      problemsByMessage.set(key, {
+        status,
+        message,
+        categories: [...new Set(validCategories)],
+        tool
+      });
+      return;
+    }
+    current.status = worstProblemStatus(current.status, status);
+    current.categories = [...new Set([...current.categories, ...validCategories])];
+    current.tool ??= tool;
   };
 
-  // Relationship summaries carry the exact measured reason. Node details are neutral specs,
-  // so using them here would turn values such as "높이 157mm" into misleading advice.
-  graph.edges.forEach((edge) => addReason(edge.status, edge.summary || edge.label, toolForGraphEdge(edge.id)));
-  graph.insights.forEach((insight) => addReason(insight.status, insight.description || insight.title));
-  graph.toolResults.forEach((result) => {
-    const tool = isBuildGraphTool(result.tool) ? result.tool : undefined;
-    addReason(result.status, result.summary, tool);
+  graph.toolResults.forEach((result) =>
+    addProblem(result.status, result.summary, [], isBuildGraphTool(result.tool) ? result.tool : undefined)
+  );
+  graph.edges.forEach((edge) => {
+    addProblem(edge.status, edge.summary || edge.label, [
+      categoryByNodeId.get(edge.source),
+      categoryByNodeId.get(edge.target)
+    ], toolForGraphEdge(edge.id));
+  });
+  graph.insights.forEach((insight) => {
+    addProblem(
+      insight.status,
+      insight.description || insight.title,
+      insight.relatedNodeIds.map((nodeId) => categoryByNodeId.get(nodeId))
+    );
   });
 
-  const status: SlotProblemStatus | null = reasons.some((reason) => reason.status === 'FAIL')
-    ? 'FAIL'
-    : reasons.some((reason) => reason.status === 'WARN')
-      ? 'WARN'
-      : null;
-  if (!status) {
-    return null;
+  if (problemsByMessage.size === 0 && detectedStatus) {
+    addProblem(
+      detectedStatus,
+      detectedStatus === 'FAIL'
+        ? '현재 구성에서 장착 불가 항목이 있습니다.'
+        : '현재 구성에서 주의 항목이 있습니다.'
+    );
   }
 
-  const selectedReason = reasons.find((reason) => reason.status === status);
-  const message = selectedReason?.text
-    ?? (status === 'FAIL' ? '현재 구성에서 장착 불가 항목이 있습니다.' : '현재 구성에서 주의 항목이 있습니다.');
-  const matchedTool = selectedReason?.tool ?? graph.toolResults.find((result) => result.status === status)?.tool;
-  return { status, message, tool: isBuildGraphTool(matchedTool) ? matchedTool : undefined };
+  return [...problemsByMessage.values()].sort(
+    (left, right) => problemStatusRank(right.status) - problemStatusRank(left.status)
+  );
 }
 
 function toolForGraphEdge(edgeId: string): BuildGraphFocus['tool'] | undefined {
