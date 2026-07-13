@@ -53,7 +53,7 @@ class UserQueryServiceGoogleOAuthTest {
         when(googleOAuthRuntimeStore.getPendingLogin("oauth-code")).thenReturn(pending);
         when(jdbcTemplate.queryForList(anyString(), anyString())).thenReturn(List.of());
 
-        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("oauth-code", false, false))
+        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("oauth-code", false, false, null, null, null, null))
                 .isInstanceOfSatisfying(ApiException.class, exception -> {
                     assertThat(exception.status()).isEqualTo(HttpStatus.BAD_REQUEST);
                     assertThat(exception.code()).isEqualTo("VALIDATION_ERROR");
@@ -71,10 +71,27 @@ class UserQueryServiceGoogleOAuthTest {
         when(googleOAuthRuntimeStore.getPendingLogin("oauth-code")).thenReturn(pending);
         when(googleOAuthRuntimeStore.consumePendingLogin("oauth-code")).thenReturn(pending);
         when(jdbcTemplate.queryForList(anyString(), anyString())).thenReturn(List.of());
-        when(jdbcTemplate.queryForMap(anyString(), eq("new@example.com"), eq("New User"), eq(true)))
-                .thenReturn(userRow(1004L, "new@example.com", "New User", "USER"));
+        when(jdbcTemplate.queryForMap(
+                anyString(),
+                eq("new@example.com"),
+                eq("New User"),
+                eq("010-1234-5678"),
+                eq("06236"),
+                eq("서울시 강남구 테헤란로 1"),
+                eq("101호"),
+                eq(true)
+        ))
+                .thenReturn(userRowWithContact(1004L, "new@example.com", "New User", "USER"));
 
-        Map<String, Object> response = userQueryService.exchangeGoogleLogin("oauth-code", true, true);
+        Map<String, Object> response = userQueryService.exchangeGoogleLogin(
+                "oauth-code",
+                true,
+                true,
+                "01012345678",
+                " 06236 ",
+                "서울시   강남구   테헤란로 1",
+                " 101호 "
+        );
         @SuppressWarnings("unchecked")
         Map<String, Object> user = (Map<String, Object>) response.get("user");
 
@@ -113,7 +130,7 @@ class UserQueryServiceGoogleOAuthTest {
         });
         when(jdbcTemplate.queryForList(anyString(), eq(1L))).thenReturn(List.of(userRow(1L, "admin@example.com", "BuildGraph Admin", "ADMIN")));
 
-        Map<String, Object> response = userQueryService.exchangeGoogleLogin("oauth-code", false, false);
+        Map<String, Object> response = userQueryService.exchangeGoogleLogin("oauth-code", false, false, null, null, null, null);
         @SuppressWarnings("unchecked")
         Map<String, Object> user = (Map<String, Object>) response.get("user");
 
@@ -123,10 +140,114 @@ class UserQueryServiceGoogleOAuthTest {
     }
 
     @Test
+    void googleExistingUserMissingContactRequiresContactBeforeConsumingCode() {
+        GoogleOAuthPendingLogin pending = pending("Demo User", "User@Example.com");
+        when(googleOAuthRuntimeStore.getPendingLogin("oauth-code")).thenReturn(pending);
+        when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            Object argument = invocation.getArgument(1);
+            if (sql.contains("FROM user_auth_providers") && "google-sub-1".equals(argument)) {
+                return List.of(userRow(1004L, "user@example.com", "Demo User", "USER"));
+            }
+            return List.of();
+        });
+
+        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("oauth-code", false, false, null, null, null, null))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.code()).isEqualTo("VALIDATION_ERROR");
+                    assertThat(exception.details()).containsEntry("reason", "CONTACT_REQUIRED");
+                    assertThat(exception.details()).containsEntry("email", "user@example.com");
+                });
+
+        verify(googleOAuthRuntimeStore, never()).consumePendingLogin(anyString());
+    }
+
+    @Test
+    void googleExistingUserMissingContactCanCompleteContactAndLogin() {
+        GoogleOAuthPendingLogin pending = pending("Demo User", "User@Example.com");
+        when(googleOAuthRuntimeStore.getPendingLogin("oauth-code")).thenReturn(pending);
+        when(googleOAuthRuntimeStore.consumePendingLogin("oauth-code")).thenReturn(pending);
+        when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            Object argument = invocation.getArgument(1);
+            if (sql.contains("FROM user_auth_providers") && "google-sub-1".equals(argument)) {
+                return List.of(userRow(1004L, "user@example.com", "Demo User", "USER"));
+            }
+            return List.of();
+        });
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L)))
+                .thenReturn(List.of(userRow(1004L, "user@example.com", "Demo User", "USER")));
+
+        Map<String, Object> response = userQueryService.exchangeGoogleLogin(
+                "oauth-code",
+                false,
+                false,
+                "01012345678",
+                " 06236 ",
+                "서울시   강남구   테헤란로 1",
+                " 101호 "
+        );
+        @SuppressWarnings("unchecked")
+        Map<String, Object> user = (Map<String, Object>) response.get("user");
+
+        assertThat(user).containsEntry("email", "user@example.com");
+        verify(jdbcTemplate).update(
+                org.mockito.ArgumentMatchers.contains("UPDATE users"),
+                eq("010-1234-5678"),
+                eq("06236"),
+                eq("서울시 강남구 테헤란로 1"),
+                eq("101호"),
+                eq(1004L)
+        );
+        verify(jdbcTemplate).update(
+                org.mockito.ArgumentMatchers.contains("INSERT INTO refresh_tokens"),
+                eq(1004L),
+                anyString(),
+                any(Timestamp.class)
+        );
+    }
+
+    @Test
+    void googleProfileVerificationRedirectReturnsProfileVerificationToken() {
+        GoogleOAuthPendingLogin pending = new GoogleOAuthPendingLogin(
+                "google-sub-1",
+                "User@Example.com",
+                "Demo User",
+                true,
+                "/my/profile?verified=google"
+        );
+        when(googleOAuthRuntimeStore.getPendingLogin("oauth-code")).thenReturn(pending);
+        when(googleOAuthRuntimeStore.consumePendingLogin("oauth-code")).thenReturn(pending);
+        when(googleOAuthRuntimeStore.createProfileVerificationToken(
+                "00000000-0000-4000-8000-000000001004",
+                "google-sub-1"
+        )).thenReturn("profile-token");
+        when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            Object argument = invocation.getArgument(1);
+            if (sql.contains("FROM user_auth_providers") && "google-sub-1".equals(argument)) {
+                return List.of(userRowWithContact(1004L, "user@example.com", "Demo User", "USER"));
+            }
+            return List.of();
+        });
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L)))
+                .thenReturn(List.of(Map.of("provider", "GOOGLE")));
+
+        Map<String, Object> response = userQueryService.exchangeGoogleLogin("oauth-code", false, false, null, null, null, null);
+
+        assertThat(response).containsEntry("profileVerificationToken", "profile-token");
+        verify(googleOAuthRuntimeStore).createProfileVerificationToken(
+                "00000000-0000-4000-8000-000000001004",
+                "google-sub-1"
+        );
+    }
+
+    @Test
     void googleExpiredCodeFailsWithoutConsumingAgain() {
         when(googleOAuthRuntimeStore.getPendingLogin("expired-code")).thenReturn(null);
 
-        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("expired-code", true, false))
+        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("expired-code", true, false, null, null, null, null))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
 
@@ -144,7 +265,7 @@ class UserQueryServiceGoogleOAuthTest {
         );
         when(googleOAuthRuntimeStore.getPendingLogin("oauth-code")).thenReturn(pending);
 
-        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("oauth-code", true, false))
+        assertThatThrownBy(() -> userQueryService.exchangeGoogleLogin("oauth-code", true, false, null, null, null, null))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
 
@@ -164,6 +285,21 @@ class UserQueryServiceGoogleOAuthTest {
                 "password_hash", "",
                 "name", name,
                 "role", role
+        );
+    }
+
+    private Map<String, Object> userRowWithContact(Long internalId, String email, String name, String role) {
+        return Map.of(
+                "internal_id", internalId,
+                "id", role.equals("ADMIN") ? "00000000-0000-4000-8000-000000000001" : "00000000-0000-4000-8000-000000001004",
+                "email", email,
+                "password_hash", "",
+                "name", name,
+                "role", role,
+                "phone_number", "010-1234-5678",
+                "postal_code", "06236",
+                "address_line1", "서울시 강남구 테헤란로 1",
+                "address_line2", "101호"
         );
     }
 }

@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { AdminLoginPage, AuthCallbackPage, LoginPage, SignupPage } from './features/auth/AuthPages';
+import { AdminLoginPage, AuthCallbackPage, LoginPage, MyProfilePage, SignupPage } from './features/auth/AuthPages';
 import { RequireAdmin } from './features/auth/RequireAdmin';
 import { RequireUser } from './features/auth/RequireUser';
 import { AllPartsPage, AssemblyRequestDetailPage, AssemblyRequestHistoryPage, CheckoutCompletePage, CheckoutOffersPage, CheckoutPage, CheckoutPaymentPage, PartDetailPage, SelfQuotePage } from './features/parts/PartsPages';
@@ -28,6 +28,7 @@ export default function App() {
         <Route path="/parts" element={<RequireUser><AllPartsPage /></RequireUser>} />
         <Route path="/parts/:partId" element={<RequireUser><PartDetailPage /></RequireUser>} />
         <Route path="/builds/:buildId/change-part" element={<RequireUser><ChangePartPage /></RequireUser>} />
+        <Route path="/my/profile" element={<RequireUser><MyProfilePage /></RequireUser>} />
         <Route path="/my/quotes" element={<RequireUser><MyQuotesPage /></RequireUser>} />
         <Route path="/my/assembly-requests" element={<RequireUser><AssemblyRequestHistoryPage /></RequireUser>} />
         <Route path="/my/assembly-requests/:requestId" element={<RequireUser><AssemblyRequestDetailPage /></RequireUser>} />
@@ -67,7 +68,7 @@ export default function App() {
 
 function GlobalSupportChatWidget() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/support/new') {
+  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/support/new' || pathname === '/my/profile') {
     return null;
   }
   return <SupportChatWidget />;
@@ -75,7 +76,7 @@ function GlobalSupportChatWidget() {
 
 function GlobalAiBuildAssistant() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/self-quote') {
+  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/self-quote' || pathname === '/my/profile') {
     return null;
   }
   return <AiBuildAssistant surface="home" />;

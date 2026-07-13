@@ -77,11 +77,11 @@ MVP 기준 결정값:
 
 | 항목 | 내용 |
 |---|---|
-| 담당 화면 route | `/`, `/requirements/new`, `/builds/latest`, `/builds/:buildId`, `/builds/:buildId/change-part`, `/my/quotes`, `/login`, `/signup`, `/auth/callback`, `/admin/login`, `/admin/build-graph-layouts` |
+| 담당 화면 route | `/`, `/requirements/new`, `/builds/latest`, `/builds/:buildId`, `/builds/:buildId/change-part`, `/my/quotes`, `/my/profile`, `/login`, `/signup`, `/auth/callback`, `/admin/login`, `/admin/build-graph-layouts` |
 | frontend files | `features/quote/**`, `features/auth/**` |
 | backend packages | `build`, `requirement`, `user`, `auth` |
 | DB tables | `requirements`, `builds`, `build_items`, `users`, `user_auth_providers`, `refresh_tokens` |
-| API endpoints | `POST /api/requirements/parse`, `POST /api/builds/recommend`, `POST /api/builds/from-chat`, `POST /api/build-graphs/resolve`, `GET /api/builds/{id}`, `GET /api/builds/history`, `POST /api/builds/{id}/change-part`, `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange` |
+| API endpoints | `POST /api/requirements/parse`, `POST /api/builds/recommend`, `POST /api/builds/from-chat`, `POST /api/build-graphs/resolve`, `GET /api/builds/{id}`, `GET /api/builds/history`, `POST /api/builds/{id}/change-part`, `POST /api/users`, `POST /api/users/me/password-verification`, `PATCH /api/users/me`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `POST /api/auth/exchange` |
 | 협업자 | Auth 공통/token/guard/security는 5번, Tool/RAG 근거는 3번, parts 데이터는 2번, 관리자 관계도 배치 API는 5번 admin shell/security/migration과 협업 |
 
 Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/src/lib/api.ts`, `RequireAdmin`, admin guard, security allowlist, migration 순서 관점에서 협업한다.
@@ -164,6 +164,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `/builds/latest` | 1번 | 3번 | 프론트 세션 보관 AI 추천 조합 표시, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat` |
 | `/builds/:buildId` | 1번 | 2번, 3번 | `GET /api/builds/{id}`, `GET /api/rag/evidence/{id}` |
 | `/builds/:buildId/change-part` | 1번 | 2번 | `POST /api/builds/{id}/change-part`, `GET /api/parts` |
+| `/my/profile` | 1번 | 5번 | `GET /api/auth/me`, `POST /api/users/me/password-verification`, `PATCH /api/users/me` |
 | `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts` |
 | `/self-quote` | 2번 | 1번, 3번, 5번 | `GET /api/parts`(후보 패널은 `compatibilitySource=QUOTE_DRAFT_CURRENT`), `POST /api/parts/compatible-candidates`(슬롯보드 개편 후 이 route에서 미사용 — 홈/빌드 상세 그래프 전용), `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat`, `POST /api/ai/build-chat`(`uiContext.capabilities=[BOARD_PART_FOCUS]`, optional read-only `boardFocus` 소비), `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, 5개 Tool API |
 | `/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/quote-drafts/current`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/parts/{id}/price-history` |

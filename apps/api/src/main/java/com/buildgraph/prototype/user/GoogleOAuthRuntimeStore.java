@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 public class GoogleOAuthRuntimeStore {
     private static final String STATE_PREFIX = "auth:google:state:";
     private static final String CODE_PREFIX = "auth:google:code:";
+    private static final String PROFILE_VERIFICATION_PREFIX = "auth:google:profile-verification:";
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final GoogleOAuthProperties properties;
@@ -75,6 +76,29 @@ public class GoogleOAuthRuntimeStore {
         return parsePendingLogin(payload);
     }
 
+    public String createProfileVerificationToken(String userId, String providerUserId) {
+        String token = randomToken();
+        try {
+            write(
+                    PROFILE_VERIFICATION_PREFIX + token,
+                    objectMapper.writeValueAsString(new GoogleProfileVerification(userId, providerUserId)),
+                    Duration.ofSeconds(properties.codeTtlSeconds())
+            );
+            return token;
+        } catch (JsonProcessingException exception) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Google profile verification could not be saved.");
+        }
+    }
+
+    public GoogleProfileVerification getProfileVerificationToken(String token) {
+        String payload = read(PROFILE_VERIFICATION_PREFIX + safeCode(token));
+        return parseProfileVerification(payload);
+    }
+
+    public void consumeProfileVerificationToken(String token) {
+        readAndDelete(PROFILE_VERIFICATION_PREFIX + safeCode(token));
+    }
+
     private GoogleOAuthPendingLogin parsePendingLogin(String payload) {
         if (payload == null || payload.isBlank()) {
             return null;
@@ -83,6 +107,17 @@ public class GoogleOAuthRuntimeStore {
             return objectMapper.readValue(payload, GoogleOAuthPendingLogin.class);
         } catch (JsonProcessingException exception) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Google login session has expired.");
+        }
+    }
+
+    private GoogleProfileVerification parseProfileVerification(String payload) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(payload, GoogleProfileVerification.class);
+        } catch (JsonProcessingException exception) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Google profile verification has expired.");
         }
     }
 

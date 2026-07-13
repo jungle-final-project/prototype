@@ -144,16 +144,28 @@ MVP 기준 결정값:
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/users` | no | 1번 | `{ "email": "user@example.com", "password": "passw0rd!", "name": "홍길동", "termsAccepted": true, "marketingAccepted": false }` | `{ "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" }` | `users` |
+| `POST` | `/api/users` | no | 1번 | `{ "email": "user@example.com", "password": "passw0rd!", "name": "홍길동", "phoneNumber": "010-1234-5678", "postalCode": "06236", "addressLine1": "서울시 강남구 테헤란로 1", "addressLine2": "101호", "termsAccepted": true, "marketingAccepted": false }` | `{ "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" }` | `users` |
 | `POST` | `/api/auth/login` | no | 1번 | `{ "email": "user@example.com", "password": "passw0rd!" }` | `{ "accessToken": "jwt-access-token", "refreshToken": "opaque-refresh-token", "user": { "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" } }` | `users`, `refresh_tokens` |
 | `POST` | `/api/auth/refresh` | no | 1번 | `{ "refreshToken": "opaque-refresh-token" }` | `{ "accessToken": "new-jwt-access-token", "refreshToken": "new-opaque-refresh-token" }` | `refresh_tokens` |
 | `POST` | `/api/auth/logout` | USER | 1번 | `{ "refreshToken": "opaque-refresh-token" }` | `204 No Content` | `refresh_tokens` |
-| `GET` | `/api/auth/me` | USER | 1번 | - | `{ "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" }` | `users` |
+| `GET` | `/api/auth/me` | USER | 1번 | - | `{ "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER", "phoneNumber": "010-1234-5678", "postalCode": "06236", "addressLine1": "서울시 강남구 테헤란로 1", "addressLine2": "101호", "authProviders": ["LOCAL"] }` | `users`, `user_auth_providers` |
+| `POST` | `/api/users/me/password-verification` | USER | 1번 | `{ "password": "passw0rd!" }` | `204 No Content` | `users` |
+| `PATCH` | `/api/users/me` | USER | 1번 | `{ "currentPassword": "passw0rd!", "name": "홍길동", "phoneNumber": "010-1234-5678", "postalCode": "06236", "addressLine1": "서울시 강남구 테헤란로 1", "addressLine2": "101호" }` 또는 `{ "googleVerificationToken": "short-lived-token", ... }` | `{ "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER", "phoneNumber": "010-1234-5678", "postalCode": "06236", "addressLine1": "서울시 강남구 테헤란로 1", "addressLine2": "101호", "authProviders": ["LOCAL"] }` | `users`, `user_auth_providers` |
 | `GET` | `/api/auth/google/start` | no | 1번 | `?redirect=/my/quotes` | `302 Google OAuth redirect` | runtime |
 | `GET` | `/api/auth/google/callback` | no | 1번 | Google callback query | `302 /auth/callback?code=one-time-code&redirect=/my/quotes` | `users`, `user_auth_providers`, runtime |
-| `POST` | `/api/auth/exchange` | no | 1번 | `{ "code": "one-time-code", "termsAccepted": true, "marketingAccepted": false }` | `{ "accessToken": "jwt-access-token", "refreshToken": "opaque-refresh-token", "user": { "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" } }` | `users`, `user_auth_providers`, `refresh_tokens`, runtime |
+| `POST` | `/api/auth/exchange` | no | 1번 | `{ "code": "one-time-code", "termsAccepted": true, "marketingAccepted": false, "phoneNumber": "010-1234-5678", "postalCode": "06236", "addressLine1": "서울시 강남구 테헤란로 1", "addressLine2": "101호" }` | `{ "accessToken": "jwt-access-token", "refreshToken": "opaque-refresh-token", "user": { "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" } }` | `users`, `user_auth_providers`, `refresh_tokens`, runtime |
 
 Auth/User 구현 owner는 1번이다. 5번은 `Authorization` header 전달, token 저장 helper, `RequireAdmin`, admin guard, security allowlist, 공통 `ErrorResponse` 정합성을 검토한다.
+
+회원가입 연락처/주소 규칙:
+
+- `phoneNumber`는 숫자, 공백, 괄호, 하이픈 입력을 허용하지만 숫자만 추출했을 때 0으로 시작하는 10~11자리여야 한다. 서버는 저장 전 `010-1234-5678` 같은 하이픈 형식으로 정규화한다.
+- `postalCode`는 공백 제거 후 5자리 숫자여야 한다.
+- `addressLine1`은 5자 이상이며 한글 주소 정보를 포함해야 한다. 서버는 연속 공백을 하나로 줄여 저장한다.
+- `addressLine2`는 1자 이상이어야 하며 서버는 연속 공백을 하나로 줄여 저장한다.
+- 프론트 회원가입/Google 추가 정보 화면은 Kakao 우편번호 서비스로 `postalCode`와 `addressLine1`을 자동 입력하고, 사용자는 `addressLine2`만 직접 입력한다. 서버 검증은 외부 주소 검색 UI 우회 요청도 동일하게 막는다.
+- `/my/profile` 개인정보 수정 화면은 `authProviders`에 따라 확인 방식을 분기한다. `LOCAL` 계정은 현재 비밀번호 확인 후 수정 폼을 보여주고, Google-only 계정은 Google OAuth 재인증 후 수정 폼을 보여준다. 서버는 `PATCH /api/users/me`에서 `currentPassword` 또는 짧게 유효한 `googleVerificationToken`을 다시 검증한다.
+- 회원가입, Google 추가 정보 입력, `/my/profile` 개인정보 수정의 연락처/주소 검증 실패는 `VALIDATION_ERROR`와 함께 필드 단위 `details`를 반환할 수 있다. 예: `{ "field": "postalCode", "reason": "INVALID_FORMAT", "message": "우편번호는 5자리 숫자로 입력해 주세요." }`. 프론트는 이 값을 해당 입력칸 아래 오류 메시지로 표시한다.
 
 Google OAuth 정책:
 
@@ -162,7 +174,9 @@ Google OAuth 정책:
 - state와 one-time code는 Redis에 짧은 TTL로 저장하고, exchange 성공 시 one-time code는 1회만 소비한다.
 - Google scope는 `openid email profile`만 요청한다.
 - Google `email_verified=true`만 허용한다.
-- 신규 Google 사용자는 `/api/auth/exchange`에서 `termsAccepted=true`를 보내기 전까지 `400 VALIDATION_ERROR`, `details.reason="TERMS_REQUIRED"`를 받으며 `users` row가 생성되지 않는다.
+- 신규 Google 사용자는 `/api/auth/exchange`에서 `termsAccepted=true`와 `phoneNumber`, `postalCode`, `addressLine1`, `addressLine2`를 보내기 전까지 `400 VALIDATION_ERROR`, `details.reason="TERMS_REQUIRED"`를 받으며 `users` row가 생성되지 않는다.
+- 기존 Google `USER` 계정의 연락처/주소 컬럼이 비어 있으면 `/api/auth/exchange`는 one-time code를 소비하지 않고 `400 VALIDATION_ERROR`, `details.reason="CONTACT_REQUIRED"`를 반환한다. 같은 code로 연락처/주소를 보내면 `users` row를 보완하고 로그인한다.
+- `/api/auth/exchange`의 redirect가 `/my/profile`이면 응답에 짧게 유효한 `profileVerificationToken`을 포함할 수 있다. 프론트는 이 값을 `PATCH /api/users/me.googleVerificationToken`으로 보내 Google-only 계정의 개인정보 수정을 허용한다.
 - 공개 이메일 회원가입과 신규 Google 가입은 항상 `role=USER`만 생성한다. request body의 `role` 값은 받거나 신뢰하지 않는다.
 - verified email이 기존 local 계정과 같으면 같은 `users` row에 연결하고 기존 role을 유지한다. 기존 `ADMIN` 이메일이면 `ADMIN`으로 로그인되지만, Google 신규 가입으로 `ADMIN`이 생성되지는 않는다.
 - Google access/refresh token은 저장하지 않는다.

@@ -54,6 +54,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserDto"
+  /api/users/me:
+    patch:
+      summary: 현재 사용자 개인정보 수정
+      description: 저장 시에도 현재 비밀번호를 다시 확인한다.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileUpdateRequest"
+      responses:
+        "200":
+          description: 수정된 현재 사용자
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserDto"
+  /api/users/me/password-verification:
+    post:
+      summary: 현재 사용자 개인정보 수정 전 비밀번호 확인
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfilePasswordVerificationRequest"
+      responses:
+        "204":
+          description: 비밀번호 확인 완료
   /api/auth/login:
     post:
       summary: 이메일 로그인
@@ -172,7 +205,7 @@ paths:
   /api/auth/exchange:
     post:
       summary: OAuth one-time code 교환
-      description: "Google callback에서 받은 서버 one-time code를 JWT/refresh token으로 교환한다. 신규 Google 사용자는 약관 동의 전에는 `VALIDATION_ERROR`와 `details.reason=TERMS_REQUIRED`를 반환한다."
+      description: "Google callback에서 받은 서버 one-time code를 JWT/refresh token으로 교환한다. 신규 Google 사용자는 약관 동의와 연락처/주소 입력 전에는 `VALIDATION_ERROR`와 `details.reason=TERMS_REQUIRED`를 반환한다. 기존 Google USER 계정의 연락처/주소가 비어 있으면 one-time code를 소비하지 않고 `details.reason=CONTACT_REQUIRED`를 반환한다."
       security: []
       requestBody:
         required: true
@@ -3828,10 +3861,13 @@ components:
         details:
           type: object
           description: >
-            Tool-specific detail object. For performance Tool responses this may include
-            cpuBenchmarkScore, gpuBenchmarkScore, and gameFpsEvidence items shaped
-            like GameFpsEvidenceDto. gameFpsEvidenceStatus is included only when
-            gameFpsEvidence has at least one row.
+            Endpoint-specific detail object. Auth/User contact validation errors may
+            include field, reason, and message so clients can render field-level form
+            errors, for example { field: "postalCode", reason: "INVALID_FORMAT",
+            message: "우편번호는 5자리 숫자로 입력해 주세요." }. For performance Tool
+            responses this may include cpuBenchmarkScore, gpuBenchmarkScore, and
+            gameFpsEvidence items shaped like GameFpsEvidenceDto. gameFpsEvidenceStatus
+            is included only when gameFpsEvidence has at least one row.
           additionalProperties: true
     GameFpsEvidenceDto:
       type: object
@@ -3980,9 +4016,66 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/Role"
+        phoneNumber:
+          type: string
+          nullable: true
+        postalCode:
+          type: string
+          nullable: true
+        addressLine1:
+          type: string
+          nullable: true
+        addressLine2:
+          type: string
+          nullable: true
+        authProviders:
+          type: array
+          items:
+            type: string
+            enum: [LOCAL, GOOGLE]
+    ProfileUpdateRequest:
+      type: object
+      required: [name, phoneNumber, postalCode, addressLine1, addressLine2]
+      properties:
+        currentPassword:
+          type: string
+          nullable: true
+          description: LOCAL 계정 개인정보 수정 전 확인한 현재 비밀번호. 서버는 저장 시 다시 검증한다.
+        googleVerificationToken:
+          type: string
+          nullable: true
+          description: Google-only 계정 개인정보 수정을 위해 OAuth 재인증 후 발급되는 짧은 수명의 확인 토큰.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        phoneNumber:
+          type: string
+          description: 숫자, 공백, 괄호, 하이픈 입력을 허용하며 서버가 하이픈 형식으로 정규화한다. 숫자 기준 10~11자리여야 한다.
+          maxLength: 30
+        postalCode:
+          type: string
+          description: 공백 제거 후 5자리 숫자여야 한다.
+          maxLength: 20
+        addressLine1:
+          type: string
+          description: 기본 주소. 5자 이상이며 한글 주소 정보를 포함해야 한다.
+          minLength: 5
+          maxLength: 255
+        addressLine2:
+          type: string
+          description: 상세주소.
+          minLength: 1
+          maxLength: 255
+    ProfilePasswordVerificationRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
     SignupRequest:
       type: object
-      required: [email, password, name, termsAccepted, marketingAccepted]
+      required: [email, password, name, phoneNumber, postalCode, addressLine1, addressLine2, termsAccepted, marketingAccepted]
       properties:
         email:
           type: string
@@ -3991,6 +4084,24 @@ components:
           type: string
         name:
           type: string
+        phoneNumber:
+          type: string
+          description: 숫자, 공백, 괄호, 하이픈 입력을 허용하며 서버가 하이픈 형식으로 정규화한다. 숫자 기준 10~11자리여야 한다.
+          maxLength: 30
+        postalCode:
+          type: string
+          description: 공백 제거 후 5자리 숫자여야 한다.
+          maxLength: 20
+        addressLine1:
+          type: string
+          description: 기본 주소. 5자 이상이며 한글 주소 정보를 포함해야 한다.
+          minLength: 5
+          maxLength: 255
+        addressLine2:
+          type: string
+          description: 상세주소.
+          minLength: 1
+          maxLength: 255
         termsAccepted:
           type: boolean
         marketingAccepted:
@@ -4014,6 +4125,10 @@ components:
           type: string
         user:
           $ref: "#/components/schemas/UserDto"
+        profileVerificationToken:
+          type: string
+          nullable: true
+          description: redirect가 /my/profile인 Google 재인증 응답에서만 포함될 수 있는 개인정보 수정 확인 토큰.
     RefreshRequest:
       type: object
       required: [refreshToken]
@@ -4040,6 +4155,28 @@ components:
         marketingAccepted:
           type: boolean
           nullable: true
+        phoneNumber:
+          type: string
+          nullable: true
+          description: 숫자, 공백, 괄호, 하이픈 입력을 허용하며 서버가 하이픈 형식으로 정규화한다. 숫자 기준 10~11자리여야 한다.
+          maxLength: 30
+        postalCode:
+          type: string
+          nullable: true
+          description: 공백 제거 후 5자리 숫자여야 한다.
+          maxLength: 20
+        addressLine1:
+          type: string
+          nullable: true
+          description: 기본 주소. 5자 이상이며 한글 주소 정보를 포함해야 한다.
+          minLength: 5
+          maxLength: 255
+        addressLine2:
+          type: string
+          nullable: true
+          description: 상세주소.
+          minLength: 1
+          maxLength: 255
     RequirementParseRequest:
       type: object
       required: [message]
