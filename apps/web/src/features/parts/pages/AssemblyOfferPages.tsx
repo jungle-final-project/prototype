@@ -246,7 +246,11 @@ export function CheckoutCompletePage() {
 }
 
 export function AssemblyRequestHistoryPage() {
-  const requestsQuery = useQuery({ queryKey: ['assembly-requests'], queryFn: () => listAssemblyRequests() });
+  const requestsQuery = useQuery({
+    queryKey: ['assembly-requests'],
+    queryFn: () => listAssemblyRequests(),
+    refetchInterval: 5000
+  });
   return (
     <Screen>
       <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -264,7 +268,15 @@ export function AssemblyRequestDetailPage() {
   const queryClient = useQueryClient();
   const { requestId } = useParams();
   const [cancelReason, setCancelReason] = useState('');
-  const requestQuery = useQuery({ queryKey: ['assembly-request', requestId], queryFn: () => getAssemblyRequest(requestId!), enabled: Boolean(requestId) });
+  const requestQuery = useQuery({
+    queryKey: ['assembly-request', requestId],
+    queryFn: () => getAssemblyRequest(requestId!),
+    enabled: Boolean(requestId),
+    refetchInterval: (query) => {
+      const status = (query.state.data as AssemblyRequest | undefined)?.status;
+      return status === 'REQUESTED' || status === 'OFFERED' ? 5000 : false;
+    }
+  });
   const cancelMutation = useMutation({
     mutationFn: () => cancelAssemblyRequest(requestId!, cancelReason),
     onSuccess: () => {
@@ -277,13 +289,21 @@ export function AssemblyRequestDetailPage() {
   if (requestQuery.isError || !requestQuery.data) return <AssemblyError />;
   const request = requestQuery.data;
   const offer = selectedOfferOf(request);
+  const availableOffers = request.offers.filter((candidate) => candidate.status === 'AVAILABLE');
 
   return (
     <Screen>
       <div className="mb-4"><Link to="/my/assembly-requests" className="inline-flex items-center gap-2 text-sm font-black text-brand-blue"><ArrowLeft size={16} /> 목록으로</Link></div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
-          {offer ? <RequestProgress request={request} offer={offer} /> : <Panel title={request.requestNo} subtitle={STATUS_LABELS[request.status]}><StateMessage type="info" title="기사 제안 대기 중" body="관리자가 조건에 맞는 기사 제안을 준비하고 있습니다." /></Panel>}
+          {offer ? <RequestProgress request={request} offer={offer} /> : availableOffers.length ? (
+            <Panel title={request.requestNo} subtitle={STATUS_LABELS[request.status]}>
+              <StateMessage type="success" title={`기사 제안 ${availableOffers.length}건 도착`} body="도착한 기사별 가격과 일정을 비교하고 원하는 제안을 선택할 수 있습니다." />
+              <Link to={`/checkout/offers/${request.id}`} className="mt-4 flex min-h-12 items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 text-sm font-black text-white">
+                <UserRoundCheck size={17} /> 기사 제안 비교·선택
+              </Link>
+            </Panel>
+          ) : <Panel title={request.requestNo} subtitle={STATUS_LABELS[request.status]}><StateMessage type="info" title="기사 제안 대기 중" body="조건에 맞는 기사 제안이 등록되면 이 화면에서 자동으로 알려드립니다." /></Panel>}
           <Panel title="요청 부품 snapshot" subtitle="요청 이후 가격이나 현재 견적이 바뀌어도 이 구성은 유지됩니다.">
             <div className="divide-y divide-commerce-line">{request.items.map((item) => <div key={`${item.partId}-${item.category}`} className="flex items-center justify-between gap-4 py-3 text-sm"><div><span className="font-black text-commerce-ink">{item.name}</span><span className="ml-2 font-bold text-slate-500">{item.quantity}개</span></div><span className="shrink-0 font-black">{item.lineTotal.toLocaleString()}원</span></div>)}</div>
           </Panel>
@@ -292,6 +312,11 @@ export function AssemblyRequestDetailPage() {
           <Panel title="요청 관리">
             <SummaryRow label="현재 상태" value={STATUS_LABELS[request.status]} />
             <div className="mt-3"><SummaryRow label="결제 상태" value={request.payment?.status ?? '미생성'} /></div>
+            {availableOffers.length ? (
+              <Link to={`/checkout/offers/${request.id}`} className="mt-4 flex min-h-11 items-center justify-center rounded-md bg-brand-blue px-4 text-sm font-black text-white">
+                도착한 제안 {availableOffers.length}건 확인
+              </Link>
+            ) : null}
             {request.canCancel ? (
               <div className="mt-5 border-t border-commerce-line pt-4">
                 <label className="text-xs font-black text-slate-600">취소 사유<input value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} maxLength={1000} className="mt-2 h-10 w-full rounded border border-commerce-line px-3 text-sm" /></label>
@@ -341,7 +366,9 @@ function RequestProgress({ request, offer }: { request: AssemblyRequest; offer: 
 }
 
 function AssemblyHistoryCard({ request }: { request: AssemblyRequestSummary }) {
-  return <Link to={`/my/assembly-requests/${request.id}`} className="grid gap-4 rounded-lg border border-commerce-line bg-white p-5 shadow-sm transition hover:border-brand-blue md:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-commerce-ink">{request.requestNo}</h2><StatusBadge status={request.status} />{request.paymentStatus ? <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600">결제 {request.paymentStatus}</span> : null}</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span>{request.region}</span><span>{request.preferredDate}</span><span>{request.technicianName ?? '기사 배정 전'}</span><span>부품 {request.itemCount}개</span></div></div><div className="text-left md:text-right"><div className="text-xs font-bold text-slate-500">{request.finalPrice ? '최종 제안가' : '견적 예상가'}</div><div className="mt-1 text-lg font-black text-commerce-sale">{(request.finalPrice ?? request.estimatedPartsPrice).toLocaleString()}원</div></div></Link>;
+  const hasAvailableOffer = request.status === 'OFFERED' && (request.availableOfferCount ?? 1) > 0;
+  const destination = hasAvailableOffer ? `/checkout/offers/${request.id}` : `/my/assembly-requests/${request.id}`;
+  return <Link to={destination} className="grid gap-4 rounded-lg border border-commerce-line bg-white p-5 shadow-sm transition hover:border-brand-blue md:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-commerce-ink">{request.requestNo}</h2><StatusBadge status={request.status} />{request.paymentStatus ? <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600">결제 {request.paymentStatus}</span> : null}</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span>{request.region}</span><span>{request.preferredDate}</span><span>{request.technicianName ?? '기사 배정 전'}</span><span>부품 {request.itemCount}개</span></div>{hasAvailableOffer ? <span className="mt-3 inline-flex min-h-9 items-center rounded-md bg-blue-50 px-3 text-xs font-black text-brand-blue">{request.availableOfferCount == null ? '기사 제안 비교·선택' : `기사 제안 ${request.availableOfferCount}건 비교·선택`}</span> : null}</div><div className="text-left md:text-right"><div className="text-xs font-bold text-slate-500">{request.finalPrice ? '최종 제안가' : '견적 예상가'}</div><div className="mt-1 text-lg font-black text-commerce-sale">{(request.finalPrice ?? request.estimatedPartsPrice).toLocaleString()}원</div></div></Link>;
 }
 
 function selectedOfferOf(request: AssemblyRequest) { return request.offers.find((offer) => offer.id === request.selectedOfferId || offer.status === 'SELECTED') ?? null; }

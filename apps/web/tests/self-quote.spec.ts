@@ -1124,6 +1124,59 @@ test('renders the quote checklist with progress, next-slot guide, and total', as
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
 });
 
+test('keeps the selected checklist category open while replacing single-slot parts repeatedly', async ({ page }) => {
+  await loginAsUser(page);
+  const putRequests: string[] = [];
+  const cpuCandidates = [
+    candidatePart('cpu-9600x', 'CPU', 'AMD Ryzen 5 9600X', { price: 320000 }),
+    candidatePart('cpu-285k', 'CPU', 'Intel Core Ultra 9 285K', { price: 780000 })
+  ];
+  let selectedCpuId: string | null = null;
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PUT') {
+      selectedCpuId = new URL(route.request().url()).pathname.split('/').pop() ?? null;
+      if (selectedCpuId) putRequests.push(selectedCpuId);
+    }
+    const selected = cpuCandidates.find((part) => part.id === selectedCpuId);
+    const items = selected ? [draftItem(selected.id, 'CPU', selected.name, selected.price)] : [];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...emptyDraft,
+        items,
+        totalPrice: items.reduce((sum, item) => sum + item.lineTotal, 0),
+        itemCount: items.reduce((sum, item) => sum + item.quantity, 0)
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: cpuCandidates, page: 0, size: 100, total: cpuCandidates.length })
+    });
+  });
+
+  await page.goto('/self-quote?category=CPU');
+  const candidates = page.getByTestId('checklist-candidates-CPU');
+  await expect(candidates).toBeVisible();
+
+  await candidates.getByRole('button', { name: /AMD Ryzen 5 9600X/ }).click();
+  await expect.poll(() => putRequests).toEqual(['cpu-9600x']);
+  await expect(page).toHaveURL('/self-quote?category=CPU');
+  await expect(candidates).toBeVisible();
+  await expect(page.getByTestId('checklist-CPU')).toContainText('AMD Ryzen 5 9600X');
+
+  await candidates.getByRole('button', { name: /Intel Core Ultra 9 285K/ }).click();
+  await expect.poll(() => putRequests).toEqual(['cpu-9600x', 'cpu-285k']);
+  await expect(page).toHaveURL('/self-quote?category=CPU');
+  await expect(candidates).toBeVisible();
+  await expect(page.getByTestId('checklist-CPU')).toContainText('Intel Core Ultra 9 285K');
+});
+
 test('blocks purchase when a tool check fails without a matching edge', async ({ page }) => {
   await loginAsUser(page);
   // 감사 P1-3①: GPU가 없어 GPU-PSU 엣지가 안 생기는 견적에서 파워 용량 부족(power 툴 FAIL)이
@@ -2489,6 +2542,56 @@ test('removes a single-part slot item from the slot board', async ({ page }) => 
   await expect(page.getByTestId('quote-checklist-progress')).toHaveText('7/8 완료');
 });
 
+test('decreases an overfilled RAM kit to zero and removes it from the quote', async ({ page }) => {
+  await loginAsUser(page);
+  const partId = 'part-ram-overfilled';
+  let quantity = 3;
+  const patchedQuantities: number[] = [];
+  const deletedPartIds: string[] = [];
+  const currentDraft = () => {
+    const items = quantity > 0
+      ? [draftItem(partId, 'RAM', 'DDR5 32GB 듀얼 키트', 120_000, quantity, { moduleCount: 2 })]
+      : [];
+    return {
+      ...emptyDraft,
+      items,
+      totalPrice: items.reduce((sum, item) => sum + item.lineTotal, 0),
+      itemCount: quantity
+    };
+  };
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PATCH') {
+      const body = route.request().postDataJSON() as { quantity: number };
+      quantity = body.quantity;
+      patchedQuantities.push(quantity);
+    } else if (method === 'DELETE') {
+      deletedPartIds.push(new URL(route.request().url()).pathname.split('/').pop() ?? '');
+      quantity = 0;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft()) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  const ramArea = page.getByTestId('slot-fused-area-wrap-RAM');
+
+  for (const expectedCount of [4, 2]) {
+    await ramArea.hover();
+    await page.getByTestId('slot-fused-ram-decrease').click();
+    await expect(page.getByTestId('slot-fused-ram-count')).toHaveText(String(expectedCount));
+  }
+  await ramArea.hover();
+  await page.getByTestId('slot-fused-ram-decrease').click();
+
+  await expect.poll(() => patchedQuantities).toEqual([2, 1]);
+  await expect.poll(() => deletedPartIds).toEqual([partId]);
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('0 / 8');
+});
+
 test.skip('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT compatibility in 20 item pages', async ({ page }) => {
   await loginAsUser(page);
   const partRequests: Array<Record<string, string | null>> = [];
@@ -3400,6 +3503,104 @@ test('persists an assembly request, selects an offer, completes virtual payment,
   expect(quoteDraftMethods.every((method) => method === 'GET')).toBe(true);
 });
 
+test('creates an assembly request without requiring contact or delivery address fields', async ({ page }) => {
+  const requestId = '00000000-0000-4000-8000-000000020011';
+  let submittedBody: Record<string, unknown> | null = null;
+  const request = {
+    id: requestId,
+    requestNo: 'ASM-DEMO-OPTIONAL',
+    status: 'REQUESTED',
+    serviceType: 'FULL_SERVICE',
+    region: '서울',
+    preferredDate: '2099-07-20',
+    deliveryMethod: 'DELIVERY',
+    note: '',
+    contact: { name: 'Demo User', phone: null, postalCode: null, addressLine1: null, addressLine2: null },
+    asPolicyAccepted: true,
+    estimatedPartsPrice: 1_400_000,
+    itemCount: 2,
+    selectedOfferId: null,
+    canCancel: true,
+    items: [],
+    offers: [],
+    payment: null,
+    statusHistory: []
+  };
+  await page.addInitScript(() => localStorage.setItem('buildgraph.token', 'jwt-user-token'));
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(checkoutDraft) }));
+  await page.route('**/api/build-graphs/resolve', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ mode: 'BUILD_OVERVIEW', summary: '호환 가능', nodes: [], edges: [], focusNodeIds: [], insights: [], toolResults: [] }) }));
+  await page.route('**/api/assembly-requests**', async (route) => {
+    if (route.request().method() === 'POST' && route.request().url().endsWith('/api/assembly-requests')) {
+      submittedBody = route.request().postDataJSON() as Record<string, unknown>;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(request) });
+  });
+
+  await page.goto('/checkout');
+
+  await expect(page.getByLabel('조립 지역')).toHaveValue('서울');
+  await expect(page.getByLabel('희망 일정')).not.toHaveValue('');
+  await expect(page.getByLabel('수령인')).not.toHaveAttribute('required', '');
+  await expect(page.getByLabel('연락처')).not.toHaveAttribute('required', '');
+  await expect(page.getByLabel('주소', { exact: true })).not.toHaveAttribute('required', '');
+  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await page.getByRole('button', { name: '기사 제안 요청하기' }).click();
+
+  await expect(page).toHaveURL(`/checkout/offers/${requestId}`);
+  expect(submittedBody).toMatchObject({
+    region: '서울',
+    contactName: 'Demo User',
+    contactPhone: '',
+    addressLine1: '',
+    asPolicyAccepted: true
+  });
+});
+
+test('shows a newly arrived technician offer from the in-progress request without reload', async ({ page }) => {
+  const requestId = '00000000-0000-4000-8000-000000020012';
+  let detailCalls = 0;
+  const baseRequest = {
+    id: requestId,
+    requestNo: 'ASM-DEMO-RETURN',
+    serviceType: 'FULL_SERVICE',
+    region: '서울',
+    preferredDate: '2099-07-20',
+    deliveryMethod: 'DELIVERY',
+    note: '',
+    contact: { name: 'Demo User', phone: null },
+    asPolicyAccepted: true,
+    estimatedPartsPrice: 1_400_000,
+    itemCount: 2,
+    selectedOfferId: null,
+    canCancel: true,
+    items: [],
+    payment: null,
+    statusHistory: []
+  };
+  const offer = { id: 'offer-external-new', technicianId: 'tech-external', technicianName: '외부 테스트 기사', initials: '외', rating: 4.8, completedJobs: 24, responseMinutes: 10, specialties: ['게이밍 PC'], standardAsAccepted: true, providerType: 'EXTERNAL', verified: true, status: 'AVAILABLE', confirmedPartsPrice: 1_390_000, assemblyFee: 70_000, deliveryFee: 10_000, finalPrice: 1_470_000, leadTimeDays: 2, stockStatus: '재고 확인 완료' };
+  await page.addInitScript(() => localStorage.setItem('buildgraph.token', 'jwt-user-token'));
+  await page.route('**/api/assembly-requests**', async (route) => {
+    const url = route.request().url();
+    if (url.includes(`/${requestId}`)) {
+      detailCalls += 1;
+      const arrived = detailCalls > 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...baseRequest, status: arrived ? 'OFFERED' : 'REQUESTED', offers: arrived ? [offer] : [] }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ ...baseRequest, status: 'OFFERED', availableOfferCount: 1 }], page: 0, size: 20, total: 1 }) });
+  });
+
+  await page.goto(`/my/assembly-requests/${requestId}`);
+
+  await expect(page.getByText('기사 제안 대기 중')).toBeVisible();
+  const compareLink = page.getByRole('link', { name: /기사 제안 비교·선택/ });
+  await expect(compareLink).toBeVisible({ timeout: 8_000 });
+  await expect(compareLink).toHaveAttribute('href', `/checkout/offers/${requestId}`);
+
+  await page.goto('/my/assembly-requests');
+  await expect(page.locator(`a[href="/checkout/offers/${requestId}"]`)).toContainText('기사 제안 1건 비교·선택');
+});
+
 test('blocks an incompatible assembly request and does not expose a demo bypass', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
@@ -3562,6 +3763,13 @@ test('self quote chatbot sends current draft and never mutates the draft automat
   await expect.poll(() => buildChatBodies.length).toBe(1);
   expect((buildChatBodies[0] as { currentQuoteDraft?: { items?: Array<{ partId: string }> } }).currentQuoteDraft?.items?.[0]?.partId).toBe('part-gpu-chat');
   await expect(page.getByTestId('ai-chat-messages')).toContainText('나머지 카테고리를 내부 자산 기준으로 채웠습니다.');
+
+  // 추천처럼 문장 자체에 변경 어휘가 없어도 셀프견적에서는 현재 상태를 항상 보낸다.
+  // 그래야 추천 칩 재전송과 다음 추천이 방금 적용한 draft를 기준으로 동작한다.
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('CPU 추천해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect.poll(() => buildChatBodies.length).toBe(2);
+  expect((buildChatBodies[1] as { currentQuoteDraft?: { items?: Array<{ partId: string }> } }).currentQuoteDraft?.items?.[0]?.partId).toBe('part-gpu-chat');
 
   expect(draftMutationMethods).toHaveLength(0);
   // 부품명은 체크리스트(품목 지도)와 슬롯 카드 양쪽에 반영된다. 데스크톱(lg)에서 보드 슬롯은 절대위치

@@ -10,11 +10,12 @@ import org.springframework.stereotype.Service;
 
 /**
  * Build Chat 축소 정책(2026-07 회의)의 intent 라우터.
- * 지원 범위는 예산/그래프 기반 견적 추천, 부품 교체 성능 시뮬레이션, 셀프 견적 보드 위치 강조,
- * 명확화 질문이다. 화면 이동, 장바구니 조작, 단일 부품 추천, 일반 상담은 UNSUPPORTED로 고정 안내한다.
+ * 지원 범위는 예산/그래프 기반 견적 추천, 부품 교체 성능 시뮬레이션, 접수 전 PC 증상 안내,
+ * 셀프 견적 보드 위치 강조, 명확화 질문이다. 화면 이동, 장바구니 조작, 단일 부품 추천,
+ * 그 밖의 일반 상담은 UNSUPPORTED로 고정 안내한다.
  *
  * 분기 순서가 오탐 방어의 핵심이다:
- * 시뮬레이션 → 견적 완성 → 장바구니 조작 veto → 주변기기 veto → 견적 추천 → 보드 위치 → 명확화 → UNSUPPORTED
+ * 시뮬레이션 → 견적 완성 → 장바구니 조작 veto → 주변기기 veto → PC 증상 안내 → 견적 추천 → 보드 위치 → 명확화 → UNSUPPORTED
  */
 @Service
 public class BuildChatIntentRouter {
@@ -72,6 +73,20 @@ public class BuildChatIntentRouter {
             return unsupported(category, partQuery);
         }
 
+        if (isSupportGuidanceIntent(normalized)) {
+            return decision(
+                    BuildChatIntent.SUPPORT_GUIDANCE,
+                    "HIGH",
+                    "NONE",
+                    category,
+                    partQuery,
+                    "FAST_SUPPORT_GUIDANCE",
+                    "NONE",
+                    null,
+                    List.of("PC_SYMPTOM_REPORTED")
+            );
+        }
+
         if (isBuildRecommend(normalized, message, category)) {
             return decision(BuildChatIntent.BUILD_RECOMMEND, "HIGH", "NONE", category, partQuery, "LLM_OR_DETERMINISTIC",
                     standaloneContext(body) ? "SEMANTIC_READ_ONLY" : "EXACT_ONLY",
@@ -127,6 +142,45 @@ public class BuildChatIntentRouter {
 
     private static boolean isExplanationQuestion(String normalized) {
         return containsAny(normalized, "왜", "이유", "설명", "호환", "괜찮아", "병목");
+    }
+
+    private static boolean isSupportGuidanceIntent(String normalized) {
+        if (normalized.isBlank()) {
+            return false;
+        }
+        // 예방 목적의 상품 추천은 장애 신고가 아니다.
+        if (isRecommendationVerb(normalized)
+                && containsAny(normalized, "안멈추는", "멈추지않는", "안꺼지는", "문제없는", "고장안나는")) {
+            return false;
+        }
+
+        boolean explicitSymptom = containsAny(normalized,
+                "게임하다멈", "게임중멈", "화면멈", "컴퓨터멈", "pc멈", "프리징", "먹통",
+                "검은화면", "블랙스크린", "블루스크린", "갑자기꺼", "자꾸꺼", "재부팅",
+                "부팅이안", "부팅안", "전원이안", "전원안들", "튕겨", "튕김", "크래시",
+                "프레임드랍", "화면깨", "과열", "너무뜨거", "온도가너무", "팬소리",
+                "디스크100", "저장공간부족", "인터넷이자꾸끊", "네트워크가끊", "소리가안", "소리안나",
+                "갑자기느려", "느려졌");
+        if (explicitSymptom) {
+            return true;
+        }
+
+        boolean storageSaturation = containsAny(normalized,
+                "ssd사용률100", "ssd사용률이100", "디스크사용률100", "디스크사용률이100",
+                "ssd디스크가계속100", "디스크가계속100", "디스크가100");
+        boolean storageSymptom = storageSaturation
+                || containsAny(normalized, "ssd", "디스크", "저장장치")
+                        && containsAny(normalized, "느려", "멈", "오류", "문제", "인식안", "공간부족");
+        if (storageSymptom) {
+            return true;
+        }
+
+        boolean genericSymptom = containsAny(normalized,
+                "멈춰", "멈춤", "멈춘", "얼어붙", "버벅", "끊겨", "끊김", "안켜", "안돼", "이상해");
+        boolean pcContext = containsAny(normalized,
+                "컴퓨터", "pc", "게임", "화면", "윈도우", "부팅", "전원", "그래픽", "드라이버",
+                "인터넷", "네트워크", "소리", "팬", "온도", "ssd", "디스크");
+        return genericSymptom && pcContext;
     }
 
     private static boolean isBuildScoreExplanation(

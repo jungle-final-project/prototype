@@ -82,6 +82,10 @@ public class BuildChatCacheService {
             log.info("Build Chat cache lookup skipped: disabled");
             return Optional.empty();
         }
+        if (requiresAuthoritativeDraftLookup(request)) {
+            log.debug("Build Chat cache lookup skipped: active draft is not fingerprinted in the request");
+            return Optional.empty();
+        }
         try {
             StringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
             if (redisTemplate == null) {
@@ -119,6 +123,10 @@ public class BuildChatCacheService {
         }
         if (response == null || response.isEmpty()) {
             log.debug("Build Chat cache store skipped: empty response");
+            return;
+        }
+        if (requiresAuthoritativeDraftLookup(request)) {
+            log.debug("Build Chat cache store skipped: active draft is not fingerprinted in the request");
             return;
         }
         try {
@@ -169,7 +177,7 @@ public class BuildChatCacheService {
         }
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        return "buildgraph:build-chat:v32:" + sha256(json);
+        return "buildgraph:build-chat:v48:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {
@@ -223,6 +231,12 @@ public class BuildChatCacheService {
         if (!objectMaps(body.get("currentBuilds")).isEmpty()) {
             return false;
         }
+        // 단일 부품 추천은 request body가 비어 있어도 서버의 활성 quote draft를 기준으로
+        // 호환 후보를 걸러낸다. 따라서 사용자 간 공유하면 완성 견적의 FAIL 응답이 빈 견적에
+        // 재사용될 수 있다. 본체/견적 추천만 shared cache 대상으로 유지한다.
+        if (BuildChatService.detectPartCategory(normalized) != null && !hasBuildSignal(normalized)) {
+            return false;
+        }
         if (containsAnyNormalized(
                 normalized,
                 "이견적", "그견적", "저견적", "현재견적", "기존견적", "방금", "최근", "아까", "위조합", "이조합", "그조합", "저조합",
@@ -232,6 +246,18 @@ public class BuildChatCacheService {
             return false;
         }
         return containsAnyNormalized(normalized, "견적", "pc", "컴퓨터", "본체", "조립pc", "조립컴", "추천상담", "추천해줘", "추천");
+    }
+
+    private static boolean requiresAuthoritativeDraftLookup(Map<String, Object> request) {
+        Map<String, Object> body = request == null ? Map.of() : request;
+        if (objectMap(body.get("currentQuoteDraft")).containsKey("items")) {
+            return false;
+        }
+        String message = normalizeText(body.get("message"));
+        return BuildChatService.detectPartCategory(message) != null
+                && hasRecommendationSignal(message)
+                && !hasBuildSignal(message)
+                && !hasModifySignal(message);
     }
 
     private String effectiveProfile(String requestedAiProfile) {
@@ -305,6 +331,7 @@ public class BuildChatCacheService {
             Map<String, Object> versions = jdbcTemplate.queryForMap("""
                     SELECT
                       coalesce((SELECT max(coalesce(updated_at, created_at))::text FROM parts WHERE deleted_at IS NULL), 'none') AS parts_version,
+                      coalesce((SELECT md5(string_agg(public_id::text || ':' || coalesce(price, 0)::text || ':' || status, ',' ORDER BY public_id)) FROM parts WHERE deleted_at IS NULL), 'none') AS parts_fingerprint,
                       coalesce((SELECT max(created_at)::text FROM benchmark_summaries WHERE deleted_at IS NULL), 'none') AS benchmark_version,
                       coalesce((SELECT max(created_at)::text FROM game_fps_benchmarks WHERE deleted_at IS NULL), 'none') AS fps_version,
                       coalesce((SELECT max(created_at)::text FROM rag_evidence WHERE agent_session_id IS NULL), 'none') AS rag_version,

@@ -369,6 +369,36 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void partRecommendationUsesCurrentDraftPlatformInsteadOfServingWrongSocketCpu() {
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), anyInt())).thenReturn(List.of(
+                partRow("CPU", "cpu-am5", "AMD Ryzen 9 9950X3D", 990_000,
+                        Map.of("toolReady", true, "socket", "AM5")),
+                partRow("CPU", "cpu-lga", "Intel Core Ultra 9 285K", 890_000,
+                        Map.of("toolReady", true, "socket", "LGA1851"))
+        ));
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "CPU 추천해줘",
+                "SELF_QUOTE",
+                null,
+                null,
+                "draft-1",
+                Map.of("currentQuoteDraft", Map.of("items", List.of(Map.of(
+                        "partId", "board-current",
+                        "category", "MOTHERBOARD",
+                        "name", "B860 Board",
+                        "quantity", 1,
+                        "attributes", Map.of("socket", "LGA1851"))))),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.PART_RECOMMEND);
+        assertThat(response.partRecommendations())
+                .extracting(AiChatEngineResponse.PartRecommendation::partId)
+                .containsExactly("cpu-lga");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void partRecommendationHonorsExplicitCpuModelToken() {
         AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
                 "CPU 9700X인 거 추천해줘",
@@ -799,6 +829,91 @@ class DefaultAiChatEngineTest {
         String serialized = schema.toString();
 
         assertThat(serialized).doesNotContain("uniqueItems", "maxItems", "minItems");
+    }
+
+    @Test
+    void llmRequiredSeparatesShoppingSupportGuidanceFromAgentDiagnosis() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "SUPPORT_GUIDANCE",
+                  "assistantMessage": "PC 상태 확인 경로를 안내하겠습니다.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": false,
+                    "routeType": "NONE",
+                    "category": null,
+                    "partQuery": null,
+                    "confidence": "LOW",
+                    "reason": null
+                  },
+                  "boardFocusIntent": {
+                    "shouldFocus": false,
+                    "categories": [],
+                    "confidence": "LOW",
+                    "reason": null
+                  },
+                  "supportIntent": {
+                    "shouldGuide": true,
+                    "symptomCategory": "DISPLAY_FREEZE",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 반복되는 화면 멈춤을 보고했습니다."
+                  },
+                  "partConstraint": {
+                    "category": null,
+                    "minCapacityGb": null,
+                    "minVramGb": null,
+                    "minWattageW": null,
+                    "quantity": null,
+                    "maxBudgetWon": null,
+                    "coolingType": null,
+                    "pcieGeneration": null,
+                    "airflowFocused": null
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "쓰다 보면 디스플레이가 얼어붙는 느낌이야",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.SUPPORT_GUIDANCE);
+        assertThat(response.actions()).isEmpty();
+        assertThat(response.recommendations()).isEmpty();
+        assertThat(response.partRecommendations()).isEmpty();
+        assertThat(response.parsedContext().get("supportIntent"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("symptomCategory", "DISPLAY_FREEZE")
+                .containsEntry("confidence", "HIGH")
+                .doesNotContainKeys("causeCandidates", "riskLevel", "supportDecision");
+        verifyNoJdbcWrites();
     }
 
     @Test

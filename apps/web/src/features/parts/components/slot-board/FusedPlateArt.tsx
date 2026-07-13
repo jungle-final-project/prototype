@@ -50,7 +50,7 @@ export function FusedPlateArt({
   const ramSlotCount = Math.min(4, ramItems.reduce((sum, item) => sum + itemStickCount(item), 0));
   const mountingRamSlots = useMountingRamSlots(ramSlotCount);
   const ramIncreaseTarget = ramSlotCount < 4 ? findRamIncreaseTarget(ramItems, ramSlotCount) : null;
-  const ramDecreaseAction = ramSlotCount > 1 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
+  const ramDecreaseAction = ramSlotCount > 0 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
   const isActionPending = isRemovePending || isQuantityPending;
   const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -435,13 +435,9 @@ function findRamDecreaseAction(ramItems: QuoteDraftItem[], ramSlotCount: number)
     return { type: 'quantity', item: quantityTarget, quantity: quantityTarget.quantity - 1 };
   }
 
-  if (ramItems.length <= 1) {
-    return null;
-  }
-
   for (let index = ramItems.length - 1; index >= 0; index -= 1) {
     const item = ramItems[index];
-    if (ramSlotCount - ramModuleCount(item) >= 1) {
+    if (ramSlotCount - ramModuleCount(item) >= 0) {
       return { type: 'remove', item };
     }
   }

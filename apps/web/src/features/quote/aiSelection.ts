@@ -234,6 +234,26 @@ export type AiBuildAssessment = {
   evaluatedAt: string;
 };
 
+export type AiSupportGuidanceAction = {
+  type: 'DOWNLOAD_PC_AGENT' | 'OPEN_SUPPORT_NEW';
+  label: string;
+  route?: '/support/new';
+};
+
+export type AiSupportGuidance = {
+  type: 'PC_AGENT_DIAGNOSTIC_ENTRY';
+  scope: 'PRE_DIAGNOSIS';
+  symptomCategory: 'DISPLAY_FREEZE' | 'POWER_RESTART' | 'BOOT_FAILURE' | 'PERFORMANCE_STUTTER' | 'THERMAL_NOISE' | 'STORAGE' | 'NETWORK' | 'AUDIO' | 'GENERAL';
+  title: string;
+  summary: string;
+  /** 신규 서버 응답에는 항상 포함되며, 필드 도입 전 로컬 세션 복원을 위해 optional로 읽는다. */
+  possibleCauses?: string[];
+  beforeDiagnosisChecks: string[];
+  agentRecommendation: 'OPTIONAL' | 'RECOMMENDED';
+  actions: AiSupportGuidanceAction[];
+  disclaimer: string;
+};
+
 export type AiChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -244,6 +264,7 @@ export type AiChatMessage = {
   builds?: AiRecommendedBuild[];
   simulation?: AiPerformanceSimulation | null;
   buildAssessment?: AiBuildAssessment;
+  supportGuidance?: AiSupportGuidance;
   warnings?: string[];
   quickReplies?: string[];
   /** RAM/SSD처럼 다중 상품을 허용하는 구체 추천 칩의 직접 견적 추가 메타데이터. */
@@ -293,6 +314,7 @@ export type AiBuildChatResponse = {
   builds: AiRecommendedBuild[];
   simulation?: AiPerformanceSimulation | null;
   buildAssessment?: AiBuildAssessment | null;
+  supportGuidance?: AiSupportGuidance | null;
   warnings?: string[];
   /** 모호 요청 되묻기 시 함께 오는 선택지 칩 — 그 자체로 완전한 프롬프트다. */
   quickReplies?: string[];

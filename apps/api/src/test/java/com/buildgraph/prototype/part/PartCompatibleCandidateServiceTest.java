@@ -4,8 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
@@ -120,6 +123,138 @@ class PartCompatibleCandidateServiceTest {
     }
 
     @Test
+    void compatibleCandidateIdsBackfillsThreeCandidatesAfterWrongSocketCpuFailures() {
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("cpu-current", 301L, "CPU", "Core Ultra 7", 420000, MockData.map("socket", "LGA1851")),
+                draftItem("board-current", 302L, "MOTHERBOARD", "B860 Board", 250000, MockData.map("socket", "LGA1851"))
+        ));
+        when(jdbcTemplate.queryForList(
+                org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("public_id = ?::uuid")),
+                any(Object[].class))).thenReturn(List.of(
+                candidate("cpu-am5-a", 501L, "CPU", "Ryzen 9 9950X3D", 990000, MockData.map("socket", "AM5")),
+                candidate("cpu-am5-b", 502L, "CPU", "Ryzen 9 9900X3D", 890000, MockData.map("socket", "AM5")),
+                candidate("cpu-lga-a", 503L, "CPU", "Core Ultra 9 285K", 880000, MockData.map("socket", "LGA1851")),
+                candidate("cpu-lga-b", 504L, "CPU", "Core Ultra 7 265K", 500000, MockData.map("socket", "LGA1851")),
+                candidate("cpu-lga-c", 505L, "CPU", "Core Ultra 5 245K", 320000, MockData.map("socket", "LGA1851")),
+                candidate("cpu-lga-unchecked", 506L, "CPU", "Core Ultra 5 235", 250000, MockData.map("socket", "LGA1851"))
+        ));
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
+            List<ToolBuildPart> parts = invocation.getArgument(0);
+            boolean socketMatched = parts.stream()
+                    .filter(part -> "CPU".equals(part.category()))
+                    .map(ToolBuildPart::publicId)
+                    .anyMatch(id -> id != null && id.startsWith("cpu-lga"));
+            return List.of(tool(
+                    "compatibility",
+                    socketMatched ? "PASS" : "FAIL",
+                    socketMatched ? "CPU와 메인보드 소켓이 맞습니다." : "CPU와 메인보드 소켓이 맞지 않습니다.",
+                    MockData.map(
+                            "socketMatched", socketMatched,
+                            "coolerSocketMatched", true,
+                            "coolerTdpMatched", true)));
+        });
+
+        List<String> accepted = service.compatibleCandidateIds(
+                user(), "CPU", "REPLACE",
+                List.of("cpu-am5-a", "cpu-am5-b", "cpu-lga-a", "cpu-lga-b", "cpu-lga-c", "cpu-lga-unchecked"),
+                3);
+
+        assertThat(accepted).containsExactly("cpu-lga-a", "cpu-lga-b", "cpu-lga-c");
+        verify(toolCheckService, times(5)).checkBuild(anyList(), anyInt());
+        verify(jdbcTemplate, times(1)).queryForList(
+                org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("public_id = ?::uuid")),
+                any(Object[].class));
+    }
+
+    @Test
+    void compatibleCandidateIdsPrefersThreePassesOverEarlierWarnings() {
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("gpu-current", 301L, "GPU", "Current GPU", 420000, MockData.map()),
+                draftItem("psu-current", 302L, "PSU", "Current PSU", 150000, MockData.map("capacityW", 850))
+        ));
+        when(jdbcTemplate.queryForList(
+                org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("public_id = ?::uuid")),
+                any(Object[].class))).thenReturn(List.of(
+                candidate("gpu-warn-a", 501L, "GPU", "Warn A", 600000, MockData.map()),
+                candidate("gpu-warn-b", 502L, "GPU", "Warn B", 610000, MockData.map()),
+                candidate("gpu-pass-a", 503L, "GPU", "Pass A", 620000, MockData.map()),
+                candidate("gpu-pass-b", 504L, "GPU", "Pass B", 630000, MockData.map()),
+                candidate("gpu-pass-c", 505L, "GPU", "Pass C", 640000, MockData.map())
+        ));
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
+            List<ToolBuildPart> parts = invocation.getArgument(0);
+            String gpuId = parts.stream()
+                    .filter(part -> "GPU".equals(part.category()))
+                    .map(ToolBuildPart::publicId)
+                    .filter(id -> id != null && id.startsWith("gpu-"))
+                    .findFirst()
+                    .orElse("");
+            return List.of(tool("power", gpuId.contains("warn") ? "WARN" : "PASS", "파워 검사를 마쳤습니다."));
+        });
+
+        List<String> accepted = service.compatibleCandidateIds(
+                user(), "GPU", "REPLACE",
+                List.of("gpu-warn-a", "gpu-warn-b", "gpu-pass-a", "gpu-pass-b", "gpu-pass-c"),
+                3);
+
+        assertThat(accepted).containsExactly("gpu-pass-a", "gpu-pass-b", "gpu-pass-c");
+        verify(toolCheckService, times(5)).checkBuild(anyList(), anyInt());
+    }
+
+    @Test
+    void compatibleCandidateSelectionSkipsCurrentSingleItemOnReplace() {
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftPartRow("psu-current", 301L, "PSU", "Current PSU", 150000, MockData.map("capacityW", 850))
+        ));
+        when(jdbcTemplate.queryForList(
+                org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("public_id = ?::uuid")),
+                any(Object[].class))).thenReturn(List.of(
+                candidate("psu-current", 301L, "PSU", "Current PSU", 150000, MockData.map("capacityW", 850)),
+                candidate("psu-alternative", 302L, "PSU", "Alternative PSU", 170000, MockData.map("capacityW", 1000))
+        ));
+        when(toolCheckService.checkBuild(anyList(), anyInt()))
+                .thenReturn(List.of(tool("power", "PASS", "파워 검사를 통과했습니다.")));
+
+        PartCompatibleCandidateService.CompatibleCandidateSelection selection = service.compatibleCandidateSelection(
+                user(), "PSU", "REPLACE", List.of("psu-current", "psu-alternative"), 3);
+
+        assertThat(selection.acceptedIds()).containsExactly("psu-alternative");
+        assertThat(selection.alreadySelectedIds()).containsExactly("psu-current");
+        verify(toolCheckService, times(1)).checkBuild(anyList(), anyInt());
+    }
+
+    @Test
+    void compatibleCandidateSelectionReportsAndSkipsCurrentMultiItemOnAddRecommendation() {
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftPartRow("ram-current", 301L, "RAM", "Current RAM", 150000,
+                        MockData.map("capacityGb", 32, "moduleCount", 2))
+        ));
+        when(jdbcTemplate.queryForList(
+                org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("public_id = ?::uuid")),
+                any(Object[].class))).thenReturn(List.of(
+                candidate("ram-current", 301L, "RAM", "Current RAM", 150000,
+                        MockData.map("capacityGb", 32, "moduleCount", 2)),
+                candidate("ram-alternative-a", 302L, "RAM", "Alternative RAM A", 170000,
+                        MockData.map("capacityGb", 32, "moduleCount", 2)),
+                candidate("ram-alternative-b", 303L, "RAM", "Alternative RAM B", 180000,
+                        MockData.map("capacityGb", 32, "moduleCount", 2))
+        ));
+        when(toolCheckService.checkBuild(anyList(), anyInt()))
+                .thenReturn(List.of(tool("compatibility", "PASS", "RAM 검사를 통과했습니다.")));
+
+        PartCompatibleCandidateService.CompatibleCandidateSelection selection = service.compatibleCandidateSelection(
+                user(), "RAM", "ADD", List.of("ram-current", "ram-alternative-a", "ram-alternative-b"), 3);
+
+        assertThat(selection.acceptedIds()).containsExactly("ram-alternative-a", "ram-alternative-b");
+        assertThat(selection.alreadySelectedIds()).containsExactly("ram-current");
+        verify(toolCheckService, times(2)).checkBuild(anyList(), anyInt());
+    }
+
+    @Test
     void partRowsWithCompatibilityIncludeFailingOptionsForCategoryList() {
         when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
         when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
@@ -169,6 +304,80 @@ class PartCompatibleCandidateServiceTest {
         assertThat(compatibility(items.get(1)).get("statusLabel")).isEqualTo("호환 가능");
         assertThat(compatibility(items.get(2)).get("status")).isEqualTo("WARN");
         assertThat(compatibility(items.get(2)).get("statusLabel")).isEqualTo("간섭 주의");
+    }
+
+    @Test
+    void existingRamFailureDoesNotMarkUnrelatedCpuCandidatesAsFail() {
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("draft-cpu", 301L, "CPU", "Current CPU", 420000, MockData.map("socket", "AM5")),
+                draftItem("draft-board", 302L, "MOTHERBOARD", "AM5 Board", 250000, MockData.map("socket", "AM5", "memorySlots", 2)),
+                draftItem("draft-ram", 303L, "RAM", "Dual DIMM Kit", 180000, MockData.map("memoryType", "DDR5", "moduleCount", 2))
+        ));
+        List<Map<String, Object>> rows = List.of(
+                candidate("cpu-compatible", 501L, "CPU", "Compatible CPU", 450000, MockData.map("socket", "AM5")),
+                candidate("cpu-wrong-socket", 502L, "CPU", "Wrong Socket CPU", 460000, MockData.map("socket", "LGA1851"))
+        );
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
+            List<ToolBuildPart> parts = invocation.getArgument(0);
+            String cpuId = parts.stream()
+                    .filter(part -> "CPU".equals(part.category()))
+                    .findFirst()
+                    .map(ToolBuildPart::publicId)
+                    .orElse("");
+            boolean socketMatched = "cpu-compatible".equals(cpuId);
+            return List.of(tool(
+                    "compatibility",
+                    "FAIL",
+                    socketMatched ? "RAM 스틱 수가 메인보드 슬롯을 초과합니다." : "CPU와 메인보드 소켓이 맞지 않습니다.",
+                    MockData.map(
+                            "socketMatched", socketMatched,
+                            "memoryTypeMatched", true,
+                            "coolerSocketMatched", true,
+                            "coolerTdpMatched", true,
+                            "coolerTdpMarginLow", false,
+                            "ramFormFactorMatched", true,
+                            "ramSlotsMatched", false,
+                            "m2SlotsMatched", true)));
+        });
+
+        List<Map<String, Object>> items = service.partRowsWithCompatibility(
+                user(), "QUOTE_DRAFT_CURRENT", "CPU", null, null, rows);
+
+        assertThat(compatibility(items.get(0))).containsEntry("status", "PASS");
+        assertThat(compatibility(items.get(0)).get("summary")).isEqualTo("현재 조합 기준 호환 가능합니다");
+        assertThat(compatibility(items.get(1))).containsEntry("status", "FAIL");
+        assertThat(compatibility(items.get(1)).get("summary")).isEqualTo("CPU와 메인보드 소켓이 맞지 않습니다.");
+    }
+
+    @Test
+    void existingPsuSizeFailureDoesNotMarkFittingGpuCandidateAsFail() {
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("draft-cpu", 301L, "CPU", "Current CPU", 420000, Map.of()),
+                draftItem("draft-gpu", 302L, "GPU", "Current GPU", 900000, MockData.map("lengthMm", 300)),
+                draftItem("draft-psu", 303L, "PSU", "Long PSU", 150000, MockData.map("capacityW", 1000, "depthMm", 200)),
+                draftItem("draft-case", 304L, "CASE", "Compact Case", 120000, MockData.map("maxGpuLengthMm", 360, "maxPsuLengthMm", 180))
+        ));
+        List<Map<String, Object>> rows = List.of(
+                candidate("gpu-fitting", 501L, "GPU", "Fitting GPU", 950000, MockData.map("lengthMm", 320, "wattage", 250))
+        );
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of(
+                tool("power", "PASS", "파워 용량을 충족합니다."),
+                tool("size", "FAIL", "파워 깊이가 케이스 허용 길이를 초과합니다.", MockData.map(
+                        "gpuLengthMm", 320,
+                        "maxGpuLengthMm", 360,
+                        "gpuHeadroomMm", 40,
+                        "psuDepthMm", 200,
+                        "maxPsuLengthMm", 180,
+                        "psuHeadroomMm", -20)),
+                tool("performance", "PASS", "성능을 충족합니다.")
+        ));
+
+        List<Map<String, Object>> items = service.partRowsWithCompatibility(
+                user(), "QUOTE_DRAFT_CURRENT", "GPU", null, null, rows);
+
+        assertThat(compatibility(items.get(0))).containsEntry("status", "PASS");
     }
 
     @Test
@@ -236,8 +445,8 @@ class PartCompatibleCandidateServiceTest {
     }
 
     @Test
-    void addModeSkipsAppendWhenCandidateAlreadyInBuild() {
-        // GET 경로는 장착 부품을 후보 목록에서 제외하지 않으므로, 자기 자신을 이중 계상하지 않아야 한다.
+    void addModeIncrementsQuantityWhenCandidateAlreadyExistsInBuild() {
+        // 실제 담기 API는 같은 상품을 별도 행으로 복제하지 않고 기존 quantity를 +1 한다.
         when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
         when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
                 draftPartRow("draft-ram", 301L, "RAM", "DDR5 킷", 180000, MockData.map("memoryType", "DDR5", "moduleCount", 2))
@@ -245,15 +454,24 @@ class PartCompatibleCandidateServiceTest {
         List<List<ToolBuildPart>> capturedBuilds = new java.util.ArrayList<>();
         when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
             capturedBuilds.add(new java.util.ArrayList<>(invocation.getArgument(0)));
-            return List.of(tool("compatibility", "PASS", "호환됩니다."));
+            return List.of(tool(
+                    "compatibility",
+                    "FAIL",
+                    "RAM 스틱 수가 메인보드 슬롯을 초과합니다.",
+                    MockData.map("memoryTypeMatched", true, "ramFormFactorMatched", true, "ramSlotsMatched", false)));
         });
         List<Map<String, Object>> rows = List.of(
                 candidate("draft-ram", 301L, "RAM", "DDR5 킷", 180000, MockData.map("memoryType", "DDR5", "moduleCount", 2))
         );
 
-        service.partRowsWithCompatibility(user(), "QUOTE_DRAFT_CURRENT", "RAM", "ADD", null, rows);
+        List<Map<String, Object>> items = service.partRowsWithCompatibility(
+                user(), "QUOTE_DRAFT_CURRENT", "RAM", "ADD", null, rows);
 
-        assertThat(capturedBuilds.get(0)).extracting(ToolBuildPart::publicId).containsExactly("draft-ram");
+        assertThat(capturedBuilds.get(0)).singleElement().satisfies(part -> {
+            assertThat(part.publicId()).isEqualTo("draft-ram");
+            assertThat(part.effectiveQuantity()).isEqualTo(2);
+        });
+        assertThat(compatibility(items.get(0))).containsEntry("status", "FAIL");
     }
 
     @Test
@@ -356,6 +574,10 @@ class PartCompatibleCandidateServiceTest {
 
     private static Map<String, Object> tool(String tool, String status, String summary) {
         return MockData.map("tool", tool, "status", status, "confidence", "MEDIUM", "summary", summary, "details", Map.of());
+    }
+
+    private static Map<String, Object> tool(String tool, String status, String summary, Map<String, Object> details) {
+        return MockData.map("tool", tool, "status", status, "confidence", "MEDIUM", "summary", summary, "details", details);
     }
 
     private static CurrentUserService.CurrentUser user() {

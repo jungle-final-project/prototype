@@ -36,12 +36,33 @@ public class BuildEvaluationService {
             String focusTool
     ) {
         List<ToolBuildPart> safeParts = parts == null ? List.of() : parts;
+        int requestedBudgetWon = requestedBudget != null && requestedBudget > 0
+                ? requestedBudget
+                : total(safeParts);
+        List<Map<String, Object>> rawToolResults = safeParts.isEmpty()
+                ? List.of()
+                : toolCheckService.checkBuild(safeParts, requestedBudgetWon);
+        return evaluateSnapshot(safeParts, rawToolResults, requestedBudget, focusCategory, focusTool);
+    }
+
+    /**
+     * 이미 Tool 검증을 마친 추천 카드도 그래프/현재 견적과 동일한 점수·조언 정책으로 평가한다.
+     * Tool을 다시 호출하지 않아 추천 응답 지연을 늘리지 않는다.
+     */
+    public BuildEvaluation evaluateSnapshot(
+            List<ToolBuildPart> parts,
+            List<Map<String, Object>> rawToolResults,
+            Integer requestedBudget,
+            String focusCategory,
+            String focusTool
+    ) {
+        List<ToolBuildPart> safeParts = parts == null ? List.of() : parts;
         int totalPrice = total(safeParts);
         int budgetWon = requestedBudget != null && requestedBudget > 0 ? requestedBudget : totalPrice;
         List<Map<String, Object>> toolResults = safeParts.isEmpty()
                 ? List.of()
                 : ToolApplicabilityPolicy.applicableToolResults(
-                        toolCheckService.checkBuild(safeParts, budgetWon),
+                        rawToolResults == null ? List.of() : rawToolResults,
                         safeParts
                 );
         Map<String, Object> compositeScore = buildCompositeScoreService.score(

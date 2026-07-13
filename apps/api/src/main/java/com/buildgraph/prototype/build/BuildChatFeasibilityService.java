@@ -195,6 +195,28 @@ public class BuildChatFeasibilityService {
     }
 
     /**
+     * 명시 예산이 없는 "가성비" 요청용 정렬. 성능 근거가 있는 CPU/GPU는 벤치마크 대비 가격,
+     * RAM/저장장치/파워는 대표 정량 스펙 대비 가격으로 정렬한다. 객관적 성능 근거가 없는
+     * 메인보드/케이스/쿨러는 임의 점수를 만들지 않고 가격이 낮은 순으로만 제시한다.
+     */
+    public List<PartOption> bestValueFirst(String category, int limit) {
+        if (category == null) {
+            return List.of();
+        }
+        String valueOrder = switch (category) {
+            case "CPU", "GPU" -> "(coalesce((SELECT max(bs.score) FROM benchmark_summaries bs "
+                    + "WHERE bs.part_id = p.id AND bs.deleted_at IS NULL), 0)::numeric "
+                    + "/ greatest(p.price, 1)) DESC, price ASC, name ASC";
+            case "RAM", "STORAGE" -> "(" + numericAttribute("capacityGb", "kitCapacityGb", "memoryGb")
+                    + "::numeric / greatest(p.price, 1)) DESC, price ASC, name ASC";
+            case "PSU" -> "(" + numericAttribute("wattage", "capacityW")
+                    + "::numeric / greatest(p.price, 1)) DESC, price ASC, name ASC";
+            default -> "price ASC, name ASC";
+        };
+        return queryOptions("", valueOrder, new ArrayList<>(List.of(category)), limit);
+    }
+
+    /**
      * 사용자가 명시한 모델명/제조사 토큰을 만족하는 ACTIVE 부품만 조회한다.
      * LLM이 만든 추천 문구와 무관하게 실제 후보는 DB의 이름·제조사·GPU class로 다시 제한한다.
      */

@@ -199,7 +199,7 @@ class BuildChatCacheServiceTest {
     }
 
     @Test
-    void standalonePartRecommendationCacheIsSharedAcrossUsers() {
+    void standalonePartRecommendationWithoutDraftFingerprintBypassesCache() {
         Map<String, String> redisStore = new LinkedHashMap<>();
         TestCache cache = cache(redisStore);
         Map<String, Object> request = Map.of("message", "고성능 GPU 추천해줘");
@@ -211,7 +211,28 @@ class BuildChatCacheServiceTest {
 
         cache.service.store(request, "BUILD_CHAT_54_MINI_FAST", 42L, response);
 
-        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 7L)).isPresent();
+        assertThat(redisStore).isEmpty();
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 42L)).isEmpty();
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 7L)).isEmpty();
+    }
+
+    @Test
+    void standalonePartRecommendationWithExplicitDraftFingerprintCanCachePerUser() {
+        Map<String, String> redisStore = new LinkedHashMap<>();
+        TestCache cache = cache(redisStore);
+        Map<String, Object> request = Map.of(
+                "message", "고성능 GPU 추천해줘",
+                "currentQuoteDraft", Map.of("items", List.of()));
+        Map<String, Object> response = Map.of(
+                "answerType", "PART",
+                "message", "GPU 후보입니다.",
+                "partRecommendation", Map.of("category", "GPU")
+        );
+
+        cache.service.store(request, "BUILD_CHAT_54_MINI_FAST", 42L, response);
+
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 42L)).isPresent();
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 7L)).isEmpty();
     }
 
     @Test
