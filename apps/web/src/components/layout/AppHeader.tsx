@@ -137,10 +137,10 @@ export function AppHeader() {
             {user?.role === 'USER' ? <HeaderButton to={hasTechnicianProfile ? '/technician' : '/technician/apply'} icon={<Wrench size={15} />} label={hasTechnicianProfile ? '기사 포털' : '기사로 참여'} quiet /> : null}
             {user ? (
               <>
-                <div className="flex h-9 max-w-[170px] items-center gap-2 rounded-md px-2 text-xs font-semibold text-slate-600 sm:max-w-none">
+                <Link to="/my/profile" className="flex h-9 max-w-[170px] items-center gap-2 rounded-md px-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100 sm:max-w-none" aria-label="마이페이지로 이동">
                   {user.role === 'ADMIN' ? <ShieldCheck size={15} className="text-slate-500" /> : <UserRound size={15} className="text-slate-500" />}
                   <span className="truncate">{user.name || user.email}</span>
-                </div>
+                </Link>
                 <button onClick={logout} className="flex h-9 items-center gap-1 rounded-md border border-commerce-line bg-white px-3 text-xs font-bold text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100">
                   <LogOut size={15} />
                   로그아웃

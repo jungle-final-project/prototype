@@ -286,6 +286,10 @@ Owner: 5번
 | `email` | `VARCHAR(255)` | no | - | 로그인 이메일 |
 | `password_hash` | `VARCHAR(255)` | yes | - | local 가입자만 사용 |
 | `name` | `VARCHAR(100)` | no | - | 표시 이름 |
+| `phone_number` | `VARCHAR(30)` | yes | - | local 회원가입 전화번호 |
+| `postal_code` | `VARCHAR(20)` | yes | - | local 회원가입 우편번호 |
+| `address_line1` | `VARCHAR(255)` | yes | - | local 회원가입 기본 주소 |
+| `address_line2` | `VARCHAR(255)` | yes | - | local 회원가입 상세 주소 |
 | `role` | `VARCHAR(30)` | no | - | `USER`, `ADMIN` |
 | `terms_accepted_at` | `TIMESTAMPTZ` | no | - | 약관 동의 시각 |
 | `marketing_accepted_at` | `TIMESTAMPTZ` | yes | - | 마케팅 동의 시각 |
@@ -303,6 +307,7 @@ Index:
 Auth 저장 규칙:
 
 - `users.email`은 local 회원가입과 Google 연결 모두 소문자 trim 기준으로 저장한다.
+- local 회원가입과 신규 Google 회원가입은 `phone_number`, `postal_code`, `address_line1`, `address_line2`를 필수로 입력받아 저장한다. 서버는 전화번호를 하이픈 형식으로, 주소 공백을 단일 공백으로 정규화한다. 기존 사용자와 관리자 계정은 해당 컬럼이 `NULL`일 수 있다.
 - 공개 회원가입과 신규 Google 가입은 항상 `role='USER'`만 생성한다. 클라이언트 request의 role 값은 저장하지 않는다.
 - 관리자 계정은 seed/admin 운영 절차로만 `role='ADMIN'`을 갖는다. Google 로그인은 기존 `ADMIN` row에 provider를 연결할 수 있지만 신규 Google 가입으로 `ADMIN` row를 만들지 않는다.
 - `/admin/signup`용 별도 테이블이나 공개 관리자 가입 row는 만들지 않는다.

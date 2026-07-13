@@ -5,6 +5,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -147,7 +148,15 @@ class UserControllerTest {
 
     @Test
     void exchangeReturnsAuthResponse() throws Exception {
-        when(userQueryService.exchangeGoogleLogin("one-time-code", true, false)).thenReturn(Map.of(
+        when(userQueryService.exchangeGoogleLogin(
+                "one-time-code",
+                true,
+                false,
+                "010-1234-5678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호"
+        )).thenReturn(Map.of(
                 "accessToken", "jwt-access-token",
                 "refreshToken", "refresh-token",
                 "user", Map.of(
@@ -164,7 +173,11 @@ class UserControllerTest {
                                 {
                                   "code": "one-time-code",
                                   "termsAccepted": true,
-                                  "marketingAccepted": false
+                                  "marketingAccepted": false,
+                                  "phoneNumber": "010-1234-5678",
+                                  "postalCode": "06236",
+                                  "addressLine1": "서울시 강남구 테헤란로 1",
+                                  "addressLine2": "101호"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -172,7 +185,15 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.refreshToken").value("refresh-token"))
                 .andExpect(jsonPath("$.user.role").value("USER"));
 
-        verify(userQueryService).exchangeGoogleLogin("one-time-code", true, false);
+        verify(userQueryService).exchangeGoogleLogin(
+                "one-time-code",
+                true,
+                false,
+                "010-1234-5678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호"
+        );
     }
 
     @Test
@@ -205,7 +226,17 @@ class UserControllerTest {
 
     @Test
     void signupReturnsCreatedUserResponse() throws Exception {
-        when(userQueryService.signup("Demo User", "user@example.com", "passw0rd!", true, false)).thenReturn(Map.of(
+        when(userQueryService.signup(
+                "Demo User",
+                "user@example.com",
+                "passw0rd!",
+                "010-1234-5678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호",
+                true,
+                false
+        )).thenReturn(Map.of(
                 "id", "00000000-0000-4000-8000-000000001004",
                 "email", "user@example.com",
                 "name", "Demo User",
@@ -219,6 +250,10 @@ class UserControllerTest {
                                   "email": "user@example.com",
                                   "password": "passw0rd!",
                                   "name": "Demo User",
+                                  "phoneNumber": "010-1234-5678",
+                                  "postalCode": "06236",
+                                  "addressLine1": "서울시 강남구 테헤란로 1",
+                                  "addressLine2": "101호",
                                   "role": "ADMIN",
                                   "termsAccepted": true,
                                   "marketingAccepted": false
@@ -230,12 +265,32 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.name").value("Demo User"))
                 .andExpect(jsonPath("$.role").value("USER"));
 
-        verify(userQueryService).signup("Demo User", "user@example.com", "passw0rd!", true, false);
+        verify(userQueryService).signup(
+                "Demo User",
+                "user@example.com",
+                "passw0rd!",
+                "010-1234-5678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호",
+                true,
+                false
+        );
     }
 
     @Test
     void signupPassesMarketingAccepted() throws Exception {
-        when(userQueryService.signup("Demo User", "user@example.com", "passw0rd!", true, true)).thenReturn(Map.of(
+        when(userQueryService.signup(
+                "Demo User",
+                "user@example.com",
+                "passw0rd!",
+                "010-1234-5678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호",
+                true,
+                true
+        )).thenReturn(Map.of(
                 "id", "00000000-0000-4000-8000-000000001004",
                 "email", "user@example.com",
                 "name", "Demo User",
@@ -249,6 +304,10 @@ class UserControllerTest {
                                   "email": "user@example.com",
                                   "password": "passw0rd!",
                                   "name": "Demo User",
+                                  "phoneNumber": "010-1234-5678",
+                                  "postalCode": "06236",
+                                  "addressLine1": "서울시 강남구 테헤란로 1",
+                                  "addressLine2": "101호",
                                   "termsAccepted": true,
                                   "marketingAccepted": true
                                 }
@@ -259,7 +318,17 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.name").value("Demo User"))
                 .andExpect(jsonPath("$.role").value("USER"));
 
-        verify(userQueryService).signup("Demo User", "user@example.com", "passw0rd!", true, true);
+        verify(userQueryService).signup(
+                "Demo User",
+                "user@example.com",
+                "passw0rd!",
+                "010-1234-5678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호",
+                true,
+                true
+        );
     }
 
     @Test
@@ -268,7 +337,11 @@ class UserControllerTest {
                 "id", "00000000-0000-4000-8000-000000000001",
                 "email", "admin@example.com",
                 "name", "Admin User",
-                "role", "ADMIN"
+                "role", "ADMIN",
+                "phoneNumber", "010-1234-5678",
+                "postalCode", "06236",
+                "addressLine1", "서울시 강남구 테헤란로 1",
+                "addressLine2", "101호"
         ));
 
         mockMvc.perform(get("/api/auth/me")
@@ -277,9 +350,81 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.id").value("00000000-0000-4000-8000-000000000001"))
                 .andExpect(jsonPath("$.email").value("admin@example.com"))
                 .andExpect(jsonPath("$.name").value("Admin User"))
-                .andExpect(jsonPath("$.role").value("ADMIN"));
+                .andExpect(jsonPath("$.role").value("ADMIN"))
+                .andExpect(jsonPath("$.phoneNumber").value("010-1234-5678"))
+                .andExpect(jsonPath("$.postalCode").value("06236"))
+                .andExpect(jsonPath("$.addressLine1").value("서울시 강남구 테헤란로 1"))
+                .andExpect(jsonPath("$.addressLine2").value("101호"));
 
         verify(userQueryService).me("Bearer jwt-admin-token");
+    }
+
+    @Test
+    void updateMeReturnsUpdatedProfile() throws Exception {
+        when(userQueryService.updateMe(
+                "Bearer jwt-user-token",
+                "passw0rd!",
+                null,
+                "홍길동",
+                "01012345678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호"
+        )).thenReturn(Map.of(
+                "id", "00000000-0000-4000-8000-000000001004",
+                "email", "user@example.com",
+                "name", "홍길동",
+                "role", "USER",
+                "phoneNumber", "010-1234-5678",
+                "postalCode", "06236",
+                "addressLine1", "서울시 강남구 테헤란로 1",
+                "addressLine2", "101호"
+        ));
+
+        mockMvc.perform(patch("/api/users/me")
+                        .header("Authorization", "Bearer jwt-user-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "홍길동",
+                                  "currentPassword": "passw0rd!",
+                                  "googleVerificationToken": null,
+                                  "phoneNumber": "01012345678",
+                                  "postalCode": "06236",
+                                  "addressLine1": "서울시 강남구 테헤란로 1",
+                                  "addressLine2": "101호"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("user@example.com"))
+                .andExpect(jsonPath("$.name").value("홍길동"))
+                .andExpect(jsonPath("$.phoneNumber").value("010-1234-5678"));
+
+        verify(userQueryService).updateMe(
+                "Bearer jwt-user-token",
+                "passw0rd!",
+                null,
+                "홍길동",
+                "01012345678",
+                "06236",
+                "서울시 강남구 테헤란로 1",
+                "101호"
+        );
+    }
+
+    @Test
+    void verifyProfilePasswordReturnsNoContent() throws Exception {
+        mockMvc.perform(post("/api/users/me/password-verification")
+                        .header("Authorization", "Bearer jwt-user-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "password": "passw0rd!"
+                                }
+                                """))
+                .andExpect(status().isNoContent());
+
+        verify(userQueryService).verifyProfilePassword("Bearer jwt-user-token", "passw0rd!");
     }
 
     @Test
