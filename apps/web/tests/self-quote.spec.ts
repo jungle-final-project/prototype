@@ -1,15 +1,4 @@
 import { expect, test, type Page } from '@playwright/test';
-import {
-  OPENDB_COMMON_PROFILE,
-  aabbContains,
-  aabbIntersects,
-  assemblyBoundsForCategory,
-  assemblyDimensionsForItem,
-  assemblyInstalledVolumes,
-  projectedAssemblyBounds,
-  projectedBoundsOverlap,
-  resolveAssemblyOccluders
-} from '../src/features/parts/components/slot-board/assembly3dProfile';
 
 const checkoutDraft = {
   id: 'draft-checkout-test',
@@ -253,16 +242,6 @@ async function loginAsUser(page: Page) {
   });
 }
 
-async function disableWebGL2(page: Page) {
-  await page.addInitScript(() => {
-    const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function patchedGetContext(this: HTMLCanvasElement, type: string, ...args: unknown[]) {
-      if (type === 'webgl2') return null;
-      return Reflect.apply(originalGetContext, this, [type, ...args]);
-    } as typeof HTMLCanvasElement.prototype.getContext;
-  });
-}
-
 async function mockEmptyPriceHistory(route: Parameters<Parameters<Page['route']>[1]>[0], partId: string) {
   await route.fulfill({
     status: 200,
@@ -359,7 +338,6 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
 });
 
 test('AI part location focus spotlights all 8 categories across fused, motherboard, and 3D views', async ({ page }) => {
-  test.setTimeout(60_000);
   await loginAsUser(page);
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.authUser', JSON.stringify({
@@ -442,19 +420,16 @@ test('AI part location focus spotlights all 8 categories across fused, motherboa
     await expect(page.getByTestId(`slot-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
 
     await page.getByRole('radio', { name: '3D' }).click();
-    const assembly = page.getByTestId('assembly-3d-view');
-    await expect(assembly).toHaveAttribute('data-ai-focus-categories', item.category);
-    await expect(assembly).toHaveAttribute('data-ai-dimmed-categories', new RegExp(otherCategory));
-    await expect(assembly).toHaveAttribute(
-      'data-occluding-categories',
-      item.category === 'CPU' ? 'COOLER' : item.category === 'STORAGE' ? 'GPU,COOLER' : ''
-    );
+    await expect(page.getByTestId(`slot-${item.category}`)).toHaveAttribute('data-ai-spotlight', 'true');
+    await expect(page.getByTestId(`slot-${item.category}`)).toHaveCSS('outline-style', 'solid');
+    await expect(page.getByTestId(`slot-${otherCategory}`)).toHaveAttribute('data-ai-dimmed', 'true');
   }
 
   await input.fill('CPU랑 RAM 위치 보여줘');
   await send.click();
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-ai-focus-categories', 'CPU,RAM');
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-ai-dimmed-categories', /GPU/);
+  await expect(page.getByTestId('slot-CPU')).toHaveAttribute('data-ai-spotlight', 'true');
+  await expect(page.getByTestId('slot-RAM')).toHaveAttribute('data-ai-spotlight', 'true');
+  await expect(page.getByTestId('slot-GPU')).toHaveAttribute('data-ai-dimmed', 'true');
   await expect(page).toHaveURL('/self-quote');
   expect(draftMutationMethods).toHaveLength(0);
   expect(buildChatBodies).toHaveLength(focusCases.length + 1);
@@ -474,10 +449,9 @@ test('AI part location focus spotlights all 8 categories across fused, motherboa
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await input.fill('램 위치가 어디 있어?');
   await send.click();
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-reduced-motion', 'true');
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-ai-focus-categories', 'RAM');
-  // 새 3열 레이아웃에서도 하단 선택 패널이 아닌 3D 캔버스의 빈 여백을 클릭한다.
-  await page.getByTestId('assembly-3d-view').click({ position: { x: 5, y: 80 } });
+  await expect(page.getByTestId('slot-RAM')).toHaveCSS('animation-name', 'none');
+  await expect(page.getByTestId('slot-RAM')).toHaveCSS('outline-style', 'solid');
+  await page.getByTestId('slot-board').click({ position: { x: 5, y: 5 } });
   await expect(page.getByTestId('slot-board-ai-focus-status')).toHaveCount(0);
 });
 
@@ -715,25 +689,23 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   await expect(page.getByTestId('slot-GPU')).toBeVisible();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('buildgraph.selfQuote.slotBoardVisualMode'))).toBe('motherboard');
 
-  // 3D: 실제 WebGL 캔버스와 조립 제어가 나타난다.
+  // 3D: 등각 씬과 부품 글리프가 보이고, 보드 정보 표시 스위치가 나타난다.
   await isometricRadio.click();
   await expect(isometricRadio).toHaveAttribute('aria-checked', 'true');
   await expect(board).toHaveAttribute('data-visual-mode', 'isometric');
-  await expect(page.getByTestId('assembly-3d-view')).toBeVisible();
-  await expect(page.getByTestId('assembly-3d-canvas')).toBeVisible();
-  await expect(page.getByRole('button', { name: '전체 분해' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '3D 시점 초기화' })).toBeVisible();
-  await expect(page.getByTestId('slot-board-motherboard-art')).toHaveCount(0);
-  await expect(page.getByTestId('iso-part-GPU')).toHaveCount(0);
+  await expect(page.getByTestId('slot-board-motherboard-art')).toBeVisible();
+  await expect(page.getByRole('switch', { name: '보드 정보 표시' })).toBeVisible();
+  await expect(page.getByTestId('iso-part-CPU')).toBeVisible();
+  await expect(page.getByTestId('iso-part-MOTHERBOARD')).toBeVisible();
+  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
+  await expect(page.getByTestId('iso-part-PSU')).toBeVisible();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('buildgraph.selfQuote.slotBoardVisualMode'))).toBe('isometric');
 
   // 새로고침 후에도 3D 선택이 유지된다.
   await page.reload();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
   await expect(page.getByRole('radio', { name: '3D' })).toHaveAttribute('aria-checked', 'true');
-  await expect(page.getByTestId('assembly-3d-canvas')).toBeVisible();
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-detached-categories', '');
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-assembly-mode', 'assembled');
+  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
 
   // 배치도로 복귀 + 저장 확인, 새로고침 후에도 배치도가 유지된다.
   await page.getByRole('radio', { name: '배치도' }).click();
@@ -741,7 +713,6 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   await expect(page.getByTestId('slot-board-fused-plate')).toBeVisible();
   await expect(page.getByTestId('slot-board-motherboard-art')).toHaveCount(0);
   await expect(page.getByTestId('iso-part-GPU')).toHaveCount(0);
-  await expect(page.getByTestId('assembly-3d-view')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('buildgraph.selfQuote.slotBoardVisualMode'))).toBe('fused');
 
   await page.reload();
@@ -749,13 +720,9 @@ test('toggles the slot board across 배치도/실장도/3D views and persists th
   await expect(page.getByRole('radio', { name: '배치도' })).toHaveAttribute('aria-checked', 'true');
 });
 
-test('assembles only selected quote parts in WebGL and keeps detach controls visual-only', async ({ page }) => {
+test('aligns 3D slot cards into two equal rows', async ({ page }) => {
   await loginAsUser(page);
-  const draftMutationMethods: string[] = [];
   await page.route('**/api/quote-drafts/current**', async (route) => {
-    if (route.request().method() !== 'GET') {
-      draftMutationMethods.push(route.request().method());
-    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
   });
   await page.route('**/api/parts**', async (route) => {
@@ -765,203 +732,33 @@ test('assembles only selected quote parts in WebGL and keeps detach controls vis
   await page.goto('/self-quote');
   await page.getByRole('radio', { name: '3D' }).click();
 
-  const assembly = page.getByTestId('assembly-3d-view');
-  await expect(assembly).toHaveAttribute('data-rendered-categories', 'CPU,MOTHERBOARD,RAM,GPU,STORAGE,PSU,CASE,COOLER');
-  await expect(assembly).toHaveAttribute('data-ram-instances', '4');
-  await expect(assembly).toHaveAttribute('data-storage-instances', '2');
-  await expect(page.getByTestId('assembly-3d-canvas')).toBeVisible({ timeout: 15_000 });
-
-  await page.getByTestId('checklist-GPU').click();
-  await expect(page.getByTestId('assembly-selected-part')).toContainText('풀보드 RTX GPU');
-  await expect(page.getByTestId('assembly-selected-part')).toContainText('간섭 주의');
-
-  await page.getByRole('button', { name: 'GPU 분리' }).click();
-  await expect(assembly).toHaveAttribute('data-detached-categories', 'GPU');
-  await expect(page.getByRole('button', { name: 'GPU 다시 장착' })).toBeVisible();
-  await expect(page.getByTestId('assembly-announcement')).toContainText('GPU를 분리했습니다');
-
-  await page.getByRole('button', { name: 'GPU 다시 장착' }).click();
-  await expect(assembly).toHaveAttribute('data-detached-categories', '');
-
-  await page.getByRole('button', { name: '전체 분해' }).click();
-  await expect(assembly).toHaveAttribute('data-assembly-mode', 'detached');
-  await expect(assembly).toHaveAttribute('data-case-panel', 'open');
-  await expect(page.getByRole('button', { name: '전체 조립' })).toBeVisible();
-
-  await page.getByRole('button', { name: '전체 조립' }).click();
-  await expect(assembly).toHaveAttribute('data-assembly-mode', 'assembled');
-  await expect(assembly).toHaveAttribute('data-case-panel', 'closed');
-  expect(draftMutationMethods).toEqual([]);
-});
-
-test('pins the OpenDB common profile, provenance, and product-independent category dimensions', () => {
-  expect(OPENDB_COMMON_PROFILE).toMatchObject({
-    id: 'opendb-common-v1',
-    millimetersPerSceneUnit: 60,
-    source: {
-      commit: 'b9d3f3165b6a2e76576f929de8d9e796d40530a3',
-      license: 'ODC-By 1.0'
-    },
-    dimensionsMm: {
-      CASE: [458, 472, 231],
-      MOTHERBOARD: [244, 305, 2],
-      CPU: [40, 40, 4],
-      RAM: [7, 133, 38.6],
-      GPU: [275, 120, 40],
-      STORAGE: [80, 22, 3.5],
-      PSU: [150, 86, 150],
-      COOLER: [120, 120, 154]
-    },
-    installedPositionsMm: {
-      MOTHERBOARD: [21, 27, -102],
-      CPU: [-42, 87, -98],
-      RAM: [93, 60, -81],
-      GPU: [0, -57, -78],
-      STORAGE: [-9, 47, -98],
-      PSU: [-120, -170, -36],
-      COOLER: [-42, 87, -25]
-    },
-    storageSlotPositionsMm: [[-9, 47, -98], [-9, 20, -98]]
-  });
-  expect(OPENDB_COMMON_PROFILE.source.url).toContain('/tree/b9d3f3165b6a2e76576f929de8d9e796d40530a3');
-  expect(OPENDB_COMMON_PROFILE.source.licenseUrl).toContain('/LICENSE.txt');
-  expect(OPENDB_COMMON_PROFILE.statistics.CASE.sampleCount).toBe(937);
-  expect(OPENDB_COMMON_PROFILE.statistics.GPU.filterMm).toEqual([150, 450]);
-
-  const compactProduct = assemblyDimensionsForItem('GPU', { lengthMm: 210, slotWidth: 2 });
-  const oversizedProduct = assemblyDimensionsForItem('GPU', { lengthMm: 390, slotWidth: 4 });
-  expect(compactProduct).toEqual(oversizedProduct);
-  expect(compactProduct).toEqual([275 / 60, 120 / 60, 40 / 60]);
-});
-
-test('keeps installed compound AABBs collision-free and inside the common case', () => {
-  const volumes = {
-    MOTHERBOARD: assemblyInstalledVolumes('MOTHERBOARD'),
-    CPU: assemblyInstalledVolumes('CPU'),
-    RAM: assemblyInstalledVolumes('RAM', 4),
-    GPU: assemblyInstalledVolumes('GPU'),
-    STORAGE: assemblyInstalledVolumes('STORAGE', 2),
-    PSU: assemblyInstalledVolumes('PSU'),
-    COOLER: assemblyInstalledVolumes('COOLER')
+  const readCardBox = async (category: string) => {
+    const box = await page.getByTestId(`slot-${category}`).boundingBox();
+    if (!box) {
+      throw new Error(`${category} 3D 카드 위치를 확인할 수 없습니다.`);
+    }
+    return box;
   };
-  const caseBounds = assemblyBoundsForCategory('CASE');
+  const topCategories = ['CPU', 'COOLER', 'RAM', 'STORAGE'];
+  const bottomCategories = ['CASE', 'GPU', 'MOTHERBOARD', 'PSU'];
+  const topBoxes = await Promise.all(topCategories.map(readCardBox));
+  const bottomBoxes = await Promise.all(bottomCategories.map(readCardBox));
 
-  for (const categoryVolumes of Object.values(volumes)) {
-    for (const volume of categoryVolumes) {
-      expect(aabbContains(caseBounds, volume)).toBe(true);
+  for (const row of [topBoxes, bottomBoxes]) {
+    const [first, ...rest] = row;
+    for (const box of rest) {
+      expect(Math.abs(box.y - first.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.width - first.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.height - first.height)).toBeLessThanOrEqual(1);
     }
   }
 
-  const collisionPairs = [
-    ['STORAGE', 'RAM'],
-    ['STORAGE', 'GPU'],
-    ['STORAGE', 'COOLER'],
-    ['GPU', 'PSU'],
-    ['COOLER', 'RAM'],
-    ['COOLER', 'GPU']
-  ] as const;
-  for (const [left, right] of collisionPairs) {
-    for (const leftVolume of volumes[left]) {
-      for (const rightVolume of volumes[right]) {
-        expect(aabbIntersects(leftVolume, rightVolume), `${left} must not penetrate ${right}`).toBe(false);
-      }
-    }
+  for (let index = 0; index < topBoxes.length; index += 1) {
+    expect(Math.abs(topBoxes[index].x - bottomBoxes[index].x)).toBeLessThanOrEqual(1);
   }
-  expect(volumes.COOLER.map((volume) => volume.id)).toEqual([
-    'cooler-base',
-    'cooler-support-left',
-    'cooler-support-right',
-    'cooler-tower'
-  ]);
 });
 
-test('keeps M.2 projected screen bounds clear of RAM at the fixed default camera', () => {
-  const storage = projectedAssemblyBounds(assemblyInstalledVolumes('STORAGE', 2), 1440 / 720);
-  const ram = projectedAssemblyBounds(assemblyInstalledVolumes('RAM', 4), 1440 / 720);
-
-  expect(projectedBoundsOverlap(storage, ram)).toBe(false);
-});
-
-test('resolves only the approved CPU and M.2 see-through occluders', () => {
-  expect(resolveAssemblyOccluders('CPU', [], new Set())).toEqual(['COOLER']);
-  expect(resolveAssemblyOccluders('STORAGE', [], new Set())).toEqual(['GPU', 'COOLER']);
-  expect(resolveAssemblyOccluders('GPU', [], new Set())).toEqual([]);
-  expect(resolveAssemblyOccluders(null, ['CPU', 'STORAGE'], new Set())).toEqual(['GPU', 'COOLER']);
-  expect(resolveAssemblyOccluders('STORAGE', [], new Set(['STORAGE']))).toEqual([]);
-  expect(resolveAssemblyOccluders('STORAGE', [], new Set(['GPU']))).toEqual(['COOLER']);
-});
-
-test('shows 3D quantity overflow, reduced-motion state changes, and an empty-draft guide', async ({ page }) => {
-  await loginAsUser(page);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.route('**/api/quote-drafts/current**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
-  });
-  await page.route('**/api/parts**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
-  });
-
-  await page.goto('/self-quote');
-  await page.getByRole('radio', { name: '3D' }).click();
-  const assembly = page.getByTestId('assembly-3d-view');
-  await expect(assembly).toHaveAttribute('data-reduced-motion', 'true');
-
-  await page.getByTestId('checklist-RAM').click();
-  await expect(page.getByTestId('assembly-selected-part')).toContainText('4개 표시 · +1개 추가 구성');
-  await page.getByRole('button', { name: 'RAM 분리' }).click();
-  await expect(assembly).toHaveAttribute('data-animation-state', 'idle');
-
-  await page.unroute('**/api/quote-drafts/current**');
-  await page.route('**/api/quote-drafts/current**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
-  });
-  await page.reload();
-  await expect(page.getByText('3D로 표시할 부품을 견적에 추가하세요')).toBeVisible();
-  await expect(page.getByTestId('assembly-3d-canvas')).toHaveCount(0);
-});
-
-test('renders only categories present in the current quote draft', async ({ page }) => {
-  await loginAsUser(page);
-  const subsetItems = fullDraftItems.filter((item) => ['CPU', 'RAM', 'GPU'].includes(item.category));
-  const subsetDraft = {
-    ...fullDraft,
-    items: subsetItems,
-    totalPrice: subsetItems.reduce((sum, item) => sum + item.lineTotal, 0),
-    itemCount: subsetItems.reduce((sum, item) => sum + item.quantity, 0)
-  };
-  await page.route('**/api/quote-drafts/current**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(subsetDraft) });
-  });
-  await page.route('**/api/parts**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
-  });
-
-  await page.goto('/self-quote');
-  await page.getByRole('radio', { name: '3D' }).click();
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-rendered-categories', 'CPU,RAM,GPU');
-  await expect(page.getByTestId('assembly-3d-view')).not.toHaveAttribute('data-rendered-categories', /CASE|PSU|MOTHERBOARD/);
-});
-
-test('keeps WebGL 3D disabled below the desktop breakpoint', async ({ page }) => {
-  await page.setViewportSize({ width: 820, height: 900 });
-  await loginAsUser(page);
-  await page.addInitScript(() => {
-    localStorage.setItem('buildgraph.selfQuote.slotBoardVisualMode', 'isometric');
-  });
-  await page.route('**/api/quote-drafts/current**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
-  });
-  await page.route('**/api/parts**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
-  });
-
-  await page.goto('/self-quote');
-  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'motherboard');
-  await expect(page.getByTestId('assembly-3d-view')).toHaveCount(0);
-  await expect(page.getByTestId('assembly-3d-canvas')).toHaveCount(0);
-});
-
-test('uses a clean WebGL canvas and a single selected-part control panel', async ({ page }) => {
+test('spotlights only the focused 3D part from slot card hover without dimming the rest', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
@@ -973,66 +770,28 @@ test('uses a clean WebGL canvas and a single selected-part control panel', async
   await page.goto('/self-quote');
   await page.getByRole('radio', { name: '3D' }).click();
 
-  await expect(page.getByTestId('assembly-3d-canvas')).toBeVisible();
-  await expect(page.getByTestId('slot-board-motherboard-art')).toHaveCount(0);
-  await expect(page.getByTestId('iso-part-GPU')).toHaveCount(0);
-  await expect(page.getByTestId('assembly-selected-part')).toHaveCount(0);
+  const gpuSlot = page.getByTestId('slot-GPU');
+  const gpuIso = page.getByTestId('iso-part-GPU');
+  const psuIso = page.getByTestId('iso-part-PSU');
+  const ramIso = page.getByTestId('iso-part-RAM');
+  await expect(gpuIso).toHaveAttribute('data-hovered', 'false');
+  await expect(ramIso).toHaveAttribute('data-dimmed', 'false');
 
-  await page.getByTestId('checklist-GPU').click();
-  await expect(page.getByTestId('assembly-3d-view')).toHaveAttribute('data-selected-category', 'GPU');
-  await expect(page.getByTestId('assembly-selected-part')).toContainText('풀보드 RTX GPU');
-  await expect(page.getByRole('button', { name: 'GPU 분리' })).toBeVisible();
+  await gpuSlot.hover();
+  await expect(gpuSlot).toHaveAttribute('data-hovered', 'true');
+  await expect(gpuIso).toHaveAttribute('data-hovered', 'true');
+  await expect(gpuIso).toHaveAttribute('data-spotlight', 'true');
+  await expect(psuIso).toHaveAttribute('data-spotlight', 'false');
+  await expect(ramIso).toHaveAttribute('data-spotlight', 'false');
+  await expect(ramIso).toHaveAttribute('data-dimmed', 'false');
+  await expect(psuIso).toHaveAttribute('data-dimmed', 'false');
+
+  await page.getByText('구성 관계도 — 부품 간 호환 상태').hover();
+  await expect(gpuIso).toHaveAttribute('data-hovered', 'false');
+  await expect(ramIso).toHaveAttribute('data-dimmed', 'false');
 });
 
-test('applies the fixed OpenDB profile, attribution, selection outline, and M.2 see-through rule', async ({ page }) => {
-  await loginAsUser(page);
-  await page.route('**/api/quote-drafts/current**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
-  });
-  await page.route('**/api/parts**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
-  });
-
-  await page.goto('/self-quote');
-  await page.getByRole('radio', { name: '3D' }).click();
-
-  const assembly = page.getByTestId('assembly-3d-view');
-  const canvas = page.getByTestId('assembly-3d-canvas');
-  await expect(assembly).toHaveAttribute('data-layout-profile', 'opendb-common-v1');
-  await expect(canvas).toHaveAttribute('data-layout-profile', 'opendb-common-v1');
-  await expect(canvas).toHaveAttribute('data-camera-position', '10,6.5,14');
-  await expect(canvas).toHaveAttribute('data-camera-target', '0,0,-0.3');
-  await expect(canvas).toHaveAttribute('data-camera-fov', '35');
-  await expect(canvas).toHaveAttribute('data-scene-background', '#eef2f6');
-  await expect(page.getByRole('link', { name: 'BuildCores OpenDB' })).toHaveAttribute(
-    'href',
-    'https://github.com/buildcores/buildcores-open-db/tree/b9d3f3165b6a2e76576f929de8d9e796d40530a3'
-  );
-  await expect(page.getByRole('link', { name: 'ODC-By 1.0' })).toHaveAttribute(
-    'href',
-    'https://github.com/buildcores/buildcores-open-db/blob/b9d3f3165b6a2e76576f929de8d9e796d40530a3/LICENSE.txt'
-  );
-
-  await page.getByTestId('checklist-CASE').click();
-  await expect(canvas).toHaveAttribute('data-selected-category', 'CASE');
-  await expect(canvas).toHaveAttribute('data-selected-base-color', '#2f3742');
-  await expect(canvas).toHaveAttribute('data-selection-outline-color', '#2563eb');
-  await expect(canvas).not.toHaveAttribute('data-selected-base-color', '#2563eb');
-
-  await page.getByTestId('checklist-CPU').click();
-  await expect(assembly).toHaveAttribute('data-occluding-categories', 'COOLER');
-
-  await page.getByTestId('checklist-STORAGE').click();
-  await expect(assembly).toHaveAttribute('data-occluding-categories', 'GPU,COOLER');
-  await expect(canvas).toHaveAttribute('data-occluding-categories', 'GPU,COOLER');
-  await expect(canvas).toHaveAttribute('data-occluder-opacity', '0.15');
-
-  await page.getByRole('button', { name: 'SSD 분리' }).click();
-  await expect(assembly).toHaveAttribute('data-occluding-categories', '');
-  await expect(canvas).toHaveAttribute('data-occluding-categories', '');
-});
-
-test('shows WebGL compatibility status and keeps problem reasons accessible in the control panel', async ({ page }) => {
+test('shows 3D problem markers, problem reasons, and overlay preference', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/build-graphs/resolve', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(problemGraphResponse()) });
@@ -1047,15 +806,19 @@ test('shows WebGL compatibility status and keeps problem reasons accessible in t
   await page.goto('/self-quote');
   await page.getByRole('radio', { name: '3D' }).click();
 
-  await page.getByTestId('checklist-GPU').click();
-  const selectedPart = page.getByTestId('assembly-selected-part');
-  await expect(selectedPart).toContainText('풀보드 RTX GPU');
-  await expect(selectedPart).toContainText('장착 불가');
-  await selectedPart.getByRole('button', { name: '문제 사유 보기' }).click();
+  const gpuSlot = page.getByTestId('slot-GPU');
+  await expect(gpuSlot).toHaveAttribute('data-status', 'FAIL');
+  await expect(gpuSlot.getByText('장착 불가')).toBeVisible();
+  await expect(page.getByTestId('iso-part-GPU')).toHaveAttribute('data-status', 'FAIL');
+  await expect(page.getByTestId('iso-part-marker-GPU')).toBeVisible();
+  // GPU-PSU 관계선/인사이트가 FAIL이면 양쪽 슬롯 모두 빨강으로 승격된다(체크리스트와 동일 규칙).
+  await expect(page.getByTestId('iso-part-PSU')).toHaveAttribute('data-status', 'FAIL');
+  await expect(page.getByTestId('iso-part-marker-PSU')).toBeVisible();
+
+  await page.getByTestId('iso-part-marker-GPU').click();
   const popover = page.getByTestId('slot-problem-popover');
   await expect(popover).toBeVisible();
   await expect(popover).toContainText('장착 불가');
-  await expect(popover).toContainText('파워 용량이 부족합니다.');
   await expect(popover).toContainText('GPU 권장 정격 파워보다 PSU 용량이 부족합니다.');
   await expect(popover).toContainText('GPU 교체 전에 850W 이상 파워를 먼저 검토하세요.');
   await expect(popover.getByTestId('slot-problem-ai-explain')).toBeVisible();
@@ -1064,11 +827,26 @@ test('shows WebGL compatibility status and keeps problem reasons accessible in t
   await expect(page).toHaveURL('/self-quote?category=GPU');
   await expect(page.getByTestId('checklist-GPU')).toBeVisible();
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+
+  const overlayToggle = page.getByRole('switch', { name: '보드 정보 표시' });
+  await expect(overlayToggle).toHaveAttribute('aria-checked', 'true');
+  await overlayToggle.click();
+  await expect(overlayToggle).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByTestId('slot-board-edges')).toHaveCount(0);
+  await expect(page.getByTestId('slot-GPU')).not.toBeVisible();
+  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
+  await expect(page.getByTestId('iso-part-marker-GPU')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('buildgraph.selfQuote.slotBoardOverlaysVisible'))).toBe('false');
+
+  await page.reload();
+  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
+  await expect(page.getByRole('switch', { name: '보드 정보 표시' })).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByTestId('slot-GPU')).not.toBeVisible();
+  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
 });
 
-test('falls back to the legacy isometric scene when WebGL2 is unavailable', async ({ page }) => {
+test('draws a card-to-part elbow connector only for the selected card in 3D view', async ({ page }) => {
   await loginAsUser(page);
-  await disableWebGL2(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
   });
@@ -1078,10 +856,6 @@ test('falls back to the legacy isometric scene when WebGL2 is unavailable', asyn
 
   await page.goto('/self-quote');
   await page.getByRole('radio', { name: '3D' }).click();
-
-  await expect(page.getByTestId('assembly-3d-canvas')).toHaveCount(0);
-  await expect(page.getByTestId('slot-board-motherboard-art')).toBeVisible();
-  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
 
   const connector = page.getByTestId('iso-card-connector');
   await expect(connector).toHaveCount(0);
@@ -1120,9 +894,8 @@ test('uses a border-only asset for selected 3D motherboard highlight', async ({ 
   expect(svg).not.toMatch(/\sfill="(?!none")[^"]+"/);
 });
 
-test('keeps the selected motherboard highlight in the legacy WebGL fallback', async ({ page }) => {
+test('highlights only the blue scene board layer when motherboard is selected in 3D view', async ({ page }) => {
   await loginAsUser(page);
-  await disableWebGL2(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
   });
@@ -1149,7 +922,6 @@ test('keeps the selected motherboard highlight in the legacy WebGL fallback', as
 
 test('uses admin-placed anchors for the 3D connector when available', async ({ page }) => {
   await loginAsUser(page);
-  await disableWebGL2(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
   });
@@ -1186,7 +958,6 @@ test('uses admin-placed anchors for the 3D connector when available', async ({ p
 
 test('falls back to auto-computed anchors when the layout fetch fails', async ({ page }) => {
   await loginAsUser(page);
-  await disableWebGL2(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
   });
@@ -1206,7 +977,7 @@ test('falls back to auto-computed anchors when the layout fetch fails', async ({
   await expect(connector).toHaveAttribute('data-anchor-source', 'auto');
 });
 
-test('keeps checklist order while removing legacy 3D callout badges', async ({ page }) => {
+test('keeps card order badges but hides 3D glyph order badges', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
@@ -1218,14 +989,16 @@ test('keeps checklist order while removing legacy 3D callout badges', async ({ p
   await page.goto('/self-quote');
   await page.getByRole('radio', { name: '3D' }).click();
 
-  await expect(page.getByTestId('checklist-CPU')).toContainText('1. CPU');
-  await expect(page.getByTestId('checklist-MOTHERBOARD')).toContainText('2. 메인보드');
-  await expect(page.getByTestId('checklist-GPU')).toContainText('4. GPU');
-  await expect(page.getByTestId('checklist-COOLER')).toContainText('8. 쿨러');
+  // 카드 번호 = 체크리스트 RECOMMENDED_SLOT_ORDER index+1 (SLOT_CONFIGS 순서가 아님).
+  await expect(page.getByTestId('slot-order-CPU')).toHaveText('1');
+  await expect(page.getByTestId('slot-order-MOTHERBOARD')).toHaveText('2');
+  await expect(page.getByTestId('slot-order-GPU')).toHaveText('4');
+  await expect(page.getByTestId('slot-order-COOLER')).toHaveText('8');
 
-  await expect(page.getByTestId('assembly-3d-canvas')).toBeVisible();
-  await expect(page.getByTestId('slot-order-CPU')).toHaveCount(0);
-  await expect(page.getByTestId('iso-part-CPU')).toHaveCount(0);
+  // 3D 그림 위 번호는 제거하고, 부품 이미지만 유지한다.
+  await expect(page.getByTestId('iso-part-CPU')).toBeVisible();
+  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
+  await expect(page.getByTestId('iso-part-PSU')).toBeVisible();
   await expect(page.getByTestId('iso-order-CPU')).toHaveCount(0);
   await expect(page.getByTestId('iso-order-GPU')).toHaveCount(0);
   await expect(page.getByTestId('iso-order-PSU')).toHaveCount(0);
@@ -1547,7 +1320,7 @@ test('keeps fallback topology edges when the graph api fails', async ({ page }) 
 
   await page.getByRole('radio', { name: '3D' }).click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
-  await expect(page.getByTestId('assembly-3d-canvas')).toBeVisible();
+  await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
   await expect(page.getByTestId('slot-board-edges')).toHaveCount(0);
   await expect(page.getByTestId('quote-summary-bar')).toContainText('검증 확인 불가');
 });
@@ -1695,6 +1468,239 @@ test('submits the server-authoritative score explanation and renders the assessm
   await expect(page.getByTestId('ai-build-assessment')).toContainText('GPU 상향 우선');
   expect(chatRequest['assessmentContext']).toEqual({ source: 'QUOTE_DRAFT_CURRENT', focusType: 'SCORE' });
   await expect(page.getByTestId('ai-build-assessment')).not.toContainText('성능 430');
+});
+
+test('shows the measured fit reason in the board banner and sends the same Tool focus to AI', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'user-fit-explanation',
+      email: 'user@example.com',
+      name: 'Fit Explanation User',
+      role: 'USER'
+    }));
+  });
+  let chatRequest: Record<string, unknown> = {};
+  const base = buildGraphResponse();
+  const fitSummary = '쿨러 높이 157mm / 케이스 허용 160mm입니다. 여유 3mm로 장착은 가능하지만 간섭을 주의해야 합니다.';
+
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(fullDraft)
+  }));
+  await page.route('**/api/build-graphs/resolve', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ...base,
+      nodes: base.nodes.map((node) => node.category === 'COOLER' || node.category === 'CASE'
+        ? { ...node, status: 'WARN', detail: node.category === 'COOLER' ? '높이 157mm' : 'CPU 쿨러 최대 160mm' }
+        : node),
+      edges: [{
+        id: 'edge-cooler-case-height',
+        source: 'part-COOLER',
+        target: 'part-CASE',
+        type: 'REQUIRES',
+        status: 'WARN',
+        label: '높이 간섭 주의',
+        summary: fitSummary
+      }],
+      toolResults: [{
+        tool: 'size',
+        status: 'WARN',
+        confidence: 'MEDIUM',
+        summary: '케이스 장착 여유가 낮아 추가 확인이 필요합니다.',
+        details: { coolerHeightMm: 157, maxCpuCoolerHeightMm: 160, coolerHeadroomMm: 3 }
+      }]
+    })
+  }));
+  await page.route('**/api/parts**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+  }));
+  await page.route('**/api/ai/build-chat', async (route) => {
+    chatRequest = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: 'CPU 쿨러와 케이스 사이의 높이 여유가 3mm라 조립 시 간섭을 주의해야 합니다.',
+        builds: [],
+        simulation: null,
+        warnings: [],
+        quickReplies: []
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+
+  const banner = page.getByTestId('slot-board-problem-banner');
+  await expect(banner).toContainText('\uC8FC\uC758 \uD544\uC694 2\uAC74');
+  await expect(banner).not.toHaveText('높이 157mm');
+  await banner.click();
+  const problemList = page.getByTestId('slot-board-problem-list');
+  const fitProblem = problemList.locator('li').filter({ hasText: fitSummary });
+  await expect(fitProblem).toContainText(fitSummary);
+  await fitProblem.getByTestId('slot-problem-ai-explain').click();
+
+
+  await expect.poll(() => chatRequest['assessmentContext']).toEqual({
+    source: 'QUOTE_DRAFT_CURRENT',
+    focusType: 'ISSUE',
+    tool: 'size'
+  });
+
+  chatRequest = {};
+  await page.getByRole('radio', { name: '3D' }).click();
+  await page.getByTestId('iso-part-marker-COOLER').click();
+  await page.getByTestId('slot-problem-popover').getByTestId('slot-problem-ai-explain').click();
+
+  await expect.poll(() => chatRequest['assessmentContext']).toEqual({
+    source: 'QUOTE_DRAFT_CURRENT',
+    focusType: 'ISSUE',
+    category: 'COOLER',
+    tool: 'size'
+  });
+});
+
+test('keeps the ATX case mismatch warning in a non-overlapping top status row across every board view', async ({ page }) => {
+  await loginAsUser(page);
+  const message = '메인보드 규격 ATX / 케이스 지원 최대 M-ATX입니다. 케이스가 이 보드 규격의 장착을 지원하지 않습니다.';
+  const base = buildGraphResponse();
+
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(fullDraft)
+  }));
+  await page.route('**/api/build-graphs/resolve', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ...base,
+      nodes: base.nodes.map((node) => node.category === 'MOTHERBOARD' || node.category === 'CASE'
+        ? { ...node, status: 'FAIL' }
+        : { ...node, status: 'PASS' }),
+      edges: [{
+        id: 'edge-board-case-form',
+        source: 'part-MOTHERBOARD',
+        target: 'part-CASE',
+        type: 'REQUIRES',
+        status: 'FAIL',
+        label: '보드 규격 장착 불가',
+        summary: message
+      }],
+      insights: [],
+      toolResults: [{
+        tool: 'size',
+        status: 'FAIL',
+        confidence: 'HIGH',
+        summary: message,
+        details: { motherboardFormFactor: 'ATX', caseMaxFormFactor: 'M-ATX' }
+      }]
+    })
+  }));
+  await page.route('**/api/parts**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+  }));
+
+  await page.goto('/self-quote');
+
+  const expectStatusAboveBoard = async () => {
+    const statusRegion = page.getByTestId('slot-board-status-region');
+    const board = page.getByTestId('slot-board');
+    await expect(statusRegion).toHaveAttribute('data-placement', 'top');
+    await expect(statusRegion).toBeVisible();
+    await expect(board).toBeVisible();
+    await expect.poll(async () => {
+      const [statusBox, boardBox] = await Promise.all([statusRegion.boundingBox(), board.boundingBox()]);
+      return Boolean(statusBox && boardBox && statusBox.y + statusBox.height <= boardBox.y + 1);
+    }).toBe(true);
+  };
+
+  const banner = page.getByTestId('slot-board-problem-banner');
+  await expect(banner).toContainText(message);
+  await expect(banner.getByTestId('slot-problem-ai-explain')).toBeVisible();
+  await expectStatusAboveBoard();
+
+  for (const control of [
+    page.getByTestId('relation-map-open'),
+    page.getByRole('button', { name: '실장도 보기' })
+  ]) {
+    await expect(control).toBeVisible();
+    await expect.poll(async () => {
+      const [statusBox, controlBox] = await Promise.all([
+        page.getByTestId('slot-board-status-region').boundingBox(),
+        control.boundingBox()
+      ]);
+      return Boolean(statusBox && controlBox && statusBox.y + statusBox.height <= controlBox.y);
+    }).toBe(true);
+  }
+
+  await page.getByRole('button', { name: '실장도 보기' }).click();
+  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'motherboard');
+  await expectStatusAboveBoard();
+
+  await page.getByRole('button', { name: '실장도 접기' }).click();
+  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'fused');
+  await page.getByRole('radio', { name: '3D' }).click();
+  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
+  await expectStatusAboveBoard();
+
+  await page.getByRole('radio', { name: '배치도' }).click();
+  await page.getByTestId('relation-map-open').click();
+  await expect(page.getByTestId('relation-map-bottom-banner')).toContainText(message);
+  await expectStatusAboveBoard();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileStatusRegion = page.getByTestId('slot-board-status-region');
+  await expect(mobileStatusRegion).toBeVisible();
+  await expect.poll(async () => {
+    const mobileStatusBox = await mobileStatusRegion.boundingBox();
+    return Boolean(
+      mobileStatusBox
+      && mobileStatusBox.x >= 0
+      && mobileStatusBox.x + mobileStatusBox.width <= 390
+    );
+  }).toBe(true);
+});
+
+test('does not reserve a board status row when the graph has no warning or failure', async ({ page }) => {
+  await loginAsUser(page);
+  const base = buildGraphResponse();
+
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(fullDraft)
+  }));
+  await page.route('**/api/build-graphs/resolve', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ...base,
+      nodes: base.nodes.map((node) => ({ ...node, status: 'PASS' })),
+      edges: base.edges.map((edge) => ({ ...edge, status: 'PASS' })),
+      insights: [],
+      toolResults: []
+    })
+  }));
+  await page.route('**/api/parts**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+  }));
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('slot-board-status-region')).toHaveCount(0);
+  await expect(page.getByTestId('slot-board')).toBeVisible();
 });
 
 test('shows game FPS reference in the performance panel with game and resolution selectors', async ({ page }) => {
