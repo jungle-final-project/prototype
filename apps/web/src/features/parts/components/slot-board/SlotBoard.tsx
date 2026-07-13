@@ -166,7 +166,7 @@ export function SlotBoard({
   }, [onClearAiFocus]);
 
   return (
-    <div className="panel slot-board-panel relative flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="panel slot-board-panel relative flex h-full w-full min-w-0 max-w-[calc(100vw-2rem)] flex-col overflow-hidden lg:max-w-full">
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
       <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
         <div className="flex items-center justify-between gap-2">
@@ -233,6 +233,18 @@ export function SlotBoard({
           </span>
         </div>
       </div>
+      {isRelationMapVisible && !isIsometric && !isMotherboard ? (
+        <RelationMapBanner
+          problem={boardProblem}
+          graph={graph}
+          onExplain={() => explainIssue(undefined, boardProblem?.tool)}
+        />
+      ) : boardProblem ? (
+        <SlotBoardProblemBanner
+          problem={boardProblem}
+          onExplain={() => explainIssue(undefined, boardProblem.tool)}
+        />
+      ) : null}
       {isIsometric ? (
         <IsometricSlotBoardBody
           items={items}
@@ -293,17 +305,9 @@ export function SlotBoard({
           isQuantityPending={isQuantityPending}
           graph={graph}
           statusByCategory={statusByCategory}
-          boardProblems={boardProblems}
           flashingCategories={flashingCategories}
-          onExplainIssue={explainIssue}
         />
       )}
-      {(isMotherboard || isIsometric) && boardProblem ? (
-        <SlotBoardProblemBanner
-          problems={[boardProblem]}
-          onExplain={(problem) => explainIssue(undefined, problem.tool)}
-        />
-      ) : null}
       {!isIsometric ? (
         <button
           type="button"
@@ -318,14 +322,6 @@ export function SlotBoard({
         >
           {isMotherboard ? '실장도 접기' : '실장도 보기'}
         </button>
-      ) : null}
-      {isRelationMapVisible && !isIsometric && !isMotherboard ? (
-        <RelationMapBanner
-          problem={boardProblem}
-          graph={graph}
-          onExplain={() => explainIssue(undefined, boardProblem?.tool)}
-          className="pointer-events-none absolute inset-x-4 bottom-4 z-[35] flex justify-center lg:bottom-5"
-        />
       ) : null}
       {!isIsometric ? (
         <button
@@ -440,9 +436,7 @@ function FusedSlotBoardBody({
   isQuantityPending,
   graph,
   statusByCategory,
-  boardProblems,
-  flashingCategories,
-  onExplainIssue
+  flashingCategories
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -456,9 +450,7 @@ function FusedSlotBoardBody({
   isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
-  boardProblems: SlotBoardBannerProblem[];
   flashingCategories: Set<PartCategory>;
-  onExplainIssue: (category?: PartCategory, tool?: BuildGraphFocus['tool']) => void;
 }) {
   return (
     // 보드 본체 — 배치도(기본): 실사 배치판(FusedPlateArt) 위에 부품 오버레이가 겹쳐진다(데스크톱 전용).
@@ -483,10 +475,6 @@ function FusedSlotBoardBody({
         onUpdateQuantity={onUpdateQuantity}
         isRemovePending={isRemovePending}
         isQuantityPending={isQuantityPending}
-      />
-      <SlotBoardProblemBanner
-        problems={boardProblems}
-        onExplain={(problem) => onExplainIssue(undefined, problem.tool)}
       />
       <div data-testid="slot-board-mobile-slots" className="flex flex-col gap-2 lg:hidden">
         {SLOT_CONFIGS.map((slot) => (
@@ -851,13 +839,11 @@ function RelationMapEdges({
 function RelationMapBanner({
   problem,
   graph,
-  onExplain,
-  className = 'absolute inset-x-3 bottom-4 z-30 flex justify-center'
+  onExplain
 }: {
   problem: SlotBoardBannerProblem | null;
   graph?: BuildGraphResolveResponse;
   onExplain?: () => void;
-  className?: string;
 }) {
   const issues = relationMapIssues(graph);
   const count = issues.length;
@@ -868,21 +854,12 @@ function RelationMapBanner({
     : '현재 선택한 부품 기준으로 감지된 문제가 없습니다.';
 
   return (
-    <div
-      data-testid="relation-map-bottom-banner"
-      className={className}
-    >
-      <div className={`pointer-events-none flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
-        hasProblem
-          ? status === 'WARN'
-            ? 'border-amber-500'
-            : 'border-red-500'
-          : 'border-emerald-500 text-emerald-600'
-      }`}>
-        <p className={`text-center text-[13.5px] font-semibold sm:text-[16px] ${status === 'WARN' ? 'text-amber-500' : status === 'FAIL' ? 'text-red-500' : 'text-emerald-600'}`}>{message}</p>
-        {hasProblem && onExplain ? <ExplainIssueButton onClick={onExplain} /> : null}
-      </div>
-    </div>
+    <SlotBoardStatusRow
+      bannerTestId="relation-map-bottom-banner"
+      status={status}
+      message={message}
+      onExplain={hasProblem ? onExplain : undefined}
+    />
   );
 }
 
@@ -1685,7 +1662,7 @@ function IsometricSlotCard({
             event.stopPropagation();
             onRemoveItem(primaryItem.partId);
           }}
-          className="absolute right-1 top-6 z-20 rounded border border-commerce-line bg-white px-1.5 py-0.5 text-[9px] font-black text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
+          className="pointer-events-none absolute right-1 top-6 z-20 rounded border border-commerce-line bg-white px-1.5 py-0.5 text-[9px] font-black text-slate-400 opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 hover:border-commerce-sale hover:text-commerce-sale disabled:cursor-wait"
         >
           빼기
         </button>
@@ -1936,117 +1913,51 @@ function SlotBoardProblemBanner({
     return null;
   }
 
-  const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
-  const warnCount = problems.length - failCount;
-  const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
-  const sharedCardClass = 'rounded-lg border bg-white px-3.5 py-2 text-[10px] font-black';
-  const statusCardClass = (status: SlotProblemStatus) => status === 'FAIL'
-    ? 'slot-board-fail-banner-pulse border-red-400 text-red-600 shadow-[0_10px_20px_rgba(239,68,68,0.24)]'
-    : 'border-amber-400 text-amber-700 shadow-[0_10px_20px_rgba(245,158,11,0.18)]';
+  return (
+    <SlotBoardStatusRow
+      bannerTestId="slot-board-problem-banner"
+      status={problem.status}
+      message={problem.message}
+      onExplain={onExplain}
+    />
+  );
+}
 
-  if (problems.length === 1) {
-    const problem = problems[0];
-    return (
-      <div className="pointer-events-none absolute inset-x-4 top-4 z-[35] flex justify-center">
-        <div
-          data-testid="slot-board-problem-banner"
-          data-status={problem.status}
-          className={[
-            sharedCardClass,
-            statusCardClass(problem.status),
-            'pointer-events-none inline-flex max-w-[74%] items-center gap-2 text-center'
-          ].join(' ')}
-        >
-          {problem.status === 'FAIL'
-            ? <CircleX size={17} aria-hidden="true" className="shrink-0" />
-            : <AlertTriangle size={17} aria-hidden="true" className="shrink-0" />}
-          <span>{problem.message}</span>
-          {onExplain ? <ExplainIssueButton onClick={() => onExplain(problem)} /> : null}
-        </div>
-      </div>
-    );
-  }
+function SlotBoardStatusRow({
+  bannerTestId,
+  status,
+  message,
+  onExplain
+}: {
+  bannerTestId: 'slot-board-problem-banner' | 'relation-map-bottom-banner';
+  status?: SlotProblemStatus;
+  message: string;
+  onExplain?: () => void;
+}) {
+  const borderClass = status === 'FAIL'
+    ? 'border-red-500'
+    : status === 'WARN'
+      ? 'border-amber-500'
+      : 'border-emerald-500';
+  const textClass = status === 'FAIL'
+    ? 'text-red-500'
+    : status === 'WARN'
+      ? 'text-amber-500'
+      : 'text-emerald-600';
 
   return (
-    <div className="pointer-events-none absolute inset-x-4 top-4 z-[35] flex justify-center">
-      <div ref={rootRef} className="pointer-events-auto relative w-full max-w-[576px]">
-        <button
-          type="button"
-          data-testid="slot-board-problem-banner"
-          data-status={overallStatus}
-          aria-expanded={isExpanded}
-          aria-controls="slot-board-problem-list"
-          onClick={() => setIsExpanded((expanded) => !expanded)}
-          className={[
-            sharedCardClass,
-            statusCardClass(overallStatus),
-            'flex w-full items-center justify-between gap-3 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-            overallStatus === 'FAIL'
-              ? 'hover:border-red-500 hover:bg-red-50 focus-visible:ring-red-300'
-              : 'hover:border-amber-500 hover:bg-amber-50 focus-visible:ring-amber-300'
-          ].join(' ')}
-        >
-          <span className="inline-flex min-w-0 items-center gap-2">
-            {overallStatus === 'FAIL'
-              ? <CircleX size={17} aria-hidden="true" className="shrink-0" />
-              : <AlertTriangle size={17} aria-hidden="true" className="shrink-0" />}
-            <span>
-              {failCount > 0 ? <>호환 불가 {failCount}건</> : null}
-              {failCount > 0 && warnCount > 0 ? ' · ' : null}
-              {warnCount > 0 ? <>주의 필요 {warnCount}건</> : null}
-            </span>
-          </span>
-          <ChevronDown
-            size={18}
-            aria-hidden="true"
-            className={['shrink-0 transition-transform', isExpanded ? 'rotate-180' : ''].join(' ')}
-          />
-        </button>
-        {isExpanded ? (
-          <div
-            id="slot-board-problem-list"
-            data-testid="slot-board-problem-list"
-            className={[
-              'absolute inset-x-0 top-full mt-2 max-h-60 overflow-y-auto rounded-lg border bg-white',
-              overallStatus === 'FAIL'
-                ? 'border-red-300 shadow-[0_14px_30px_rgba(239,68,68,0.24)]'
-                : 'border-amber-300 shadow-[0_14px_30px_rgba(245,158,11,0.2)]'
-            ].join(' ')}
-          >
-            <ul className="divide-y divide-slate-100">
-              {problems.map((problem, index) => (
-                <li
-                  key={[problem.message, problem.categories.join('-'), index].join('-')}
-                  data-status={problem.status}
-                  className={[
-                    'flex items-center gap-3 px-4 py-3 text-left',
-                    problem.status === 'FAIL' ? 'bg-red-50/30' : 'bg-amber-50/30'
-                  ].join(' ')}
-                >
-                  {problem.status === 'FAIL'
-                    ? <CircleX size={17} aria-hidden="true" className="shrink-0 text-red-500" />
-                    : <AlertTriangle size={17} aria-hidden="true" className="shrink-0 text-amber-500" />}
-                  <span className="min-w-0 flex-1 break-keep text-[10px] font-bold leading-4 text-slate-700">
-                    {problem.message}
-                  </span>
-                  {problem.categories.length > 0 ? (
-                    <span
-                      className={[
-                        'shrink-0 rounded-md border px-2 py-1 text-[10px] font-black',
-                        problem.status === 'FAIL'
-                          ? 'border-red-200 bg-red-50 text-red-600'
-                          : 'border-amber-200 bg-amber-50 text-amber-700'
-                      ].join(' ')}
-                    >
-                      {problem.categories.map((category) => slotConfigFor(category)?.label ?? category).join(' · ')}
-                    </span>
-                  ) : null}
-                  {onExplain ? <ExplainIssueButton onClick={() => onExplain(problem)} /> : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
+    <div
+      data-testid="slot-board-status-region"
+      data-placement="top"
+      className="w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2"
+    >
+      <div
+        data-testid={bannerTestId}
+        data-status={status ?? 'PASS'}
+        className={`flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border bg-white px-3 py-2 shadow-sm sm:flex-row sm:items-center sm:justify-between ${borderClass}`}
+      >
+        <p className={`min-w-0 flex-1 break-words text-center text-[13.5px] font-semibold sm:text-left sm:text-[16px] ${textClass}`}>{message}</p>
+        {status && onExplain ? <ExplainIssueButton onClick={onExplain} /> : null}
       </div>
     </div>
   );
@@ -2061,7 +1972,7 @@ function ExplainIssueButton({ onClick }: { onClick: () => void }) {
         event.stopPropagation();
         onClick();
       }}
-      className="pointer-events-auto inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+      className="pointer-events-auto inline-flex shrink-0 self-center items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
     >
       <Sparkles size={11} aria-hidden="true" />
       AI에게 설명
