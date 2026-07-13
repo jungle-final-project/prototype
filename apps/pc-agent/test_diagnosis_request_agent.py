@@ -115,6 +115,14 @@ class FakeSocket:
         self.closed = True
 
 
+class FailingSocket(FakeSocket):
+    def send(self, payload):
+        frame = json.loads(payload)
+        if frame.get("type") == "DIAGNOSIS_RESULT":
+            raise OSError("server unavailable")
+        self.sent.append(frame)
+
+
 class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
     def test_ready_authenticates_and_request_gets_real_response(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -213,6 +221,50 @@ class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
 
             self.assertEqual("event-1", first.sent[-1]["detail"]["eventId"])
             self.assertEqual("event-1", second.sent[-1]["detail"]["eventId"])
+
+    def test_result_is_queued_offline_and_sent_after_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            detail = {
+                "diagnosisId": "diagnosis-1",
+                "resultId": "result-1",
+                "severity": "NORMAL",
+                "resolutionType": "NONE",
+            }
+
+            self.assertTrue(client.send_diagnosis_result(detail))
+            socket = FakeSocket()
+            client._socket = socket
+            client._on_message(socket, json.dumps({"type": "READY", "detail": {"deviceId": "device-1"}}))
+
+            result_frames = [frame for frame in socket.sent if frame.get("type") == "DIAGNOSIS_RESULT"]
+            self.assertEqual([detail], [frame["detail"] for frame in result_frames])
+
+    def test_result_send_failure_stays_pending_and_retries_after_reconnect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            failing = FailingSocket()
+            client._socket = failing
+            client._on_message(failing, json.dumps({"type": "READY", "detail": {"deviceId": "device-1"}}))
+            self.assertTrue(client.send_diagnosis_result({"diagnosisId": "diagnosis-1", "resultId": "result-1"}))
+
+            client._on_close(failing, 1006, "network lost")
+            recovered = FakeSocket()
+            client._socket = recovered
+            client._on_message(recovered, json.dumps({"type": "READY", "detail": {"deviceId": "device-1"}}))
+
+            result_frames = [frame for frame in recovered.sent if frame.get("type") == "DIAGNOSIS_RESULT"]
+            self.assertEqual("result-1", result_frames[-1]["detail"]["resultId"])
 
 
 class BackgroundViewerControllerTest(unittest.TestCase):

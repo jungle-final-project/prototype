@@ -46,11 +46,19 @@ public class PcAgentDiagnosisSocketBroker {
             "CANCELLED",
             "TIMED_OUT"
     );
+    private static final Set<String> RESULT_SEVERITIES = Set.of(
+            "NORMAL", "INFO", "WARNING", "CRITICAL", "INDETERMINATE"
+    );
+    private static final Set<String> RESOLUTION_TYPES = Set.of(
+            "NONE", "SOFTWARE_RECOVERY", "USER_ACTION", "PHYSICAL_INSPECTION", "UNKNOWN"
+    );
 
     private final Map<String, SessionRegistration> sessionsByDeviceId = new ConcurrentHashMap<>();
     private final Map<String, PendingResponse> pendingByDiagnosisId = new ConcurrentHashMap<>();
     private final Map<String, DiagnosisStatus> latestStatusByDiagnosisId = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> statusEventIdsByDiagnosisId = new ConcurrentHashMap<>();
+    private final Map<String, DiagnosisResultRecord> latestResultByDiagnosisId = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> resultIdsByDiagnosisId = new ConcurrentHashMap<>();
 
     public WebSocketSession register(AgentPrincipal principal, WebSocketSession session) {
         WebSocketSession outbound = new ConcurrentWebSocketSessionDecorator(
@@ -168,6 +176,45 @@ public class PcAgentDiagnosisSocketBroker {
         return latestStatusByDiagnosisId.get(diagnosisId);
     }
 
+    public boolean recordResult(String deviceId, Map<String, Object> result) {
+        String diagnosisId = text(result == null ? null : result.get("diagnosisId"));
+        String resultId = text(result == null ? null : result.get("resultId"));
+        String severity = text(result == null ? null : result.get("severity"));
+        String resolutionType = text(result == null ? null : result.get("resolutionType"));
+        String evaluatedAt = text(result == null ? null : result.get("evaluatedAt"));
+        if (deviceId == null || diagnosisId == null || resultId == null || evaluatedAt == null
+                || !RESULT_SEVERITIES.contains(severity)
+                || !RESOLUTION_TYPES.contains(resolutionType)
+                || !(result.get("evidence") instanceof java.util.List<?>)) {
+            return false;
+        }
+        Set<String> resultIds = resultIdsByDiagnosisId.computeIfAbsent(
+                diagnosisId,
+                ignored -> ConcurrentHashMap.newKeySet()
+        );
+        if (!resultIds.add(resultId)) {
+            return true;
+        }
+        latestResultByDiagnosisId.put(diagnosisId, new DiagnosisResultRecord(
+                deviceId,
+                diagnosisId,
+                resultId,
+                Collections.unmodifiableMap(new HashMap<>(result))
+        ));
+        return true;
+    }
+
+    DiagnosisResultRecord latestResult(String diagnosisId) {
+        return latestResultByDiagnosisId.get(diagnosisId);
+    }
+
+    private static String text(Object value) {
+        if (!(value instanceof String text) || text.isBlank()) {
+            return null;
+        }
+        return text.trim();
+    }
+
     private static boolean matches(SessionRegistration registration, WebSocketSession session) {
         return registration.session() == session
                 || Objects.equals(registration.originalSessionId(), session.getId())
@@ -196,6 +243,14 @@ public class PcAgentDiagnosisSocketBroker {
             int progress,
             String message,
             Map<String, Object> metadata
+    ) {
+    }
+
+    record DiagnosisResultRecord(
+            String deviceId,
+            String diagnosisId,
+            String resultId,
+            Map<String, Object> result
     ) {
     }
 

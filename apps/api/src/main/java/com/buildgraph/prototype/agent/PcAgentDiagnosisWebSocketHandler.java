@@ -74,6 +74,10 @@ public class PcAgentDiagnosisWebSocketHandler extends TextWebSocketHandler {
             recordDiagnosisStatus(session, payload);
             return;
         }
+        if ("DIAGNOSIS_RESULT".equals(payload.get("type"))) {
+            recordDiagnosisResult(session, payload);
+            return;
+        }
         sendError(session, "INVALID_WS_PAYLOAD", "지원하지 않는 WebSocket 메시지입니다.");
     }
 
@@ -148,6 +152,21 @@ public class PcAgentDiagnosisWebSocketHandler extends TextWebSocketHandler {
         send(outbound(session), "DIAGNOSIS_STATUS_ACK", Map.of(
                 "diagnosisId", diagnosisId,
                 "eventId", eventId
+        ));
+    }
+
+    private void recordDiagnosisResult(WebSocketSession session, Map<String, Object> payload) throws IOException {
+        AgentPrincipal principal = (AgentPrincipal) session.getAttributes().get("agentPrincipal");
+        Map<String, Object> detail = objectMap(payload.get("detail"));
+        String diagnosisId = text(detail.get("diagnosisId"));
+        String resultId = text(detail.get("resultId"));
+        if (!broker.recordResult(principal.deviceId(), detail)) {
+            sendError(outbound(session), "INVALID_DIAGNOSIS_RESULT", "진단 결과 형식이 올바르지 않습니다.");
+            return;
+        }
+        send(outbound(session), "DIAGNOSIS_RESULT_ACK", Map.of(
+                "diagnosisId", diagnosisId,
+                "resultId", resultId
         ));
     }
 

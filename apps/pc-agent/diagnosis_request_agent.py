@@ -39,6 +39,7 @@ REQUEST_RESPONSE_STATUSES = {
 DIAGNOSIS_SOCKET_PATH = "/ws/pc-agent/diagnosis"
 PROCESSED_DIAGNOSIS_LIMIT = 200
 MAX_SYNC_STATUS_FRAMES = 200
+MAX_SYNC_RESULT_FRAMES = 20
 
 
 def parse_server_datetime(value: Any) -> datetime | None:
@@ -295,6 +296,8 @@ class AgentDiagnosisWebSocketClient:
         self._status_lock = threading.Lock()
         self._status_frames: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._pending_status_event_ids: set[str] = set()
+        self._result_frames: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._pending_result_ids: set[str] = set()
 
     def start(self) -> None:
         if self.websocket_factory is None:
@@ -332,6 +335,24 @@ class AgentDiagnosisWebSocketClient:
                 removed_event_id, _ = self._status_frames.popitem(last=False)
                 self._pending_status_event_ids.discard(removed_event_id)
         self._flush_status_frames()
+        return True
+
+    def send_diagnosis_result(self, detail: dict[str, Any]) -> bool:
+        result_id = detail.get("resultId")
+        diagnosis_id = detail.get("diagnosisId")
+        if not isinstance(result_id, str) or not result_id.strip():
+            return False
+        if not isinstance(diagnosis_id, str) or not diagnosis_id.strip():
+            return False
+        frame = {"type": "DIAGNOSIS_RESULT", "detail": dict(detail)}
+        with self._status_lock:
+            self._result_frames[result_id] = frame
+            self._result_frames.move_to_end(result_id)
+            self._pending_result_ids.add(result_id)
+            while len(self._result_frames) > MAX_SYNC_RESULT_FRAMES:
+                removed_result_id, _ = self._result_frames.popitem(last=False)
+                self._pending_result_ids.discard(removed_result_id)
+        self._flush_result_frames()
         return True
 
     def _run(self) -> None:
@@ -382,8 +403,10 @@ class AgentDiagnosisWebSocketClient:
             self._set_state("REQUEST_RECEIVED" if self.processor.store.is_busy() else "IDLE")
             with self._status_lock:
                 self._pending_status_event_ids.update(self._status_frames)
+                self._pending_result_ids.update(self._result_frames)
             self.on_ready()
             self._flush_status_frames()
+            self._flush_result_frames()
             return
         if frame_type == "DIAGNOSIS_REQUEST":
             detail = frame.get("detail")
@@ -406,6 +429,7 @@ class AgentDiagnosisWebSocketClient:
         self.authenticated = False
         with self._status_lock:
             self._pending_status_event_ids.update(self._status_frames)
+            self._pending_result_ids.update(self._result_frames)
         if self.state != "FAILED":
             self._set_state("DISCONNECTED")
 
@@ -428,6 +452,25 @@ class AgentDiagnosisWebSocketClient:
             with self._status_lock:
                 self._pending_status_event_ids.discard(event_id)
 
+    def _flush_result_frames(self) -> None:
+        socket_app = self._socket
+        if not self.authenticated or socket_app is None:
+            return
+        with self._status_lock:
+            pending = [
+                (result_id, self._result_frames[result_id])
+                for result_id in self._result_frames
+                if result_id in self._pending_result_ids
+            ]
+        for result_id, frame in pending:
+            try:
+                with self._send_lock:
+                    socket_app.send(json.dumps(frame, ensure_ascii=False))
+            except Exception:
+                return
+            with self._status_lock:
+                self._pending_result_ids.discard(result_id)
+
     def _set_state(self, state: str) -> None:
         if state not in AGENT_STATES:
             raise ValueError(f"unsupported Agent state: {state}")
@@ -444,6 +487,7 @@ class BackgroundViewerController:
         show_viewer: Callable[..., None],
         metrics_snapshot_provider: Callable[[], Any] | None = None,
         diagnosis_snapshot_provider: Callable[[], Any] | None = None,
+        diagnosis_result_provider: Callable[[], Any] | None = None,
         cancel_diagnosis: Callable[[], bool] | None = None,
         retry_diagnosis: Callable[[], bool] | None = None,
     ) -> None:
@@ -453,6 +497,7 @@ class BackgroundViewerController:
         self.show_viewer = show_viewer
         self.metrics_snapshot_provider = metrics_snapshot_provider or (lambda: None)
         self.diagnosis_snapshot_provider = diagnosis_snapshot_provider or (lambda: None)
+        self.diagnosis_result_provider = diagnosis_result_provider or (lambda: None)
         self.cancel_diagnosis = cancel_diagnosis or (lambda: False)
         self.retry_diagnosis = retry_diagnosis or (lambda: False)
         self._lock = threading.Lock()
@@ -502,6 +547,7 @@ class BackgroundViewerController:
             connection_state_provider=self.connection_state_provider,
             metrics_snapshot_provider=self.metrics_snapshot_provider,
             diagnosis_snapshot_provider=self.diagnosis_snapshot_provider,
+            diagnosis_result_provider=self.diagnosis_result_provider,
             cancel_diagnosis=self.cancel_diagnosis,
             retry_diagnosis=self.retry_diagnosis,
             on_window_ready=self._on_window_ready,

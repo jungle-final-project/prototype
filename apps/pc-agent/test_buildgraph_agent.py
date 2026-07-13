@@ -618,6 +618,20 @@ class AgentGoal1112Test(unittest.TestCase):
             mode="LIVE",
         )
         session = DiagnosisSession(request)
+        result = agent.DiagnosisResult(
+            diagnosis_id=request.diagnosis_id,
+            severity="NORMAL",
+            title="측정된 하드웨어 상태가 정상 범위입니다.",
+            summary="현재 수집된 근거에서는 즉시 조치가 필요한 이상이 확인되지 않았습니다.",
+            evidence=(),
+            findings=(),
+            suspected_causes=(),
+            recommended_actions=("현재 상태 유지",),
+            resolution_type="NONE",
+            can_auto_recover=False,
+            unsupported_checks=(),
+            evaluated_at="2026-07-13T00:01:00Z",
+        )
 
         self.assertEqual(
             "SYMPTOM_CONFIRM",
@@ -634,6 +648,20 @@ class AgentGoal1112Test(unittest.TestCase):
             ),
         )
         self.assertEqual(
+            "DIAGNOSING",
+            agent.diagnosis_session_ui_state(
+                session,
+                agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
+                agent.DiagnosisRunSnapshot(
+                    diagnosis_id=request.diagnosis_id,
+                    mode="LIVE",
+                    state="PARTIALLY_COMPLETED",
+                    progress=100,
+                    transition_allowed=True,
+                ),
+            ),
+        )
+        self.assertEqual(
             "DIAGNOSIS_RESULT",
             agent.diagnosis_session_ui_state(
                 session,
@@ -645,6 +673,7 @@ class AgentGoal1112Test(unittest.TestCase):
                     progress=100,
                     transition_allowed=True,
                 ),
+                result,
             ),
         )
         self.assertEqual(

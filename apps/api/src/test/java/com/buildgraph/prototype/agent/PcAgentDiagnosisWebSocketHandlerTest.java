@@ -88,6 +88,36 @@ class PcAgentDiagnosisWebSocketHandlerTest {
         assertLastFrameContains(session, "\"eventId\":\"event-1\"");
     }
 
+    @Test
+    void authenticatedDiagnosisResultIsRecordedAndAcknowledged() throws Exception {
+        WebSocketSession session = session();
+        AgentPrincipal principal = new AgentPrincipal(1L, "device-1", 7L, "ACTIVE");
+        when(authenticationService.authenticate("agent-token"))
+                .thenReturn(AgentTokenAuthenticationResult.authenticated(principal));
+        when(broker.register(principal, session)).thenReturn(session);
+        when(broker.recordResult(any(), any())).thenReturn(true);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"AUTH","agentToken":"agent-token"}
+                """));
+
+        handler.handleTextMessage(session, new TextMessage("""
+                {
+                  "type":"DIAGNOSIS_RESULT",
+                  "detail":{
+                    "diagnosisId":"diagnosis-1",
+                    "resultId":"result-1",
+                    "severity":"CRITICAL",
+                    "resolutionType":"PHYSICAL_INSPECTION",
+                    "evaluatedAt":"2026-07-13T01:00:00Z",
+                    "evidence":[]
+                  }
+                }
+                """));
+
+        assertLastFrameContains(session, "\"type\":\"DIAGNOSIS_RESULT_ACK\"");
+        assertLastFrameContains(session, "\"resultId\":\"result-1\"");
+    }
+
     private static WebSocketSession session() {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("socket-1");

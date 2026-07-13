@@ -70,4 +70,32 @@ class PcAgentDiagnosisSocketBrokerTest {
                 "UNKNOWN", 30, "잘못된 상태", Map.of()
         )).isFalse();
     }
+
+    @Test
+    void diagnosisResultDeduplicatesResultIdAndKeepsRawEvidenceSeparate() {
+        PcAgentDiagnosisSocketBroker broker = new PcAgentDiagnosisSocketBroker();
+        Map<String, Object> result = Map.of(
+                "diagnosisId", "diagnosis-1",
+                "resultId", "result-1",
+                "severity", "CRITICAL",
+                "resolutionType", "PHYSICAL_INSPECTION",
+                "evaluatedAt", "2026-07-13T01:00:00Z",
+                "summary", "표시용 요약",
+                "evidence", List.of(Map.of("metricType", "temperature", "value", 90))
+        );
+
+        assertThat(broker.recordResult("device-1", result)).isTrue();
+        assertThat(broker.recordResult("device-1", result)).isTrue();
+
+        assertThat(broker.latestResult("diagnosis-1").resultId()).isEqualTo("result-1");
+        assertThat(broker.latestResult("diagnosis-1").result().get("summary")).isEqualTo("표시용 요약");
+        assertThat(broker.recordResult("device-1", Map.of(
+                "diagnosisId", "diagnosis-2",
+                "resultId", "result-2",
+                "severity", "UNKNOWN",
+                "resolutionType", "NONE",
+                "evaluatedAt", "2026-07-13T01:00:00Z",
+                "evidence", List.of()
+        ))).isFalse();
+    }
 }
