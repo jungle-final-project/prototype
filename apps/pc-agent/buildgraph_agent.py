@@ -125,6 +125,20 @@ CARD_ICON_FILES = {
     "startup": Path("assets/icons/startup-windows.png"),
     "version": Path("assets/icons/version-info.png"),
 }
+PC_AGENT_UI_FLOW = (
+    "SYMPTOM_CONFIRM",
+    "DIAGNOSING",
+    "DIAGNOSIS_RESULT",
+    "AS_REQUEST_CREATED",
+)
+
+
+def next_pc_agent_ui_state(current: str) -> str:
+    try:
+        index = PC_AGENT_UI_FLOW.index(current)
+    except ValueError:
+        return PC_AGENT_UI_FLOW[0]
+    return PC_AGENT_UI_FLOW[min(index + 1, len(PC_AGENT_UI_FLOW) - 1)]
 
 
 def resolve_ui_font_family(root: Any | None = None) -> str:
@@ -981,6 +995,17 @@ def log_file(config: AgentConfig) -> Path:
 
 
 def print_status(config_path: Path) -> None:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
     config = load_config(config_path)
     print(config.registration_status())
 
@@ -4218,6 +4243,7 @@ def show_log_viewer(
     focus_signal: dict[str, Any] | None = None,
     support_signal: dict[str, Any] | None = None,
 ) -> None:
+    """Render the reference PC diagnosis flow while preserving the existing Agent boundaries."""
     if tk is None or ttk is None:
         show_log_viewer_powershell(config_path)
         return
@@ -4228,2188 +4254,531 @@ def show_log_viewer(
 
     config = load_config(config_path)
     config.log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_file(config)
-
-    def reload_viewer_config() -> AgentConfig:
-        nonlocal config, path
-        config = load_config(config_path)
-        config.log_dir.mkdir(parents=True, exist_ok=True)
-        path = log_file(config)
-        return config
-
     root = tk.Tk()
     root.title(DISPLAY_APP_NAME)
     apply_agent_window_icon(root)
-    root.geometry("1000x740")
-    root.minsize(1000, 740)
-    root.maxsize(1000, 740)
+    root.geometry("1672x941+0+0")
+    root.minsize(1672, 941)
+    root.maxsize(1672, 941)
     root.resizable(False, False)
-    colors = {
-        "app_bg": "#f5f7f8",
-        "sidebar_bg": "#e7f2ef",
-        "sidebar_active": "#ffffff",
-        "sidebar_active_bar": "#1f8a70",
-        "text": "#172b3a",
-        "muted": "#5c6b73",
-        "subtle": "#7b8a92",
-        "border": "#d7e0e3",
-        "card_bg": "#ffffff",
-        "section_bg": "#ffffff",
-        "table_header": "#edf3f4",
-        "row_alt": "#f8fbfb",
-        "signal_bg": "#f8fbfb",
-        "signal_hover": "#edf7f4",
-    }
+    root.overrideredirect(os.environ.get("PC_AGENT_CAPTURE_NATIVE") != "1")
+    root.configure(background="#ffffff")
+    root.attributes("-topmost", True)
+    root.after(15000, lambda: root.attributes("-topmost", False))
+    root.lift()
+    root.focus_force()
+    try:
+        root.tk.call("tk", "scaling", 1.0)
+    except tk.TclError:
+        pass
+
     ui_font_family = resolve_ui_font_family(root)
 
-    def ui_font(size_px: int, weight: str = "regular", underline: bool = False) -> tuple[Any, ...]:
-        return tk_ui_font(ui_font_family, size_px, weight, underline)
+    def font(size: int, weight: str = "regular") -> tuple[Any, ...]:
+        return tk_ui_font(ui_font_family, size, weight)
 
-    root.option_add("*Font", ui_font(FONT_BODY_PX))
+    canvas = tk.Canvas(
+        root,
+        width=1672,
+        height=941,
+        background="#ffffff",
+        highlightthickness=0,
+        borderwidth=0,
+    )
+    canvas.pack(fill="both", expand=True)
 
-    def create_round_rect(
-        canvas: tk.Canvas,
+    colors = {
+        "text": "#111111",
+        "muted": "#767676",
+        "subtle": "#9a9a9a",
+        "line": "#dedede",
+        "soft": "#f5f5f5",
+        "blue": "#1677ff",
+        "red": "#ff4d3d",
+        "red_soft": "#fff0ef",
+        "green": "#12bd67",
+        "green_soft": "#effbf5",
+    }
+    capture_state = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
+    if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT", "AS_REQUEST_CREATED"}:
+        capture_state = "SYMPTOM_CONFIRM"
+    ui = {
+        "state": capture_state,
+        "demo": True,
+        "busy": False,
+        "diagnosisReady": False,
+        "status": "",
+        "diagnosis": None,
+        "window": None,
+        "ticketUrl": None,
+    }
+    image_refs: list[Any] = []
+    button_counter = {"value": 0}
+    drag_origin = {"x": 0, "y": 0}
+
+    def round_rect(
         x1: int,
         y1: int,
         x2: int,
         y2: int,
         radius: int,
-        **kwargs: Any,
-    ) -> None:
+        fill: str,
+        outline: str = "",
+        width: int = 1,
+        tags: tuple[str, ...] | str = (),
+    ) -> int:
         points = [
-            x1 + radius,
-            y1,
-            x2 - radius,
-            y1,
-            x2,
-            y1,
-            x2,
-            y1 + radius,
-            x2,
-            y2 - radius,
-            x2,
-            y2,
-            x2 - radius,
-            y2,
-            x1 + radius,
-            y2,
-            x1,
-            y2,
-            x1,
-            y2 - radius,
-            x1,
-            y1 + radius,
-            x1,
-            y1,
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
         ]
-        canvas.create_polygon(points, smooth=True, **kwargs)
-
-    def rounded_container(
-        parent: tk.Misc,
-        height: int,
-        padding: tuple[int, int] = (14, 12),
-        radius: int = 16,
-    ) -> tuple[tk.Canvas, tk.Frame]:
-        canvas = tk.Canvas(
-            parent,
-            height=height,
-            background=colors["app_bg"],
-            highlightthickness=0,
-            borderwidth=0,
+        return canvas.create_polygon(
+            points,
+            smooth=True,
+            splinesteps=24,
+            fill=fill,
+            outline=outline,
+            width=width,
+            tags=tags,
         )
-        inner = tk.Frame(canvas, background=colors["card_bg"])
-        window_id = canvas.create_window(padding[0], padding[1], anchor="nw", window=inner)
 
-        def redraw(event: tk.Event) -> None:
-            canvas.delete("rounded-bg")
-            width = max(2, event.width)
-            actual_height = max(2, event.height)
-            create_round_rect(
-                canvas,
-                1,
-                1,
-                width - 1,
-                actual_height - 1,
-                radius,
-                fill=colors["card_bg"],
-                outline=colors["border"],
-                tags="rounded-bg",
-            )
-            canvas.tag_lower("rounded-bg")
-            canvas.coords(window_id, padding[0], padding[1])
-            canvas.itemconfigure(
-                window_id,
-                width=max(1, width - padding[0] * 2),
-                height=max(1, actual_height - padding[1] * 2),
-            )
+    def text(
+        x: int,
+        y: int,
+        value: str,
+        size: int,
+        color: str | None = None,
+        weight: str = "regular",
+        anchor: str = "nw",
+        width: int | None = None,
+        tags: tuple[str, ...] | str = (),
+    ) -> int:
+        options: dict[str, Any] = {
+            "text": value,
+            "font": font(size, weight),
+            "fill": color or colors["text"],
+            "anchor": anchor,
+            "tags": tags,
+        }
+        if width is not None:
+            options["width"] = width
+        return canvas.create_text(x, y, **options)
 
-        canvas.bind("<Configure>", redraw)
-        return canvas, inner
+    def line(x1: int, y1: int, x2: int, y2: int, color: str | None = None, width: int = 1) -> int:
+        return canvas.create_line(x1, y1, x2, y2, fill=color or colors["line"], width=width)
 
-    def rounded_button(
-        parent: tk.Misc,
-        text: str,
+    def bind_click(tag: str, command: Any) -> None:
+        canvas.tag_bind(tag, "<Button-1>", lambda event: command())
+        canvas.tag_bind(tag, "<Enter>", lambda event: canvas.configure(cursor="hand2"))
+        canvas.tag_bind(tag, "<Leave>", lambda event: canvas.configure(cursor=""))
+
+    def button(
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        label: str,
         command: Any,
-        variant: str = "secondary",
-        width: int = 112,
-        height: int = 32,
-    ) -> tk.Canvas:
-        is_primary = variant == "primary"
-        fill = "#197b8f" if is_primary else "#eef7f7"
-        hover = "#156a7a" if is_primary else "#dcefed"
-        foreground = "#ffffff" if is_primary else colors["text"]
+        primary: bool = True,
+        disabled: bool = False,
+        size: int = 20,
+    ) -> None:
+        button_counter["value"] += 1
+        tag = f"button-{button_counter['value']}"
+        if primary:
+            fill, stroke, foreground = ("#111111", "#111111", "#ffffff")
+        else:
+            fill, stroke, foreground = ("#ffffff", "#111111", "#111111")
+        if disabled:
+            fill, stroke, foreground = ("#f2f2f2", "#dedede", "#999999")
+        round_rect(x1, y1, x2, y2, 10, fill, stroke, 1, tag)
+        text((x1 + x2) // 2, (y1 + y2) // 2, label, size, foreground, "semibold", "center", tags=tag)
+        if not disabled:
+            bind_click(tag, command)
+
+    def draw_check(x: int, y: int, size: int, color: str, width: int = 3) -> None:
+        canvas.create_line(
+            x - int(size * 0.42), y, x - int(size * 0.12), y + int(size * 0.30),
+            x + int(size * 0.48), y - int(size * 0.36), fill=color, width=width,
+            capstyle="round", joinstyle="round",
+        )
+
+    def draw_chat_icon(x: int, y: int, size: int = 22) -> None:
+        round_rect(x - size, y - int(size * 0.72), x + size, y + int(size * 0.60), 6, "#f4f4f4", "#333333", 2)
+        canvas.create_line(x - 8, y + int(size * 0.58), x - 13, y + int(size * 0.92), x - 2, y + int(size * 0.58), fill="#333333", width=2)
+        for dx in (-7, 0, 7):
+            canvas.create_oval(x + dx - 1, y - 1, x + dx + 1, y + 1, fill="#333333", outline="#333333")
+
+    def draw_header() -> None:
+        canvas.create_rectangle(0, 0, 1672, 68, fill="#ffffff", outline="")
+        line(0, 67, 1672, 67, "#e0e0e0")
         try:
-            parent_bg = str(parent.cget("background"))  # type: ignore[attr-defined]
-        except Exception:
-            parent_bg = colors["app_bg"]
-        canvas = tk.Canvas(
-            parent,
-            width=width,
-            height=height,
-            background=parent_bg,
-            highlightthickness=0,
-            borderwidth=0,
-            cursor="hand2",
-        )
-
-        def draw(background: str) -> None:
-            canvas.delete("all")
-            create_round_rect(canvas, 1, 1, width - 1, height - 1, 12, fill=background, outline=background)
-            canvas.create_text(
-                width // 2,
-                height // 2,
-                text=text,
-                fill=foreground,
-                font=ui_font(FONT_BUTTON_PX, "semibold" if is_primary else "regular"),
-            )
-
-        def invoke(event: object = None) -> None:
-            command()
-
-        draw(fill)
-        canvas.bind("<Button-1>", invoke)
-        canvas.bind("<Enter>", lambda event: draw(hover))
-        canvas.bind("<Leave>", lambda event: draw(fill))
-        return canvas
-
-    def disabled_button(parent: tk.Misc, text: str, width: int = 112, height: int = 32) -> tk.Canvas:
-        try:
-            parent_bg = str(parent.cget("background"))  # type: ignore[attr-defined]
-        except Exception:
-            parent_bg = colors["app_bg"]
-        canvas = tk.Canvas(
-            parent,
-            width=width,
-            height=height,
-            background=parent_bg,
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        create_round_rect(canvas, 1, 1, width - 1, height - 1, 12, fill="#edf3f4", outline=colors["border"])
-        canvas.create_text(
-            width // 2,
-            height // 2,
-            text=text,
-            fill=colors["subtle"],
-            font=ui_font(FONT_BUTTON_PX),
-        )
-        return canvas
-
-    root.configure(background=colors["app_bg"])
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except tk.TclError:
-        pass
-    style.configure(
-        "Agent.TEntry",
-        padding=(8, 5),
-        fieldbackground=colors["card_bg"],
-        foreground=colors["text"],
-        bordercolor=colors["border"],
-        lightcolor=colors["border"],
-        darkcolor=colors["border"],
-    )
-    style.configure(
-        "Agent.TCombobox",
-        padding=(8, 5),
-        fieldbackground=colors["card_bg"],
-        foreground=colors["text"],
-        bordercolor=colors["border"],
-        lightcolor=colors["border"],
-        darkcolor=colors["border"],
-        arrowcolor=colors["muted"],
-    )
-    style.map(
-        "Agent.TCombobox",
-        fieldbackground=[("readonly", colors["card_bg"])],
-        foreground=[("readonly", colors["text"])],
-        bordercolor=[("focus", colors["sidebar_active_bar"])],
-        arrowcolor=[("focus", colors["sidebar_active_bar"])],
-    )
-    style.configure("Agent.Toolbar.TButton", padding=(12, 5), font=ui_font(FONT_BUTTON_PX, "semibold"))
-    style.configure(
-        "Agent.Treeview",
-        background=colors["section_bg"],
-        fieldbackground=colors["section_bg"],
-        foreground=colors["text"],
-        bordercolor=colors["border"],
-        rowheight=28,
-        font=ui_font(FONT_LOG_PX),
-    )
-    style.configure(
-        "Agent.Treeview.Heading",
-        background=colors["table_header"],
-        foreground=colors["muted"],
-        relief="flat",
-        font=ui_font(FONT_LOG_PX, "semibold"),
-    )
-    style.map(
-        "Agent.Treeview",
-        background=[("selected", "#dcefed")],
-        foreground=[("selected", colors["text"])],
-    )
-
-    range_status = tk.StringVar(value="")
-    pc_status = tk.StringVar(value="-")
-    pc_detail = tk.StringVar(value="-")
-    upload_status = tk.StringVar(value="-")
-    upload_detail = tk.StringVar(value="-")
-    startup_status = tk.StringVar(value="-")
-    startup_detail = tk.StringVar(value="-")
-    version_status = tk.StringVar(value="-")
-    version_detail = tk.StringVar(value="-")
-    selected_nav = tk.StringVar(value="상태")
-    home_ai_summary = tk.StringVar(
-        value="최근 진단 결과 없음\nPC 진단받기 후 기록 탭에 저장됩니다."
-    )
-    home_detection_title = tk.StringVar(value="최근 감지 신호 없음")
-    home_detection_detail = tk.StringVar(value="최근 로그에서 AS 접수가 필요한 신호는 아직 없습니다.")
-    home_support_status = tk.StringVar(value="")
-    update_status = tk.StringVar(value="")
-    home_consent = tk.BooleanVar(value=False)
-    home_detection_value: dict[str, Any] = {"signal": None}
-    home_diagnosis_ready = {"ready": False}
-
-    shell = tk.Frame(root, background=colors["app_bg"])
-    shell.pack(fill="both", expand=True)
-
-    sidebar = tk.Frame(shell, width=150, background=colors["sidebar_bg"])
-    sidebar.pack(side="left", fill="y")
-    sidebar.pack_propagate(False)
-    tk.Frame(sidebar, height=22, background=colors["sidebar_bg"]).pack(fill="x")
-    nav_items: list[tuple[str, tk.Frame]] = []
-
-    def render_nav() -> None:
-        for name, item in nav_items:
-            active = selected_nav.get() == name
-            item.configure(
-                background=colors["sidebar_active"] if active else colors["sidebar_bg"],
-                highlightbackground=colors["border"] if active else colors["sidebar_bg"],
-            )
-            for child in item.winfo_children():
-                role = getattr(child, "_agent_nav_role", "")
-                if role == "bar":
-                    child.configure(background=colors["sidebar_active_bar"] if active else colors["sidebar_bg"])
-                else:
-                    child.configure(
-                        background=colors["sidebar_active"] if active else colors["sidebar_bg"],
-                        foreground=colors["text"] if active else colors["muted"],
-                    )
-
-    def add_nav_item(name: str, icon: str, command: Any) -> None:
-        item = tk.Frame(
-            sidebar,
-            height=44,
-            background=colors["sidebar_bg"],
-            highlightthickness=1,
-            highlightbackground=colors["sidebar_bg"],
-        )
-        item.pack(fill="x", padx=12, pady=5)
-        item.pack_propagate(False)
-        bar = tk.Frame(item, width=4, background=colors["sidebar_bg"])
-        bar._agent_nav_role = "bar"  # type: ignore[attr-defined]
-        bar.pack(side="left", fill="y")
-        label = tk.Label(
-            item,
-            text=f"{icon}  {name}",
-            font=ui_font(FONT_BUTTON_PX, "semibold" if name == "상태" else "regular"),
-            anchor="w",
-            padx=12,
-            background=colors["sidebar_bg"],
-            foreground=colors["muted"],
-        )
-        label.pack(side="left", fill="both", expand=True)
-
-        def activate(event: object = None) -> None:
-            selected_nav.set(name)
-            render_nav()
-            command()
-
-        for widget in (item, bar, label):
-            widget.configure(cursor="hand2")
-            widget.bind("<Button-1>", activate)
-        nav_items.append((name, item))
-
-    add_nav_item("상태", "●", lambda: show_status_tab())
-    add_nav_item("AI 진단", "+", lambda: show_support_tab())
-    add_nav_item("기록", "≡", lambda: show_log_tab())
-    add_nav_item("설정", "○", lambda: open_log_folder(config_path))
-    render_nav()
-
-    content = tk.Frame(shell, background=colors["app_bg"], padx=14, pady=0)
-    content.pack(side="left", fill="both", expand=True)
-
-    header = tk.Frame(content, background=colors["app_bg"])
-    header.pack(fill="x")
-    range_badge = tk.Label(
-        header,
-        textvariable=range_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background="#e9f3f1",
-        padx=12,
-        pady=5,
-    )
-
-    view_stack = tk.Frame(content, background=colors["app_bg"])
-    view_stack.pack(fill="both", expand=True)
-    status_view = tk.Frame(view_stack, background=colors["app_bg"])
-    log_view = tk.Frame(view_stack, background=colors["app_bg"])
-    support_view = tk.Frame(view_stack, background=colors["app_bg"])
-
-    status_header = tk.Frame(status_view, background=colors["app_bg"])
-    status_header.pack(fill="x", pady=(0, 8))
-    status_title_row = tk.Frame(status_header, background=colors["app_bg"])
-    status_title_row.pack(fill="x")
-    tk.Label(
-        status_title_row,
-        text="상태 홈",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(side="left", fill="x", expand=True)
-    rounded_button(
-        status_title_row,
-        "업데이트 확인",
-        lambda: check_for_agent_update(),
-        "primary",
-        width=118,
-        height=32,
-    ).pack(side="right", padx=(8, 0))
-    tk.Label(
-        status_title_row,
-        textvariable=update_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="e",
-    ).pack(side="right", fill="x", expand=True)
-    tk.Label(
-        status_header,
-        text="PCAgent가 시스템을 안전하게 보호하고 있습니다.",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(4, 0))
-
-    cards = tk.Frame(status_view, background=colors["app_bg"])
-    cards.pack(fill="x", pady=(0, 10))
-    for index in range(4):
-        cards.columnconfigure(index, weight=1, uniform="status-card")
-
-    card_icons: dict[str, tk.Label] = {}
-    card_title_labels: dict[str, tk.Label] = {}
-    card_value_labels: dict[str, tk.Label] = {}
-    tone_colors = {
-        "ok": "#0f8f83",
-        "warning": "#b7791f",
-        "danger": "#b42318",
-        "muted": colors["muted"],
-    }
-    tone_icon_styles = {
-        "ok": ("#e8f7f4", "#a9ddd5"),
-        "warning": ("#fff7e6", "#f6d18b"),
-        "danger": ("#fff1f0", "#f4b4ad"),
-        "muted": ("#f7fafb", colors["border"]),
-    }
-
-    def card_tone_color(tone: str) -> str:
-        return tone_colors.get(tone, tone_colors["muted"])
-
-    def draw_card_icon(label: tk.Label, kind: str, tone: str) -> None:
-        stroke_hex = card_tone_color(tone)
-        soft, line = tone_icon_styles.get(tone, tone_icon_styles["muted"])
-        if Image is not None:
-            try:
-                def color(value: str) -> tuple[int, int, int, int]:
-                    value = value.lstrip("#")
-                    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16), 255)
-
-                icon_path = runtime_asset_path(CARD_ICON_FILES[kind])
-                original = Image.open(icon_path).convert("RGBA")
-                alpha = original.getchannel("A")
-                if alpha.getextrema() == (255, 255):
-                    grayscale = original.convert("L")
-                    mask = Image.eval(grayscale, lambda pixel: 255 - pixel)
-                else:
-                    mask = alpha
-                tinted = Image.new("RGBA", original.size, color(stroke_hex))
-                tinted.putalpha(mask)
-                size = 34
+            if Image is not None:
+                original = Image.open(runtime_asset_path(AGENT_ICON_PNG)).convert("RGBA")
                 resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
-                tinted.thumbnail((size, size), resampling)
-                image = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-                if ImageDraw is not None:
-                    draw = ImageDraw.Draw(image)
-                    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=10, fill=color(soft), outline=color(line), width=1)
-                offset = ((size - tinted.width) // 2, (size - tinted.height) // 2)
-                image.alpha_composite(tinted, offset)
+                original.thumbnail((28, 28), resampling)
                 buffer = BytesIO()
-                image.save(buffer, format="PNG")
+                original.save(buffer, format="PNG")
                 photo = tk.PhotoImage(data=base64.b64encode(buffer.getvalue()).decode("ascii"))
-                label.configure(image=photo, text="", background=colors["card_bg"], borderwidth=0, highlightthickness=0)
-                label._agent_card_photo = photo  # type: ignore[attr-defined]
-                return
-            except Exception:
-                pass
-        fallback_text = {"pc": "PC", "server": "PC", "upload": "UP", "startup": "ST", "version": "i"}.get(kind, "i")
-        label.configure(
-            image="",
-            text=fallback_text,
-            width=3,
-            height=1,
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=stroke_hex,
-            background=soft,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=line,
-        )
+                image_refs.append(photo)
+                canvas.create_image(40, 34, image=photo)
+            else:
+                canvas.create_rectangle(28, 22, 52, 46, fill="#111111", outline="")
+        except Exception:
+            canvas.create_rectangle(28, 22, 52, 46, fill="#111111", outline="")
+        canvas.create_polygon(34, 27, 45, 27, 45, 38, 41, 38, 41, 32, 34, 32, fill="#ffffff", outline="")
+        canvas.create_polygon(34, 32, 38, 36, 38, 41, 34, 37, fill="#ffffff", outline="")
+        text(70, 34, "PC Agent", 21, colors["text"], "regular", "w")
+        text(1525, 34, "—", 24, colors["text"], "regular", "center", tags="window-min")
+        canvas.create_rectangle(1574, 26, 1588, 42, fill="", outline="#111111", width=2, tags="window-max")
+        canvas.create_line(1629, 27, 1645, 43, fill="#111111", width=2, tags="window-close")
+        canvas.create_line(1645, 27, 1629, 43, fill="#111111", width=2, tags="window-close")
+        bind_click("window-min", root.iconify)
+        bind_click("window-close", root.destroy)
+        canvas.tag_bind("window-max", "<Button-1>", lambda event: None)
+        canvas.tag_bind("window-max", "<Enter>", lambda event: canvas.configure(cursor="hand2"))
+        canvas.tag_bind("window-max", "<Leave>", lambda event: canvas.configure(cursor=""))
 
-    def add_card(
-        parent: tk.Frame,
-        key: str,
-        index: int,
-        title: str,
-        value: tk.StringVar,
-        detail: tk.StringVar,
-        icon_kind: str,
-    ) -> None:
-        card_canvas, card = rounded_container(parent, 88, padding=(14, 12), radius=12)
-        card_canvas.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 8, 0))
-        card.columnconfigure(0, weight=1)
-        card.columnconfigure(1, weight=0)
-        title_label = tk.Label(
-            card,
-            text=title,
-            font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        title_label.grid(row=0, column=0, sticky="ew")
-        card_title_labels[key] = title_label
-        icon_label = tk.Label(card, background=colors["card_bg"], borderwidth=0, highlightthickness=0)
-        icon_label.grid(row=0, column=1, rowspan=2, sticky="ne", padx=(8, 0))
-        draw_card_icon(icon_label, icon_kind, "muted")
-        card_icons[key] = icon_label
-        value_label = tk.Label(
-            card,
-            textvariable=value,
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        value_label.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        card_value_labels[key] = value_label
-        tk.Label(
-            card,
-            textvariable=detail,
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["subtle"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        round_rect(1408, 101, 1508, 143, 9, "#ffffff", "#d8d8d8")
+        canvas.create_oval(1424, 117, 1434, 127, fill=colors["green"], outline="")
+        text(1444, 122, "연결됨", 17, colors["text"], "regular", "w")
+        tag = "demo-toggle"
+        round_rect(1527, 101, 1633, 143, 9, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1, tag)
+        text(1580, 122, "시연 모드", 17, colors["text"], "regular", "center", tags=tag)
+        bind_click(tag, toggle_demo)
 
-    add_card(cards, "pc", 0, "PC 상태", pc_status, pc_detail, "pc")
-    add_card(cards, "upload", 1, "마지막 업로드", upload_status, upload_detail, "upload")
-    add_card(cards, "startup", 2, "시작프로그램", startup_status, startup_detail, "startup")
-    add_card(cards, "version", 3, "버전", version_status, version_detail, "version")
+    def draw_step(number: int, x: int, label: str, style: str) -> None:
+        if style == "active" or style == "done-black":
+            canvas.create_oval(x - 20, 181, x + 20, 221, fill="#050505", outline="#050505")
+            text(x, 201, str(number), 17, "#ffffff", "regular", "center")
+            label_color = colors["text"]
+        elif style == "done-check":
+            canvas.create_oval(x - 20, 181, x + 20, 221, fill="#ffffff", outline="#d3d8dc")
+            draw_check(x, 201, 13, "#111111", 2)
+            label_color = colors["muted"]
+        else:
+            canvas.create_oval(x - 20, 181, x + 20, 221, fill="#ffffff", outline="#d7dce0")
+            text(x, 201, str(number), 17, colors["subtle"], "regular", "center")
+            label_color = colors["muted"]
+        text(x + 36, 201, label, 18, label_color, "regular", "w")
 
-    diagnosis_section, diagnosis_inner = rounded_container(status_view, 286, padding=(14, 12), radius=16)
-    diagnosis_section.pack(fill="x", pady=(0, 10))
-    diagnosis_inner.columnconfigure(0, weight=1)
-    diagnosis_inner.rowconfigure(0, weight=1, uniform="diagnosis_halves")
-    diagnosis_inner.rowconfigure(2, weight=1, uniform="diagnosis_halves")
-    ai_summary_row = tk.Frame(diagnosis_inner, background=colors["card_bg"])
-    ai_summary_row.grid(row=0, column=0, sticky="nsew")
-    ai_summary_row.columnconfigure(0, weight=1)
-    ai_summary_row.rowconfigure(0, minsize=76, weight=1)
-    ai_text = tk.Frame(ai_summary_row, background=colors["card_bg"])
-    ai_text.grid(row=0, column=0, sticky="sw", padx=(0, 16), pady=(0, 20))
-    ai_text.columnconfigure(0, weight=1)
-    tk.Label(
-        ai_text,
-        text="진단 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    tk.Label(
-        ai_text,
-        textvariable=home_ai_summary,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        justify="left",
-        anchor="w",
-        wraplength=640,
-        height=3,
-    ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
-    rounded_button(
-        ai_summary_row,
-        "PC 진단받기",
-        lambda: run_home_diagnosis(),
-        "primary",
-        width=118,
-        height=32,
-    ).grid(row=0, column=1, sticky="se", pady=(0, 20))
-    tk.Frame(diagnosis_inner, height=1, background=colors["border"]).grid(row=1, column=0, sticky="ew", pady=(8, 8))
-    detection_block = tk.Frame(diagnosis_inner, background=colors["card_bg"])
-    detection_block.grid(row=2, column=0, sticky="nsew")
-    detection_block.columnconfigure(0, weight=1)
-    detection_block.rowconfigure(0, weight=1)
-    detection_row = tk.Frame(detection_block, background=colors["card_bg"])
-    detection_row.grid(row=0, column=0, sticky="nsew")
-    detection_row.columnconfigure(0, weight=1)
-    tk.Label(
-        detection_row,
-        text="최근 감지 신호",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    tk.Label(
-        detection_row,
-        textvariable=home_detection_title,
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground="#b7791f",
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
-    tk.Label(
-        detection_row,
-        textvariable=home_detection_detail,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=540,
-    ).grid(row=2, column=0, sticky="ew", pady=(3, 0))
-    action_row = tk.Frame(detection_block, background=colors["card_bg"])
-    action_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-    action_row.columnconfigure(1, weight=1)
-    consent_row = tk.Frame(
-        action_row,
-        background=colors["card_bg"],
-        cursor="hand2",
-    )
-    consent_row.grid(row=0, column=0, sticky="w")
-    consent_marker = tk.Canvas(
-        consent_row,
-        width=48,
-        height=24,
-        background=colors["card_bg"],
-        highlightthickness=0,
-        borderwidth=0,
-        cursor="hand2",
-    )
-    consent_marker.pack(side="left", padx=(0, 8), pady=2)
-    consent_text = tk.Label(
-        consent_row,
-        text="최근 30분 진단 로그 전송 동의",
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        font=ui_font(FONT_BODY_PX),
-        cursor="hand2",
-    )
-    consent_text.pack(side="left", padx=(0, 10), pady=2)
+    def draw_stepper() -> None:
+        state = str(ui["state"])
+        if state == "SYMPTOM_CONFIRM":
+            styles = ("active", "idle", "idle")
+        elif state == "DIAGNOSING":
+            styles = ("done-check", "active", "idle")
+        elif state == "DIAGNOSIS_RESULT":
+            styles = ("idle", "idle", "active")
+        else:
+            styles = ("done-black", "done-black", "done-black")
+        draw_step(1, 354, "증상 확인", styles[0])
+        line(493, 201, 725, 201, "#d9d9d9")
+        draw_step(2, 765, "하드웨어 진단", styles[1])
+        line(938, 201, 1162, 201, "#d9d9d9")
+        draw_step(3, 1201, "결과 및 조치", styles[2])
 
-    def paint_home_consent() -> None:
-        selected = bool(home_consent.get())
-        background = colors["card_bg"]
-        track_fill = colors["sidebar_active_bar"] if selected else "#dce7ea"
-        track_outline = colors["sidebar_active_bar"] if selected else "#c7d5d9"
-        text_color = colors["text"] if selected else colors["muted"]
-        consent_row.configure(background=background)
-        consent_marker.configure(background=background)
-        consent_text.configure(background=background, foreground=text_color)
-        consent_marker.delete("all")
-        create_round_rect(
-            consent_marker,
-            1,
-            1,
-            47,
-            23,
-            12,
-            fill=track_fill,
-            outline=track_outline,
-        )
-        knob_left = 27 if selected else 4
-        consent_marker.create_oval(knob_left, 4, knob_left + 16, 20, fill="#ffffff", outline="#ffffff")
-        if selected:
-            consent_marker.create_line(9, 12, 13, 16, 20, 8, fill="#ffffff", width=1.6, capstyle="round", joinstyle="round")
+    def draw_sparkline(x: int, y: int, values: Sequence[int], emphasis: bool = False) -> None:
+        for index, value in enumerate(values):
+            shade = "#8e8e8e" if emphasis and 6 <= index <= 9 else "#e7e7e7"
+            canvas.create_rectangle(x + index * 14, y - value, x + index * 14 + 8, y, fill=shade, outline="")
 
-    def toggle_home_consent(event: object = None) -> None:
-        home_consent.set(not bool(home_consent.get()))
-        paint_home_consent()
+    def draw_symptom() -> None:
+        cards = [
+            (163, "CPU", "점검 예정", False, [15, 20, 25, 31, 38, 46, 32, 26, 23, 20, 19, 20, 22, 20, 19, 27]),
+            (512, "GPU", "우선 점검", True, [8, 12, 17, 21, 18, 28, 38, 47, 55, 42, 34, 28, 26, 21, 17, 12]),
+            (850, "RAM", "참고 확인", False, [24, 14, 13, 19, 25, 29, 37, 24, 16, 9, 28, 39, 30, 22, 16, 11]),
+            (1192, "디스크", "참고 확인", False, [26, 12, 20, 18, 14, 11, 9, 13, 18, 24, 18, 15, 17, 21, 27, 19]),
+        ]
+        for x, title_value, subtitle, active, values in cards:
+            round_rect(x, 283, x + 316, 549, 16, "#ffffff", colors["blue"] if active else "#d9d9d9", 2 if active else 1)
+            text(x + 38, 332, title_value, 27, colors["blue"] if active else colors["text"], "semibold")
+            text(x + 38, 377, subtitle, 18, colors["blue"] if active else colors["muted"])
+            draw_sparkline(x + 34, 497, values, emphasis=active or title_value == "CPU")
 
-    for widget in (consent_row, consent_marker, consent_text):
-        widget.bind("<Button-1>", toggle_home_consent)
-    paint_home_consent()
+        round_rect(163, 588, 1508, 779, 16, "#ffffff", "#dddddd")
+        canvas.create_oval(196, 620, 261, 685, fill="#f4f4f4", outline="")
+        draw_chat_icon(228, 651, 13)
+        text(290, 628, "전달받은 증상", 24, colors["text"], "semibold")
+        text(290, 670, "“게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.”", 25, colors["text"])
+        text(290, 724, "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.", 18, colors["muted"])
+        button(686, 817, 984, 889, "진단 시작", start_diagnosis, True, size=21)
 
-    tk.Label(
-        action_row,
-        textvariable=home_support_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground="#16766b",
-        background=colors["card_bg"],
-        anchor="e",
-    ).grid(row=0, column=1, sticky="ew", padx=(8, 8))
-    rounded_button(
-        action_row,
-        "AS 접수 신청",
-        lambda: submit_home_support_request(),
-        "primary",
-        width=118,
-        height=32,
-    ).grid(row=0, column=2, sticky="e")
+    def draw_progress_ring(x: int, y: int) -> None:
+        canvas.create_oval(x - 23, y - 23, x + 23, y + 23, outline="#e8e8e8", width=5)
+        canvas.create_arc(x - 23, y - 23, x + 23, y + 23, start=90, extent=-238, style="arc", outline="#6f7478", width=5)
 
-    summary_section, summary_inner = rounded_container(status_view, 150, padding=(14, 10), radius=16)
-    summary_section.pack(fill="x", expand=False)
-    tk.Label(
-        summary_inner,
-        text="로그 현황",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 6))
-    summary_columns = ("time", "cpu", "memory", "disk", "gpu", "event")
-    summary_table = ttk.Treeview(
-        summary_inner,
-        columns=summary_columns,
-        show="headings",
-        height=8,
-        style="Agent.Treeview",
-    )
-    summary_table.heading("time", text="시간")
-    summary_table.heading("cpu", text="CPU")
-    summary_table.heading("memory", text="메모리")
-    summary_table.heading("disk", text="디스크")
-    summary_table.heading("gpu", text="GPU")
-    summary_table.heading("event", text="이벤트")
-    summary_table.column("time", width=86, minwidth=72, anchor="w", stretch=False)
-    summary_table.column("cpu", width=78, minwidth=64, anchor="e", stretch=False)
-    summary_table.column("memory", width=86, minwidth=72, anchor="e", stretch=False)
-    summary_table.column("disk", width=82, minwidth=68, anchor="e", stretch=False)
-    summary_table.column("gpu", width=78, minwidth=64, anchor="e", stretch=False)
-    summary_table.column("event", width=260, minwidth=180, anchor="w")
-    summary_table.tag_configure("odd", background=colors["row_alt"])
-    summary_table.tag_configure("even", background=colors["section_bg"])
-    summary_table.pack(fill="both", expand=True)
-    summary_empty = tk.Frame(summary_inner, background=colors["card_bg"])
-    tk.Label(
-        summary_empty,
-        text="표시할 로그가 없습니다",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-    ).pack(pady=(24, 3))
-    tk.Label(
-        summary_empty,
-        text="백그라운드 수집이 시작되면 최근 로그가 표시됩니다",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-    ).pack()
+    def draw_diagnosing() -> None:
+        round_rect(277, 232, 1396, 822, 15, "#ffffff", "#d7dce0")
+        canvas.create_oval(322, 269, 383, 330, fill="#ffffff", outline="#d7dce0")
+        draw_chat_icon(352, 299, 12)
+        text(419, 272, "전달받은 증상", 16, colors["muted"])
+        text(419, 299, "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.", 20, colors["text"], "regular")
+        text(419, 334, "전달받은 증상을 바탕으로 진단 범위를 설정했습니다.", 15, colors["muted"])
+        line(326, 376, 1345, 376)
+        text(836, 419, "진단 진행 중", 31, colors["text"], "semibold", "center")
+        draw_progress_ring(786, 475)
+        text(845, 475, "66%", 35, colors["text"], "regular", "center")
+        detail = ui["status"] or "전달받은 증상을 바탕으로 전체 하드웨어 검사를 진행하고 있습니다."
+        text(836, 520, str(detail), 16, colors["muted"], "regular", "center")
+        line(326, 554, 1345, 554)
 
-    log_mode = tk.StringVar(value="diagnosis")
-    log_mode_bar = tk.Frame(log_view, background=colors["app_bg"])
-    log_mode_bar.pack(fill="x", pady=(0, 8))
-    rounded_button(log_mode_bar, "진단 기록", lambda: set_log_mode("diagnosis"), "primary", width=104, height=32).pack(
-        side="left",
-    )
-    rounded_button(log_mode_bar, "원본 로그", lambda: set_log_mode("raw"), "secondary", width=104, height=32).pack(
-        side="left",
-        padx=(8, 0),
-    )
+        centers = (438, 704, 969, 1212)
+        labels = (("CPU", "검사 완료"), ("GPU", "집중 분석 중"), ("RAM", "대기"), ("디스크", "대기"))
+        for index, (cx, values) in enumerate(zip(centers, labels, strict=False)):
+            if index == 1:
+                round_rect(cx - 95, 572, cx + 122, 616, 10, "#ffffff", colors["red"])
+                canvas.create_oval(cx - 72, 587, cx - 60, 599, fill=colors["red"], outline="")
+                draw_check(cx - 66, 593, 5, "#ffffff", 1)
+                text(cx - 48, 593, values[0], 16, colors["text"], "semibold", "w")
+                text(cx + 10, 593, values[1], 15, colors["text"], "regular", "w")
+            else:
+                icon_color = colors["green"] if index == 0 else "#92989d"
+                canvas.create_oval(cx - 67, 588, cx - 55, 600, fill=icon_color if index == 0 else "#ffffff", outline=icon_color)
+                if index == 0:
+                    draw_check(cx - 61, 594, 5, "#ffffff", 1)
+                else:
+                    canvas.create_line(cx - 61, 590, cx - 61, 594, fill=icon_color)
+                    canvas.create_line(cx - 61, 594, cx - 57, 597, fill=icon_color)
+                text(cx - 42, 594, values[0], 16, colors["text"], "semibold", "w")
+                text(cx + 16, 594, values[1], 15, colors["muted"], "regular", "w")
+            if index < 3:
+                line(cx + 133, 577, cx + 133, 608, "#e0e0e0")
+        line(326, 631, 1345, 631)
 
-    diagnosis_history_records: dict[str, dict[str, Any]] = {}
-    diagnosis_history_frame = tk.Frame(
-        log_view,
-        background=colors["section_bg"],
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-    )
-    diagnosis_history_frame.columnconfigure(0, weight=1)
-    diagnosis_history_frame.rowconfigure(1, weight=1)
-    tk.Label(
-        diagnosis_history_frame,
-        text="진단 기록",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 6))
-    diagnosis_history_columns = ("time", "service", "summary", "confidence")
-    diagnosis_history_tree = ttk.Treeview(
-        diagnosis_history_frame,
-        columns=diagnosis_history_columns,
-        show="headings",
-        height=12,
-        style="Agent.Treeview",
-    )
-    diagnosis_history_tree.heading("time", text="시간")
-    diagnosis_history_tree.heading("service", text="추천")
-    diagnosis_history_tree.heading("summary", text="간단 문제")
-    diagnosis_history_tree.heading("confidence", text="신뢰도")
-    diagnosis_history_tree.column("time", width=128, minwidth=112, anchor="w", stretch=False)
-    diagnosis_history_tree.column("service", width=128, minwidth=112, anchor="w", stretch=False)
-    diagnosis_history_tree.column("summary", width=470, minwidth=300, anchor="w")
-    diagnosis_history_tree.column("confidence", width=76, minwidth=64, anchor="center", stretch=False)
-    diagnosis_history_tree.tag_configure("odd", background=colors["row_alt"])
-    diagnosis_history_tree.tag_configure("even", background=colors["section_bg"])
-    diagnosis_history_scroll = ttk.Scrollbar(
-        diagnosis_history_frame,
-        orient="vertical",
-        command=diagnosis_history_tree.yview,
-    )
-    diagnosis_history_tree.configure(yscrollcommand=diagnosis_history_scroll.set)
-    diagnosis_history_tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 12))
-    diagnosis_history_scroll.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 12))
-    diagnosis_history_empty = tk.Label(
-        diagnosis_history_frame,
-        text="아직 저장된 진단 기록이 없습니다. 상태 탭에서 PC 진단받기를 실행해 주세요.",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["subtle"],
-        background=colors["section_bg"],
-    )
+        text(326, 651, "검사 진행 내용", 17, colors["text"], "semibold")
+        checklist = [
+            ("전체 센서 수집 완료", "#9ba1a5"),
+            ("온도 및 사용률 분석 중", colors["red"]),
+            ("냉각 팬 회전 상태 확인 중", "#92989d"),
+            ("열 제한 징후 확인 예정", "#92989d"),
+        ]
+        for idx, (label, dot) in enumerate(checklist):
+            cy = 693 + idx * 32
+            canvas.create_oval(333, cy - 7, 347, cy + 7, fill="#ffffff" if idx != 1 else dot, outline=dot)
+            if idx == 0:
+                draw_check(340, cy, 6, dot, 1)
+            elif idx > 1:
+                canvas.create_line(340, cy - 4, 340, cy, fill=dot)
+                canvas.create_line(340, cy, 344, cy + 3, fill=dot)
+            text(367, cy, label, 15, colors["text"], "regular", "w")
 
-    filters = tk.Frame(log_view, background=colors["app_bg"])
-    tk.Label(
-        filters,
-        text="날짜",
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left")
-    now_for_filter = datetime.now(KST)
-    year_value = tk.StringVar(value=str(now_for_filter.year))
-    month_value = tk.StringVar(value=f"{now_for_filter.month:02d}")
-    day_value = tk.StringVar(value=f"{now_for_filter.day:02d}")
-    year_select = ttk.Combobox(
-        filters,
-        textvariable=year_value,
-        values=[str(year) for year in range(now_for_filter.year - 3, now_for_filter.year + 2)],
-        width=6,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    year_select.pack(side="left", padx=(6, 4))
-    tk.Label(
-        filters,
-        text="년",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left", padx=(0, 6))
-    month_select = ttk.Combobox(
-        filters,
-        textvariable=month_value,
-        values=[f"{month:02d}" for month in range(1, 13)],
-        width=4,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    month_select.pack(side="left", padx=(0, 4))
-    tk.Label(
-        filters,
-        text="월",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left", padx=(0, 6))
-    day_select = ttk.Combobox(
-        filters,
-        textvariable=day_value,
-        values=[f"{day:02d}" for day in range(1, 32)],
-        width=4,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    day_select.pack(side="left", padx=(0, 4))
-    tk.Label(
-        filters,
-        text="일",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left", padx=(0, 14))
-    tk.Label(
-        filters,
-        text="시간",
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left")
-    hour_value = tk.StringVar(value=f"{datetime.now(KST).hour:02d}:00")
-    hour_select = ttk.Combobox(
-        filters,
-        textvariable=hour_value,
-        values=[f"{hour:02d}:00" for hour in range(24)],
-        width=7,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    hour_select.pack(side="left", padx=(6, 14))
+        text(809, 651, "실시간 진단 로그", 17, colors["text"], "semibold")
+        round_rect(809, 684, 1344, 801, 8, "#fbfbfb", "#dedede")
+        logs = [
+            ("10:32:41", "시스템 센서 데이터 수집을 완료했습니다.", colors["muted"]),
+            ("10:32:44", "CPU 상태 검사를 완료했습니다.", colors["muted"]),
+            ("10:32:45", "GPU 온도 및 사용률 분석을 시작했습니다.", colors["red"]),
+        ]
+        for idx, (stamp, message, color) in enumerate(logs):
+            cy = 712 + idx * 31
+            text(827, cy, stamp, 14, color, "regular", "w")
+            text(912, cy, message, 14, color, "regular", "w")
+        button(699, 848, 966, 911, "분석 계속", continue_analysis, True, disabled=bool(ui["busy"] and not ui["demo"]), size=20)
 
-    columns = ("time", "kind", "cpu", "memory", "disk", "gpu", "vram", "cpu_temp", "gpu_temp", "message")
-    table_frame = tk.Frame(
-        log_view,
-        background=colors["section_bg"],
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-    )
-    tk.Label(
-        table_frame,
-        text="전체 로그내용",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 6))
-    tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12, style="Agent.Treeview")
-    tree.heading("time", text="시간")
-    tree.heading("kind", text="이벤트")
-    tree.heading("cpu", text="CPU")
-    tree.heading("memory", text="메모리")
-    tree.heading("disk", text="디스크")
-    tree.heading("gpu", text="GPU")
-    tree.heading("vram", text="VRAM")
-    tree.heading("cpu_temp", text="CPU 온도")
-    tree.heading("gpu_temp", text="GPU 온도")
-    tree.heading("message", text="메시지")
-    tree.column("time", width=78, minwidth=70, anchor="w", stretch=False)
-    tree.column("kind", width=138, minwidth=120, anchor="w", stretch=False)
-    tree.column("cpu", width=62, minwidth=58, anchor="e", stretch=False)
-    tree.column("memory", width=74, minwidth=68, anchor="e", stretch=False)
-    tree.column("disk", width=70, minwidth=64, anchor="e", stretch=False)
-    tree.column("gpu", width=62, minwidth=58, anchor="e", stretch=False)
-    tree.column("vram", width=64, minwidth=60, anchor="e", stretch=False)
-    tree.column("cpu_temp", width=76, minwidth=70, anchor="e", stretch=False)
-    tree.column("gpu_temp", width=76, minwidth=70, anchor="e", stretch=False)
-    tree.column("message", width=280, minwidth=220, anchor="w")
-    tree.tag_configure("odd", background=colors["row_alt"])
-    tree.tag_configure("even", background=colors["section_bg"])
+    def draw_result_icon(x: int, y: int) -> None:
+        canvas.create_oval(x - 26, y - 26, x + 26, y + 26, fill="#f4f4f4", outline="")
+        canvas.create_line(x - 8, y + 11, x - 8, y - 12, x + 8, y - 12, fill="#111111", width=2)
+        canvas.create_line(x + 8, y - 12, x + 8, y + 2, fill="#111111", width=2)
+        canvas.create_line(x - 8, y + 1, x + 3, y + 1, fill="#111111", width=2)
 
-    vertical = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-    horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
-    tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
-    tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 0))
-    vertical.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 0))
-    horizontal.grid(row=2, column=0, sticky="ew", padx=(12, 0), pady=(0, 12))
-    table_frame.columnconfigure(0, weight=1)
-    table_frame.rowconfigure(1, weight=1)
-    log_empty_label = tk.Label(
-        table_frame,
-        text="표시할 로그가 없습니다",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["subtle"],
-        background=colors["section_bg"],
-    )
+    def draw_result() -> None:
+        round_rect(187, 236, 1485, 896, 15, "#ffffff", "#d7dce0")
+        draw_result_icon(257, 294)
+        text(311, 285, "진단 결과", 23, colors["text"], "semibold")
+        text(311, 346, "현재 냉각 시스템 또는 하드웨어의 물리적 이상 가능성이 높습니다.", 36, colors["text"], "semibold")
+        text(311, 409, "GPU 온도 상승, 팬 회전 상태 비정상, 열 제한 징후가 함께 감지되었습니다.", 22, "#5f6368")
+        text(311, 447, "현재 환경에서는 소프트웨어를 통한 자동 복구가 불가능합니다.", 22, "#5f6368")
+        line(311, 495, 1359, 495)
+        text(311, 529, "핵심 결과", 22, colors["text"], "semibold")
+        chips = [(311, 571, 523, "GPU 온도 상승", "temp"), (566, 571, 820, "팬 회전 상태 비정상", "fan"), (864, 571, 1051, "열 제한 징후", "warn")]
+        for x1, y1, x2, label, kind in chips:
+            round_rect(x1, y1, x2, 621, 25, "#ffeaea", "")
+            if kind == "temp":
+                canvas.create_oval(x1 + 24, 590, x1 + 34, 610, fill="#ffffff", outline=colors["red"], width=2)
+                canvas.create_line(x1 + 29, 580, x1 + 29, 599, fill=colors["red"], width=3)
+            elif kind == "fan":
+                for angle in (0, 120, 240):
+                    canvas.create_arc(x1 + 20, 580, x1 + 43, 608, start=angle, extent=65, style="arc", outline=colors["red"], width=3)
+                canvas.create_oval(x1 + 29, 592, x1 + 34, 597, fill=colors["red"], outline="")
+            else:
+                canvas.create_polygon(x1 + 29, 580, x1 + 17, 608, x1 + 41, 608, fill="#ffffff", outline=colors["red"], width=2)
+                text(x1 + 29, 600, "!", 14, colors["red"], "semibold", "center")
+            text(x1 + 57, 596, label, 18, colors["text"], "regular", "w")
+        line(311, 648, 1359, 648)
+        text(311, 678, "권장 조치", 22, colors["text"], "semibold")
+        actions = [(330, "GPU 냉각 팬 점검"), (674, "팬 전원 연결 상태 확인"), (1027, "AS 기사 연결 권장")]
+        for index, (x, label) in enumerate(actions, start=1):
+            canvas.create_oval(x - 18, 721, x + 18, 757, fill="#fff0ef", outline="")
+            text(x, 739, str(index), 15, colors["red"], "semibold", "center")
+            text(x + 42, 739, label, 18, "#333333", "regular", "w")
+            if index < 3:
+                line(x + 259, 724, x + 259, 754)
+        button(523, 790, 815, 861, "진단 상세", show_diagnosis_detail, False, size=20)
+        button(848, 790, 1145, 861, "AS 연결하기", connect_as, True, disabled=bool(ui["busy"]), size=20)
+        if ui["status"]:
+            text(836, 876, str(ui["status"]), 14, colors["red"], "regular", "center")
 
-    diagnosis_header = tk.Frame(support_view, background=colors["app_bg"])
-    diagnosis_header.pack(fill="x", pady=(0, 8))
-    tk.Label(
-        diagnosis_header,
-        text="진단 결과 상세",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(fill="x")
-    tk.Label(
-        diagnosis_header,
-        text="최근 로컬 로그를 기준으로 상태, 이유, 조치 방향만 확인합니다.",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(4, 0))
+    def draw_success() -> None:
+        round_rect(306, 305, 1366, 803, 15, "#ffffff", "#d7dce0")
+        canvas.create_oval(784, 362, 888, 466, fill=colors["green_soft"], outline="#b9efd3")
+        draw_check(836, 414, 42, colors["green"], 6)
+        text(836, 508, "AS 요청이 생성되었습니다", 42, colors["text"], "semibold", "center")
+        text(836, 589, "요청 내용은 웹에서 확인할 수 있습니다.", 24, "#5f6368", "regular", "center")
+        button(662, 671, 1010, 736, "웹에서 확인하기", open_created_ticket, True, size=21)
 
-    diagnosis_summary_status = tk.StringVar(value="-")
-    diagnosis_summary_time = tk.StringVar(value="-")
-    diagnosis_summary_text = tk.StringVar(value="-")
-    diagnosis_empty_text = tk.StringVar(value="")
-    diagnosis_ai_summary = tk.StringVar(value="AI 분석 결과 없음")
-    diagnosis_ai_cause = tk.StringVar(value="-")
-    diagnosis_ai_action = tk.StringVar(value="-")
-    diagnosis_ai_admin = tk.StringVar(value="AI 분석 결과가 저장되어 있지 않습니다.")
+    def render() -> None:
+        canvas.delete("all")
+        button_counter["value"] = 0
+        draw_header()
+        draw_stepper()
+        if ui["state"] == "SYMPTOM_CONFIRM":
+            draw_symptom()
+        elif ui["state"] == "DIAGNOSING":
+            draw_diagnosing()
+        elif ui["state"] == "DIAGNOSIS_RESULT":
+            draw_result()
+        else:
+            draw_success()
 
-    diagnosis_summary_card, diagnosis_summary_inner = rounded_container(
-        support_view,
-        104,
-        padding=(14, 12),
-        radius=16,
-    )
-    diagnosis_summary_card.pack(fill="x", pady=(0, 8))
-    diagnosis_summary_inner.columnconfigure(0, weight=1)
-    diagnosis_title_row = tk.Frame(diagnosis_summary_inner, background=colors["card_bg"])
-    diagnosis_title_row.grid(row=0, column=0, sticky="ew")
-    diagnosis_title_row.columnconfigure(0, weight=1)
-    tk.Label(
-        diagnosis_title_row,
-        text="진단 결과 상세",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    diagnosis_status_badge = tk.Label(
-        diagnosis_title_row,
-        textvariable=diagnosis_summary_status,
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground=colors["muted"],
-        background="#edf3f4",
-        padx=10,
-        pady=4,
-    )
-    diagnosis_status_badge.grid(row=0, column=1, sticky="e")
-    tk.Label(
-        diagnosis_summary_inner,
-        textvariable=diagnosis_summary_time,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
-    tk.Label(
-        diagnosis_summary_inner,
-        textvariable=diagnosis_summary_text,
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=720,
-    ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
-    tk.Label(
-        diagnosis_summary_inner,
-        textvariable=diagnosis_empty_text,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=720,
-    ).grid(row=3, column=0, sticky="ew", pady=(3, 0))
-
-    diagnosis_metric_grid = tk.Frame(support_view, background=colors["app_bg"])
-    diagnosis_metric_grid.pack(fill="x", pady=(0, 8))
-    for index in range(4):
-        diagnosis_metric_grid.columnconfigure(index, weight=1, uniform="diagnosis-metric")
-    diagnosis_metric_widgets: list[dict[str, tk.Label]] = []
-    for index, title in enumerate(("CPU", "메모리", "디스크", "GPU")):
-        metric_canvas, metric_inner = rounded_container(diagnosis_metric_grid, 124, padding=(12, 10), radius=12)
-        metric_canvas.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 8, 0))
-        metric_inner.columnconfigure(0, weight=1)
-        tk.Label(
-            metric_inner,
-            text=title,
-            font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).grid(row=0, column=0, sticky="ew")
-        status_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        status_label.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        current_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        current_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        threshold_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["subtle"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        threshold_label.grid(row=3, column=0, sticky="ew", pady=(2, 0))
-        description_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-            wraplength=160,
-        )
-        description_label.grid(row=4, column=0, sticky="ew", pady=(4, 0))
-        diagnosis_metric_widgets.append(
-            {
-                "status": status_label,
-                "current": current_label,
-                "threshold": threshold_label,
-                "description": description_label,
-            }
-        )
-
-    diagnosis_events_card, diagnosis_events_inner = rounded_container(
-        support_view,
-        150,
-        padding=(14, 10),
-        radius=16,
-    )
-    diagnosis_events_card.pack(fill="x", pady=(0, 8))
-    tk.Label(
-        diagnosis_events_inner,
-        text="이벤트 로그 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 6))
-    diagnosis_event_columns = ("time", "type", "content", "status")
-    diagnosis_event_tree = ttk.Treeview(
-        diagnosis_events_inner,
-        columns=diagnosis_event_columns,
-        show="headings",
-        height=4,
-        style="Agent.Treeview",
-    )
-    diagnosis_event_tree.heading("time", text="시간")
-    diagnosis_event_tree.heading("type", text="유형")
-    diagnosis_event_tree.heading("content", text="내용")
-    diagnosis_event_tree.heading("status", text="상태")
-    diagnosis_event_tree.column("time", width=80, minwidth=70, anchor="w", stretch=False)
-    diagnosis_event_tree.column("type", width=110, minwidth=92, anchor="w", stretch=False)
-    diagnosis_event_tree.column("content", width=430, minwidth=260, anchor="w")
-    diagnosis_event_tree.column("status", width=70, minwidth=58, anchor="center", stretch=False)
-    diagnosis_event_tree.tag_configure("odd", background=colors["row_alt"])
-    diagnosis_event_tree.tag_configure("even", background=colors["section_bg"])
-    diagnosis_event_tree.pack(fill="both", expand=True)
-    diagnosis_event_empty = tk.Label(
-        diagnosis_events_inner,
-        text="표시할 이벤트가 없습니다",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-    )
-
-    diagnosis_ai_card, diagnosis_ai_inner = rounded_container(support_view, 104, padding=(14, 10), radius=16)
-    diagnosis_ai_card.pack(fill="x", pady=(0, 8))
-    tk.Label(
-        diagnosis_ai_inner,
-        text="AI 분석 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 4))
-    for label, variable in (
-        ("AI 요약", diagnosis_ai_summary),
-        ("의심 원인", diagnosis_ai_cause),
-        ("권장 조치", diagnosis_ai_action),
-        ("관리자 확인", diagnosis_ai_admin),
-    ):
-        row = tk.Frame(diagnosis_ai_inner, background=colors["card_bg"])
-        row.pack(fill="x")
-        tk.Label(
-            row,
-            text=f"{label}:",
-            font=ui_font(FONT_SECONDARY_PX, "semibold"),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            width=10,
-            anchor="w",
-        ).pack(side="left")
-        tk.Label(
-            row,
-            textvariable=variable,
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-
-    diagnosis_actions = tk.Frame(support_view, background=colors["app_bg"], pady=2)
-    diagnosis_actions.pack(fill="x")
-    rounded_button(
-        diagnosis_actions,
-        "홈으로 돌아가기",
-        lambda: show_status_tab(),
-        "secondary",
-        width=128,
-        height=32,
-    ).pack(side="left")
-    rounded_button(
-        diagnosis_actions,
-        "새로고침",
-        lambda: refresh_diagnosis_detail(),
-        "primary",
-        width=104,
-        height=32,
-    ).pack(side="right")
-
-    support_card, support_inner = rounded_container(support_view, 520, padding=(18, 16), radius=16)
-    support_card.pack(fill="both", expand=True, pady=(6, 0))
-    support_card.pack_forget()
-    tk.Label(
-        support_inner,
-        text="진단",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x")
-    tk.Label(
-        support_inner,
-        text="AI 로그 요약과 AS 접수에 필요한 상세 정보를 확인합니다.",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(4, 14))
-
-    symptom_title = tk.StringVar(value="")
-    symptom_type = tk.StringVar(value="REMOTE_DRIVER_OS")
-    symptom_time = tk.StringVar(value="")
-    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
-    support_mode = tk.StringVar(value="우선 진단만 받기")
-    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
-    support_status = tk.StringVar(value="")
-    incident_window_value = tk.StringVar(value="전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
-    support_signal_value: dict[str, Any] | None = None
-    preview_running = {"active": False}
-
-    def add_form_label(parent: tk.Misc, text: str) -> None:
-        tk.Label(
-            parent,
-            text=text,
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(fill="x", pady=(0, 4))
-
-    def add_form_field(parent: tk.Misc, label: str, widget: tk.Widget) -> None:
-        block = tk.Frame(parent, background=colors["card_bg"])
-        block.pack(fill="x", pady=(0, 10))
-        add_form_label(block, label)
-        widget.pack(fill="x")
-
-    form_grid = tk.Frame(support_inner, background=colors["card_bg"])
-    form_grid.pack(fill="x")
-    left_form = tk.Frame(form_grid, background=colors["card_bg"])
-    right_form = tk.Frame(form_grid, background=colors["card_bg"])
-    left_form.pack(side="left", fill="both", expand=True, padx=(0, 10))
-    right_form.pack(side="left", fill="both", expand=True, padx=(10, 0))
-    add_form_field(left_form, "증상 제목", ttk.Entry(left_form, textvariable=symptom_title, style="Agent.TEntry"))
-    type_select = ttk.Combobox(
-        left_form,
-        textvariable=symptom_type,
-        values=sorted(REMOTE_SYMPTOM_TYPES | VISIT_SYMPTOM_TYPES),
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    add_form_field(left_form, "증상 유형", type_select)
-    add_form_field(right_form, "증상 발생 시각", ttk.Entry(right_form, textvariable=symptom_time, style="Agent.TEntry"))
-
-    detail_block = tk.Frame(support_inner, background=colors["card_bg"])
-    detail_block.pack(fill="both", expand=True, pady=(0, 10))
-    add_form_label(detail_block, "증상 상세")
-    symptom_detail = tk.Text(
-        detail_block,
-        height=5,
-        wrap="word",
-        relief="flat",
-        borderwidth=1,
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        font=ui_font(FONT_BODY_PX),
-    )
-    symptom_detail.pack(fill="both", expand=True)
-
-    mode_block = tk.Frame(support_inner, background=colors["card_bg"])
-    mode_block.pack(fill="x", pady=(0, 8))
-    add_form_label(mode_block, "지원 신청 방식")
-    for label in ("우선 진단만 받기", "원격지원 신청", "방문지원 신청"):
-        tk.Radiobutton(
-            mode_block,
-            text=label,
-            variable=support_mode,
-            value=label,
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            activebackground=colors["card_bg"],
-            selectcolor=colors["card_bg"],
-            font=ui_font(FONT_BODY_PX),
-        ).pack(side="left", padx=(0, 16))
-
-    preview_block = tk.Frame(
-        support_inner,
-        background=colors["section_bg"],
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        padx=12,
-        pady=10,
-    )
-    preview_block.pack(fill="x", pady=(0, 10))
-    tk.Label(
-        preview_block,
-        text="AI 로그 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 4))
-    tk.Label(
-        preview_block,
-        textvariable=rag_preview_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["section_bg"],
-        justify="left",
-        anchor="w",
-        wraplength=720,
-    ).pack(fill="x")
-
-    tk.Label(
-        support_inner,
-        textvariable=incident_window_value,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 8))
-    tk.Label(
-        support_inner,
-        textvariable=support_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground="#16766b",
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 8))
-
-    support_actions = tk.Frame(support_inner, background=colors["card_bg"])
-    support_actions.pack(fill="x")
-
-    for legacy_widget in (
-        diagnosis_header,
-        diagnosis_summary_card,
-        diagnosis_metric_grid,
-        diagnosis_events_card,
-        diagnosis_ai_card,
-        diagnosis_actions,
-    ):
-        legacy_widget.pack_forget()
-
-    diagnosis_chat_context_text = tk.StringVar(value="상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
-    diagnosis_chat_status = tk.StringVar(value="")
-    diagnosis_chat_current: dict[str, Any] = {"record": None}
-    diagnosis_chat_running = {"active": False}
-
-    diagnosis_chat_card, diagnosis_chat_inner = rounded_container(
-        support_view,
-        520,
-        padding=(18, 16),
-        radius=16,
-    )
-    diagnosis_chat_card.pack(fill="both", expand=True)
-    diagnosis_chat_inner.columnconfigure(0, weight=1)
-    diagnosis_chat_inner.rowconfigure(2, weight=1)
-    tk.Label(
-        diagnosis_chat_inner,
-        text="AI 진단",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    tk.Label(
-        diagnosis_chat_inner,
-        textvariable=diagnosis_chat_context_text,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=760,
-    ).grid(row=1, column=0, sticky="ew", pady=(4, 12))
-
-    diagnosis_chat_transcript = tk.Text(
-        diagnosis_chat_inner,
-        height=15,
-        wrap="word",
-        relief="flat",
-        borderwidth=1,
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        font=ui_font(FONT_BODY_PX),
-        background=colors["section_bg"],
-        foreground=colors["text"],
-        state="disabled",
-        padx=10,
-        pady=8,
-    )
-    diagnosis_chat_transcript.grid(row=2, column=0, sticky="nsew")
-    diagnosis_chat_transcript.tag_configure("user", foreground="#155f8b", spacing3=8)
-    diagnosis_chat_transcript.tag_configure("assistant", foreground=colors["text"], spacing3=8)
-    diagnosis_chat_transcript.tag_configure("system", foreground=colors["muted"], spacing3=8)
-
-    quick_question_row = tk.Frame(diagnosis_chat_inner, background=colors["card_bg"])
-    quick_question_row.grid(row=3, column=0, sticky="ew", pady=(10, 8))
-
-    diagnosis_chat_input = tk.Text(
-        diagnosis_chat_inner,
-        height=3,
-        wrap="word",
-        relief="flat",
-        borderwidth=1,
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        font=ui_font(FONT_BODY_PX),
-    )
-    diagnosis_chat_input.grid(row=4, column=0, sticky="ew")
-
-    diagnosis_chat_bottom = tk.Frame(diagnosis_chat_inner, background=colors["card_bg"])
-    diagnosis_chat_bottom.grid(row=5, column=0, sticky="ew", pady=(8, 0))
-    diagnosis_chat_bottom.columnconfigure(0, weight=1)
-    tk.Label(
-        diagnosis_chat_bottom,
-        textvariable=diagnosis_chat_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground="#16766b",
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=560,
-    ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
-
-    diagnosis_chat_escalation = tk.Frame(diagnosis_chat_inner, background=colors["section_bg"], padx=12, pady=10)
-    diagnosis_chat_escalation_text = tk.StringVar(value="")
-    tk.Label(
-        diagnosis_chat_escalation,
-        textvariable=diagnosis_chat_escalation_text,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-        wraplength=560,
-    ).pack(side="left", fill="x", expand=True)
-
-    def set_chat_transcript(messages: list[dict[str, Any]], empty_text: str) -> None:
-        diagnosis_chat_transcript.configure(state="normal")
-        diagnosis_chat_transcript.delete("1.0", "end")
-        if not messages:
-            diagnosis_chat_transcript.insert("end", empty_text + "\n", "system")
-        for item in messages:
-            role = str(item.get("role") or "")
-            content = sanitize_display_text(item.get("content"), 2000)
-            if role == "user":
-                diagnosis_chat_transcript.insert("end", f"나: {content}\n\n", "user")
-            elif role == "assistant":
-                diagnosis_chat_transcript.insert("end", f"AI: {content}\n\n", "assistant")
-        diagnosis_chat_transcript.configure(state="disabled")
-        diagnosis_chat_transcript.see("end")
-
-    def update_chat_escalation(response: dict[str, Any] | None) -> None:
-        escalation = response.get("escalation") if isinstance(response, dict) else None
-        if not isinstance(escalation, dict) or not bool(escalation.get("recommended")):
-            diagnosis_chat_escalation.grid_forget()
+    def toggle_demo() -> None:
+        if ui["busy"]:
             return
-        reason = sanitize_display_text(escalation.get("reason"), 220)
-        diagnosis_chat_escalation_text.set(f"AS 접수가 필요할 수 있습니다. {reason}")
-        if not diagnosis_chat_escalation.winfo_ismapped():
-            diagnosis_chat_escalation.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+        ui["demo"] = not bool(ui["demo"])
+        ui["state"] = "SYMPTOM_CONFIRM"
+        ui["diagnosisReady"] = False
+        ui["diagnosis"] = None
+        ui["window"] = None
+        ui["ticketUrl"] = None
+        ui["status"] = ""
+        render()
 
-    rounded_button(
-        diagnosis_chat_escalation,
-        "AS 접수로 이동",
-        lambda: show_status_tab(),
-        "primary",
-        width=118,
-        height=30,
-    ).pack(side="right", padx=(10, 0))
-
-    def refresh_diagnosis_chat_context() -> None:
-        try:
-            current_config = reload_viewer_config()
-            record = latest_diagnosis_record(current_config)
-        except Exception as exception:
-            diagnosis_chat_current["record"] = None
-            diagnosis_chat_context_text.set("진단 기록을 읽을 수 없습니다.")
-            diagnosis_chat_status.set(event_panel_failure_message(exception))
-            set_chat_transcript([], "진단 기록을 다시 확인해 주세요.")
-            update_chat_escalation(None)
+    def start_diagnosis() -> None:
+        ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
+        ui["status"] = ""
+        render()
+        if ui["demo"]:
+            ui["diagnosisReady"] = True
             return
+        ui["busy"] = True
+        ui["status"] = "최근 30분 로그를 준비하고 있습니다."
+        render()
 
-        diagnosis_chat_current["record"] = record
-        if record is None:
-            diagnosis_chat_context_text.set("상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
-            diagnosis_chat_status.set("")
-            set_chat_transcript([], "최근 진단 결과가 있으면 여기서 바로 질문할 수 있습니다.")
-            update_chat_escalation(None)
-            return
-
-        diagnosis_id = str(record.get("id") or "")
-        label = sanitize_display_text(record.get("recommendedServiceLabel"), 50)
-        confidence = sanitize_display_text(record.get("confidence"), 20)
-        diagnosis_chat_context_text.set(
-            f"최근 진단 기준: {format_diagnosis_history_time(record.get('createdAt'))} / {label} / 신뢰도 {confidence}"
-        )
-        messages = read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT)
-        set_chat_transcript(messages, "최근 진단 결과에 대해 궁금한 점을 물어보세요.")
-        last_response = next(
-            (
-                item.get("payload")
-                for item in reversed(messages)
-                if item.get("role") == "assistant" and isinstance(item.get("payload"), dict)
-            ),
-            None,
-        )
-        update_chat_escalation(last_response if isinstance(last_response, dict) else None)
-        diagnosis_chat_status.set("")
-
-    def submit_diagnosis_chat(question: str | None = None) -> None:
-        if diagnosis_chat_running["active"]:
-            return
-        text = (question if question is not None else diagnosis_chat_input.get("1.0", "end")).strip()
-        if not text:
-            diagnosis_chat_status.set("질문을 입력해 주세요.")
-            return
-        try:
-            current_config = reload_viewer_config()
-            record = diagnosis_chat_current.get("record") or latest_diagnosis_record(current_config)
-        except Exception as exception:
-            diagnosis_chat_status.set(event_panel_failure_message(exception))
-            return
-        if not isinstance(record, dict):
-            diagnosis_chat_status.set("상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
-            return
-
-        diagnosis_id = str(record.get("id") or "")
-        history = read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT)
-        append_diagnosis_chat_message(current_config, diagnosis_id, "user", text)
-        diagnosis_chat_input.delete("1.0", "end")
-        set_chat_transcript(
-            read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT),
-            "",
-        )
-        diagnosis_chat_running["active"] = True
-        diagnosis_chat_status.set("AI가 최근 진단 결과를 확인하고 있습니다.")
-
-        def apply_success(response: dict[str, Any]) -> None:
-            assistant_message = sanitize_display_text(response.get("assistantMessage"), 2000)
-            append_diagnosis_chat_message(current_config, diagnosis_id, "assistant", assistant_message, response)
-            set_chat_transcript(
-                read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT),
-                "",
-            )
-            update_chat_escalation(response)
-            diagnosis_chat_status.set("")
-            diagnosis_chat_running["active"] = False
-
-        def apply_error(exception: Exception) -> None:
-            diagnosis_chat_status.set(event_panel_failure_message(exception))
-            diagnosis_chat_running["active"] = False
-
-        def run_chat() -> None:
+        def worker() -> None:
             try:
-                response = send_diagnosis_chat(current_config, record, history, text)
-                root.after(0, lambda: apply_success(response))
-            except Exception as exception:
-                root.after(0, lambda current=exception: apply_error(current))
-
-        threading.Thread(target=run_chat, daemon=True).start()
-
-    for quick_text in ("원인 쉽게 설명", "직접 해볼 조치", "위험한 상태야?", "AS 접수해야 해?"):
-        rounded_button(
-            quick_question_row,
-            quick_text,
-            lambda value=quick_text: submit_diagnosis_chat(value),
-            "secondary",
-            width=116,
-            height=30,
-        ).pack(side="left", padx=(0, 8))
-    rounded_button(
-        diagnosis_chat_bottom,
-        "보내기",
-        lambda: submit_diagnosis_chat(),
-        "primary",
-        width=88,
-        height=32,
-    ).grid(row=0, column=1, sticky="e")
-    log_filter_state = {"logTabOpened": False, "userTouched": False}
-
-    def selected_date_text() -> str:
-        return f"{year_value.get()}-{month_value.get()}-{day_value.get()}"
-
-    def set_date_filter(date_text: str) -> None:
-        try:
-            parsed = datetime.strptime(date_text, "%Y-%m-%d")
-        except ValueError:
-            parsed = datetime.now(KST)
-        year_value.set(f"{parsed.year:04d}")
-        month_value.set(f"{parsed.month:02d}")
-        day_value.set(f"{parsed.day:02d}")
-        sync_day_values()
-
-    def pack_log_body(widget: tk.Widget, **options: Any) -> None:
-        try:
-            widget.pack(**options, before=buttons)
-        except NameError:
-            widget.pack(**options)
-
-    def refresh_diagnosis_history_list() -> None:
-        reload_viewer_config()
-        records = read_diagnosis_history(config)
-        diagnosis_history_records.clear()
-        diagnosis_history_tree.delete(*diagnosis_history_tree.get_children())
-        if not records:
-            diagnosis_history_tree.grid_remove()
-            diagnosis_history_scroll.grid_remove()
-            diagnosis_history_empty.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=12, pady=(36, 12))
-            return
-        diagnosis_history_empty.grid_remove()
-        diagnosis_history_tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 12))
-        diagnosis_history_scroll.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 12))
-        for index, record in enumerate(records):
-            item_id = f"diagnosis-{index}-{record['id']}"
-            diagnosis_history_records[item_id] = record
-            diagnosis_history_tree.insert(
-                "",
-                "end",
-                iid=item_id,
-                values=(
-                    format_diagnosis_history_time(record.get("createdAt")),
-                    sanitize_display_text(record.get("recommendedServiceLabel"), 40),
-                    sanitize_display_text(record.get("summaryText") or record.get("recommendationMessage"), 96),
-                    sanitize_display_text(record.get("confidence"), 20),
-                ),
-                tags=("odd" if index % 2 else "even",),
-            )
-
-    def show_diagnosis_history_detail(record: dict[str, Any]) -> None:
-        panel = tk.Toplevel(root)
-        panel.title("진단 상세")
-        panel.geometry("560x420")
-        panel.minsize(520, 380)
-        panel.configure(background=colors["app_bg"])
-        apply_agent_window_icon(panel)
-        panel.transient(root)
-        container = tk.Frame(panel, background=colors["card_bg"], padx=18, pady=16)
-        container.pack(fill="both", expand=True, padx=14, pady=14)
-        tk.Label(
-            container,
-            text=sanitize_display_text(record.get("recommendedServiceLabel"), 80),
-            font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-            foreground=card_tone_color(str(record.get("tone", "muted"))),
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(fill="x")
-        tk.Label(
-            container,
-            text=f"{format_diagnosis_history_time(record.get('createdAt'))} · 신뢰도 {sanitize_display_text(record.get('confidence'), 20)}",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(fill="x", pady=(4, 10))
-        detail_frame = tk.Frame(container, background=colors["card_bg"])
-        detail_frame.pack(fill="both", expand=True)
-        detail_text = tk.Text(
-            detail_frame,
-            wrap="word",
-            height=12,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=colors["border"],
-            padx=10,
-            pady=10,
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["text"],
-            background="#f8fbfb",
-        )
-        detail_scroll = ttk.Scrollbar(detail_frame, orient="vertical", command=detail_text.yview)
-        detail_text.configure(yscrollcommand=detail_scroll.set)
-        detail_text.pack(side="left", fill="both", expand=True)
-        detail_scroll.pack(side="right", fill="y")
-        detail_text.insert("1.0", diagnosis_history_detail_text(record))
-        detail_text.configure(state="disabled")
-        rounded_button(container, "닫기", panel.destroy, "primary", width=96, height=32).pack(side="right", pady=(12, 0))
-        panel.grab_set()
-        panel.focus_set()
-
-    def open_selected_diagnosis_history(event: object = None) -> None:
-        selected = diagnosis_history_tree.selection()
-        if not selected:
-            return
-        record = diagnosis_history_records.get(selected[0])
-        if record is not None:
-            show_diagnosis_history_detail(record)
-
-    diagnosis_history_tree.bind("<Double-1>", open_selected_diagnosis_history)
-    diagnosis_history_tree.bind("<Return>", open_selected_diagnosis_history)
-
-    def set_log_mode(mode: str) -> None:
-        log_mode.set(mode)
-        if mode == "raw":
-            diagnosis_history_frame.pack_forget()
-            if not range_badge.winfo_ismapped():
-                range_badge.pack(side="right")
-            pack_log_body(filters, fill="x", pady=(0, 8))
-            pack_log_body(table_frame, fill="both", expand=True)
-            refresh_log()
-            return
-        range_badge.pack_forget()
-        range_status.set("")
-        filters.pack_forget()
-        table_frame.pack_forget()
-        pack_log_body(diagnosis_history_frame, fill="both", expand=True)
-        refresh_diagnosis_history_list()
-
-    def sync_day_values() -> None:
-        try:
-            year = int(year_value.get())
-            month = int(month_value.get())
-            max_day = calendar.monthrange(year, month)[1]
-        except ValueError:
-            max_day = 31
-        values = [f"{day:02d}" for day in range(1, max_day + 1)]
-        day_select.configure(values=values)
-        if day_value.get() not in values:
-            day_value.set(values[-1])
-
-    def refresh_log_from_filter_change(event: object = None) -> None:
-        log_filter_state["userTouched"] = True
-        sync_day_values()
-        refresh_log()
-
-    def select_signal(signal: dict[str, Any]) -> None:
-        set_date_filter(str(signal["date"]))
-        hour_value.set(f"{int(signal['hour']):02d}:00")
-        log_filter_state["userTouched"] = True
-        log_mode.set("raw")
-        show_log_tab()
-
-    def refresh_home_detection(detection: dict[str, Any] | None) -> None:
-        home_detection_value["signal"] = detection
-        if detection is None:
-            home_detection_title.set("최근 감지 신호 없음")
-            home_detection_detail.set("최근 로그에서 AS 접수가 필요한 신호는 아직 없습니다.")
-            return
-        home_detection_title.set(sanitize_display_text(detection.get("title"), 72))
-        detail = str(detection.get("detail") or event_panel_signal_summary(detection))
-        home_detection_detail.set(sanitize_display_text(detail, 120))
-
-    def refresh_home_diagnosis_summary() -> None:
-        if preview_running["active"]:
-            return
-        records = read_diagnosis_history(config, limit=1)
-        if not records:
-            home_ai_summary.set("최근 진단 결과 없음\nPC 진단받기 후 기록 탭에 저장됩니다.")
-            return
-        home_ai_summary.set(compact_home_diagnosis_text(records[0]))
-
-    def support_detail_text() -> str:
-        return symptom_detail.get("1.0", "end").strip()
-
-    def set_support_detail(text: str) -> None:
-        symptom_detail.delete("1.0", "end")
-        symptom_detail.insert("1.0", text)
-
-    def reset_support_form() -> None:
-        nonlocal support_signal_value
-        support_signal_value = None
-        symptom_title.set("")
-        symptom_type.set("REMOTE_DRIVER_OS")
-        symptom_time.set("")
-        symptom_detail.delete("1.0", "end")
-        support_mode.set(support_mode_label_for_service("DIAGNOSIS_ONLY"))
-        rag_preview_status.set("AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
-        incident_window_value.set("문제 발생 전후 로그 범위는 증상 유형과 발생 시각 기준으로 계산합니다.")
-
-    def fill_support_from_signal(signal: dict[str, Any] | None) -> None:
-        nonlocal support_signal_value
-        support_signal_value = signal
-        if signal is None:
-            now = datetime.now(KST)
-            symptom_time.set(now.strftime("%Y-%m-%d %H:%M:%S"))
-            incident_window_value.set("전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
-            return
-        code = str(signal.get("code") or "REMOTE_DRIVER_OS")
-        detected_at = event_panel_detected_at(signal)
-        window = default_incident_window(code, detected_at=detected_at, trigger_type="USER_REQUEST")
-        symptom_type.set(code if code in REMOTE_SYMPTOM_TYPES or code in VISIT_SYMPTOM_TYPES else "REMOTE_DRIVER_OS")
-        symptom_time.set(detected_at.strftime("%Y-%m-%d %H:%M:%S"))
-        symptom_title.set(event_panel_signal_summary(signal))
-        if not support_detail_text():
-            set_support_detail(
-                "PCAgent가 확인이 필요한 이벤트를 감지했습니다.\n"
-                f"- {event_panel_signal_summary(signal)}\n"
-                "로그 전송 후 담당자가 내용을 검토합니다."
-            )
-        incident_window_value.set(
-            f"전송 로그 범위: {window.started_at.strftime('%Y-%m-%d %H:%M:%S')} ~ "
-            f"{window.ended_at.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-
-    def submit_support_request(status_target: Any = None) -> None:
-        def set_status(text: str) -> None:
-            support_status.set(text)
-            if status_target is not None:
-                status_target.set(text)
-
-        try:
-            current_config = reload_viewer_config()
-            current_path = path
-            detected_at = parse_datetime(symptom_time.get(), "symptomTime") if symptom_time.get().strip() else datetime.now(KST)
-            selected_type = symptom_type.get() or "REMOTE_DRIVER_OS"
-            window = default_incident_window(selected_type, detected_at=detected_at, trigger_type="USER_REQUEST")
-            gzip_path = current_config.log_dir.parent / "uploads" / f"{window.incident_id}.jsonl.gz"
-            gzip_window(current_path, gzip_path, window)
-            symptom_parts = [
-                symptom_title.get().strip() or "PCAgent AS 접수",
-                support_mode.get(),
-                support_detail_text(),
-            ]
-            result = upload_gzip(
-                current_config,
-                gzip_path,
-                f"agent-support-{uuid.uuid4()}",
-                " / ".join(part for part in symptom_parts if part),
-                window,
-            )
-            ticket_id = str(result["ticketId"])
-            reset_support_form()
-            set_status(f"AS 접수 신청이 완료되었습니다. 관리자 AS 티켓 목록에서 확인할 수 있습니다. 티켓 {ticket_id}")
-            refresh_status()
-            refresh_log()
-        except Exception as exception:
-            set_status(event_panel_failure_message(exception))
-
-    def preview_support_recommendation(
-        status_target: Any = None,
-        save_history: bool = False,
-        compact_target: bool = False,
-    ) -> None:
-        def set_preview_text(text: str, target_text: str | None = None) -> None:
-            rag_preview_status.set(text)
-            if status_target is not None:
-                status_target.set(target_text or text)
-
-        if preview_running["active"]:
-            return
-        preview_running["active"] = True
-        set_preview_text(
-            "선택 구간 로그를 준비하고 있습니다.",
-            "진단 로그를 준비하고 있습니다." if compact_target else None,
-        )
-        support_status.set("")
-        symptom_time_text = symptom_time.get()
-        selected_type = symptom_type.get() or "REMOTE_DRIVER_OS"
-        try:
-            current_config = reload_viewer_config()
-            current_path = path
-        except Exception as exception:
-            message = as_rag_preview_failure_message(exception)
-            set_preview_text(message, compact_as_rag_preview_failure_message(exception) if compact_target else None)
-            preview_running["active"] = False
-            return
-
-        def finish() -> None:
-            preview_running["active"] = False
-
-        def apply_result(window: IncidentWindow, result: dict[str, Any]) -> None:
-            support_mode.set(support_mode_label_for_service(result.get("recommendedService")))
-            incident_window_value.set(
-                f"문제 발생 전후 로그: {window.started_at.strftime('%Y-%m-%d %H:%M:%S')} ~ "
-                f"{window.ended_at.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            full_text = format_as_rag_preview(result)
-            target_text: str | None = None
-            if save_history:
-                record = diagnosis_history_record(result, window)
-                append_diagnosis_history(current_config, record)
-                refresh_diagnosis_history_list()
-                home_diagnosis_ready["ready"] = True
-                home_support_status.set("진단 결과를 기록 탭에 저장했습니다.")
-                target_text = compact_home_diagnosis_text(record)
-            set_preview_text(full_text, target_text if compact_target else None)
-            finish()
-
-        def apply_error(exception: Exception) -> None:
-            message = as_rag_preview_failure_message(exception)
-            set_preview_text(message, compact_as_rag_preview_failure_message(exception) if compact_target else None)
-            finish()
-
-        def run_preview() -> None:
-            try:
-                detected_at = parse_datetime(symptom_time_text, "symptomTime") if symptom_time_text.strip() else datetime.now(KST)
-                window = default_incident_window(selected_type, detected_at=detected_at, trigger_type="USER_REQUEST")
+                current_config = load_config(config_path)
+                current_path = log_file(current_config)
+                window = default_incident_window("REMOTE_DRIVER_OS", detected_at=datetime.now(KST), trigger_type="USER_REQUEST")
                 gzip_path = current_config.log_dir.parent / "previews" / f"{window.incident_id}.jsonl.gz"
                 gzip_window(current_path, gzip_path, window)
-                root.after(0, lambda: set_preview_text("서버에서 AI 추천을 확인하고 있습니다."))
-                result = preview_as_rag(
+                result = preview_as_rag(current_config, gzip_path, f"agent-rag-preview-{uuid.uuid4()}", window)
+                record = diagnosis_history_record(result, window)
+                append_diagnosis_history(current_config, record)
+
+                def apply() -> None:
+                    ui["busy"] = False
+                    ui["diagnosisReady"] = True
+                    ui["diagnosis"] = result
+                    ui["window"] = window
+                    ui["status"] = "하드웨어 분석이 완료되었습니다."
+                    render()
+
+                root.after(0, apply)
+            except Exception as exception:
+                def fail(current: Exception = exception) -> None:
+                    ui["busy"] = False
+                    ui["status"] = event_panel_failure_message(current)
+                    render()
+                root.after(0, fail)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def continue_analysis() -> None:
+        if not ui["demo"] and not ui["diagnosisReady"]:
+            ui["status"] = "진단 완료 후 결과를 확인할 수 있습니다."
+            render()
+            return
+        ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
+        ui["status"] = ""
+        render()
+
+    def show_diagnosis_detail() -> None:
+        detail = "GPU 온도 상승\n팬 회전 상태 비정상\n열 제한 징후\n\n권장 조치: GPU 냉각 팬과 전원 연결 상태를 점검하세요."
+        if isinstance(ui["diagnosis"], dict):
+            detail = format_as_rag_preview(ui["diagnosis"])
+        panel = tk.Toplevel(root)
+        panel.title("진단 상세")
+        panel.geometry("560x360")
+        panel.configure(background="#ffffff")
+        apply_agent_window_icon(panel)
+        tk.Label(panel, text="진단 상세", font=font(24, "semibold"), background="#ffffff", anchor="w").pack(fill="x", padx=28, pady=(28, 14))
+        tk.Label(panel, text=detail, font=font(16), foreground=colors["muted"], background="#ffffff", justify="left", anchor="nw", wraplength=500).pack(fill="both", expand=True, padx=28)
+        tk.Button(panel, text="닫기", command=panel.destroy, font=font(15), background="#111111", foreground="#ffffff", relief="flat", padx=30, pady=8).pack(pady=24)
+        panel.transient(root)
+        panel.grab_set()
+
+    def connect_as() -> None:
+        if ui["demo"]:
+            ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
+            ui["ticketUrl"] = support_new_url(config)
+            render()
+            return
+        if ui["busy"]:
+            return
+        ui["busy"] = True
+        ui["status"] = "AS 요청을 생성하고 있습니다."
+        render()
+
+        def worker() -> None:
+            try:
+                current_config = load_config(config_path)
+                current_path = log_file(current_config)
+                window = ui["window"] if isinstance(ui["window"], IncidentWindow) else default_incident_window(
+                    "REMOTE_DRIVER_OS", detected_at=datetime.now(KST), trigger_type="USER_REQUEST"
+                )
+                gzip_path = current_config.log_dir.parent / "uploads" / f"{window.incident_id}.jsonl.gz"
+                gzip_window(current_path, gzip_path, window)
+                result = upload_gzip(
                     current_config,
                     gzip_path,
-                    f"agent-rag-preview-{uuid.uuid4()}",
+                    f"agent-support-{uuid.uuid4()}",
+                    "게임 실행 후 프레임 끊김 / GPU 냉각 시스템 점검 필요",
                     window,
                 )
-                root.after(0, lambda: apply_result(window, result))
+                ticket_id = str(result["ticketId"])
+                url = support_url(current_config.api_base_url, ticket_id, current_config.web_base_url)
+
+                def apply() -> None:
+                    ui["busy"] = False
+                    ui["ticketUrl"] = url
+                    ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
+                    ui["status"] = ""
+                    render()
+
+                root.after(0, apply)
             except Exception as exception:
-                root.after(0, lambda current=exception: apply_error(current))
+                def fail(current: Exception = exception) -> None:
+                    ui["busy"] = False
+                    ui["status"] = event_panel_failure_message(current)
+                    render()
+                root.after(0, fail)
 
-        threading.Thread(target=run_preview, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-    update_running = {"active": False}
+    def open_created_ticket() -> None:
+        url = str(ui["ticketUrl"] or support_new_url(config))
+        webbrowser.open(url)
 
-    def check_for_agent_update() -> None:
-        if update_running["active"]:
-            return
-        update_running["active"] = True
-        update_status.set("업데이트 확인 중...")
-        try:
-            current_config = reload_viewer_config()
-        except Exception as exception:
-            update_status.set(event_panel_failure_message(exception))
-            update_running["active"] = False
-            return
+    def start_drag(event: tk.Event) -> None:
+        drag_origin["x"] = event.x_root - root.winfo_x()
+        drag_origin["y"] = event.y_root - root.winfo_y()
 
-        def finish(result: dict[str, Any]) -> None:
-            status = str(result.get("status") or "")
-            latest = sanitize_display_text(result.get("latestVersion"), 40)
-            if status == "UP_TO_DATE":
-                update_status.set(f"최신 버전입니다. ({latest})")
-                update_running["active"] = False
-                return
-            if status == "DEV_MODE":
-                update_status.set(f"최신 {latest} 확인됨. 개발 실행은 exe 재빌드가 필요합니다.")
-                update_running["active"] = False
-                return
-            if status == "READY":
-                script_path = Path(str(result["scriptPath"]))
-                update_status.set(f"최신 {latest} 적용 중입니다. PCAgent를 다시 시작합니다.")
-                try:
-                    launch_update_apply_script(script_path)
-                except Exception as exception:
-                    update_status.set(event_panel_failure_message(exception))
-                    update_running["active"] = False
-                    return
-                root.after(700, lambda: os._exit(0))
-                return
-            update_status.set("업데이트 상태를 확인할 수 없습니다.")
-            update_running["active"] = False
+    def drag_window(event: tk.Event) -> None:
+        root.geometry(f"+{event.x_root - drag_origin['x']}+{event.y_root - drag_origin['y']}")
 
-        def fail(exception: Exception) -> None:
-            update_status.set(event_panel_failure_message(exception))
-            update_running["active"] = False
-
-        def run_update_check() -> None:
-            try:
-                result = prepare_agent_update(current_config)
-                root.after(0, lambda: finish(result))
-            except Exception as exception:
-                root.after(0, lambda current=exception: fail(current))
-
-        threading.Thread(target=run_update_check, daemon=True).start()
-
-    def prepare_home_support_context() -> None:
-        signal = home_detection_value.get("signal")
-        fill_support_from_signal(signal if isinstance(signal, dict) else None)
-        if signal is None:
-            symptom_title.set("PC 상태 진단")
-            set_support_detail("PCAgent가 최근 30분 로그를 기준으로 상태를 진단합니다.")
-
-    def run_home_diagnosis() -> None:
-        prepare_home_support_context()
-        home_support_status.set("")
-        preview_support_recommendation(home_ai_summary, save_history=True, compact_target=True)
-
-    def submit_home_support_request() -> None:
-        if not home_consent.get():
-            home_support_status.set("최근 30분 진단 로그 전송에 동의하면 AS 접수를 신청할 수 있습니다.")
-            return
-        if not home_diagnosis_ready["ready"]:
-            home_support_status.set("AS 접수 전 PC 진단받기를 먼저 진행해 주세요.")
-            return
-        prepare_home_support_context()
-        submit_support_request(home_support_status)
-
-    def summary_section_height(row_count: int) -> int:
-        if row_count <= 0:
-            return 150
-        visible_rows = max(3, min(STATUS_LOG_SUMMARY_LIMIT, row_count))
-        return 72 + visible_rows * 28
-
-    def refresh_log_summary() -> None:
-        rows = read_status_log_summary_rows(path, STATUS_LOG_SUMMARY_LIMIT)
-        summary_table.delete(*summary_table.get_children())
-        summary_section.configure(height=summary_section_height(len(rows)))
-        if not rows:
-            summary_table.pack_forget()
-            if not summary_empty.winfo_ismapped():
-                summary_empty.pack(fill="x", expand=False)
-            return
-        summary_empty.pack_forget()
-        if not summary_table.winfo_ismapped():
-            summary_table.pack(fill="both", expand=True)
-        summary_table.configure(height=max(3, min(STATUS_LOG_SUMMARY_LIMIT, len(rows))))
-        for index, row in enumerate(rows):
-            summary_table.insert(
-                "",
-                "end",
-                values=display_log_summary_values(row),
-                tags=("odd" if index % 2 else "even",),
-            )
-
-    def refresh_status() -> None:
-        reload_viewer_config()
-        model = status_home_model(config, path)
-        cards_model = {
-            "pc": model["pcStatusCard"],
-            "upload": model["uploadCard"],
-            "startup": model["startupCard"],
-            "version": model["versionCard"],
-        }
-        pc_status.set(str(cards_model["pc"]["value"]))
-        pc_detail.set(str(cards_model["pc"]["detail"]))
-        upload_status.set(str(cards_model["upload"]["value"]))
-        upload_detail.set(str(cards_model["upload"]["detail"]))
-        startup_status.set(str(cards_model["startup"]["value"]))
-        startup_detail.set(str(cards_model["startup"]["detail"]))
-        version_status.set(str(cards_model["version"]["value"]))
-        version_detail.set(str(cards_model["version"]["detail"]))
-        for key, card in cards_model.items():
-            tone = str(card.get("tone", "muted"))
-            if key in card_title_labels:
-                title_color = card_tone_color(tone) if key == "pc" else colors["text"]
-                card_title_labels[key].configure(foreground=title_color)
-            if key in card_value_labels:
-                card_value_labels[key].configure(foreground=card_tone_color(tone))
-            if key in card_icons:
-                icon_kind = "startup" if key == "startup" else key
-                draw_card_icon(card_icons[key], icon_kind, tone)
-        refresh_home_diagnosis_summary()
-        refresh_home_detection(model["homeDetection"])
-        refresh_log_summary()
-
-    def refresh_log() -> None:
-        reload_viewer_config()
-        if not log_filter_state["userTouched"]:
-            current_date, current_hour = default_log_filter_values()
-            set_date_filter(current_date)
-            hour_value.set(f"{current_hour:02d}:00")
-        try:
-            selected_hour = int(hour_value.get().split(":", 1)[0])
-        except ValueError:
-            selected_hour = datetime.now(KST).hour
-        selected_date = selected_date_text()
-        rows = read_log_rows_for_filter(
-            path,
-            selected_date,
-            selected_hour,
-            log_filter_state["userTouched"],
-            LOG_TABLE_LIMIT,
-        )
-        tree.delete(*tree.get_children())
-        for index, row in enumerate(rows):
-            tree.insert("", "end", values=display_log_table_values(row), tags=("odd" if index % 2 else "even",))
-        if rows:
-            log_empty_label.place_forget()
-        else:
-            log_empty_label.place(relx=0.5, rely=0.52, anchor="center")
-            log_empty_label.lift()
-        range_label = (
-            f"{selected_date} {selected_hour:02d}:00"
-            if log_filter_state["userTouched"]
-            else f"{selected_date} 최신"
-        )
-        range_status.set(f"범위 {range_label} | 표시 {len(rows)}개")
-
-    def refresh_diagnosis_detail() -> None:
-        reload_viewer_config()
-        model = diagnosis_detail_model(config, path)
-        tone = str(model["tone"])
-        badge_bg = {
-            "ok": "#eef8f5",
-            "warning": "#fff7e6",
-            "danger": "#fdeaea",
-            "muted": "#edf3f4",
-        }.get(tone, "#edf3f4")
-        diagnosis_summary_status.set(str(model["status"]))
-        diagnosis_status_badge.configure(foreground=card_tone_color(tone), background=badge_bg)
-        diagnosis_summary_time.set(f"마지막 진단 시간: {model['lastDiagnosticTime']}")
-        diagnosis_summary_text.set(str(model["summary"]))
-        diagnosis_empty_text.set("" if model["hasResult"] else str(model["emptyMessage"]))
-
-        for widgets, metric in zip(diagnosis_metric_widgets, model["metrics"], strict=False):
-            metric_tone = str(metric["tone"])
-            widgets["status"].configure(
-                text=f"상태: {metric['status']}",
-                foreground=card_tone_color(metric_tone),
-            )
-            widgets["current"].configure(text=f"{metric['currentLabel']}: {metric['currentValue']}")
-            widgets["threshold"].configure(text=f"기준: {metric['threshold']}")
-            widgets["description"].configure(text=str(metric["description"]))
-
-        diagnosis_event_tree.delete(*diagnosis_event_tree.get_children())
-        events = list(model["events"])
-        if events:
-            diagnosis_event_empty.pack_forget()
-            if not diagnosis_event_tree.winfo_ismapped():
-                diagnosis_event_tree.pack(fill="both", expand=True)
-            for index, event in enumerate(events):
-                diagnosis_event_tree.insert(
-                    "",
-                    "end",
-                    values=(event["time"], event["type"], event["content"], event["status"]),
-                    tags=("odd" if index % 2 else "even",),
-                )
-        else:
-            diagnosis_event_tree.pack_forget()
-            if not diagnosis_event_empty.winfo_ismapped():
-                diagnosis_event_empty.pack(fill="both", expand=True, pady=(24, 0))
-
-        ai = model["aiAnalysis"]
-        diagnosis_ai_summary.set(str(ai["summary"]))
-        diagnosis_ai_cause.set(", ".join(ai["suspectedCauses"]) if ai["suspectedCauses"] else "-")
-        diagnosis_ai_action.set(", ".join(ai["recommendedActions"]) if ai["recommendedActions"] else "-")
-        diagnosis_ai_admin.set(str(ai["adminReview"]))
-
-    def show_status_tab() -> None:
-        selected_nav.set("상태")
-        render_nav()
-        log_view.pack_forget()
-        support_view.pack_forget()
-        status_view.pack(fill="both", expand=True)
-        range_badge.pack_forget()
-        range_status.set("")
-        refresh_status()
-
-    def show_log_tab() -> None:
-        selected_nav.set("기록")
-        render_nav()
-        status_view.pack_forget()
-        support_view.pack_forget()
-        log_view.pack(fill="both", expand=True)
-        if log_mode.get() == "raw" and should_initialize_log_filter(log_filter_state["logTabOpened"], log_filter_state["userTouched"]):
-            current_date, current_hour = default_log_filter_values()
-            set_date_filter(current_date)
-            hour_value.set(f"{current_hour:02d}:00")
-        log_filter_state["logTabOpened"] = True
-        set_log_mode(log_mode.get())
-        if log_mode.get() == "raw":
-            tree.focus_set()
-
-    def show_support_tab(signal: dict[str, Any] | None = None) -> None:
-        selected_nav.set("AI 진단")
-        render_nav()
-        status_view.pack_forget()
-        log_view.pack_forget()
-        support_view.pack(fill="both", expand=True)
-        range_badge.pack_forget()
-        range_status.set("")
-        refresh_diagnosis_chat_context()
-
-    def set_current_hour() -> None:
-        current_date, current_hour = default_log_filter_values()
-        set_date_filter(current_date)
-        hour_value.set(f"{current_hour:02d}:00")
-        log_filter_state["userTouched"] = False
-        log_filter_state["logTabOpened"] = False
-        refresh_log()
-
-    sync_day_values()
-    year_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-    month_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-    day_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-    hour_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-
-    buttons = tk.Frame(log_view, background=colors["app_bg"], pady=8)
-    buttons.pack(fill="x")
-    rounded_button(buttons, "로그 폴더", lambda: open_log_folder(config_path), "secondary", width=104, height=32).pack(
-        side="left",
-    )
-    rounded_button(
-        buttons,
-        "AS 페이지",
-        lambda: open_support_page(config_path),
-        "secondary",
-        width=104,
-        height=32,
-    ).pack(side="left", padx=(8, 0))
-
-    rounded_button(
-        support_actions,
-        "AI 추천 확인",
-        preview_support_recommendation,
-        "secondary",
-        width=132,
-        height=34,
-    ).pack(side="left")
-    rounded_button(
-        support_actions,
-        "AS 접수 신청",
-        submit_support_request,
-        "primary",
-        width=132,
-        height=34,
-    ).pack(side="right")
-
-    if support_signal:
-        show_support_tab(support_signal)
-    elif focus_signal:
-        select_signal(focus_signal)
-    else:
-        show_status_tab()
-
-    live_refresh_job: str | None = None
-
-    def schedule_live_refresh() -> None:
-        nonlocal live_refresh_job
-        refresh_status()
-        refresh_log_summary()
-        refresh_log()
-        live_refresh_job = root.after(5000, schedule_live_refresh)
-
-    def stop_live_refresh() -> None:
-        nonlocal live_refresh_job
-        if live_refresh_job is not None:
-            root.after_cancel(live_refresh_job)
-            live_refresh_job = None
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", stop_live_refresh)
-
-    schedule_live_refresh()
+    canvas.bind("<ButtonPress-1>", lambda event: start_drag(event) if event.y <= 68 else None)
+    canvas.bind("<B1-Motion>", lambda event: drag_window(event) if event.y <= 68 else None)
+    render()
     try:
         root.mainloop()
     finally:
