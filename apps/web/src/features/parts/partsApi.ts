@@ -13,6 +13,8 @@ import type {
   RecommendationEventRequest
 } from './types';
 
+export const CURRENT_QUOTE_DRAFT_STALE_TIME_MS = 30_000;
+
 export function listParts(params: PartSearchParams = {}) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

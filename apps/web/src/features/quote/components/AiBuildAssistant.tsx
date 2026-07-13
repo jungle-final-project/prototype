@@ -5,7 +5,7 @@ import { BarChart3, Bot, CheckCircle2, Send, ShoppingCart, Sparkles, X } from 'l
 import { useLockedPageScroll } from '../../../hooks/useHiddenPageScrollbar';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib/api';
 import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, requestPerfCompare, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
-import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
+import { applyAiBuildToQuoteDraft, CURRENT_QUOTE_DRAFT_STALE_TIME_MS, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   PART_CATEGORY_LABELS,
@@ -99,7 +99,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const quoteDraftQuery = useQuery({
     queryKey: ['quote-draft', 'current'],
     queryFn: getCurrentQuoteDraft,
-    enabled: hasToken && isPanelOpen
+    enabled: hasToken && isPanelOpen,
+    staleTime: CURRENT_QUOTE_DRAFT_STALE_TIME_MS
   });
 
   useEffect(() => {
