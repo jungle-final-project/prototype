@@ -871,7 +871,7 @@ function RelationMapBanner({
       data-testid="relation-map-bottom-banner"
       className={className}
     >
-      <div className={`pointer-events-auto flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
+      <div className={`pointer-events-none flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
         hasProblem
           ? status === 'WARN'
             ? 'border-amber-500'
@@ -1479,7 +1479,7 @@ function IsometricSlotBoardBody({
           detail={activeProblem}
           onClose={() => setActiveProblemCategory(null)}
           onShowCandidates={() => showReplacementCandidates(activeProblem.category)}
-          onExplain={() => onExplainIssue(activeProblem.category, toolForCategory(activeProblem.category))}
+          onExplain={() => onExplainIssue(activeProblem.category, activeProblem.tool ?? toolForCategory(activeProblem.category))}
         />
       ) : null}
       {celebrating ? (
@@ -1877,11 +1877,13 @@ type SlotProblemDetail = {
   status: SlotProblemStatus;
   title: string;
   reasons: string[];
+  tool?: BuildGraphFocus['tool'];
 };
 
 type SlotProblemReason = {
   status: SlotProblemStatus;
   text: string;
+  tool?: BuildGraphFocus['tool'];
 };
 
 type SlotBoardBannerProblem = {
@@ -1901,7 +1903,7 @@ function SlotBoardProblemBanner({ problem, onExplain }: { problem: SlotBoardBann
       <div
         data-testid="slot-board-problem-banner"
         data-status={problem.status}
-        className={`pointer-events-auto flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
+        className={`pointer-events-none flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
           isFail
             ? 'border-red-500'
             : 'border-amber-500'
@@ -1923,7 +1925,7 @@ function ExplainIssueButton({ onClick }: { onClick: () => void }) {
         event.stopPropagation();
         onClick();
       }}
-      className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+      className="pointer-events-auto inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
     >
       <Sparkles size={11} aria-hidden="true" />
       AI에게 설명
@@ -2667,18 +2669,26 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
     }
     return current;
   };
-  const addReason = (category: PartCategory, status: SlotProblemStatus, text?: string, promoteStatus = true) => {
+  const addReason = (
+    category: PartCategory,
+    status: SlotProblemStatus,
+    text?: string,
+    promoteStatus = true,
+    tool?: BuildGraphFocus['tool']
+  ) => {
     const trimmed = text?.trim();
     const detail = ensure(category, status, promoteStatus);
     if (trimmed) {
-      detail.reasons.push({ status, text: trimmed });
+      detail.reasons.push({ status, text: trimmed, tool });
     }
   };
 
   graph.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
     if (category && isProblemStatus(node.status)) {
-      addReason(category, node.status, node.detail);
+      // A part node's detail is a neutral spec label (for example, "높이 157mm"),
+      // not the reason why its status was promoted by a relationship edge.
+      ensure(category, node.status, true);
     }
   });
 
@@ -2688,11 +2698,12 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
     }
     const sourceCategory = categoryByNodeId.get(edge.source);
     const targetCategory = categoryByNodeId.get(edge.target);
+    const tool = toolForGraphEdge(edge.id);
     if (sourceCategory) {
-      addReason(sourceCategory, edge.status, edge.summary || edge.label, false);
+      addReason(sourceCategory, edge.status, edge.summary || edge.label, false, tool);
     }
     if (targetCategory) {
-      addReason(targetCategory, edge.status, edge.summary || edge.label, false);
+      addReason(targetCategory, edge.status, edge.summary || edge.label, false, tool);
     }
   });
 
@@ -2711,12 +2722,14 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
 
   const result = new Map<PartCategory, SlotProblemDetail>();
   details.forEach((detail, category) => {
+    const focusedReason = detail.reasons.find((reason) => reason.status === detail.status && reason.tool);
     result.set(category, {
       category,
       categoryLabel: slotConfigFor(category)?.label ?? category,
       status: detail.status,
       title: detail.status === 'FAIL' ? '장착 불가' : '간섭 주의',
-      reasons: uniqueProblemReasons(detail.reasons)
+      reasons: uniqueProblemReasons(detail.reasons),
+      tool: focusedReason?.tool
     });
   });
   return result;
@@ -2727,20 +2740,24 @@ function slotBoardProblemBanner(graph?: BuildGraphResolveResponse): SlotBoardBan
     return null;
   }
   const reasons: SlotProblemReason[] = [];
-  const addReason = (status: string, text?: string) => {
+  const addReason = (status: string, text?: string, tool?: BuildGraphFocus['tool']) => {
     if (!isProblemStatus(status)) {
       return;
     }
     const trimmed = text?.trim();
     if (trimmed) {
-      reasons.push({ status, text: trimmed });
+      reasons.push({ status, text: trimmed, tool });
     }
   };
 
-  graph.toolResults.forEach((result) => addReason(result.status, result.summary));
-  graph.nodes.forEach((node) => addReason(node.status, node.detail));
-  graph.edges.forEach((edge) => addReason(edge.status, edge.summary || edge.label));
+  // Relationship summaries carry the exact measured reason. Node details are neutral specs,
+  // so using them here would turn values such as "높이 157mm" into misleading advice.
+  graph.edges.forEach((edge) => addReason(edge.status, edge.summary || edge.label, toolForGraphEdge(edge.id)));
   graph.insights.forEach((insight) => addReason(insight.status, insight.description || insight.title));
+  graph.toolResults.forEach((result) => {
+    const tool = isBuildGraphTool(result.tool) ? result.tool : undefined;
+    addReason(result.status, result.summary, tool);
+  });
 
   const status: SlotProblemStatus | null = reasons.some((reason) => reason.status === 'FAIL')
     ? 'FAIL'
@@ -2751,10 +2768,22 @@ function slotBoardProblemBanner(graph?: BuildGraphResolveResponse): SlotBoardBan
     return null;
   }
 
-  const message = uniqueProblemReasons(reasons.filter((reason) => reason.status === status))[0]
+  const selectedReason = reasons.find((reason) => reason.status === status);
+  const message = selectedReason?.text
     ?? (status === 'FAIL' ? '현재 구성에서 장착 불가 항목이 있습니다.' : '현재 구성에서 주의 항목이 있습니다.');
-  const matchedTool = graph.toolResults.find((result) => result.status === status)?.tool;
+  const matchedTool = selectedReason?.tool ?? graph.toolResults.find((result) => result.status === status)?.tool;
   return { status, message, tool: isBuildGraphTool(matchedTool) ? matchedTool : undefined };
+}
+
+function toolForGraphEdge(edgeId: string): BuildGraphFocus['tool'] | undefined {
+  if (edgeId === 'edge-gpu-psu-power') return 'power';
+  if (edgeId === 'edge-gpu-case-length' || edgeId === 'edge-cooler-case-height'
+    || edgeId === 'edge-psu-case-depth' || edgeId === 'edge-board-case-form') return 'size';
+  if (edgeId === 'edge-cpu-gpu-performance') return 'performance';
+  if (edgeId === 'edge-budget-total-price') return 'price';
+  if (edgeId === 'edge-cpu-board-socket' || edgeId === 'edge-board-ram-memory'
+    || edgeId === 'edge-cpu-cooler-socket' || edgeId === 'edge-board-storage-m2') return 'compatibility';
+  return undefined;
 }
 
 function isBuildGraphTool(value: string | undefined): value is NonNullable<BuildGraphFocus['tool']> {
