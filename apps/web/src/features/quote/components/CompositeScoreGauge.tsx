@@ -55,10 +55,10 @@ const SIZE_STYLES: Record<CompositeScoreGaugeSize, {
     showEndpoints: true
   },
   compact: {
-    shell: 'w-[160px]',
-    svg: 'h-[48px]',
-    strokeWidth: 12,
-    center: 'bottom-0.5',
+    shell: 'w-[168px]',
+    svg: 'h-[78px]',
+    strokeWidth: 14,
+    center: 'bottom-2',
     scoreText: 'text-xl',
     maxText: 'text-[10px]',
     labelText: 'text-[10px]',
@@ -175,7 +175,12 @@ export function CompositeScoreGauge({
       aria-label={`종합 점수 ${displayScore}점 / ${score.maxScore.toLocaleString('ko-KR')}점${deltaLabel ? `, 이전 대비 ${deltaLabel}` : ''}`}
     >
       <div className="relative mx-auto">
-        <svg className={`w-full overflow-visible ${styles.svg}`} viewBox="0 0 220 132" role="img" aria-hidden="true">
+        <svg
+          className={`w-full overflow-visible ${styles.svg}`}
+          viewBox={isCompact ? '0 12 220 108' : '0 0 220 132'}
+          role="img"
+          aria-hidden="true"
+        >
           <path
             d="M 24 112 A 86 86 0 0 1 196 112"
             fill="none"
@@ -195,18 +200,7 @@ export function CompositeScoreGauge({
           />
         </svg>
 
-        {isCompact && deltaLabel ? (
-          <div className="absolute inset-x-0 bottom-1 z-10 flex justify-center">
-            <span
-              data-testid={deltaTestId}
-              className={`inline-flex rounded-full border px-1 py-px text-[9px] font-black leading-none ${scoreDeltaTone(roundedDelta ?? 0)}`}
-            >
-              {deltaLabel}
-            </span>
-          </div>
-        ) : null}
-
-        {!isCompact ? <div className={`absolute inset-x-0 ${styles.center} px-1`}>
+        <div className={`absolute inset-x-0 ${styles.center} px-1`}>
           <div data-testid={scoreTestId} className={`font-black leading-none ${styles.scoreText} ${textClass}`}>
             {displayScore.toLocaleString('ko-KR')}
             <span className={`ml-1 font-black text-slate-400 ${styles.maxText}`}>/ {score.maxScore.toLocaleString('ko-KR')}</span>
@@ -224,22 +218,8 @@ export function CompositeScoreGauge({
               {score.grade} · {score.label}
             </div>
           ) : null}
-        </div> : null}
-      </div>
-
-      {isCompact ? (
-        <div className="-mt-px px-1">
-          <div data-testid={scoreTestId} className={`font-black leading-none ${styles.scoreText} ${textClass}`}>
-            {displayScore.toLocaleString('ko-KR')}
-            <span className={`ml-1 font-black text-slate-400 ${styles.maxText}`}>/ {score.maxScore.toLocaleString('ko-KR')}</span>
-          </div>
-          {showLabel ? (
-            <div className={`mt-1 truncate font-black text-commerce-ink ${styles.labelText}`} title={`${score.grade} · ${score.label}`}>
-              {score.grade} · {score.label}
-            </div>
-          ) : null}
         </div>
-      ) : null}
+      </div>
 
       {styles.showEndpoints ? (
         <div className={`-mt-3 flex items-center justify-between px-4 font-bold text-slate-400 ${styles.endpointText}`} aria-hidden="true">

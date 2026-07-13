@@ -67,6 +67,22 @@ export function QuotePerformancePanel({
   compact?: boolean;
 }) {
   const compositeScore = graph?.compositeScore;
+  const roundedCompositeScore = compositeScore ? Math.round(compositeScore.score) : null;
+  const previousCompositeScoreRef = useRef<number | null>(roundedCompositeScore);
+  const [scoreDelta, setScoreDelta] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (roundedCompositeScore === null) return;
+    const previousScore = previousCompositeScoreRef.current;
+    if (previousScore === null) {
+      previousCompositeScoreRef.current = roundedCompositeScore;
+      return;
+    }
+    if (previousScore === roundedCompositeScore) return;
+    setScoreDelta(roundedCompositeScore - previousScore);
+    previousCompositeScoreRef.current = roundedCompositeScore;
+  }, [roundedCompositeScore]);
+
   if (!compositeScore) {
     return compact ? (
       <CompactPerformancePlaceholder
@@ -94,6 +110,7 @@ export function QuotePerformancePanel({
         onStartComparison={onStartComparison}
         onApplyComparison={onApplyComparison}
         checkoutActions={checkoutActions}
+        scoreDelta={scoreDelta}
         compact={compact}
       />
     </section>
@@ -174,6 +191,7 @@ function PerfPanelBody({
   onStartComparison,
   onApplyComparison,
   checkoutActions,
+  scoreDelta,
   compact
 }: {
   compositeScore: NonNullable<BuildGraphResolveResponse['compositeScore']>;
@@ -185,23 +203,14 @@ function PerfPanelBody({
   onStartComparison?: (target: PerfCompareTarget) => void;
   onApplyComparison?: (target: PerfCompareTarget) => Promise<unknown>;
   checkoutActions?: ReactNode;
+  scoreDelta: number | null;
   compact: boolean;
 }) {
   const queryClient = useQueryClient();
   const [gameKey, setGameKey] = useState<string>(FPS_GAMES[0].key);
   const [resKey, setResKey] = useState<string>('QHD');
-  const roundedCompositeScore = Math.round(compositeScore.score);
-  const previousCompositeScoreRef = useRef(roundedCompositeScore);
-  const [scoreDelta, setScoreDelta] = useState<number | null>(null);
   const game = FPS_GAMES.find((g) => g.key === gameKey) ?? FPS_GAMES[0];
   const resolution = FPS_RESOLUTIONS.find((r) => r.key === resKey) ?? FPS_RESOLUTIONS[1];
-
-  useEffect(() => {
-    const previousScore = previousCompositeScoreRef.current;
-    if (previousScore === roundedCompositeScore) return;
-    setScoreDelta(roundedCompositeScore - previousScore);
-    previousCompositeScoreRef.current = roundedCompositeScore;
-  }, [roundedCompositeScore]);
 
   const partIds = perfItems.map((item) => item.partId).filter(Boolean);
   const partKey = useMemo(() => [...partIds].sort().join(','), [partIds]);
@@ -366,13 +375,13 @@ function PerfPanelBody({
     return (
       <div
         data-testid="quote-performance-grid"
-        className="rounded-lg border border-commerce-line bg-white px-2.5 py-1 lg:min-h-[86px]"
+        className="rounded-lg border border-commerce-line bg-white px-2.5 py-1 lg:min-h-[98px]"
       >
         <div className={`grid gap-2 lg:items-center ${
-          activeComparison ? 'lg:grid-cols-[230px_minmax(0,1fr)_auto]' : 'lg:grid-cols-[176px_minmax(0,1fr)]'
+          activeComparison ? 'lg:grid-cols-[230px_minmax(0,1fr)_auto]' : 'lg:grid-cols-[196px_minmax(0,1fr)]'
         }`}>
           <div className={`flex items-center justify-center border-b border-commerce-line pb-1.5 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-2 ${
-            activeComparison ? 'min-h-[88px]' : 'min-h-[68px]'
+            activeComparison ? 'min-h-[88px]' : 'min-h-[80px]'
           }`}>
             <div className="w-full min-w-0">
               <div className="flex flex-nowrap items-center justify-between gap-2 text-[9px] font-black">

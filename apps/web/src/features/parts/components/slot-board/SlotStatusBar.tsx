@@ -143,13 +143,13 @@ export function QuoteCheckoutActions({
   compact = false
 }: QuoteCheckoutActionsProps) {
   const saveClassName = compact
-    ? 'inline-flex min-h-8 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-[11px] font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60'
+    ? 'inline-flex min-h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-[11px] font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60'
     : 'inline-flex min-h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-4 text-sm font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60';
   const purchaseClassName = compact
-    ? 'inline-flex min-h-8 items-center gap-1 rounded-md bg-brand-blue px-2.5 text-[11px] font-black text-white hover:bg-blue-700'
+    ? 'inline-flex min-h-9 items-center gap-1 rounded-md bg-brand-blue px-3 text-[11px] font-black text-white hover:bg-blue-700'
     : 'inline-flex min-h-10 items-center gap-2 rounded-md bg-brand-blue px-5 text-sm font-black text-white hover:bg-blue-700';
   const disabledPurchaseClassName = compact
-    ? 'inline-flex min-h-8 cursor-not-allowed items-center gap-1 rounded-md bg-slate-200 px-2.5 text-[11px] font-black text-slate-400'
+    ? 'inline-flex min-h-9 cursor-not-allowed items-center gap-1 rounded-md bg-slate-200 px-3 text-[11px] font-black text-slate-400'
     : 'inline-flex min-h-10 cursor-not-allowed items-center gap-2 rounded-md bg-slate-200 px-5 text-sm font-black text-slate-400';
   return (
     <>

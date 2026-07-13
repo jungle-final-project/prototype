@@ -1141,14 +1141,14 @@ function QuoteSummaryBar({
           : 'text-emerald-600';
   return (
     <div data-testid="quote-summary-bar" className="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_auto] lg:gap-1.5">
-      <div className="panel flex items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
+      <div className="panel flex min-h-12 items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-xl font-black text-brand-blue lg:h-7 lg:w-7 lg:text-base">₩</span>
         <div className="min-w-0">
           <div className="text-[11px] font-bold text-slate-500">총액</div>
           <div className="truncate text-sm font-black text-commerce-ink">{totalPrice > 0 ? `${totalPrice.toLocaleString()}원` : '—'}</div>
         </div>
       </div>
-      <div className="panel flex items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
+      <div className="panel flex min-h-12 items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 lg:h-7 lg:w-7">
           <svg viewBox="0 0 20 20" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
             <rect x="3" y="3" width="6" height="6" rx="1" /><rect x="11" y="3" width="6" height="6" rx="1" />
@@ -1160,7 +1160,7 @@ function QuoteSummaryBar({
           <div className="text-sm font-black text-commerce-ink">{filledCount} / {slotCount}</div>
         </div>
       </div>
-      <div className="panel flex items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
+      <div className="panel flex min-h-12 items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
         <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg lg:h-7 lg:w-7 ${isEmpty ? 'bg-slate-100' : hasRedState ? 'bg-red-50' : graphError ? 'bg-slate-100' : warnCount > 0 ? 'bg-amber-50' : 'bg-emerald-50'}`}>
           <svg viewBox="0 0 20 20" className={`h-5 w-5 ${isEmpty ? 'text-slate-400' : hasRedState ? 'text-red-500' : graphError ? 'text-slate-400' : warnCount > 0 ? 'text-amber-500' : 'text-emerald-500'}`} fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 5v4m0 2.5v.5" strokeLinecap="round" />
@@ -1172,7 +1172,7 @@ function QuoteSummaryBar({
         </div>
       </div>
       {checkoutActions ? (
-        <div data-testid="quote-checkout-actions" className="panel col-span-2 flex items-center justify-end gap-1.5 px-2 py-1.5 sm:col-span-1">
+        <div data-testid="quote-checkout-actions" className="panel col-span-2 flex min-h-12 items-center justify-end gap-1.5 px-2 py-1.5 sm:col-span-1">
           {checkoutActions}
         </div>
       ) : null}
