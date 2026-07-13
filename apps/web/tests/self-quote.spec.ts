@@ -1422,6 +1422,19 @@ test('shows the current build performance panel from the resolve performance too
   await expect(panel.getByTestId('quote-performance-fit')).toHaveCount(0);
   await expect(panel.getByTestId('quote-composite-score-gauge')).toBeVisible();
   await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
+  const gaugeContainsScore = await panel.getByTestId('quote-composite-score-gauge').evaluate((gauge) => {
+    const svg = gauge.querySelector('svg');
+    const score = gauge.querySelector('[data-testid="quote-composite-score"]');
+    if (!(svg instanceof SVGElement) || !(score instanceof HTMLElement)) return false;
+    const svgRect = svg.getBoundingClientRect();
+    const scoreRect = score.getBoundingClientRect();
+    return svgRect.width >= 160
+      && scoreRect.left >= svgRect.left
+      && scoreRect.right <= svgRect.right
+      && scoreRect.top >= svgRect.top
+      && scoreRect.bottom <= svgRect.bottom;
+  });
+  expect(gaugeContainsScore).toBe(true);
   await expect(panel.getByTestId('quote-composite-score-title')).toHaveCSS('white-space', 'nowrap');
   await expect(panel.getByTestId('quote-composite-score-delta')).toHaveCount(0);
   await expect(panel).toContainText('호환·성능·여유 종합 1000점');
@@ -1435,6 +1448,17 @@ test('shows the current build performance panel from the resolve performance too
   // 미선택 상태에서는 중복 설명·빈 비교 그래프를 노출하지 않는다.
   await expect(panel.getByTestId('cost-effect-empty')).toHaveCount(0);
   await expect(page.getByTestId('quote-checkout-actions')).toBeVisible();
+  const summarySizing = await page.getByTestId('quote-summary-bar').locator(':scope > .panel').evaluateAll((cards) => {
+    const heights = cards.map((card) => card.getBoundingClientRect().height);
+    const action = cards.find((card) => card.getAttribute('data-testid') === 'quote-checkout-actions');
+    const buttons = action ? [...action.querySelectorAll('button, a')] : [];
+    return {
+      cardCount: cards.length,
+      heightGap: Math.max(...heights) - Math.min(...heights),
+      actionMinHeight: Math.min(...buttons.map((button) => button.getBoundingClientRect().height))
+    };
+  });
+  expect(summarySizing).toMatchObject({ cardCount: 4, heightGap: 0, actionMinHeight: 36 });
 });
 
 test('submits the server-authoritative score explanation and renders the assessment card', async ({ page }) => {
@@ -1928,10 +1952,14 @@ test('picks a replacement candidate in the performance panel, compares, and appl
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
   });
   await page.route('**/api/build-graphs/resolve', async (route) => {
+    const requestBody = JSON.parse(route.request().postData() ?? '{}');
+    const requestedItems = Array.isArray(requestBody?.items) ? requestBody.items : [];
+    const hasReplacement = currentDraft === replacedDraft
+      || requestedItems.some((item: { partId?: string }) => item.partId === 'cand-cpu-1');
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture() })
+      body: JSON.stringify({ ...buildGraphResponse(), compositeScore: compositeScoreFixture(hasReplacement ? 782 : 734) })
     });
   });
   // 선택기·아코디언이 공유하는 GET /api/parts — 카테고리별 후보를 돌려준다(FAIL 후보는 사유 포함).
@@ -2043,6 +2071,8 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   expect(replaceRequests[0].body).toMatchObject({ quantity: 1 });
   await expect(page.getByTestId('checklist-CPU')).toContainText('인텔 245K');
   await expect(panel.getByTestId('fps-avg')).toHaveText('281 FPS');
+  await expect(panel.getByTestId('quote-composite-score')).toContainText('782');
+  await expect(panel.getByTestId('quote-composite-score-delta')).toContainText('+48');
 
   // AI 변경 미리보기 연동(창 이벤트)은 그대로 유지된다 — 같은 비교 모드가 켜지고 카테고리도 따라간다.
   await page.evaluate(() => {
