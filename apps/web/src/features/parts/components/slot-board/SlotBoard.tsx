@@ -1937,7 +1937,7 @@ function SlotBoardProblemBanner({
   const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
   const warnCount = problems.length - failCount;
   const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
-  const sharedCardClass = 'rounded-lg border bg-white px-3.5 py-2 text-xs font-black';
+  const sharedCardClass = 'rounded-lg border bg-white px-3.5 py-2 text-[10px] font-black';
   const statusCardClass = (status: SlotProblemStatus) => status === 'FAIL'
     ? 'slot-board-fail-banner-pulse border-red-400 text-red-600 shadow-[0_10px_20px_rgba(239,68,68,0.24)]'
     : 'border-amber-400 text-amber-700 shadow-[0_10px_20px_rgba(245,158,11,0.18)]';
@@ -1952,7 +1952,7 @@ function SlotBoardProblemBanner({
           className={[
             sharedCardClass,
             statusCardClass(problem.status),
-            'pointer-events-auto inline-flex max-w-[62%] items-center gap-2 text-center'
+            'pointer-events-auto inline-flex max-w-[74%] items-center gap-2 text-center'
           ].join(' ')}
         >
           {problem.status === 'FAIL'
@@ -1967,7 +1967,7 @@ function SlotBoardProblemBanner({
 
   return (
     <div className="pointer-events-none absolute inset-x-4 top-4 z-[35] flex justify-center">
-      <div ref={rootRef} className="pointer-events-auto relative w-full max-w-[480px]">
+      <div ref={rootRef} className="pointer-events-auto relative w-full max-w-[576px]">
         <button
           type="button"
           data-testid="slot-board-problem-banner"
@@ -2024,7 +2024,7 @@ function SlotBoardProblemBanner({
                   {problem.status === 'FAIL'
                     ? <CircleX size={17} aria-hidden="true" className="shrink-0 text-red-500" />
                     : <AlertTriangle size={17} aria-hidden="true" className="shrink-0 text-amber-500" />}
-                  <span className="min-w-0 flex-1 break-keep text-[13px] font-bold leading-5 text-slate-700">
+                  <span className="min-w-0 flex-1 break-keep text-[10px] font-bold leading-4 text-slate-700">
                     {problem.message}
                   </span>
                   {problem.categories.length > 0 ? (
