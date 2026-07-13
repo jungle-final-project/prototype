@@ -107,6 +107,12 @@ UPDATE_DIR_NAME = "updates"
 UPDATE_APPLY_SCRIPT_FILE = "apply-pcagent-update.cmd"
 UPDATE_PENDING_FILE = "pending-update.json"
 HOME_MEMORY_WARNING_THRESHOLD = 85.0
+PC_AGENT_USAGE_WARNING_THRESHOLD = 80.0
+PC_AGENT_USAGE_DANGER_THRESHOLD = 95.0
+PC_AGENT_CPU_TEMP_WARNING_THRESHOLD = 85.0
+PC_AGENT_CPU_TEMP_DANGER_THRESHOLD = 95.0
+PC_AGENT_GPU_TEMP_WARNING_THRESHOLD = 85.0
+PC_AGENT_GPU_TEMP_DANGER_THRESHOLD = 95.0
 DIAGNOSIS_DETAIL_EVENT_LIMIT = 5
 DIAGNOSIS_DETAIL_WARNING_THRESHOLD = HOME_MEMORY_WARNING_THRESHOLD
 DIAGNOSIS_DETAIL_DANGER_THRESHOLD = 95.0
@@ -476,6 +482,8 @@ class AgentConfig:
     schema_version: int = DEFAULT_SCHEMA_VERSION
     web_base_url: str | None = None
     environment: str = "local"
+    symptom: str | None = None
+    symptom_type: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
@@ -491,6 +499,8 @@ class AgentConfig:
             schema_version=optional_config_int(data, "schemaVersion", DEFAULT_SCHEMA_VERSION),
             web_base_url=optional_config_text(data, "webBaseUrl"),
             environment=optional_config_text(data, "environment") or "local",
+            symptom=optional_config_text(data, "symptom"),
+            symptom_type=optional_config_text(data, "symptomType"),
         )
 
     def registration_status(self) -> str:
@@ -976,7 +986,7 @@ def import_activation_config(config_path: Path, activation_path: Path | None = N
 
     config_data = read_config_json(config_path)
     changed = False
-    for field in ("apiBaseUrl", "webBaseUrl", "environment"):
+    for field in ("apiBaseUrl", "webBaseUrl", "environment", "symptom", "symptomType"):
         value = optional_config_text(activation_data, field)
         if value and config_data.get(field) != value:
             config_data[field] = value
@@ -1172,15 +1182,30 @@ GPU_FIELDS = (
     "vramUsagePercent",
     "gpuTemp",
     "gpuTempCelsius",
+    "gpuFanRpm",
+    "gpuFanPercent",
 )
 CPU_TEMP_FIELDS = ("cpuTemp", "cpuTempCelsius", "cpuTemperatureCelsius")
 CPU_USAGE_FIELDS = ("cpuUsage", "cpuUsagePercent")
 MEMORY_USAGE_FIELDS = ("memoryUsage", "ramUsage", "memoryUsedPercent")
+MEMORY_USED_FIELDS = ("memoryUsedBytes",)
+MEMORY_TOTAL_FIELDS = ("memoryTotalBytes",)
 DISK_USAGE_FIELDS = ("diskUsage", "diskUsedPercent")
+DISK_ACTIVE_FIELDS = ("diskBusyEstimatePercent",)
+DISK_HEALTH_FIELDS = ("diskSmartStatus", "diskHealth")
 GPU_USAGE_FIELDS = ("gpuUsage", "gpuUsagePercent")
 GPU_VRAM_FIELDS = ("vramUsage", "vramUsagePercent")
 GPU_TEMP_FIELDS = ("gpuTemp", "gpuTempCelsius")
-OPTIONAL_SENSOR_STATUS_FIELDS = ("vramUsagePercent", "cpuTempCelsius", "gpuTempCelsius")
+GPU_FAN_RPM_FIELDS = ("gpuFanRpm",)
+GPU_FAN_PERCENT_FIELDS = ("gpuFanPercent",)
+OPTIONAL_SENSOR_STATUS_FIELDS = (
+    "vramUsagePercent",
+    "cpuTempCelsius",
+    "gpuTempCelsius",
+    "gpuFanRpm",
+    "gpuFanPercent",
+    "diskSmartStatus",
+)
 WINDOWS_GPU_ENGINE_COUNTER = r"\GPU Engine(*)\Utilization Percentage"
 WINDOWS_DISK_BUSY_COUNTER = r"\PhysicalDisk(_Total)\% Disk Time"
 SYSTEM_METRIC_KIND = "SYSTEM_METRIC"
@@ -1225,6 +1250,11 @@ def mark_unavailable(
     for field in fields:
         payload[field] = None
         reasons.setdefault(field, reason)
+
+
+def sensor_reason_is_failure(reason: str | None) -> bool:
+    normalized = (reason or "").casefold()
+    return any(token in normalized for token in ("failed", "timed out", "exception"))
 
 
 def safe_process_name(value: Any) -> str | None:
@@ -1470,6 +1500,12 @@ class HardwareMetricCollector:
         self.collect_cpu_memory(payload, reasons)
         self.collect_disk_usage(payload, reasons)
         self.collect_disk_io(payload, reasons, observed_at)
+        mark_unavailable(
+            payload,
+            reasons,
+            DISK_HEALTH_FIELDS,
+            "SMART health unsupported by this collector",
+        )
         self.collect_gpu(payload, reasons)
         self.collect_cpu_temperature(payload, reasons)
         self.collect_top_processes(payload, reasons, observed_at)
@@ -1482,15 +1518,26 @@ class HardwareMetricCollector:
         if self.psutil is None:
             mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil unavailable")
             mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil unavailable")
             return
         try:
             cpu_usage = clamp_percent(self.psutil.cpu_percent(interval=0.05))
         except Exception:
             cpu_usage = None
+            mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil cpu_percent query failed")
         try:
-            memory_usage = clamp_percent(self.psutil.virtual_memory().percent)
+            memory = self.psutil.virtual_memory()
+            memory_usage = clamp_percent(getattr(memory, "percent", None))
+            memory_used = rounded_or_none(getattr(memory, "used", None))
+            memory_total = rounded_or_none(getattr(memory, "total", None))
         except Exception:
             memory_usage = None
+            memory_used = None
+            memory_total = None
+            mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil virtual_memory query failed")
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil virtual_memory query failed")
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil virtual_memory query failed")
         if cpu_usage is None:
             mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil cpu_percent unavailable")
         else:
@@ -1499,6 +1546,14 @@ class HardwareMetricCollector:
             mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil virtual_memory unavailable")
         else:
             set_metric_aliases(payload, MEMORY_USAGE_FIELDS, memory_usage)
+        if memory_used is None:
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil memory used bytes unavailable")
+        else:
+            set_metric_aliases(payload, MEMORY_USED_FIELDS, memory_used)
+        if memory_total is None:
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil memory total bytes unavailable")
+        else:
+            set_metric_aliases(payload, MEMORY_TOTAL_FIELDS, memory_total)
 
     def collect_disk_usage(self, payload: dict[str, Any], reasons: dict[str, str]) -> None:
         if self.psutil is None:
@@ -1508,6 +1563,7 @@ class HardwareMetricCollector:
             disk_usage = clamp_percent(self.psutil.disk_usage(disk_usage_root()).percent)
         except Exception:
             disk_usage = None
+            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage query failed")
         if disk_usage is None:
             mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage unavailable")
         else:
@@ -1583,7 +1639,7 @@ class HardwareMetricCollector:
         return subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,fan.speed",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -1614,6 +1670,7 @@ class HardwareMetricCollector:
         memory_used = parse_float(parts[1])
         memory_total = parse_float(parts[2])
         gpu_temp = rounded_or_none(parse_float(parts[3]))
+        gpu_fan = clamp_percent(parse_float(parts[4])) if len(parts) >= 5 else None
         if gpu_usage is None:
             payload["gpuUsage"] = None
             payload["gpuUsagePercent"] = None
@@ -1639,6 +1696,13 @@ class HardwareMetricCollector:
         else:
             payload["gpuTemp"] = gpu_temp
             payload["gpuTempCelsius"] = gpu_temp
+        payload["gpuFanRpm"] = None
+        reasons["gpuFanRpm"] = "GPU fan RPM unsupported by nvidia-smi"
+        if gpu_fan is None:
+            payload["gpuFanPercent"] = None
+            reasons["gpuFanPercent"] = "nvidia-smi GPU fan sensor unavailable"
+        else:
+            payload["gpuFanPercent"] = gpu_fan
         payload["gpuCollectorSource"] = "nvidia-smi"
         return True, None
 
@@ -1659,6 +1723,8 @@ class HardwareMetricCollector:
         set_metric_aliases(payload, GPU_USAGE_FIELDS, usage)
         mark_unavailable(payload, reasons, GPU_VRAM_FIELDS, f"VRAM utilization unavailable from {source}")
         mark_unavailable(payload, reasons, GPU_TEMP_FIELDS, f"GPU temperature unavailable from {source}")
+        mark_unavailable(payload, reasons, GPU_FAN_RPM_FIELDS, f"GPU fan RPM unavailable from {source}")
+        mark_unavailable(payload, reasons, GPU_FAN_PERCENT_FIELDS, f"GPU fan sensor unavailable from {source}")
         payload["gpuCollectorSource"] = source
         return True, None
 
@@ -1704,7 +1770,8 @@ class HardwareMetricCollector:
         try:
             readings = sensors(fahrenheit=False) or {}
         except Exception:
-            readings = {}
+            mark_unavailable(payload, reasons, CPU_TEMP_FIELDS, "CPU temperature sensor query failed")
+            return
         selected: float | None = None
         fallback: float | None = None
         for entries in readings.values():
@@ -1732,10 +1799,14 @@ class HardwareMetricCollector:
             "vramUsagePercent": "VRAM sensor currently unsupported by this collector",
             "cpuTempCelsius": "CPU temperature sensor currently unsupported by this collector",
             "gpuTempCelsius": "GPU temperature sensor currently unsupported by this collector",
+            "gpuFanRpm": "GPU fan RPM sensor currently unsupported by this collector",
+            "gpuFanPercent": "GPU fan sensor currently unsupported by this collector",
+            "diskSmartStatus": "SMART health currently unsupported by this collector",
         }
         for field in OPTIONAL_SENSOR_STATUS_FIELDS:
             if payload.get(field) is None:
-                status[field] = "unsupported"
+                reason = reasons.get(field, default_reasons[field])
+                status[field] = "failed" if sensor_reason_is_failure(reason) else "unsupported"
                 reasons.setdefault(field, default_reasons[field])
             else:
                 status[field] = "collected"
@@ -3205,6 +3276,349 @@ def numeric_log_value(row: dict[str, Any], *fields: str) -> float | None:
         return None
 
 
+SENSOR_COLLECTED = "collected"
+SENSOR_UNSUPPORTED = "unsupported"
+SENSOR_FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class SensorReading:
+    value: float | str | None
+    availability: str
+    reason: str | None = None
+    unit: str = ""
+
+
+@dataclass(frozen=True)
+class HardwareSensorSnapshot:
+    cpu_usage: SensorReading
+    cpu_temp: SensorReading
+    gpu_usage: SensorReading
+    gpu_temp: SensorReading
+    gpu_fan: SensorReading
+    memory_usage: SensorReading
+    memory_used: SensorReading
+    memory_total: SensorReading
+    disk_activity: SensorReading
+    disk_usage: SensorReading
+    disk_health: SensorReading
+    cpu_history: tuple[float, ...]
+    gpu_history: tuple[float, ...]
+    memory_history: tuple[float, ...]
+    disk_history: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class SymptomScreenInput:
+    snapshot: HardwareSensorSnapshot
+    symptom: str
+    symptom_type: str | None
+
+
+@dataclass(frozen=True)
+class HardwareWidgetState:
+    key: str
+    title: str
+    primary: str
+    details: tuple[str, ...]
+    status: str
+    tone: str
+    history: tuple[float, ...]
+    highlighted: bool = False
+
+
+@dataclass(frozen=True)
+class SymptomScreenState:
+    widgets: tuple[HardwareWidgetState, ...]
+    symptom: str
+    suspected_components: tuple[str, ...]
+
+
+def metric_metadata(row: dict[str, Any], field: str) -> dict[str, Any]:
+    payload = log_payload(row)
+    value = row.get(field)
+    if not isinstance(value, dict):
+        value = payload.get(field)
+    return value if isinstance(value, dict) else {}
+
+
+def sensor_reading(row: dict[str, Any], *fields: str, unit: str = "") -> SensorReading:
+    value = log_value(row, *fields)
+    if value is not None and (not isinstance(value, str) or value.strip()):
+        normalized = rounded_or_none(value)
+        return SensorReading(normalized if normalized is not None else str(value).strip(), SENSOR_COLLECTED, unit=unit)
+
+    statuses = metric_metadata(row, "sensorStatus")
+    reasons = metric_metadata(row, "unavailableReason")
+    reason = next((str(reasons[field]) for field in fields if reasons.get(field)), None)
+    explicit_status = next((str(statuses[field]) for field in fields if statuses.get(field)), None)
+    availability = SENSOR_FAILED if explicit_status == SENSOR_FAILED or sensor_reason_is_failure(reason) else SENSOR_UNSUPPORTED
+    return SensorReading(None, availability, reason, unit)
+
+
+def sensor_history(rows: Sequence[dict[str, Any]], *fields: str) -> tuple[float, ...]:
+    history: list[float] = []
+    for row in rows[-16:]:
+        value = numeric_log_value(row, *fields)
+        if value is not None:
+            history.append(max(0.0, min(100.0, value)))
+    return tuple(history)
+
+
+def hardware_sensor_snapshot(current: dict[str, Any], rows: Sequence[dict[str, Any]]) -> HardwareSensorSnapshot:
+    fan_rpm = sensor_reading(current, *GPU_FAN_RPM_FIELDS, unit="RPM")
+    fan_percent = sensor_reading(current, *GPU_FAN_PERCENT_FIELDS, unit="%")
+    gpu_fan = fan_rpm if fan_rpm.availability == SENSOR_COLLECTED else fan_percent
+    if gpu_fan.availability != SENSOR_COLLECTED and fan_rpm.availability == SENSOR_FAILED:
+        gpu_fan = fan_rpm
+
+    disk_history = sensor_history(rows, *DISK_ACTIVE_FIELDS)
+    if not disk_history:
+        disk_history = sensor_history(rows, *DISK_USAGE_FIELDS)
+    return HardwareSensorSnapshot(
+        cpu_usage=sensor_reading(current, *CPU_USAGE_FIELDS),
+        cpu_temp=sensor_reading(current, *CPU_TEMP_FIELDS),
+        gpu_usage=sensor_reading(current, *GPU_USAGE_FIELDS),
+        gpu_temp=sensor_reading(current, *GPU_TEMP_FIELDS),
+        gpu_fan=gpu_fan,
+        memory_usage=sensor_reading(current, *MEMORY_USAGE_FIELDS),
+        memory_used=sensor_reading(current, *MEMORY_USED_FIELDS),
+        memory_total=sensor_reading(current, *MEMORY_TOTAL_FIELDS),
+        disk_activity=sensor_reading(current, *DISK_ACTIVE_FIELDS),
+        disk_usage=sensor_reading(current, *DISK_USAGE_FIELDS),
+        disk_health=sensor_reading(current, *DISK_HEALTH_FIELDS),
+        cpu_history=sensor_history(rows, *CPU_USAGE_FIELDS),
+        gpu_history=sensor_history(rows, *GPU_USAGE_FIELDS),
+        memory_history=sensor_history(rows, *MEMORY_USAGE_FIELDS),
+        disk_history=disk_history,
+    )
+
+
+def failed_system_metric_row(reason: str) -> dict[str, Any]:
+    fields = (
+        *CPU_USAGE_FIELDS,
+        *CPU_TEMP_FIELDS,
+        *GPU_USAGE_FIELDS,
+        *GPU_TEMP_FIELDS,
+        *GPU_FAN_RPM_FIELDS,
+        *GPU_FAN_PERCENT_FIELDS,
+        *MEMORY_USAGE_FIELDS,
+        *MEMORY_USED_FIELDS,
+        *MEMORY_TOTAL_FIELDS,
+        *DISK_ACTIVE_FIELDS,
+        *DISK_USAGE_FIELDS,
+        *DISK_HEALTH_FIELDS,
+    )
+    payload: dict[str, Any] = {field: None for field in fields}
+    payload["unavailableReason"] = {field: reason for field in fields}
+    payload["sensorStatus"] = {field: SENSOR_FAILED for field in fields}
+    return build_metric_snapshot(datetime.now(KST), 0, SYSTEM_METRIC_KIND, payload)
+
+
+class SystemSensorProvider:
+    def __init__(self, collector: HardwareMetricCollector | None = None) -> None:
+        self.collector = collector or HardwareMetricCollector()
+
+    def load(self, config: AgentConfig) -> SymptomScreenInput:
+        rows = [row for row in read_log_tail(log_file(config), 16) if is_system_metric_row(row)]
+        if rows:
+            current = rows[-1]
+            snapshot_rows = rows
+        else:
+            try:
+                current = self.collector.collect(datetime.now(KST), 0)
+            except Exception:
+                current = failed_system_metric_row("system sensor collection failed")
+            snapshot_rows = [current]
+        return SymptomScreenInput(
+            snapshot=hardware_sensor_snapshot(current, snapshot_rows),
+            symptom=config.symptom or "웹에서 전달받은 증상이 없습니다.",
+            symptom_type=config.symptom_type,
+        )
+
+
+class DemoSensorProvider:
+    DEMO_SYMPTOM = "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다."
+    CPU_HISTORY = (18, 22, 27, 31, 35, 42, 38, 34, 30, 28, 32, 36, 33, 30, 29, 32)
+    GPU_HISTORY = (24, 31, 38, 45, 53, 61, 70, 78, 82, 86, 84, 87, 86, 85, 84, 86)
+    MEMORY_HISTORY = (53, 54, 54, 55, 56, 57, 58, 59, 59, 60, 60, 61, 61, 62, 62, 62)
+    DISK_HISTORY = (14, 18, 22, 19, 25, 31, 28, 24, 20, 17, 21, 26, 23, 19, 22, 24)
+
+    def load(self, config: AgentConfig) -> SymptomScreenInput:
+        rows: list[dict[str, Any]] = []
+        for index in range(16):
+            payload = {
+                "cpuUsagePercent": self.CPU_HISTORY[index],
+                "cpuTempCelsius": 58.0,
+                "gpuUsagePercent": self.GPU_HISTORY[index],
+                "gpuTempCelsius": 88.0,
+                "gpuFanRpm": 0.0,
+                "gpuFanPercent": None,
+                "memoryUsedPercent": self.MEMORY_HISTORY[index],
+                "memoryUsedBytes": 10 * 1024**3,
+                "memoryTotalBytes": 16 * 1024**3,
+                "diskBusyEstimatePercent": self.DISK_HISTORY[index],
+                "diskUsedPercent": 48.0,
+                "diskSmartStatus": "정상",
+                "sensorStatus": {
+                    "cpuTempCelsius": SENSOR_COLLECTED,
+                    "gpuTempCelsius": SENSOR_COLLECTED,
+                    "gpuFanRpm": SENSOR_COLLECTED,
+                    "gpuFanPercent": SENSOR_UNSUPPORTED,
+                    "diskSmartStatus": SENSOR_COLLECTED,
+                },
+                "unavailableReason": {"gpuFanPercent": "demo fan percentage unsupported"},
+            }
+            rows.append(build_metric_snapshot(datetime.now(KST), index, SYSTEM_METRIC_KIND, payload))
+        return SymptomScreenInput(
+            snapshot=hardware_sensor_snapshot(rows[-1], rows),
+            symptom=config.symptom or self.DEMO_SYMPTOM,
+            symptom_type=config.symptom_type or "VISIT_FAN_THERMAL",
+        )
+
+
+def reading_number(reading: SensorReading) -> float | None:
+    return float(reading.value) if is_number(reading.value) else None
+
+
+def reading_text(reading: SensorReading, unit: str = "") -> str:
+    if reading.availability == SENSOR_FAILED:
+        return "확인 실패"
+    if reading.availability != SENSOR_COLLECTED:
+        return "측정 불가"
+    if isinstance(reading.value, str):
+        return reading.value
+    value = reading_number(reading)
+    if value is None:
+        return "측정 불가"
+    formatted = f"{value:.0f}" if value.is_integer() else f"{value:.1f}"
+    return f"{formatted}{unit}"
+
+
+def memory_size_text(reading: SensorReading) -> str:
+    value = reading_number(reading)
+    if reading.availability != SENSOR_COLLECTED or value is None:
+        return reading_text(reading)
+    return f"{value / 1024**3:.1f}GB"
+
+
+def fan_text(reading: SensorReading) -> str:
+    value = reading_number(reading)
+    if reading.availability != SENSOR_COLLECTED or value is None:
+        return reading_text(reading)
+    unit = reading.unit or "%"
+    if value == 0:
+        return f"0 {unit} (정지)"
+    return f"정상 회전 · {value:.0f}{unit}"
+
+
+def component_status(
+    usage: SensorReading,
+    optional: Sequence[SensorReading] = (),
+    temperature: SensorReading | None = None,
+    fan: SensorReading | None = None,
+    temperature_warning: float = 1000.0,
+    temperature_danger: float = 1000.0,
+) -> tuple[str, str]:
+    if usage.availability == SENSOR_FAILED or any(item.availability == SENSOR_FAILED for item in optional):
+        return "확인 실패", "warning"
+    if usage.availability != SENSOR_COLLECTED:
+        return "측정 불가", "default"
+    usage_value = reading_number(usage) or 0.0
+    temperature_value = reading_number(temperature) if temperature is not None else None
+    fan_value = reading_number(fan) if fan is not None else None
+    if usage_value >= PC_AGENT_USAGE_DANGER_THRESHOLD or (
+        temperature_value is not None and temperature_value >= temperature_danger
+    ):
+        return "이상", "danger"
+    if fan_value == 0 and temperature_value is not None and temperature_value >= temperature_warning:
+        return "이상", "danger"
+    if usage_value >= PC_AGENT_USAGE_WARNING_THRESHOLD or (
+        temperature_value is not None and temperature_value >= temperature_warning
+    ):
+        return "주의", "warning"
+    if fan_value == 0 or any(item.availability != SENSOR_COLLECTED for item in optional):
+        return "보통", "default"
+    if usage_value >= 50.0:
+        return "보통", "default"
+    return "정상", "default"
+
+
+def suspected_hardware_components(symptom: str, symptom_type: str | None) -> tuple[str, ...]:
+    normalized = symptom.casefold()
+    matches: set[str] = set()
+    keyword_groups = {
+        "cpu": ("cpu", "프로세서", "과열", "발열"),
+        "gpu": ("gpu", "그래픽", "프레임", "게임", "화면", "냉각", "팬", "온도"),
+        "ram": ("ram", "메모리"),
+        "disk": ("disk", "디스크", "ssd", "저장", "부팅"),
+    }
+    for component, keywords in keyword_groups.items():
+        if any(keyword in normalized for keyword in keywords):
+            matches.add(component)
+    type_components = {
+        "REMOTE_DRIVER_OS": ("gpu",),
+        "REMOTE_STORAGE_MEMORY": ("ram", "disk"),
+        "VISIT_FAN_THERMAL": ("cpu", "gpu"),
+        "VISIT_DISK_FAILURE": ("disk",),
+    }
+    matches.update(type_components.get(symptom_type or "", ()))
+    return tuple(component for component in ("cpu", "gpu", "ram", "disk") if component in matches)
+
+
+def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScreenState:
+    snapshot = screen_input.snapshot
+    suspected = suspected_hardware_components(screen_input.symptom, screen_input.symptom_type)
+
+    cpu_status, cpu_tone = component_status(
+        snapshot.cpu_usage,
+        (snapshot.cpu_temp,),
+        temperature=snapshot.cpu_temp,
+        temperature_warning=PC_AGENT_CPU_TEMP_WARNING_THRESHOLD,
+        temperature_danger=PC_AGENT_CPU_TEMP_DANGER_THRESHOLD,
+    )
+    gpu_status, gpu_tone = component_status(
+        snapshot.gpu_usage,
+        (snapshot.gpu_temp, snapshot.gpu_fan),
+        temperature=snapshot.gpu_temp,
+        fan=snapshot.gpu_fan,
+        temperature_warning=PC_AGENT_GPU_TEMP_WARNING_THRESHOLD,
+        temperature_danger=PC_AGENT_GPU_TEMP_DANGER_THRESHOLD,
+    )
+    memory_status, memory_tone = component_status(
+        snapshot.memory_usage,
+        (snapshot.memory_used, snapshot.memory_total),
+    )
+    disk_primary = snapshot.disk_activity if snapshot.disk_activity.availability == SENSOR_COLLECTED else snapshot.disk_usage
+    disk_status, disk_tone = component_status(disk_primary, (snapshot.disk_health,))
+
+    memory_capacity = f"{memory_size_text(snapshot.memory_used)} / {memory_size_text(snapshot.memory_total)}"
+    disk_label = "활성 시간" if snapshot.disk_activity.availability == SENSOR_COLLECTED else "사용률"
+    widgets = (
+        HardwareWidgetState(
+            "cpu", "CPU", f"사용률 {reading_text(snapshot.cpu_usage, '%')}",
+            (f"온도 {reading_text(snapshot.cpu_temp, '°C')}",), cpu_status, cpu_tone,
+            snapshot.cpu_history, "cpu" in suspected,
+        ),
+        HardwareWidgetState(
+            "gpu", "GPU", f"사용률 {reading_text(snapshot.gpu_usage, '%')}",
+            (f"온도 {reading_text(snapshot.gpu_temp, '°C')}", f"팬 {fan_text(snapshot.gpu_fan)}"), gpu_status, gpu_tone,
+            snapshot.gpu_history, "gpu" in suspected,
+        ),
+        HardwareWidgetState(
+            "ram", "RAM", f"사용률 {reading_text(snapshot.memory_usage, '%')}",
+            (memory_capacity,), memory_status, memory_tone,
+            snapshot.memory_history, "ram" in suspected,
+        ),
+        HardwareWidgetState(
+            "disk", "디스크", f"{disk_label} {reading_text(disk_primary, '%')}",
+            (f"SMART {reading_text(snapshot.disk_health)}",), disk_status, disk_tone,
+            snapshot.disk_history, "disk" in suspected,
+        ),
+    )
+    return SymptomScreenState(widgets, screen_input.symptom, suspected)
+
+
 def home_usage_detection(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     now = datetime.now(KST)
     cutoff = now - timedelta(minutes=HOME_USAGE_LOOKBACK_MINUTES)
@@ -4301,6 +4715,8 @@ def show_log_viewer(
         "red_soft": "#fff0ef",
         "green": "#12bd67",
         "green_soft": "#effbf5",
+        "warning": "#f59e0b",
+        "danger": "#c2410c",
     }
     capture_state = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
     if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT", "AS_REQUEST_CREATED"}:
@@ -4315,6 +4731,8 @@ def show_log_viewer(
         "window": None,
         "ticketUrl": None,
     }
+    system_sensor_provider = SystemSensorProvider()
+    demo_sensor_provider = DemoSensorProvider()
     image_refs: list[Any] = []
     button_counter = {"value": 0}
     drag_origin = {"x": 0, "y": 0}
@@ -4481,29 +4899,32 @@ def show_log_viewer(
         line(570, 136, 710, 136, "#d9d9d9")
         draw_step(3, 740, PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
 
-    def draw_sparkline(x: int, y: int, values: Sequence[int], emphasis: bool = False) -> None:
+    def draw_sparkline(x: int, y: int, values: Sequence[float], emphasis: bool = False) -> None:
         for index, value in enumerate(values):
             shade = "#8e8e8e" if emphasis and 6 <= index <= 9 else "#e7e7e7"
-            canvas.create_rectangle(x + index * 10, y - value, x + index * 10 + 6, y, fill=shade, outline="")
+            height = max(4, int(min(100.0, max(0.0, value)) * 0.38))
+            canvas.create_rectangle(x + index * 10, y - height, x + index * 10 + 6, y, fill=shade, outline="")
 
     def draw_symptom() -> None:
-        cards = [
-            (70, "CPU", "점검 예정", False, [15, 20, 25, 31, 38, 46, 32, 26, 23, 20, 19, 20, 22, 20, 19, 27]),
-            (287, "GPU", "우선 점검", True, [8, 12, 17, 21, 18, 28, 38, 47, 55, 42, 34, 28, 26, 21, 17, 12]),
-            (504, "RAM", "참고 확인", False, [24, 14, 13, 19, 25, 29, 37, 24, 16, 9, 28, 39, 30, 22, 16, 11]),
-            (721, "디스크", "참고 확인", False, [26, 12, 20, 18, 14, 11, 9, 13, 18, 24, 18, 15, 17, 21, 27, 19]),
-        ]
-        for x, title_value, subtitle, active, values in cards:
-            round_rect(x, 182, x + 209, 350, 12, "#ffffff", colors["blue"] if active else "#d9d9d9", 2 if active else 1)
-            text(x + 22, 209, title_value, 18, colors["blue"] if active else colors["text"], "semibold")
-            text(x + 22, 241, subtitle, 13, colors["blue"] if active else colors["muted"])
-            draw_sparkline(x + 22, 325, values, emphasis=active or title_value == "CPU")
+        provider = demo_sensor_provider if ui["demo"] else system_sensor_provider
+        screen = build_symptom_screen_state(provider.load(config))
+        for x, card in zip((70, 287, 504, 721), screen.widgets, strict=False):
+            tone_color = colors[card.tone] if card.tone in {"warning", "danger"} else None
+            outline = tone_color or (colors["blue"] if card.highlighted else "#d9d9d9")
+            emphasis = bool(tone_color or card.highlighted)
+            round_rect(x, 182, x + 209, 350, 12, "#ffffff", outline, 2 if emphasis else 1)
+            text(x + 18, 199, card.title, 17, tone_color or colors["text"], "semibold")
+            text(x + 18, 227, card.primary, 13, tone_color or colors["text"], "semibold")
+            for detail_index, detail in enumerate(card.details[:2]):
+                text(x + 18, 251 + detail_index * 18, detail, 10, colors["muted"])
+            text(x + 18, 291, f"상태 {card.status}", 11, tone_color or colors["muted"], "semibold")
+            draw_sparkline(x + 18, 336, card.history, emphasis=emphasis)
 
         round_rect(70, 370, 930, 530, 12, "#ffffff", "#dddddd")
         canvas.create_oval(90, 393, 132, 435, fill="#f4f4f4", outline="")
         draw_chat_icon(111, 414, 9)
         text(153, 390, "전달받은 증상", 17, colors["text"], "semibold")
-        text(153, 423, "“게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.”", 16, colors["text"], width=735)
+        text(153, 423, f"“{screen.symptom}”", 15, colors["text"], width=735)
         text(153, 477, "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.", 13, colors["muted"])
         button(390, 555, 610, 608, "진단 시작", start_diagnosis, True, size=15)
 
@@ -4781,7 +5202,15 @@ def show_log_viewer(
 
     canvas.bind("<ButtonPress-1>", lambda event: start_drag(event) if event.y <= 68 else None)
     canvas.bind("<B1-Motion>", lambda event: drag_window(event) if event.y <= 68 else None)
+
+    def refresh_symptom_metrics() -> None:
+        if root.winfo_exists() and ui["state"] == "SYMPTOM_CONFIRM":
+            render()
+        if root.winfo_exists():
+            root.after(5000, refresh_symptom_metrics)
+
     render()
+    root.after(5000, refresh_symptom_metrics)
     try:
         root.mainloop()
     finally:

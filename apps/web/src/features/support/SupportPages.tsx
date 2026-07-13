@@ -407,7 +407,11 @@ export function SupportNewPage() {
     setAgentDownloadMessage('');
     try {
       const activation = await issueAgentActivationToken();
-      await downloadAgentPackage(activation.activationToken);
+      await downloadAgentPackage(
+        activation.activationToken,
+        symptomDetail.trim() || symptomTitle.trim(),
+        symptomType
+      );
       setAgentDownloadState('done');
       setAgentDownloadMessage('PCAgent.zip을 내려받았습니다. 압축을 풀고 PCAgent.exe를 실행하면 자동 등록됩니다.');
     } catch (cause) {
@@ -1126,13 +1130,15 @@ function toSupportRequestKind(value?: string | null): SupportRequestKind {
   return 'DIAGNOSIS_ONLY';
 }
 
-async function downloadAgentPackage(activationToken: string) {
+async function downloadAgentPackage(activationToken: string, symptom: string, symptomType: string) {
   const manifest = await fetchAgentDownloadManifest();
   const exe = await fetchAgentExecutable(manifest);
   const config = {
     apiBaseUrl: resolveAgentApiBaseUrl(),
     webBaseUrl: window.location.origin,
     activationToken,
+    symptom,
+    symptomType,
     environment: import.meta.env.MODE ?? 'local'
   };
   const encoder = new TextEncoder();

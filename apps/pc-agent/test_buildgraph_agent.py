@@ -452,7 +452,7 @@ class AgentGoal1112Test(unittest.TestCase):
                 return 10.0
 
             def virtual_memory(self) -> SimpleNamespace:
-                return SimpleNamespace(percent=20.0)
+                return SimpleNamespace(percent=20.0, used=8 * 1024**3, total=16 * 1024**3)
 
             def disk_usage(self, path: str) -> SimpleNamespace:
                 return SimpleNamespace(percent=30.0)
@@ -468,7 +468,7 @@ class AgentGoal1112Test(unittest.TestCase):
 
         collector = agent.HardwareMetricCollector(
             psutil_module=FakePsutil(),
-            nvidia_smi_runner=lambda: SimpleNamespace(returncode=0, stdout="42, 2048, 8192, 66\n"),
+            nvidia_smi_runner=lambda: SimpleNamespace(returncode=0, stdout="42, 2048, 8192, 66, 37\n"),
             time_fn=lambda: 100.0,
         )
 
@@ -480,12 +480,117 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(row["vramUsagePercent"], 25.0)
         self.assertEqual(row["gpuTemp"], 66.0)
         self.assertEqual(row["gpuTempCelsius"], 66.0)
+        self.assertEqual(row["gpuFanPercent"], 37.0)
+        self.assertEqual(row["memoryUsedBytes"], 8 * 1024**3)
+        self.assertEqual(row["memoryTotalBytes"], 16 * 1024**3)
         self.assertEqual(row["gpuCollectorSource"], "nvidia-smi")
         self.assertEqual(row["sensorStatus"]["vramUsagePercent"], "collected")
         self.assertEqual(row["sensorStatus"]["gpuTempCelsius"], "collected")
         self.assertEqual(row["sensorStatus"]["cpuTempCelsius"], "unsupported")
         self.assertEqual(agent.display_log_table_values(row)[6], "25.0%")
         self.assertEqual(agent.display_log_table_values(row)[8], "66.0C")
+
+    def test_symptom_screen_marks_usage_at_80_percent_as_warning(self) -> None:
+        payload = {
+            "cpuUsagePercent": 80.0,
+            "cpuTempCelsius": 60.0,
+            "gpuUsagePercent": 30.0,
+            "gpuTempCelsius": 55.0,
+            "gpuFanPercent": 25.0,
+            "memoryUsedPercent": 40.0,
+            "memoryUsedBytes": 6 * 1024**3,
+            "memoryTotalBytes": 16 * 1024**3,
+            "diskBusyEstimatePercent": 20.0,
+            "diskUsedPercent": 45.0,
+            "diskSmartStatus": "정상",
+        }
+        row = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, payload)
+        snapshot = agent.hardware_sensor_snapshot(row, [row])
+        screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(snapshot, "CPU 사용률이 높습니다.", None))
+
+        self.assertEqual(screen.widgets[0].status, "주의")
+        self.assertEqual(screen.widgets[0].tone, "warning")
+
+    def test_symptom_screen_distinguishes_zero_fan_unsupported_and_failed_sensor(self) -> None:
+        zero_fan_payload = {
+            "cpuUsagePercent": 20.0,
+            "cpuTempCelsius": 55.0,
+            "gpuUsagePercent": 30.0,
+            "gpuTempCelsius": 60.0,
+            "gpuFanRpm": 0.0,
+            "memoryUsedPercent": 40.0,
+            "memoryUsedBytes": 6 * 1024**3,
+            "memoryTotalBytes": 16 * 1024**3,
+            "diskUsedPercent": 45.0,
+            "diskSmartStatus": None,
+            "unavailableReason": {"diskSmartStatus": "SMART unsupported"},
+        }
+        zero_fan_row = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, zero_fan_payload)
+        zero_fan_screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(zero_fan_row, [zero_fan_row]), "팬을 확인해 주세요.", None
+        ))
+        self.assertIn("0 RPM (정지)", zero_fan_screen.widgets[1].details[1])
+        self.assertIn("측정 불가", zero_fan_screen.widgets[3].details[0])
+
+        failed = agent.failed_system_metric_row("system sensor collection failed")
+        failed_screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(failed, [failed]), "센서 확인", None
+        ))
+        self.assertEqual(failed_screen.widgets[0].status, "확인 실패")
+        self.assertIn("확인 실패", failed_screen.widgets[0].primary)
+
+    def test_demo_sensor_provider_is_deterministic_and_uses_shared_status_policy(self) -> None:
+        config = agent.AgentConfig(
+            api_base_url="http://localhost:8080",
+            activation_token="activation-token",
+            device_fingerprint_hash="fingerprint",
+            os_version="Windows 11",
+            agent_version="test-agent",
+            policy_version="test-policy",
+        )
+        provider = agent.DemoSensorProvider()
+
+        first = agent.build_symptom_screen_state(provider.load(config))
+        second = agent.build_symptom_screen_state(provider.load(config))
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.widgets[1].status, "이상")
+        self.assertIn("0 RPM (정지)", first.widgets[1].details[1])
+
+    def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
+        class Collector:
+            def collect(self, ts: datetime, index: int) -> dict:
+                payload = {
+                    "cpuUsagePercent": 20.0,
+                    "cpuTempCelsius": 55.0,
+                    "gpuUsagePercent": 30.0,
+                    "gpuTempCelsius": 60.0,
+                    "gpuFanPercent": 25.0,
+                    "memoryUsedPercent": 40.0,
+                    "memoryUsedBytes": 6 * 1024**3,
+                    "memoryTotalBytes": 16 * 1024**3,
+                    "diskBusyEstimatePercent": 15.0,
+                    "diskUsedPercent": 45.0,
+                    "diskSmartStatus": "정상",
+                }
+                return agent.build_metric_snapshot(ts, index, agent.SYSTEM_METRIC_KIND, payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = agent.AgentConfig(
+                api_base_url="http://localhost:8080",
+                activation_token="activation-token",
+                device_fingerprint_hash="fingerprint",
+                os_version="Windows 11",
+                agent_version="test-agent",
+                policy_version="test-policy",
+                log_dir=Path(directory),
+                symptom="SSD 저장장치에서 오류가 발생합니다.",
+                symptom_type="VISIT_DISK_FAILURE",
+            )
+            screen = agent.build_symptom_screen_state(agent.SystemSensorProvider(Collector()).load(config))
+
+        self.assertEqual(screen.symptom, "SSD 저장장치에서 오류가 발생합니다.")
+        self.assertTrue(screen.widgets[3].highlighted)
 
     def test_metric_collector_uses_windows_gpu_counter_after_nvidia_failure(self) -> None:
         class FakePsutil:
