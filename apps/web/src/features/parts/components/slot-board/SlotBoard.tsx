@@ -20,6 +20,7 @@ import {
   type SlotEdgeConfig
 } from './slotBoardConfig';
 import { FusedPlateArt } from './FusedPlateArt';
+import { ThreeDAssemblyView } from './ThreeDAssemblyView';
 
 // 3뷰: 배치판(fused, 기본) / 실장도(motherboard, 구 평면도 복원) / 3D 등각(isometric).
 export type SlotBoardVisualMode = 'fused' | 'motherboard' | 'isometric';
@@ -134,7 +135,7 @@ export function SlotBoard({
   };
 
   useEffect(() => {
-    if (!hasAiFocus || !onClearAiFocus) return undefined;
+    if (!onClearAiFocus) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         onClearAiFocus();
@@ -142,7 +143,7 @@ export function SlotBoard({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [hasAiFocus, onClearAiFocus]);
+  }, [onClearAiFocus]);
 
   return (
     <div className="panel slot-board-panel relative flex h-full min-h-0 flex-col overflow-hidden">
@@ -171,15 +172,6 @@ export function SlotBoard({
           <SlotBoardModeSegments value={visualMode} onChange={handleVisualModeChange} />
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-end gap-3 text-[10px] font-bold text-slate-500">
-          {isIsometric ? (
-            <SlotBoardDisplaySwitch
-              label="보드 정보 표시"
-              checked={overlaysVisible}
-              onToggle={() => setOverlaysVisible((visible) => !visible)}
-              onText="정보 켜짐"
-              offText="정보 꺼짐"
-            />
-          ) : null}
           <span className="flex items-center gap-1.5">
             <svg width="20" height="4" viewBox="0 0 20 4" aria-hidden="true"><line x1="0" y1="2" x2="20" y2="2" stroke="#16a34a" strokeWidth="3" /></svg>
             호환 가능
@@ -339,47 +331,6 @@ function SlotBoardModeSegments({
         );
       })}
     </div>
-  );
-}
-
-function SlotBoardDisplaySwitch({
-  label,
-  checked,
-  onToggle,
-  onText,
-  offText
-}: {
-  label: string;
-  checked: boolean;
-  onToggle: () => void;
-  onText: string;
-  offText: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label={label}
-      aria-checked={checked}
-      onClick={onToggle}
-      className={`hidden items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue lg:inline-flex ${
-        checked
-          ? 'border-blue-200 bg-blue-50 text-brand-blue'
-          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-      }`}
-    >
-      <span
-        aria-hidden="true"
-        className={`relative h-3.5 w-6 rounded-full transition ${checked ? 'bg-brand-blue' : 'bg-slate-300'}`}
-      >
-        <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white shadow-sm transition ${
-            checked ? 'left-3' : 'left-0.5'
-          }`}
-        />
-      </span>
-      {checked ? onText : offText}
-    </button>
   );
 }
 
@@ -1279,22 +1230,7 @@ function MotherboardSlotBoardBody({
   );
 }
 
-function IsometricSlotBoardBody({
-  items,
-  selectedCategory,
-  aiFocusCategories,
-  nextCategory,
-  onSlotSelect,
-  onClearSelection,
-  onClearAiFocus,
-  onRemoveItem,
-  isRemovePending,
-  graph,
-  statusByCategory,
-  flashingCategories,
-  overlaysVisible,
-  connectorAnchors
-}: {
+type IsometricSlotBoardBodyProps = {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
   aiFocusCategories: PartCategory[];
@@ -1309,7 +1245,72 @@ function IsometricSlotBoardBody({
   flashingCategories: Set<PartCategory>;
   overlaysVisible: boolean;
   connectorAnchors?: ConnectorAnchors;
-}) {
+};
+
+function IsometricSlotBoardBody(props: IsometricSlotBoardBodyProps) {
+  const [activeProblemCategory, setActiveProblemCategory] = useState<PartCategory | null>(null);
+  const problemDetailsByCategory = slotProblemDetailsByCategory(props.graph);
+  const activeProblem = activeProblemCategory ? problemDetailsByCategory.get(activeProblemCategory) : undefined;
+
+  useEffect(() => {
+    if (activeProblemCategory && !problemDetailsByCategory.has(activeProblemCategory)) {
+      setActiveProblemCategory(null);
+    }
+  }, [activeProblemCategory, props.graph]);
+
+  useEffect(() => {
+    if (!activeProblem) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActiveProblemCategory(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeProblem]);
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <ThreeDAssemblyView
+        items={props.items}
+        selectedCategory={props.selectedCategory}
+        aiFocusCategories={props.aiFocusCategories}
+        statusByCategory={props.statusByCategory}
+        onSelectCategory={props.onSlotSelect}
+        onClearSelection={props.onClearSelection}
+        onClearAiFocus={props.onClearAiFocus}
+        onProblemOpen={setActiveProblemCategory}
+        hasProblem={(category) => problemDetailsByCategory.has(category)}
+        fallback={<LegacyIsometricSlotBoardBody {...props} />}
+      />
+      {activeProblem ? (
+        <SlotProblemPopover
+          detail={activeProblem}
+          onClose={() => setActiveProblemCategory(null)}
+          onShowCandidates={() => {
+            setActiveProblemCategory(null);
+            props.onSlotSelect(activeProblem.category);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function LegacyIsometricSlotBoardBody({
+  items,
+  selectedCategory,
+  aiFocusCategories,
+  nextCategory,
+  onSlotSelect,
+  onClearSelection,
+  onClearAiFocus,
+  onRemoveItem,
+  isRemovePending,
+  graph,
+  statusByCategory,
+  flashingCategories,
+  overlaysVisible,
+  connectorAnchors
+}: IsometricSlotBoardBodyProps) {
   const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
   const [activeProblemCategory, setActiveProblemCategory] = useState<PartCategory | null>(null);
   const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
