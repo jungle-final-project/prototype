@@ -1,5 +1,7 @@
 # BuildGraph AI를 서울 리전에 올리는 결정 완결형 설계
 
+> **현재 작업 기준 아님:** 이 문서는 ECS Fargate 대안 설계의 기록이다. 현재 운영 인프라 분리는 [aws-infrastructure-separation-plan.md](aws-infrastructure-separation-plan.md)의 API EC2 + 저비용 Single-AZ 구성을 우선한다.
+
 > AWS 배포 전략 · ap-northeast-2 · ECS Fargate
 
 그린필드 AWS 배포. 로컬 `docker-compose`(앱 3 + 인프라 4)를 풀 관리형 스택으로 옮기고, **오토스케일링 부하 시연**을 핵심 목표로 삼는다. 5개 축(컴퓨트 · 데이터 · 네트워크 · CI/CD · 관측/비용)의 개별 설계를 하나로 통합하고 상호 모순을 해소했으며, 적대적 리뷰가 짚은 14개 갭(다중 태스크 상태 공유 · WS 브로드캐스트 · LLM 과금 봉쇄 · 시크릿 평문)을 본문에 반영했다. **`apps/pc-agent`는 사용자 로컬 실행 CLI라 서버 배포 대상이 아니다** — AWS는 RabbitMQ 큐·활성화 토큰만 제공하고 에이전트 실행은 사용자 PC에서 돈다.

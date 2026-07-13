@@ -2,6 +2,8 @@
 
 이 문서는 [aws-infrastructure-separation-plan.md](aws-infrastructure-separation-plan.md)의 Phase 1 결과다. Phase 1에서는 운영 AWS 리소스와 현재 배포를 변경하지 않고, 이후 설정 변경을 판정할 테스트부터 작성한다.
 
+이후 테스트 대상은 새 Green API EC2에 배포할 설정이다. 기존 Blue의 `compose.prod.yaml`은 CloudFront 전환과 롤백 대기 기간이 끝날 때까지 테스트를 맞추기 위해 수정하거나 중지하지 않는다.
+
 ## Phase 1 상태
 
 - 테스트 작성 완료일: `2026-07-13`
@@ -44,10 +46,10 @@ SPRING_RABBITMQ_PASSWORD
 SPRING_RABBITMQ_SSL_ENABLED
 ```
 
-Amazon MQ RabbitMQ Cluster의 `SPRING_RABBITMQ_ADDRESSES`는 다음 형식을 사용한다.
+Amazon MQ RabbitMQ Single-instance broker의 `SPRING_RABBITMQ_ADDRESSES`는 다음 형식을 사용한다.
 
 ```text
-broker-host-1:5671,broker-host-2:5671,broker-host-3:5671
+broker-host:5671
 ```
 
 `amqps://` 접두사는 넣지 않고 TLS 여부는 `SPRING_RABBITMQ_SSL_ENABLED=true`로 별도 설정한다.
@@ -84,7 +86,21 @@ mailpit
 - React 정적 파일, `/assets/*`, `index.html`을 제공하지 않는다.
 - 실제 설정 파일이 추가되면 컨테이너에서 `nginx -t`를 실행한다.
 
+Blue와 Green은 서로 다른 EC2이므로 두 환경 모두 Nginx `80`과 API 컨테이너 `8080`을 사용할 수 있다. `18080` 같은 Green 전용 포트는 만들지 않는다.
+
+### Blue·Green 공유 보안 그룹 수동 검증
+
+AWS 콘솔 설정은 정적 검증기 범위 밖이므로 Phase 2와 Phase 6에서 다음을 수동 확인한다.
+
+- Green EC2에 기존 `buildgraph-demo-ec2-sg` / `sg-099aac782b77a854e`를 연결
+- RDS SG 5432, Redis SG 6379, RabbitMQ SG 5671의 Source가 공유 SG `sg-099aac782b77a854e`
+- 공유 SG의 기존 SSH 22 규칙은 Blue SSH 배포 종료 전까지 임시 유지
+- Green API 컨테이너 8080은 호스트나 공유 SG에 공개하지 않음
+- Green EC2 접속과 배포는 SSM Session Manager·Run Command 사용
+
 CloudFront는 AWS 콘솔 수동 관리 대상이므로 정적 파일 검사에 포함하지 않는다. `/api/*`와 `/ws/*`의 캐시·헤더·WebSocket 설정은 CloudFront 전환 단계에서 콘솔 체크리스트와 배포 후 요청으로 검증한다.
+
+Primary CloudFront를 변경하기 전에 Staging Distribution에서 S3 Web과 Green API를 검증한다. header 기반 요청으로 API를 먼저 확인하고, 브라우저 WebSocket은 낮은 비율의 weight-based 정책과 session stickiness로 확인한다. Primary 전환 후 롤백 대기 기간이 끝날 때까지 Blue의 기존 Origin과 Compose를 제거하지 않는다.
 
 ## 실제 AWS 연결 테스트
 
