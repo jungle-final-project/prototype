@@ -21,12 +21,21 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import quote, urljoin
+
+from diagnosis_request_agent import (
+    AgentDiagnosisWebSocketClient,
+    BackgroundViewerController,
+    DiagnosisSession,
+    DiagnosisSessionStore,
+    DiagnosisRequestProcessor,
+    ViewerRequestSignal,
+)
 
 try:
     import tkinter as tk
@@ -93,7 +102,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.7"
+DEFAULT_AGENT_VERSION = "0.1.8"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -484,6 +493,7 @@ class AgentConfig:
     environment: str = "local"
     symptom: str | None = None
     symptom_type: str | None = None
+    device_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
@@ -501,6 +511,7 @@ class AgentConfig:
             environment=optional_config_text(data, "environment") or "local",
             symptom=optional_config_text(data, "symptom"),
             symptom_type=optional_config_text(data, "symptomType"),
+            device_id=optional_config_text(data, "deviceId"),
         )
 
     def registration_status(self) -> str:
@@ -4659,6 +4670,11 @@ def show_log_viewer(
     config_path: Path,
     focus_signal: dict[str, Any] | None = None,
     support_signal: dict[str, Any] | None = None,
+    background_mode: bool = False,
+    diagnosis_session_provider: Any = None,
+    connection_state_provider: Any = None,
+    on_window_ready: Any = None,
+    on_window_closed: Any = None,
 ) -> None:
     """Render the reference PC diagnosis flow while preserving the existing Agent boundaries."""
     if tk is None or ttk is None:
@@ -4721,9 +4737,12 @@ def show_log_viewer(
     capture_state = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
     if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT", "AS_REQUEST_CREATED"}:
         capture_state = "SYMPTOM_CONFIRM"
+    diagnosis_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
     ui = {
         "state": capture_state,
-        "demo": True,
+        "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else True,
+        "diagnosisSession": diagnosis_session,
+        "requestLocked": isinstance(diagnosis_session, DiagnosisSession),
         "busy": False,
         "diagnosisReady": False,
         "status": "",
@@ -4855,14 +4874,16 @@ def show_log_viewer(
         canvas.create_line(974, 21, 986, 35, fill="#111111", width=2, tags="window-close")
         canvas.create_line(986, 21, 974, 35, fill="#111111", width=2, tags="window-close")
         bind_click("window-min", root.iconify)
-        bind_click("window-close", root.destroy)
+        bind_click("window-close", close_window)
         canvas.tag_bind("window-max", "<Button-1>", lambda event: None)
         canvas.tag_bind("window-max", "<Enter>", lambda event: canvas.configure(cursor="hand2"))
         canvas.tag_bind("window-max", "<Leave>", lambda event: canvas.configure(cursor=""))
 
+        connection_state = connection_state_provider() if callable(connection_state_provider) else "IDLE"
+        connected = connection_state in {"IDLE", "REQUEST_RECEIVED", "RUNNING", "COMPLETED"}
         round_rect(778, 68, 866, 102, 8, "#ffffff", "#d8d8d8")
-        canvas.create_oval(791, 81, 799, 89, fill=colors["green"], outline="")
-        text(809, 85, "연결됨", 13, colors["text"], "regular", "w")
+        canvas.create_oval(791, 81, 799, 89, fill=colors["green"] if connected else colors["subtle"], outline="")
+        text(809, 85, "연결됨" if connected else "연결 끊김", 13, colors["text"], "regular", "w")
         tag = "demo-toggle"
         round_rect(878, 68, 970, 102, 8, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1, tag)
         text(924, 85, "시연 모드", 13, colors["text"], "regular", "center", tags=tag)
@@ -4907,7 +4928,15 @@ def show_log_viewer(
 
     def draw_symptom() -> None:
         provider = demo_sensor_provider if ui["demo"] else system_sensor_provider
-        screen = build_symptom_screen_state(provider.load(config))
+        screen_input = provider.load(config)
+        active_session = ui["diagnosisSession"]
+        if isinstance(active_session, DiagnosisSession):
+            screen_input = replace(
+                screen_input,
+                symptom=active_session.request.symptom,
+                symptom_type=None,
+            )
+        screen = build_symptom_screen_state(screen_input)
         for x, card in zip((70, 287, 504, 721), screen.widgets, strict=False):
             tone_color = colors[card.tone] if card.tone in {"warning", "danger"} else None
             outline = tone_color or (colors["blue"] if card.highlighted else "#d9d9d9")
@@ -5066,7 +5095,7 @@ def show_log_viewer(
             draw_success()
 
     def toggle_demo() -> None:
-        if ui["busy"]:
+        if ui["busy"] or ui["requestLocked"]:
             return
         ui["demo"] = not bool(ui["demo"])
         ui["state"] = "SYMPTOM_CONFIRM"
@@ -5200,6 +5229,45 @@ def show_log_viewer(
     def drag_window(event: tk.Event) -> None:
         root.geometry(f"+{event.x_root - drag_origin['x']}+{event.y_root - drag_origin['y']}")
 
+    def focus_window() -> None:
+        try:
+            root.deiconify()
+            root.state("normal")
+            root.lift()
+            root.attributes("-topmost", True)
+            root.after(800, lambda: root.attributes("-topmost", False))
+            root.focus_force()
+        except tk.TclError:
+            return
+
+    def close_window() -> None:
+        if background_mode:
+            root.withdraw()
+        else:
+            root.destroy()
+
+    def apply_diagnosis_session(session: DiagnosisSession | None) -> None:
+        ui["diagnosisSession"] = session
+        ui["requestLocked"] = isinstance(session, DiagnosisSession)
+        if isinstance(session, DiagnosisSession):
+            ui["demo"] = session.request.mode == "DEMO"
+            ui["state"] = "SYMPTOM_CONFIRM"
+            ui["diagnosisReady"] = False
+            ui["diagnosis"] = None
+            ui["window"] = None
+            ui["ticketUrl"] = None
+            ui["status"] = ""
+        render()
+
+    def request_focus() -> None:
+        root.after(0, focus_window)
+
+    def request_apply_session(session: DiagnosisSession | None) -> None:
+        root.after(0, lambda: apply_diagnosis_session(session))
+
+    def request_destroy() -> None:
+        root.after(0, root.destroy)
+
     canvas.bind("<ButtonPress-1>", lambda event: start_drag(event) if event.y <= 68 else None)
     canvas.bind("<B1-Motion>", lambda event: drag_window(event) if event.y <= 68 else None)
 
@@ -5210,10 +5278,14 @@ def show_log_viewer(
             root.after(5000, refresh_symptom_metrics)
 
     render()
+    if callable(on_window_ready):
+        on_window_ready(request_focus, request_apply_session, request_destroy)
     root.after(5000, refresh_symptom_metrics)
     try:
         root.mainloop()
     finally:
+        if callable(on_window_closed):
+            on_window_closed()
         viewer_lock.release()
 
 
@@ -5928,7 +6000,10 @@ def run_background(
     instance_lock = acquire_named_instance_lock(BACKGROUND_INSTANCE_MUTEX_NAME)
     if instance_lock is None:
         if open_viewer_when_running:
-            show_log_viewer(ensure_default_config(config_path or default_background_config_path()))
+            ViewerRequestSignal(
+                app_data_dir() / "show-viewer-request.json",
+                restrict_file_to_current_user,
+            ).signal()
         return 0
     try:
         path = ensure_default_config(config_path or default_background_config_path())
@@ -5947,14 +6022,65 @@ def run_background(
         write_pid()
         runtime = AgentRuntime()
 
+        connection_state = {"value": "DISCONNECTED"}
+        diagnosis_store = DiagnosisSessionStore(app_data_dir() / "diagnosis-request-state.json")
+        viewer_controller = BackgroundViewerController(
+            path,
+            lambda: diagnosis_store.session,
+            lambda: connection_state["value"],
+            show_log_viewer,
+        )
+
+        def on_connection_state_changed(state: str) -> None:
+            connection_state["value"] = state
+
+        def on_initial_metrics_requested(session: DiagnosisSession) -> None:
+            # 다음 단계가 실제 초기 메트릭 수집기를 이 경계에 연결한다.
+            return
+
+        try:
+            current_config = load_config(path)
+        except ConfigError:
+            current_config = None
+        diagnosis_processor = DiagnosisRequestProcessor(
+            diagnosis_store,
+            device_id=current_config.device_id if current_config else None,
+            on_request=viewer_controller.show,
+            on_initial_metrics_requested=on_initial_metrics_requested,
+        )
+        diagnosis_client = None
+        if current_config and current_config.agent_token:
+            diagnosis_client = AgentDiagnosisWebSocketClient(
+                current_config.api_base_url,
+                current_config.agent_token,
+                diagnosis_processor,
+                on_state_changed=on_connection_state_changed,
+            )
+            diagnosis_client.start()
+        else:
+            on_connection_state_changed("FAILED")
+
         import threading
 
         worker = threading.Thread(target=collect_background_loop, args=(path, runtime, interval_seconds), daemon=True)
         worker.start()
+        viewer_signal = ViewerRequestSignal(
+            app_data_dir() / "show-viewer-request.json",
+            restrict_file_to_current_user,
+        )
+        viewer_signal_worker = threading.Thread(
+            target=viewer_signal.monitor,
+            args=(runtime, viewer_controller),
+            daemon=True,
+        )
+        viewer_signal_worker.start()
 
         if with_tray and pystray is not None:
             def stop(icon: object, item: object = None) -> None:
                 runtime.stop()
+                if diagnosis_client is not None:
+                    diagnosis_client.stop()
+                viewer_controller.shutdown()
                 remove_pid()
                 icon.stop()
 
@@ -5963,10 +6089,10 @@ def run_background(
                 create_tray_image(),
                 DISPLAY_APP_NAME,
                 menu=pystray.Menu(
-                    pystray.MenuItem("Open log viewer", lambda icon, item: show_log_viewer(path), default=True),
-                    pystray.MenuItem("Open log folder", lambda icon, item: open_log_folder(path)),
-                    pystray.MenuItem("Open AS page", lambda icon, item: open_support_page(path)),
-                    pystray.MenuItem("Stop", stop),
+                    pystray.MenuItem("PC Agent 열기", lambda icon, item: viewer_controller.show(), default=True),
+                    pystray.MenuItem("로그 폴더 열기", lambda icon, item: open_log_folder(path)),
+                    pystray.MenuItem("AS 페이지 열기", lambda icon, item: open_support_page(path)),
+                    pystray.MenuItem("Agent 종료", stop),
                 ),
             )
             icon.run()
@@ -5978,6 +6104,9 @@ def run_background(
                 runtime.stop()
 
         runtime.stop()
+        if diagnosis_client is not None:
+            diagnosis_client.stop()
+        viewer_controller.shutdown()
         remove_pid()
         return 0
     finally:

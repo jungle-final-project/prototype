@@ -2344,17 +2344,19 @@ class AgentGoal1112Test(unittest.TestCase):
         ensure_default_config.assert_not_called()
         show_log_viewer.assert_not_called()
 
-    def test_run_background_opens_viewer_for_user_launch_when_instance_lock_exists(self) -> None:
+    def test_run_background_signals_existing_agent_for_user_launch_when_instance_lock_exists(self) -> None:
         config_path = Path("agent-config.json")
         with patch("buildgraph_agent.acquire_named_instance_lock", return_value=None) as acquire_lock, \
             patch("buildgraph_agent.ensure_default_config", return_value=config_path) as ensure_default_config, \
+            patch("buildgraph_agent.ViewerRequestSignal") as viewer_request_signal, \
             patch("buildgraph_agent.show_log_viewer") as show_log_viewer:
             exit_code = agent.run_background(config_path, with_tray=False, open_viewer_when_running=True)
 
         self.assertEqual(exit_code, 0)
         acquire_lock.assert_called_once_with(agent.BACKGROUND_INSTANCE_MUTEX_NAME)
-        ensure_default_config.assert_called_once_with(config_path)
-        show_log_viewer.assert_called_once_with(config_path)
+        ensure_default_config.assert_not_called()
+        viewer_request_signal.return_value.signal.assert_called_once_with()
+        show_log_viewer.assert_not_called()
 
     def test_run_background_releases_instance_lock_after_shutdown(self) -> None:
         fake_lock = MagicMock()

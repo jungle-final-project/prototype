@@ -1,6 +1,6 @@
 # PCAgent
 
-4번 담당자의 PCAgent/AS 흐름 시작점입니다. 현재는 실제 Windows Service나 installer가 아니라, AS 업로드 테스트에 사용할 JSON Lines 로그를 만들고 사용자가 확인한 IncidentWindow 구간을 gzip 업로드하는 CLI/트레이 MVP입니다.
+4번 담당자의 PCAgent/AS 흐름 시작점입니다. Windows 시작프로그램에서 사용자 세션 Agent로 실행되고, 인증된 outbound WebSocket으로 웹 진단 요청을 기다리며, 요청을 받으면 기존 진단 창을 표시하는 CLI/트레이 MVP입니다. Windows Service나 별도 installer는 사용하지 않습니다.
 
 ## 실행
 
@@ -61,7 +61,7 @@ build-agent-exe.cmd
 .\dist\agent-cli.exe doctor --config agent-config.example.json
 ```
 
-`agent.exe`는 사용자용 무콘솔 실행 파일입니다. 인자 없이 더블클릭하면 `%LOCALAPPDATA%\BuildGraphAgent` 아래에 기본 config/log 폴더를 만들고, 실행 파일을 `%LOCALAPPDATA%\BuildGraphAgent\PCAgent.exe`로 복사한 뒤 Windows 시작프로그램에 고정 경로로 등록합니다. 이후 트레이 아이콘으로 백그라운드 수집을 시작합니다. 트레이 메뉴에서는 로그 뷰어 열기, 로그 폴더 열기, AS 페이지 열기, 종료를 사용할 수 있습니다. 로그 뷰어는 날짜와 시간을 선택해 1시간 단위 JSONL row를 가볍게 보여주는 창입니다. 이것은 Windows Service가 아니라 MVP용 시작프로그램 기반 백그라운드 실행입니다.
+`agent.exe`는 사용자용 무콘솔 실행 파일입니다. 인자 없이 더블클릭하면 `%LOCALAPPDATA%\BuildGraphAgent` 아래에 기본 config/log 폴더를 만들고, 실행 파일을 `%LOCALAPPDATA%\BuildGraphAgent\PCAgent.exe`로 복사한 뒤 Windows 시작프로그램에 고정 경로로 등록합니다. 이후 트레이에서 백그라운드 수집과 `/ws/pc-agent/diagnosis` 연결을 유지합니다. 창 닫기는 Agent 종료가 아니라 숨김이며, 트레이의 `Agent 종료`에서만 프로세스를 끝냅니다. 중복 실행은 새 프로세스에 창을 만들지 않고 기존 Agent에 창 표시 신호를 보냅니다.
 
 사용자 등록은 웹 지원 페이지의 PCAgent 다운로드 흐름을 기준으로 합니다. 웹은 `/api/users/me/agent-activation-token`으로 activation token을 발급한 뒤 `PCAgent.zip`을 내려받게 합니다. ZIP 안에는 `PCAgent.exe`, `pcagent-activation.json`, `README.txt`가 들어 있습니다. 사용자는 압축을 풀고 `PCAgent.exe`를 실행해야 합니다. Agent는 첫 실행 때 같은 폴더 또는 다운로드 폴더의 activation JSON에서 token을 읽어 기존 `agentToken`을 지운 뒤 현재 prototype DB에 다시 등록합니다. 등록에 성공하면 activation JSON은 자동 삭제합니다. 저장소의 `apps/web/public/downloads/pc-agent/agent.exe`를 직접 실행하면 activation JSON이 없으므로, 기존 로컬 config나 demo token이 현재 DB와 맞지 않는 환경에서는 PC 진단이 등록 실패로 끝날 수 있습니다.
 
@@ -115,7 +115,7 @@ registration: REGISTERED
 logDir: C:\...\apps\pc-agent\out\logs
 logFile: out\logs\agent-metrics.jsonl
 logBytes: 412
-agentVersion: 0.1.7
+agentVersion: 0.1.8
 policyVersion: policy-v1
 agentToken: present
 ```
@@ -128,6 +128,7 @@ agentToken: present
 - Agent token 기반 `POST /api/agent/log-uploads` 업로드
 - 업로드 응답 `ticketId`로 `/support/{ticketId}` URL 생성
 - 더블클릭 시 시작프로그램 등록과 트레이 기반 백그라운드 하드웨어 metric 수집
+- 인증 WebSocket 진단 요청 수신, 영속 중복 방지, 기존 진단 창 자동 표시
 - 트레이 아이콘에서 상태 홈과 날짜/시간별 전체 로그내용 뷰어 열기
 - 명확한 이벤트 감지 시 오른쪽 아래 알림 패널로 AS 검토 요청 연결
 - `viewer --config ...`로 같은 상태 홈을 개발 검증용으로 직접 열기

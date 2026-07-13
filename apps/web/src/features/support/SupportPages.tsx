@@ -7,12 +7,13 @@ import { formatSeoulTime } from '../../lib/dateTime';
 import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { prepareSupportLogFile } from './logFileProcessing';
-import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
 import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate, SupportChatContact } from './types';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
 type AgentDownloadState = 'idle' | 'issuing' | 'done' | 'error';
+type AgentDiagnosisRequestState = 'idle' | 'requesting' | 'accepted' | 'rejected' | 'error';
 type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
 type BlockingSupportChat = {
@@ -298,6 +299,8 @@ export function SupportNewPage() {
   const [submitState, setSubmitState] = useState<SubmitState>('default');
   const [agentDownloadState, setAgentDownloadState] = useState<AgentDownloadState>('idle');
   const [agentDownloadMessage, setAgentDownloadMessage] = useState('');
+  const [agentDiagnosisState, setAgentDiagnosisState] = useState<AgentDiagnosisRequestState>('idle');
+  const [agentDiagnosisMessage, setAgentDiagnosisMessage] = useState('');
   const [error, setError] = useState('');
   const [conflictChat, setConflictChat] = useState<BlockingSupportChat | null>(null);
   const authScope = authScopeKey(getCachedAuthUser());
@@ -419,6 +422,40 @@ export function SupportNewPage() {
       setAgentDownloadMessage(cause instanceof ApiError && cause.status === 401
         ? '로그인 후 PCAgent를 다운로드해 주세요.'
         : 'Agent 등록 토큰 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+  }
+
+  async function diagnoseWithPcAgent() {
+    const symptom = symptomDetail.trim() || symptomTitle.trim();
+    if (!symptom) {
+      setAgentDiagnosisState('error');
+      setAgentDiagnosisMessage('PC Agent에 전달할 증상을 먼저 입력해 주세요.');
+      return;
+    }
+    setAgentDiagnosisState('requesting');
+    setAgentDiagnosisMessage('');
+    try {
+      const response = await requestPcAgentDiagnosis({
+        symptom,
+        requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
+        mode: 'LIVE'
+      });
+      if (response.status === 'ACCEPTED') {
+        setAgentDiagnosisState('accepted');
+        setAgentDiagnosisMessage(`PC Agent가 진단 요청을 수신했습니다. (${response.diagnosisId})`);
+      } else {
+        setAgentDiagnosisState('rejected');
+        setAgentDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
+      }
+    } catch (cause) {
+      setAgentDiagnosisState('error');
+      if (cause instanceof ApiError && cause.code === 'AGENT_DISCONNECTED') {
+        setAgentDiagnosisMessage('연결된 PC Agent가 없습니다. PC Agent 실행 상태를 확인해 주세요.');
+      } else if (cause instanceof ApiError && cause.code === 'AGENT_RESPONSE_TIMEOUT') {
+        setAgentDiagnosisMessage('PC Agent 응답 시간이 초과되었습니다. 연결 상태를 확인해 주세요.');
+      } else {
+        setAgentDiagnosisMessage('PC Agent 진단 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      }
     }
   }
 
@@ -645,6 +682,14 @@ export function SupportNewPage() {
                 >
                   {agentDownloadState === 'issuing' ? '등록 토큰 발급 중...' : 'PCAgent 다운로드'}
                 </button>
+                <button
+                  type="button"
+                  className="rounded border border-brand-blue bg-brand-blue px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+                  onClick={diagnoseWithPcAgent}
+                  disabled={agentDiagnosisState === 'requesting'}
+                >
+                  {agentDiagnosisState === 'requesting' ? 'Agent 응답 대기 중...' : 'PC Agent로 진단'}
+                </button>
                 <a
                   className="rounded border border-slate-300 px-3 py-2 text-xs font-bold"
                   href="/downloads/pc-agent/README.txt"
@@ -668,6 +713,11 @@ export function SupportNewPage() {
               {agentDownloadMessage ? (
                 <p className={`mb-2 text-xs font-semibold ${agentDownloadState === 'error' ? 'text-red-600' : 'text-emerald-700'}`}>
                   {agentDownloadMessage}
+                </p>
+              ) : null}
+              {agentDiagnosisMessage ? (
+                <p className={`mb-2 text-xs font-semibold ${agentDiagnosisState === 'accepted' ? 'text-emerald-700' : 'text-red-600'}`}>
+                  {agentDiagnosisMessage}
                 </p>
               ) : null}
               <input
