@@ -872,7 +872,7 @@ function RelationMapBanner({
       data-testid="relation-map-bottom-banner"
       className={className}
     >
-      <div className={`pointer-events-auto flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
+      <div className={`pointer-events-none flex max-w-[88%] flex-wrap items-center justify-center gap-2 rounded-md border bg-white px-2.5 py-1.5 shadow-sm ${
         hasProblem
           ? status === 'WARN'
             ? 'border-amber-500'
@@ -1480,7 +1480,7 @@ function IsometricSlotBoardBody({
           detail={activeProblem}
           onClose={() => setActiveProblemCategory(null)}
           onShowCandidates={() => showReplacementCandidates(activeProblem.category)}
-          onExplain={() => onExplainIssue(activeProblem.category, toolForCategory(activeProblem.category))}
+          onExplain={() => onExplainIssue(activeProblem.category, activeProblem.tool ?? toolForCategory(activeProblem.category))}
         />
       ) : null}
       {celebrating ? (
@@ -1770,7 +1770,7 @@ function IsoPartLayer({
             isMounting={flashingCategories.has(slot.category)}
             status={statusByCategory.get(slot.category)}
             isHovered={aiFocusCategories.size === 0 && hoveredCategory === slot.category && slot.category !== 'MOTHERBOARD'}
-            isDimmed={partFocusCategories.size > 0 ? !isSpotlighted : motherboardSceneFocused}
+            isDimmed={hoveredCategory && hoveredCategory !== 'MOTHERBOARD' ? false : partFocusCategories.size > 0 ? !isSpotlighted : motherboardSceneFocused}
             isSpotlighted={isSpotlighted}
             isAiSpotlighted={isAiPartSpotlighted}
             isAiDimmed={aiFocusCategories.size > 0 && !isAiPartSpotlighted}
@@ -1878,11 +1878,13 @@ type SlotProblemDetail = {
   status: SlotProblemStatus;
   title: string;
   reasons: string[];
+  tool?: BuildGraphFocus['tool'];
 };
 
 type SlotProblemReason = {
   status: SlotProblemStatus;
   text: string;
+  tool?: BuildGraphFocus['tool'];
 };
 
 type SlotBoardBannerProblem = {
@@ -1952,7 +1954,7 @@ function SlotBoardProblemBanner({
           className={[
             sharedCardClass,
             statusCardClass(problem.status),
-            'pointer-events-auto inline-flex max-w-[74%] items-center gap-2 text-center'
+            'pointer-events-none inline-flex max-w-[74%] items-center gap-2 text-center'
           ].join(' ')}
         >
           {problem.status === 'FAIL'
@@ -2059,7 +2061,7 @@ function ExplainIssueButton({ onClick }: { onClick: () => void }) {
         event.stopPropagation();
         onClick();
       }}
-      className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+      className="pointer-events-auto inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
     >
       <Sparkles size={11} aria-hidden="true" />
       AI에게 설명
@@ -2803,18 +2805,25 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
     }
     return current;
   };
-  const addReason = (category: PartCategory, status: SlotProblemStatus, text?: string, promoteStatus = true) => {
+  const addReason = (
+    category: PartCategory,
+    status: SlotProblemStatus,
+    text?: string,
+    promoteStatus = true,
+    tool?: BuildGraphFocus['tool']
+  ) => {
     const trimmed = text?.trim();
     const detail = ensure(category, status, promoteStatus);
     if (trimmed) {
-      detail.reasons.push({ status, text: trimmed });
+      detail.reasons.push({ status, text: trimmed, tool });
     }
   };
 
   graph.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
     if (category && isProblemStatus(node.status)) {
-      addReason(category, node.status, node.detail);
+      // Node detail is a neutral spec value; use relationship summaries as warning reasons.
+      ensure(category, node.status, true);
     }
   });
 
@@ -2824,11 +2833,12 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
     }
     const sourceCategory = categoryByNodeId.get(edge.source);
     const targetCategory = categoryByNodeId.get(edge.target);
+    const tool = toolForGraphEdge(edge.id);
     if (sourceCategory) {
-      addReason(sourceCategory, edge.status, edge.summary || edge.label, false);
+      addReason(sourceCategory, edge.status, edge.summary || edge.label, false, tool);
     }
     if (targetCategory) {
-      addReason(targetCategory, edge.status, edge.summary || edge.label, false);
+      addReason(targetCategory, edge.status, edge.summary || edge.label, false, tool);
     }
   });
 
@@ -2847,12 +2857,14 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
 
   const result = new Map<PartCategory, SlotProblemDetail>();
   details.forEach((detail, category) => {
+    const focusedReason = detail.reasons.find((reason) => reason.status === detail.status && reason.tool);
     result.set(category, {
       category,
       categoryLabel: slotConfigFor(category)?.label ?? category,
       status: detail.status,
       title: detail.status === 'FAIL' ? '장착 불가' : '간섭 주의',
-      reasons: uniqueProblemReasons(detail.reasons)
+      reasons: uniqueProblemReasons(detail.reasons),
+      tool: focusedReason?.tool
     });
   });
   return result;
@@ -2904,7 +2916,7 @@ function slotBoardProblems(graph?: BuildGraphResolveResponse): SlotBoardBannerPr
     addProblem(edge.status, edge.summary || edge.label, [
       categoryByNodeId.get(edge.source),
       categoryByNodeId.get(edge.target)
-    ]);
+    ], toolForGraphEdge(edge.id));
   });
   graph.insights.forEach((insight) => {
     addProblem(
@@ -2926,6 +2938,17 @@ function slotBoardProblems(graph?: BuildGraphResolveResponse): SlotBoardBannerPr
   return [...problemsByMessage.values()].sort(
     (left, right) => problemStatusRank(right.status) - problemStatusRank(left.status)
   );
+}
+
+function toolForGraphEdge(edgeId: string): BuildGraphFocus['tool'] | undefined {
+  if (edgeId === 'edge-gpu-psu-power') return 'power';
+  if (edgeId === 'edge-gpu-case-length' || edgeId === 'edge-cooler-case-height'
+    || edgeId === 'edge-psu-case-depth' || edgeId === 'edge-board-case-form') return 'size';
+  if (edgeId === 'edge-cpu-gpu-performance') return 'performance';
+  if (edgeId === 'edge-budget-total-price') return 'price';
+  if (edgeId === 'edge-cpu-board-socket' || edgeId === 'edge-board-ram-memory'
+    || edgeId === 'edge-cpu-cooler-socket' || edgeId === 'edge-board-storage-m2') return 'compatibility';
+  return undefined;
 }
 
 function isBuildGraphTool(value: string | undefined): value is NonNullable<BuildGraphFocus['tool']> {

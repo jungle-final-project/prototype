@@ -758,7 +758,7 @@ test('aligns 3D slot cards into two equal rows', async ({ page }) => {
   }
 });
 
-test('spotlights only the focused 3D part from slot card hover and dims the rest', async ({ page }) => {
+test('spotlights only the focused 3D part from slot card hover without dimming the rest', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
@@ -783,8 +783,8 @@ test('spotlights only the focused 3D part from slot card hover and dims the rest
   await expect(gpuIso).toHaveAttribute('data-spotlight', 'true');
   await expect(psuIso).toHaveAttribute('data-spotlight', 'false');
   await expect(ramIso).toHaveAttribute('data-spotlight', 'false');
-  await expect(ramIso).toHaveAttribute('data-dimmed', 'true');
-  await expect(psuIso).toHaveAttribute('data-dimmed', 'true');
+  await expect(ramIso).toHaveAttribute('data-dimmed', 'false');
+  await expect(psuIso).toHaveAttribute('data-dimmed', 'false');
 
   await page.getByText('구성 관계도 — 부품 간 호환 상태').hover();
   await expect(gpuIso).toHaveAttribute('data-hovered', 'false');
@@ -1539,9 +1539,14 @@ test('shows the measured fit reason in the board banner and sends the same Tool 
   await page.goto('/self-quote');
 
   const banner = page.getByTestId('slot-board-problem-banner');
-  await expect(banner).toContainText(fitSummary);
+  await expect(banner).toContainText('\uC8FC\uC758 \uD544\uC694 2\uAC74');
   await expect(banner).not.toHaveText('높이 157mm');
-  await banner.getByTestId('slot-problem-ai-explain').click();
+  await banner.click();
+  const problemList = page.getByTestId('slot-board-problem-list');
+  const fitProblem = problemList.locator('li').filter({ hasText: fitSummary });
+  await expect(fitProblem).toContainText(fitSummary);
+  await fitProblem.getByTestId('slot-problem-ai-explain').click();
+
 
   await expect.poll(() => chatRequest['assessmentContext']).toEqual({
     source: 'QUOTE_DRAFT_CURRENT',
