@@ -391,15 +391,19 @@ class BackgroundViewerController:
         diagnosis_session_provider: Callable[[], DiagnosisSession | None],
         connection_state_provider: Callable[[], str],
         show_viewer: Callable[..., None],
+        metrics_snapshot_provider: Callable[[], Any] | None = None,
     ) -> None:
         self.config_path = config_path
         self.diagnosis_session_provider = diagnosis_session_provider
         self.connection_state_provider = connection_state_provider
         self.show_viewer = show_viewer
+        self.metrics_snapshot_provider = metrics_snapshot_provider or (lambda: None)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._request_focus: Any = None
         self._request_apply_session: Any = None
+        self._request_metrics_refresh: Any = None
+        self._request_initial_metrics_complete: Any = None
         self._request_destroy: Any = None
 
     def show(self, session: DiagnosisSession | None = None) -> None:
@@ -421,20 +425,42 @@ class BackgroundViewerController:
         if request_destroy is not None:
             request_destroy()
 
+    def refresh_metrics(self) -> None:
+        with self._lock:
+            request_metrics_refresh = self._request_metrics_refresh
+        if request_metrics_refresh is not None:
+            request_metrics_refresh()
+
+    def complete_initial_metrics(self) -> None:
+        with self._lock:
+            request_initial_metrics_complete = self._request_initial_metrics_complete
+        if request_initial_metrics_complete is not None:
+            request_initial_metrics_complete()
+
     def _run(self) -> None:
         self.show_viewer(
             self.config_path,
             background_mode=True,
             diagnosis_session_provider=self.diagnosis_session_provider,
             connection_state_provider=self.connection_state_provider,
+            metrics_snapshot_provider=self.metrics_snapshot_provider,
             on_window_ready=self._on_window_ready,
             on_window_closed=self._on_window_closed,
         )
 
-    def _on_window_ready(self, request_focus: Any, request_apply_session: Any, request_destroy: Any) -> None:
+    def _on_window_ready(
+        self,
+        request_focus: Any,
+        request_apply_session: Any,
+        request_metrics_refresh: Any,
+        request_initial_metrics_complete: Any,
+        request_destroy: Any,
+    ) -> None:
         with self._lock:
             self._request_focus = request_focus
             self._request_apply_session = request_apply_session
+            self._request_metrics_refresh = request_metrics_refresh
+            self._request_initial_metrics_complete = request_initial_metrics_complete
             self._request_destroy = request_destroy
         session = self.diagnosis_session_provider()
         if isinstance(session, DiagnosisSession):
@@ -445,6 +471,8 @@ class BackgroundViewerController:
         with self._lock:
             self._request_focus = None
             self._request_apply_session = None
+            self._request_metrics_refresh = None
+            self._request_initial_metrics_complete = None
             self._request_destroy = None
 
 

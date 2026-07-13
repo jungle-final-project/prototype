@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -35,6 +35,25 @@ from diagnosis_request_agent import (
     DiagnosisSessionStore,
     DiagnosisRequestProcessor,
     ViewerRequestSignal,
+)
+from initial_metrics import (
+    ABNORMAL,
+    AVAILABLE,
+    DEFAULT_METRIC_POLICY,
+    ERROR,
+    FAILED,
+    MODERATE,
+    PERMISSION_REQUIRED,
+    UNAVAILABLE,
+    UNSUPPORTED,
+    WARNING,
+    DemoSensorProvider as InitialDemoSensorProvider,
+    HardwareSensorProvider,
+    InitialMetricsCoordinator,
+    MetricReading,
+    MetricsNormalizer,
+    MetricsSnapshot,
+    MetricsStore,
 )
 
 try:
@@ -102,7 +121,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.8"
+DEFAULT_AGENT_VERSION = "0.1.9"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -116,12 +135,12 @@ UPDATE_DIR_NAME = "updates"
 UPDATE_APPLY_SCRIPT_FILE = "apply-pcagent-update.cmd"
 UPDATE_PENDING_FILE = "pending-update.json"
 HOME_MEMORY_WARNING_THRESHOLD = 85.0
-PC_AGENT_USAGE_WARNING_THRESHOLD = 80.0
-PC_AGENT_USAGE_DANGER_THRESHOLD = 95.0
-PC_AGENT_CPU_TEMP_WARNING_THRESHOLD = 85.0
-PC_AGENT_CPU_TEMP_DANGER_THRESHOLD = 95.0
-PC_AGENT_GPU_TEMP_WARNING_THRESHOLD = 85.0
-PC_AGENT_GPU_TEMP_DANGER_THRESHOLD = 95.0
+PC_AGENT_USAGE_WARNING_THRESHOLD = DEFAULT_METRIC_POLICY.usage_warning
+PC_AGENT_USAGE_DANGER_THRESHOLD = DEFAULT_METRIC_POLICY.usage_abnormal
+PC_AGENT_CPU_TEMP_WARNING_THRESHOLD = DEFAULT_METRIC_POLICY.cpu_temperature_warning
+PC_AGENT_CPU_TEMP_DANGER_THRESHOLD = DEFAULT_METRIC_POLICY.cpu_temperature_abnormal
+PC_AGENT_GPU_TEMP_WARNING_THRESHOLD = DEFAULT_METRIC_POLICY.gpu_temperature_warning
+PC_AGENT_GPU_TEMP_DANGER_THRESHOLD = DEFAULT_METRIC_POLICY.gpu_temperature_abnormal
 DIAGNOSIS_DETAIL_EVENT_LIMIT = 5
 DIAGNOSIS_DETAIL_WARNING_THRESHOLD = HOME_MEMORY_WARNING_THRESHOLD
 DIAGNOSIS_DETAIL_DANGER_THRESHOLD = 95.0
@@ -157,6 +176,20 @@ def next_pc_agent_ui_state(current: str) -> str:
     except ValueError:
         return PC_AGENT_UI_FLOW[0]
     return PC_AGENT_UI_FLOW[min(index + 1, len(PC_AGENT_UI_FLOW) - 1)]
+
+
+def diagnosis_session_ui_state(
+    session: DiagnosisSession | None,
+    metrics: MetricsSnapshot | None,
+) -> str:
+    if (
+        isinstance(session, DiagnosisSession)
+        and isinstance(metrics, MetricsSnapshot)
+        and metrics.diagnosis_id == session.request.diagnosis_id
+        and metrics.initial_complete
+    ):
+        return "DIAGNOSING"
+    return "SYMPTOM_CONFIRM"
 
 
 def resolve_ui_font_family(root: Any | None = None) -> str:
@@ -1198,10 +1231,13 @@ GPU_FIELDS = (
 )
 CPU_TEMP_FIELDS = ("cpuTemp", "cpuTempCelsius", "cpuTemperatureCelsius")
 CPU_USAGE_FIELDS = ("cpuUsage", "cpuUsagePercent")
+CPU_CLOCK_FIELDS = ("cpuClockMhz",)
 MEMORY_USAGE_FIELDS = ("memoryUsage", "ramUsage", "memoryUsedPercent")
 MEMORY_USED_FIELDS = ("memoryUsedBytes",)
 MEMORY_TOTAL_FIELDS = ("memoryTotalBytes",)
 DISK_USAGE_FIELDS = ("diskUsage", "diskUsedPercent")
+DISK_USED_BYTES_FIELDS = ("diskUsedBytes",)
+DISK_TOTAL_BYTES_FIELDS = ("diskTotalBytes",)
 DISK_ACTIVE_FIELDS = ("diskBusyEstimatePercent",)
 DISK_HEALTH_FIELDS = ("diskSmartStatus", "diskHealth")
 GPU_USAGE_FIELDS = ("gpuUsage", "gpuUsagePercent")
@@ -1266,6 +1302,12 @@ def mark_unavailable(
 def sensor_reason_is_failure(reason: str | None) -> bool:
     normalized = (reason or "").casefold()
     return any(token in normalized for token in ("failed", "timed out", "exception"))
+
+
+def sensor_exception_reason(prefix: str, exception: Exception) -> str:
+    if isinstance(exception, PermissionError):
+        return f"{prefix} permission required"
+    return f"{prefix} query failed"
 
 
 def safe_process_name(value: Any) -> str | None:
@@ -1334,8 +1376,8 @@ def read_windows_disk_busy_percent_powershell(
         return None, "PowerShell unavailable"
     except subprocess.TimeoutExpired:
         return None, "PowerShell disk counter timed out"
-    except Exception:
-        return None, "PowerShell disk counter query failed"
+    except Exception as exception:
+        return None, sensor_exception_reason("PowerShell disk counter", exception)
     if getattr(result, "returncode", 1) != 0:
         return None, "PowerShell disk counter query failed"
     lines = [line.strip() for line in str(getattr(result, "stdout", "")).splitlines() if line.strip()]
@@ -1398,8 +1440,8 @@ def read_windows_gpu_usage_percent_win32pdh(win32pdh_module: Any = None) -> tupl
         # GPU Engine exposes per-engine utilization. Sum active engines, then clamp
         # to a task-manager-like 0-100 estimate for the single UI percentage column.
         return round(max(0.0, min(100.0, sum(values))), 1), None
-    except Exception:
-        return None, "Windows GPU performance counter query failed"
+    except Exception as exception:
+        return None, sensor_exception_reason("Windows GPU performance counter", exception)
     finally:
         if query is not None:
             try:
@@ -1431,8 +1473,8 @@ def read_windows_gpu_usage_percent_powershell(
         return None, "PowerShell unavailable"
     except subprocess.TimeoutExpired:
         return None, "PowerShell GPU counter timed out"
-    except Exception:
-        return None, "PowerShell GPU counter query failed"
+    except Exception as exception:
+        return None, sensor_exception_reason("PowerShell GPU counter", exception)
     if getattr(result, "returncode", 1) != 0:
         return None, "PowerShell GPU counter query failed"
     lines = [line.strip() for line in str(getattr(result, "stdout", "")).splitlines() if line.strip()]
@@ -1499,6 +1541,12 @@ class HardwareMetricCollector:
         self._last_process_at: float | None = None
 
     def collect(self, ts: datetime, index: int) -> dict:
+        return self._collect(ts, index, include_processes=True)
+
+    def collect_initial(self, ts: datetime, index: int) -> dict:
+        return self._collect(ts, index, include_processes=False)
+
+    def _collect(self, ts: datetime, index: int, include_processes: bool) -> dict:
         observed_at = float(self.time_fn())
         payload: dict[str, Any] = {
             "metricKind": "system",
@@ -1519,7 +1567,8 @@ class HardwareMetricCollector:
         )
         self.collect_gpu(payload, reasons)
         self.collect_cpu_temperature(payload, reasons)
-        self.collect_top_processes(payload, reasons, observed_at)
+        if include_processes:
+            self.collect_top_processes(payload, reasons, observed_at)
         self.collect_sensor_status(payload, reasons)
 
         payload["unavailableReason"] = reasons
@@ -1528,31 +1577,43 @@ class HardwareMetricCollector:
     def collect_cpu_memory(self, payload: dict[str, Any], reasons: dict[str, str]) -> None:
         if self.psutil is None:
             mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, CPU_CLOCK_FIELDS, "psutil unavailable")
             mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil unavailable")
             mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil unavailable")
             mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil unavailable")
             return
         try:
             cpu_usage = clamp_percent(self.psutil.cpu_percent(interval=0.05))
-        except Exception:
+        except Exception as exception:
             cpu_usage = None
-            mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil cpu_percent query failed")
+            mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, sensor_exception_reason("psutil cpu_percent", exception))
+        try:
+            frequency = self.psutil.cpu_freq()
+            cpu_clock = rounded_or_none(getattr(frequency, "current", None)) if frequency is not None else None
+        except Exception as exception:
+            cpu_clock = None
+            mark_unavailable(payload, reasons, CPU_CLOCK_FIELDS, sensor_exception_reason("psutil cpu_freq", exception))
         try:
             memory = self.psutil.virtual_memory()
             memory_usage = clamp_percent(getattr(memory, "percent", None))
             memory_used = rounded_or_none(getattr(memory, "used", None))
             memory_total = rounded_or_none(getattr(memory, "total", None))
-        except Exception:
+        except Exception as exception:
             memory_usage = None
             memory_used = None
             memory_total = None
-            mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil virtual_memory query failed")
-            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil virtual_memory query failed")
-            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil virtual_memory query failed")
+            reason = sensor_exception_reason("psutil virtual_memory", exception)
+            mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, reason)
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, reason)
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, reason)
         if cpu_usage is None:
             mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil cpu_percent unavailable")
         else:
             set_metric_aliases(payload, CPU_USAGE_FIELDS, cpu_usage)
+        if cpu_clock is None:
+            mark_unavailable(payload, reasons, CPU_CLOCK_FIELDS, "psutil cpu_freq unavailable")
+        else:
+            set_metric_aliases(payload, CPU_CLOCK_FIELDS, cpu_clock)
         if memory_usage is None:
             mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil virtual_memory unavailable")
         else:
@@ -1569,16 +1630,34 @@ class HardwareMetricCollector:
     def collect_disk_usage(self, payload: dict[str, Any], reasons: dict[str, str]) -> None:
         if self.psutil is None:
             mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, "psutil unavailable")
             return
         try:
-            disk_usage = clamp_percent(self.psutil.disk_usage(disk_usage_root()).percent)
-        except Exception:
+            usage = self.psutil.disk_usage(disk_usage_root())
+            disk_usage = clamp_percent(getattr(usage, "percent", None))
+            disk_used = rounded_or_none(getattr(usage, "used", None))
+            disk_total = rounded_or_none(getattr(usage, "total", None))
+        except Exception as exception:
             disk_usage = None
-            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage query failed")
+            disk_used = None
+            disk_total = None
+            reason = sensor_exception_reason("psutil disk_usage", exception)
+            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, reason)
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, reason)
+            mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, reason)
         if disk_usage is None:
             mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage unavailable")
         else:
             set_metric_aliases(payload, DISK_USAGE_FIELDS, disk_usage)
+        if disk_used is None:
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil disk used bytes unavailable")
+        else:
+            set_metric_aliases(payload, DISK_USED_BYTES_FIELDS, disk_used)
+        if disk_total is None:
+            mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, "psutil disk total bytes unavailable")
+        else:
+            set_metric_aliases(payload, DISK_TOTAL_BYTES_FIELDS, disk_total)
 
     def collect_disk_io(self, payload: dict[str, Any], reasons: dict[str, str], observed_at: float) -> None:
         if self.psutil is None:
@@ -1587,8 +1666,11 @@ class HardwareMetricCollector:
             return
         try:
             current = self.psutil.disk_io_counters()
-        except Exception:
-            current = None
+        except Exception as exception:
+            reason = sensor_exception_reason("psutil disk_io_counters", exception)
+            mark_unavailable(payload, reasons, DISK_DELTA_FIELDS, reason)
+            payload["diskCollectorSource"] = "unavailable"
+            return
         if current is None:
             mark_unavailable(payload, reasons, DISK_DELTA_FIELDS, "psutil disk_io_counters unavailable")
             payload["diskCollectorSource"] = "unavailable"
@@ -1667,9 +1749,12 @@ class HardwareMetricCollector:
             return False, "nvidia-smi unavailable"
         except subprocess.TimeoutExpired:
             return False, "nvidia-smi timed out"
-        except Exception:
-            return False, "nvidia-smi query failed"
+        except Exception as exception:
+            return False, sensor_exception_reason("nvidia-smi", exception)
         if getattr(result, "returncode", 1) != 0:
+            error_text = str(getattr(result, "stderr", "")).casefold()
+            if "access denied" in error_text or "permission" in error_text:
+                return False, "nvidia-smi permission required"
             return False, "nvidia-smi query failed"
         lines = [line.strip() for line in str(getattr(result, "stdout", "")).splitlines() if line.strip()]
         if not lines:
@@ -1726,8 +1811,8 @@ class HardwareMetricCollector:
     ) -> tuple[bool, str | None]:
         try:
             usage, reason = reader()
-        except Exception:
-            return False, f"{source} query failed"
+        except Exception as exception:
+            return False, sensor_exception_reason(source, exception)
         usage = clamp_percent(usage)
         if usage is None:
             return False, reason or f"{source} unavailable"
@@ -1780,8 +1865,8 @@ class HardwareMetricCollector:
             return
         try:
             readings = sensors(fahrenheit=False) or {}
-        except Exception:
-            mark_unavailable(payload, reasons, CPU_TEMP_FIELDS, "CPU temperature sensor query failed")
+        except Exception as exception:
+            mark_unavailable(payload, reasons, CPU_TEMP_FIELDS, sensor_exception_reason("CPU temperature sensor", exception))
             return
         selected: float | None = None
         fallback: float | None = None
@@ -3290,6 +3375,8 @@ def numeric_log_value(row: dict[str, Any], *fields: str) -> float | None:
 SENSOR_COLLECTED = "collected"
 SENSOR_UNSUPPORTED = "unsupported"
 SENSOR_FAILED = "failed"
+SENSOR_PERMISSION_REQUIRED = "permission_required"
+SENSOR_PENDING = "pending"
 
 
 @dataclass(frozen=True)
@@ -3298,6 +3385,10 @@ class SensorReading:
     availability: str
     reason: str | None = None
     unit: str = ""
+    status: str = UNAVAILABLE
+    source: str = "unknown"
+    sampled_at: str | None = None
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3324,6 +3415,7 @@ class SymptomScreenInput:
     snapshot: HardwareSensorSnapshot
     symptom: str
     symptom_type: str | None
+    requested_checks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3405,10 +3497,66 @@ def hardware_sensor_snapshot(current: dict[str, Any], rows: Sequence[dict[str, A
     )
 
 
+def metric_sensor_reading(reading: MetricReading | None) -> SensorReading:
+    if reading is None:
+        return SensorReading(None, SENSOR_PENDING, "initial sensor collection pending")
+    availability = {
+        AVAILABLE: SENSOR_COLLECTED,
+        UNSUPPORTED: SENSOR_UNSUPPORTED,
+        PERMISSION_REQUIRED: SENSOR_PERMISSION_REQUIRED,
+        FAILED: SENSOR_FAILED,
+    }.get(reading.availability, SENSOR_FAILED)
+    return SensorReading(
+        reading.value,
+        availability,
+        reading.failure_reason,
+        reading.unit,
+        reading.status,
+        reading.source,
+        reading.sampled_at,
+        reading.error_code,
+    )
+
+
+def metrics_snapshot_screen_input(
+    metrics: MetricsSnapshot,
+    symptom: str | None,
+    requested_checks: Sequence[str] = (),
+) -> SymptomScreenInput:
+    rpm = metric_sensor_reading(metrics.latest("gpu", "fan_rpm"))
+    percent = metric_sensor_reading(metrics.latest("gpu", "fan_percent"))
+    gpu_fan = rpm
+    if rpm.availability == SENSOR_UNSUPPORTED and percent.availability != SENSOR_UNSUPPORTED:
+        gpu_fan = percent
+    return SymptomScreenInput(
+        snapshot=HardwareSensorSnapshot(
+            cpu_usage=metric_sensor_reading(metrics.latest("cpu", "usage")),
+            cpu_temp=metric_sensor_reading(metrics.latest("cpu", "temperature")),
+            gpu_usage=metric_sensor_reading(metrics.latest("gpu", "usage")),
+            gpu_temp=metric_sensor_reading(metrics.latest("gpu", "temperature")),
+            gpu_fan=gpu_fan,
+            memory_usage=metric_sensor_reading(metrics.latest("ram", "usage")),
+            memory_used=metric_sensor_reading(metrics.latest("ram", "used_bytes")),
+            memory_total=metric_sensor_reading(metrics.latest("ram", "total_bytes")),
+            disk_activity=metric_sensor_reading(metrics.latest("disk", "activity")),
+            disk_usage=metric_sensor_reading(metrics.latest("disk", "usage")),
+            disk_health=metric_sensor_reading(metrics.latest("disk", "smart")),
+            cpu_history=metrics.history("cpu", "usage"),
+            gpu_history=metrics.history("gpu", "usage"),
+            memory_history=metrics.history("ram", "usage"),
+            disk_history=metrics.history("disk", "activity") or metrics.history("disk", "usage"),
+        ),
+        symptom=(symptom or "").strip() or "웹에서 전달받은 증상 정보가 없습니다.",
+        symptom_type=None,
+        requested_checks=tuple(requested_checks),
+    )
+
+
 def failed_system_metric_row(reason: str) -> dict[str, Any]:
     fields = (
         *CPU_USAGE_FIELDS,
         *CPU_TEMP_FIELDS,
+        *CPU_CLOCK_FIELDS,
         *GPU_USAGE_FIELDS,
         *GPU_TEMP_FIELDS,
         *GPU_FAN_RPM_FIELDS,
@@ -3418,6 +3566,8 @@ def failed_system_metric_row(reason: str) -> dict[str, Any]:
         *MEMORY_TOTAL_FIELDS,
         *DISK_ACTIVE_FIELDS,
         *DISK_USAGE_FIELDS,
+        *DISK_USED_BYTES_FIELDS,
+        *DISK_TOTAL_BYTES_FIELDS,
         *DISK_HEALTH_FIELDS,
     )
     payload: dict[str, Any] = {field: None for field in fields}
@@ -3450,41 +3600,18 @@ class SystemSensorProvider:
 
 class DemoSensorProvider:
     DEMO_SYMPTOM = "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다."
-    CPU_HISTORY = (18, 22, 27, 31, 35, 42, 38, 34, 30, 28, 32, 36, 33, 30, 29, 32)
-    GPU_HISTORY = (24, 31, 38, 45, 53, 61, 70, 78, 82, 86, 84, 87, 86, 85, 84, 86)
-    MEMORY_HISTORY = (53, 54, 54, 55, 56, 57, 58, 59, 59, 60, 60, 61, 61, 62, 62, 62)
-    DISK_HISTORY = (14, 18, 22, 19, 25, 31, 28, 24, 20, 17, 21, 26, 23, 19, 22, 24)
 
     def load(self, config: AgentConfig) -> SymptomScreenInput:
-        rows: list[dict[str, Any]] = []
-        for index in range(16):
-            payload = {
-                "cpuUsagePercent": self.CPU_HISTORY[index],
-                "cpuTempCelsius": 58.0,
-                "gpuUsagePercent": self.GPU_HISTORY[index],
-                "gpuTempCelsius": 88.0,
-                "gpuFanRpm": 0.0,
-                "gpuFanPercent": None,
-                "memoryUsedPercent": self.MEMORY_HISTORY[index],
-                "memoryUsedBytes": 10 * 1024**3,
-                "memoryTotalBytes": 16 * 1024**3,
-                "diskBusyEstimatePercent": self.DISK_HISTORY[index],
-                "diskUsedPercent": 48.0,
-                "diskSmartStatus": "정상",
-                "sensorStatus": {
-                    "cpuTempCelsius": SENSOR_COLLECTED,
-                    "gpuTempCelsius": SENSOR_COLLECTED,
-                    "gpuFanRpm": SENSOR_COLLECTED,
-                    "gpuFanPercent": SENSOR_UNSUPPORTED,
-                    "diskSmartStatus": SENSOR_COLLECTED,
-                },
-                "unavailableReason": {"gpuFanPercent": "demo fan percentage unsupported"},
-            }
-            rows.append(build_metric_snapshot(datetime.now(KST), index, SYSTEM_METRIC_KIND, payload))
-        return SymptomScreenInput(
-            snapshot=hardware_sensor_snapshot(rows[-1], rows),
-            symptom=config.symptom or self.DEMO_SYMPTOM,
-            symptom_type=config.symptom_type or "VISIT_FAN_THERMAL",
+        provider = InitialDemoSensorProvider()
+        normalizer = MetricsNormalizer()
+        store = MetricsStore()
+        store.begin("manual-demo", "DEMO")
+        for index in range(3):
+            store.append("manual-demo", normalizer.normalize(provider.collect_sample(index)))
+        return metrics_snapshot_screen_input(
+            store.snapshot,
+            config.symptom or self.DEMO_SYMPTOM,
+            ("cpu", "gpu", "cooling"),
         )
 
 
@@ -3495,6 +3622,10 @@ def reading_number(reading: SensorReading) -> float | None:
 def reading_text(reading: SensorReading, unit: str = "") -> str:
     if reading.availability == SENSOR_FAILED:
         return "확인 실패"
+    if reading.availability == SENSOR_PERMISSION_REQUIRED:
+        return "권한 필요"
+    if reading.availability == SENSOR_PENDING:
+        return "수집 중"
     if reading.availability != SENSOR_COLLECTED:
         return "측정 불가"
     if isinstance(reading.value, str):
@@ -3531,18 +3662,28 @@ def component_status(
     temperature_warning: float = 1000.0,
     temperature_danger: float = 1000.0,
 ) -> tuple[str, str]:
+    readings = (usage, *optional)
+    centralized = [reading.status for reading in readings if reading.status not in {UNAVAILABLE, ERROR}]
     if usage.availability == SENSOR_FAILED or any(item.availability == SENSOR_FAILED for item in optional):
         return "확인 실패", "warning"
+    if usage.availability == SENSOR_PERMISSION_REQUIRED:
+        return "권한 필요", "warning"
+    if usage.availability == SENSOR_PENDING:
+        return "수집 중", "default"
     if usage.availability != SENSOR_COLLECTED:
         return "측정 불가", "default"
+    if ABNORMAL in centralized:
+        return "이상", "danger"
+    if WARNING in centralized:
+        return "주의", "warning"
+    if MODERATE in centralized:
+        return "보통", "default"
     usage_value = reading_number(usage) or 0.0
     temperature_value = reading_number(temperature) if temperature is not None else None
     fan_value = reading_number(fan) if fan is not None else None
     if usage_value >= PC_AGENT_USAGE_DANGER_THRESHOLD or (
         temperature_value is not None and temperature_value >= temperature_danger
     ):
-        return "이상", "danger"
-    if fan_value == 0 and temperature_value is not None and temperature_value >= temperature_warning:
         return "이상", "danger"
     if usage_value >= PC_AGENT_USAGE_WARNING_THRESHOLD or (
         temperature_value is not None and temperature_value >= temperature_warning
@@ -3555,7 +3696,11 @@ def component_status(
     return "정상", "default"
 
 
-def suspected_hardware_components(symptom: str, symptom_type: str | None) -> tuple[str, ...]:
+def suspected_hardware_components(
+    symptom: str,
+    symptom_type: str | None,
+    requested_checks: Sequence[str] = (),
+) -> tuple[str, ...]:
     normalized = symptom.casefold()
     matches: set[str] = set()
     keyword_groups = {
@@ -3574,12 +3719,22 @@ def suspected_hardware_components(symptom: str, symptom_type: str | None) -> tup
         "VISIT_DISK_FAILURE": ("disk",),
     }
     matches.update(type_components.get(symptom_type or "", ()))
+    requested_components = {
+        "cpu": ("cpu",),
+        "gpu": ("gpu",),
+        "memory": ("ram",),
+        "disk": ("disk",),
+        "cooling": ("cpu", "gpu"),
+    }
+    for check in requested_checks:
+        matches.update(requested_components.get(str(check).casefold(), ()))
     return tuple(component for component in ("cpu", "gpu", "ram", "disk") if component in matches)
 
 
 def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScreenState:
     snapshot = screen_input.snapshot
-    suspected = suspected_hardware_components(screen_input.symptom, screen_input.symptom_type)
+    symptom = screen_input.symptom.strip() or "웹에서 전달받은 증상 정보가 없습니다."
+    suspected = suspected_hardware_components(symptom, screen_input.symptom_type, screen_input.requested_checks)
 
     cpu_status, cpu_tone = component_status(
         snapshot.cpu_usage,
@@ -3627,7 +3782,7 @@ def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScree
             snapshot.disk_history, "disk" in suspected,
         ),
     )
-    return SymptomScreenState(widgets, screen_input.symptom, suspected)
+    return SymptomScreenState(widgets, symptom, suspected)
 
 
 def home_usage_detection(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
@@ -4284,9 +4439,9 @@ function Hide-SensitiveText {{
   param($Value)
   if ($null -eq $Value) {{ return "-" }}
   $text = [string]$Value
-  $text = [regex]::Replace($text, "(?i)(authorization|agenttoken|activationtoken|token|password)\s*[:=]\s*\S+", '$1=[hidden]')
-  $text = [regex]::Replace($text, "[A-Za-z]:\\\\[^\s\t\r\n]+", "[path hidden]")
-  $text = [regex]::Replace($text, "(/[^\s\t\r\n]+){{2,}}", "[path hidden]")
+  $text = [regex]::Replace($text, "(?i)(authorization|agenttoken|activationtoken|token|password)\\s*[:=]\\s*\\S+", '$1=[hidden]')
+  $text = [regex]::Replace($text, "[A-Za-z]:\\\\[^\\s\\t\\r\\n]+", "[path hidden]")
+  $text = [regex]::Replace($text, "(/[^\\s\\t\\r\\n]+){{2,}}", "[path hidden]")
   if ($text.Length -gt 120) {{ $text = $text.Substring(0, 117) + "..." }}
   return $text
 }}
@@ -4673,6 +4828,7 @@ def show_log_viewer(
     background_mode: bool = False,
     diagnosis_session_provider: Any = None,
     connection_state_provider: Any = None,
+    metrics_snapshot_provider: Any = None,
     on_window_ready: Any = None,
     on_window_closed: Any = None,
 ) -> None:
@@ -4734,10 +4890,14 @@ def show_log_viewer(
         "warning": "#f59e0b",
         "danger": "#c2410c",
     }
-    capture_state = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
+    capture_state_override = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
+    capture_state = capture_state_override
     if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT", "AS_REQUEST_CREATED"}:
         capture_state = "SYMPTOM_CONFIRM"
     diagnosis_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
+    initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+    if not capture_state_override:
+        capture_state = diagnosis_session_ui_state(diagnosis_session, initial_metrics)
     ui = {
         "state": capture_state,
         "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else True,
@@ -4745,13 +4905,12 @@ def show_log_viewer(
         "requestLocked": isinstance(diagnosis_session, DiagnosisSession),
         "busy": False,
         "diagnosisReady": False,
-        "status": "",
+        "status": "초기 메트릭을 수집하고 있습니다." if isinstance(diagnosis_session, DiagnosisSession) else "",
         "diagnosis": None,
         "window": None,
         "ticketUrl": None,
     }
-    system_sensor_provider = SystemSensorProvider()
-    demo_sensor_provider = DemoSensorProvider()
+    manual_sensor_providers: dict[str, Any] = {}
     image_refs: list[Any] = []
     button_counter = {"value": 0}
     drag_origin = {"x": 0, "y": 0}
@@ -4927,15 +5086,28 @@ def show_log_viewer(
             canvas.create_rectangle(x + index * 10, y - height, x + index * 10 + 6, y, fill=shade, outline="")
 
     def draw_symptom() -> None:
-        provider = demo_sensor_provider if ui["demo"] else system_sensor_provider
-        screen_input = provider.load(config)
         active_session = ui["diagnosisSession"]
         if isinstance(active_session, DiagnosisSession):
-            screen_input = replace(
-                screen_input,
-                symptom=active_session.request.symptom,
-                symptom_type=None,
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else MetricsSnapshot(
+                active_session.request.diagnosis_id,
+                active_session.request.mode,
+                False,
+                (),
             )
+            if not isinstance(metrics, MetricsSnapshot) or metrics.diagnosis_id != active_session.request.diagnosis_id:
+                metrics = MetricsSnapshot(active_session.request.diagnosis_id, active_session.request.mode, False, ())
+            screen_input = metrics_snapshot_screen_input(
+                metrics,
+                active_session.request.symptom,
+                active_session.request.requested_checks,
+            )
+        else:
+            provider_key = "demo" if ui["demo"] else "live"
+            provider = manual_sensor_providers.get(provider_key)
+            if provider is None:
+                provider = DemoSensorProvider() if ui["demo"] else SystemSensorProvider()
+                manual_sensor_providers[provider_key] = provider
+            screen_input = provider.load(config)
         screen = build_symptom_screen_state(screen_input)
         for x, card in zip((70, 287, 504, 721), screen.widgets, strict=False):
             tone_color = colors[card.tone] if card.tone in {"warning", "danger"} else None
@@ -4955,7 +5127,10 @@ def show_log_viewer(
         text(153, 390, "전달받은 증상", 17, colors["text"], "semibold")
         text(153, 423, f"“{screen.symptom}”", 15, colors["text"], width=735)
         text(153, 477, "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.", 13, colors["muted"])
-        button(390, 555, 610, 608, "진단 시작", start_diagnosis, True, size=15)
+        if ui["requestLocked"]:
+            button(390, 555, 610, 608, "초기 메트릭 수집 중", start_diagnosis, True, disabled=True, size=15)
+        else:
+            button(390, 555, 610, 608, "진단 시작", start_diagnosis, True, size=15)
 
     def draw_progress_ring(x: int, y: int) -> None:
         canvas.create_oval(x - 18, y - 18, x + 18, y + 18, outline="#e8e8e8", width=4)
@@ -5246,17 +5421,21 @@ def show_log_viewer(
         else:
             root.destroy()
 
+    root.protocol("WM_DELETE_WINDOW", close_window)
+
     def apply_diagnosis_session(session: DiagnosisSession | None) -> None:
         ui["diagnosisSession"] = session
         ui["requestLocked"] = isinstance(session, DiagnosisSession)
         if isinstance(session, DiagnosisSession):
             ui["demo"] = session.request.mode == "DEMO"
-            ui["state"] = "SYMPTOM_CONFIRM"
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+            ui["state"] = diagnosis_session_ui_state(session, metrics)
+            initial_complete = ui["state"] == "DIAGNOSING"
             ui["diagnosisReady"] = False
             ui["diagnosis"] = None
             ui["window"] = None
             ui["ticketUrl"] = None
-            ui["status"] = ""
+            ui["status"] = "" if initial_complete else "초기 메트릭을 수집하고 있습니다."
         render()
 
     def request_focus() -> None:
@@ -5264,6 +5443,25 @@ def show_log_viewer(
 
     def request_apply_session(session: DiagnosisSession | None) -> None:
         root.after(0, lambda: apply_diagnosis_session(session))
+
+    def request_metrics_refresh() -> None:
+        root.after(0, render)
+
+    def request_initial_metrics_complete() -> None:
+        def apply() -> None:
+            active_session = ui["diagnosisSession"]
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+            if (
+                isinstance(active_session, DiagnosisSession)
+                and isinstance(metrics, MetricsSnapshot)
+                and metrics.diagnosis_id == active_session.request.diagnosis_id
+                and metrics.initial_complete
+                and ui["state"] == "SYMPTOM_CONFIRM"
+            ):
+                ui["state"] = "DIAGNOSING"
+                ui["status"] = ""
+                render()
+        root.after(0, apply)
 
     def request_destroy() -> None:
         root.after(0, root.destroy)
@@ -5279,7 +5477,13 @@ def show_log_viewer(
 
     render()
     if callable(on_window_ready):
-        on_window_ready(request_focus, request_apply_session, request_destroy)
+        on_window_ready(
+            request_focus,
+            request_apply_session,
+            request_metrics_refresh,
+            request_initial_metrics_complete,
+            request_destroy,
+        )
     root.after(5000, refresh_symptom_metrics)
     try:
         root.mainloop()
@@ -6024,19 +6228,36 @@ def run_background(
 
         connection_state = {"value": "DISCONNECTED"}
         diagnosis_store = DiagnosisSessionStore(app_data_dir() / "diagnosis-request-state.json")
+        metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
         viewer_controller = BackgroundViewerController(
             path,
             lambda: diagnosis_store.session,
             lambda: connection_state["value"],
             show_log_viewer,
+            metrics_snapshot_provider=lambda: metrics_store.snapshot,
         )
 
         def on_connection_state_changed(state: str) -> None:
             connection_state["value"] = state
 
+        def on_metrics_updated(metrics: MetricsSnapshot) -> None:
+            viewer_controller.refresh_metrics()
+
+        def on_initial_metrics_complete(metrics: MetricsSnapshot) -> None:
+            viewer_controller.complete_initial_metrics()
+
+        initial_metrics_coordinator = InitialMetricsCoordinator(
+            metrics_store,
+            live_provider_factory=lambda: HardwareSensorProvider(HardwareMetricCollector()),
+            demo_provider_factory=InitialDemoSensorProvider,
+            on_update=on_metrics_updated,
+            on_complete=on_initial_metrics_complete,
+        )
+
         def on_initial_metrics_requested(session: DiagnosisSession) -> None:
-            # 다음 단계가 실제 초기 메트릭 수집기를 이 경계에 연결한다.
-            return
+            diagnosis_store.update_state("RUNNING")
+            connection_state["value"] = "RUNNING"
+            initial_metrics_coordinator.start(session.request.diagnosis_id, session.request.mode)
 
         try:
             current_config = load_config(path)
@@ -6048,6 +6269,17 @@ def run_background(
             on_request=viewer_controller.show,
             on_initial_metrics_requested=on_initial_metrics_requested,
         )
+        existing_session = diagnosis_store.session
+        existing_metrics = metrics_store.snapshot
+        if (
+            isinstance(existing_session, DiagnosisSession)
+            and existing_session.agent_state in {"REQUEST_RECEIVED", "RUNNING"}
+            and (
+                existing_metrics.diagnosis_id != existing_session.request.diagnosis_id
+                or not existing_metrics.initial_complete
+            )
+        ):
+            on_initial_metrics_requested(existing_session)
         diagnosis_client = None
         if current_config and current_config.agent_token:
             diagnosis_client = AgentDiagnosisWebSocketClient(

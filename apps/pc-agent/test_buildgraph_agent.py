@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import buildgraph_agent as agent
+from diagnosis_request_agent import DiagnosisRequest, DiagnosisSession
 
 
 def missing_gpu_counter() -> tuple[None, str]:
@@ -490,6 +491,44 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(agent.display_log_table_values(row)[6], "25.0%")
         self.assertEqual(agent.display_log_table_values(row)[8], "66.0C")
 
+    def test_metric_collector_reads_cpu_clock_and_disk_capacity(self) -> None:
+        class FakePsutil:
+            def cpu_percent(self, interval: float = 0.0) -> float:
+                return 24.0
+
+            def cpu_freq(self) -> SimpleNamespace:
+                return SimpleNamespace(current=4250.0)
+
+            def virtual_memory(self) -> SimpleNamespace:
+                return SimpleNamespace(percent=41.0, used=8 * 1024**3, total=16 * 1024**3)
+
+            def disk_usage(self, path: str) -> SimpleNamespace:
+                return SimpleNamespace(percent=52.0, used=520 * 1024**3, total=1000 * 1024**3)
+
+            def disk_io_counters(self) -> SimpleNamespace:
+                return SimpleNamespace(read_bytes=1000, write_bytes=500, read_count=10, write_count=5, busy_time=100)
+
+            def sensors_temperatures(self, fahrenheit: bool = False) -> dict:
+                return {}
+
+            def process_iter(self, attrs: list[str]) -> list:
+                return []
+
+        collector = agent.HardwareMetricCollector(
+            psutil_module=FakePsutil(),
+            nvidia_smi_runner=lambda: SimpleNamespace(returncode=1, stdout="", stderr="not supported"),
+            gpu_counter_reader=missing_gpu_counter,
+            powershell_gpu_counter_reader=missing_gpu_counter,
+            disk_busy_reader=lambda: (None, "counter unavailable"),
+            time_fn=lambda: 1.0,
+        )
+
+        row = collector.collect(datetime.now(agent.KST), 0)
+
+        self.assertEqual(4250.0, row["cpuClockMhz"])
+        self.assertEqual(520 * 1024**3, row["diskUsedBytes"])
+        self.assertEqual(1000 * 1024**3, row["diskTotalBytes"])
+
     def test_symptom_screen_marks_usage_at_80_percent_as_warning(self) -> None:
         payload = {
             "cpuUsagePercent": 80.0,
@@ -554,8 +593,46 @@ class AgentGoal1112Test(unittest.TestCase):
         second = agent.build_symptom_screen_state(provider.load(config))
 
         self.assertEqual(first, second)
-        self.assertEqual(first.widgets[1].status, "이상")
+        self.assertEqual(first.widgets[1].status, "주의")
         self.assertIn("0 RPM (정지)", first.widgets[1].details[1])
+
+    def test_metrics_screen_handles_missing_web_symptom_and_requested_checks(self) -> None:
+        readings = agent.MetricsNormalizer().normalize(agent.InitialDemoSensorProvider().collect_sample(0))
+        metrics = agent.MetricsSnapshot("diagnosis-missing-symptom", "DEMO", False, readings)
+
+        screen = agent.build_symptom_screen_state(
+            agent.metrics_snapshot_screen_input(metrics, "", ("disk",))
+        )
+
+        self.assertEqual(screen.symptom, "웹에서 전달받은 증상 정보가 없습니다.")
+        self.assertTrue(screen.widgets[3].highlighted)
+
+    def test_completed_initial_metrics_selects_diagnosing_ui_state(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-auto-transition",
+            device_id="device-1",
+            symptom="게임 중 프레임이 저하됩니다.",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request)
+
+        self.assertEqual(
+            "SYMPTOM_CONFIRM",
+            agent.diagnosis_session_ui_state(
+                session,
+                agent.MetricsSnapshot(request.diagnosis_id, "LIVE", False, ()),
+            ),
+        )
+        self.assertEqual(
+            "DIAGNOSING",
+            agent.diagnosis_session_ui_state(
+                session,
+                agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
+            ),
+        )
 
     def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
         class Collector:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from diagnosis_request_agent import (
     AgentDiagnosisWebSocketClient,
+    BackgroundViewerController,
     DiagnosisRequestProcessor,
     DiagnosisSessionStore,
     diagnosis_websocket_url,
@@ -137,6 +138,31 @@ class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
     def test_websocket_url_is_outbound_and_secure_when_api_is_https(self):
         self.assertEqual("ws://localhost:8080/ws/pc-agent/diagnosis", diagnosis_websocket_url("http://localhost:8080"))
         self.assertEqual("wss://api.example.com/ws/pc-agent/diagnosis", diagnosis_websocket_url("https://api.example.com"))
+
+
+class BackgroundViewerControllerTest(unittest.TestCase):
+    def test_forwards_metric_refresh_and_real_completion_to_existing_window(self):
+        events = []
+        controller = BackgroundViewerController(
+            Path("agent-config.json"),
+            diagnosis_session_provider=lambda: None,
+            connection_state_provider=lambda: "RUNNING",
+            show_viewer=lambda *args, **kwargs: None,
+            metrics_snapshot_provider=lambda: "snapshot",
+        )
+        controller._on_window_ready(
+            lambda: events.append("focus"),
+            lambda session: events.append("session"),
+            lambda: events.append("refresh"),
+            lambda: events.append("complete"),
+            lambda: events.append("destroy"),
+        )
+
+        controller.refresh_metrics()
+        controller.complete_initial_metrics()
+        controller.shutdown()
+
+        self.assertEqual(["focus", "refresh", "complete", "destroy"], events)
 
 
 if __name__ == "__main__":
