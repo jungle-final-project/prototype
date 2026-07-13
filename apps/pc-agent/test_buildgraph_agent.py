@@ -2313,6 +2313,13 @@ class AgentGoal1112Test(unittest.TestCase):
         )
         self.assertEqual(agent.next_pc_agent_ui_state(state), "AS_REQUEST_CREATED")
 
+    def test_pc_agent_window_uses_legacy_dimensions_and_three_steps(self) -> None:
+        self.assertEqual((agent.PC_AGENT_WINDOW_WIDTH, agent.PC_AGENT_WINDOW_HEIGHT), (1000, 740))
+        self.assertEqual(
+            agent.PC_AGENT_DIAGNOSIS_STEPS,
+            ("증상 확인", "하드웨어 진단", "결과 및 조치"),
+        )
+
     def test_specup_agent_icon_assets_are_available(self) -> None:
         self.assertTrue(agent.app_asset_path(agent.AGENT_ICON_PNG).exists())
         self.assertTrue(agent.app_asset_path(agent.AGENT_ICON_ICO).exists())

@@ -131,6 +131,9 @@ PC_AGENT_UI_FLOW = (
     "DIAGNOSIS_RESULT",
     "AS_REQUEST_CREATED",
 )
+PC_AGENT_DIAGNOSIS_STEPS = ("증상 확인", "하드웨어 진단", "결과 및 조치")
+PC_AGENT_WINDOW_WIDTH = 1000
+PC_AGENT_WINDOW_HEIGHT = 740
 
 
 def next_pc_agent_ui_state(current: str) -> str:
@@ -4257,9 +4260,9 @@ def show_log_viewer(
     root = tk.Tk()
     root.title(DISPLAY_APP_NAME)
     apply_agent_window_icon(root)
-    root.geometry("1672x941+0+0")
-    root.minsize(1672, 941)
-    root.maxsize(1672, 941)
+    root.geometry(f"{PC_AGENT_WINDOW_WIDTH}x{PC_AGENT_WINDOW_HEIGHT}")
+    root.minsize(PC_AGENT_WINDOW_WIDTH, PC_AGENT_WINDOW_HEIGHT)
+    root.maxsize(PC_AGENT_WINDOW_WIDTH, PC_AGENT_WINDOW_HEIGHT)
     root.resizable(False, False)
     root.overrideredirect(os.environ.get("PC_AGENT_CAPTURE_NATIVE") != "1")
     root.configure(background="#ffffff")
@@ -4279,8 +4282,8 @@ def show_log_viewer(
 
     canvas = tk.Canvas(
         root,
-        width=1672,
-        height=941,
+        width=PC_AGENT_WINDOW_WIDTH,
+        height=PC_AGENT_WINDOW_HEIGHT,
         background="#ffffff",
         highlightthickness=0,
         borderwidth=0,
@@ -4410,57 +4413,57 @@ def show_log_viewer(
             canvas.create_oval(x + dx - 1, y - 1, x + dx + 1, y + 1, fill="#333333", outline="#333333")
 
     def draw_header() -> None:
-        canvas.create_rectangle(0, 0, 1672, 68, fill="#ffffff", outline="")
-        line(0, 67, 1672, 67, "#e0e0e0")
+        canvas.create_rectangle(0, 0, PC_AGENT_WINDOW_WIDTH, 56, fill="#ffffff", outline="")
+        line(0, 55, PC_AGENT_WINDOW_WIDTH, 55, "#e0e0e0")
         try:
             if Image is not None:
                 original = Image.open(runtime_asset_path(AGENT_ICON_PNG)).convert("RGBA")
                 resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
-                original.thumbnail((28, 28), resampling)
+                original.thumbnail((24, 24), resampling)
                 buffer = BytesIO()
                 original.save(buffer, format="PNG")
                 photo = tk.PhotoImage(data=base64.b64encode(buffer.getvalue()).decode("ascii"))
                 image_refs.append(photo)
-                canvas.create_image(40, 34, image=photo)
+                canvas.create_image(28, 28, image=photo)
             else:
-                canvas.create_rectangle(28, 22, 52, 46, fill="#111111", outline="")
+                canvas.create_rectangle(16, 16, 40, 40, fill="#111111", outline="")
         except Exception:
-            canvas.create_rectangle(28, 22, 52, 46, fill="#111111", outline="")
-        canvas.create_polygon(34, 27, 45, 27, 45, 38, 41, 38, 41, 32, 34, 32, fill="#ffffff", outline="")
-        canvas.create_polygon(34, 32, 38, 36, 38, 41, 34, 37, fill="#ffffff", outline="")
-        text(70, 34, "PC Agent", 21, colors["text"], "regular", "w")
-        text(1525, 34, "—", 24, colors["text"], "regular", "center", tags="window-min")
-        canvas.create_rectangle(1574, 26, 1588, 42, fill="", outline="#111111", width=2, tags="window-max")
-        canvas.create_line(1629, 27, 1645, 43, fill="#111111", width=2, tags="window-close")
-        canvas.create_line(1645, 27, 1629, 43, fill="#111111", width=2, tags="window-close")
+            canvas.create_rectangle(16, 16, 40, 40, fill="#111111", outline="")
+        canvas.create_polygon(22, 21, 33, 21, 33, 32, 29, 32, 29, 26, 22, 26, fill="#ffffff", outline="")
+        canvas.create_polygon(22, 26, 26, 30, 26, 35, 22, 31, fill="#ffffff", outline="")
+        text(52, 28, "PC Agent", 16, colors["text"], "regular", "w")
+        text(909, 28, "—", 18, colors["text"], "regular", "center", tags="window-min")
+        canvas.create_rectangle(941, 21, 953, 35, fill="", outline="#111111", width=2, tags="window-max")
+        canvas.create_line(974, 21, 986, 35, fill="#111111", width=2, tags="window-close")
+        canvas.create_line(986, 21, 974, 35, fill="#111111", width=2, tags="window-close")
         bind_click("window-min", root.iconify)
         bind_click("window-close", root.destroy)
         canvas.tag_bind("window-max", "<Button-1>", lambda event: None)
         canvas.tag_bind("window-max", "<Enter>", lambda event: canvas.configure(cursor="hand2"))
         canvas.tag_bind("window-max", "<Leave>", lambda event: canvas.configure(cursor=""))
 
-        round_rect(1408, 101, 1508, 143, 9, "#ffffff", "#d8d8d8")
-        canvas.create_oval(1424, 117, 1434, 127, fill=colors["green"], outline="")
-        text(1444, 122, "연결됨", 17, colors["text"], "regular", "w")
+        round_rect(778, 68, 866, 102, 8, "#ffffff", "#d8d8d8")
+        canvas.create_oval(791, 81, 799, 89, fill=colors["green"], outline="")
+        text(809, 85, "연결됨", 13, colors["text"], "regular", "w")
         tag = "demo-toggle"
-        round_rect(1527, 101, 1633, 143, 9, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1, tag)
-        text(1580, 122, "시연 모드", 17, colors["text"], "regular", "center", tags=tag)
+        round_rect(878, 68, 970, 102, 8, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1, tag)
+        text(924, 85, "시연 모드", 13, colors["text"], "regular", "center", tags=tag)
         bind_click(tag, toggle_demo)
 
     def draw_step(number: int, x: int, label: str, style: str) -> None:
         if style == "active" or style == "done-black":
-            canvas.create_oval(x - 20, 181, x + 20, 221, fill="#050505", outline="#050505")
-            text(x, 201, str(number), 17, "#ffffff", "regular", "center")
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#050505", outline="#050505")
+            text(x, 136, str(number), 13, "#ffffff", "regular", "center")
             label_color = colors["text"]
         elif style == "done-check":
-            canvas.create_oval(x - 20, 181, x + 20, 221, fill="#ffffff", outline="#d3d8dc")
-            draw_check(x, 201, 13, "#111111", 2)
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#ffffff", outline="#d3d8dc")
+            draw_check(x, 136, 10, "#111111", 2)
             label_color = colors["muted"]
         else:
-            canvas.create_oval(x - 20, 181, x + 20, 221, fill="#ffffff", outline="#d7dce0")
-            text(x, 201, str(number), 17, colors["subtle"], "regular", "center")
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#ffffff", outline="#d7dce0")
+            text(x, 136, str(number), 13, colors["subtle"], "regular", "center")
             label_color = colors["muted"]
-        text(x + 36, 201, label, 18, label_color, "regular", "w")
+        text(x + 27, 136, label, 14, label_color, "regular", "w")
 
     def draw_stepper() -> None:
         state = str(ui["state"])
@@ -4472,81 +4475,81 @@ def show_log_viewer(
             styles = ("idle", "idle", "active")
         else:
             styles = ("done-black", "done-black", "done-black")
-        draw_step(1, 354, "증상 확인", styles[0])
-        line(493, 201, 725, 201, "#d9d9d9")
-        draw_step(2, 765, "하드웨어 진단", styles[1])
-        line(938, 201, 1162, 201, "#d9d9d9")
-        draw_step(3, 1201, "결과 및 조치", styles[2])
+        draw_step(1, 145, PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
+        line(252, 136, 402, 136, "#d9d9d9")
+        draw_step(2, 432, PC_AGENT_DIAGNOSIS_STEPS[1], styles[1])
+        line(570, 136, 710, 136, "#d9d9d9")
+        draw_step(3, 740, PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
 
     def draw_sparkline(x: int, y: int, values: Sequence[int], emphasis: bool = False) -> None:
         for index, value in enumerate(values):
             shade = "#8e8e8e" if emphasis and 6 <= index <= 9 else "#e7e7e7"
-            canvas.create_rectangle(x + index * 14, y - value, x + index * 14 + 8, y, fill=shade, outline="")
+            canvas.create_rectangle(x + index * 10, y - value, x + index * 10 + 6, y, fill=shade, outline="")
 
     def draw_symptom() -> None:
         cards = [
-            (163, "CPU", "점검 예정", False, [15, 20, 25, 31, 38, 46, 32, 26, 23, 20, 19, 20, 22, 20, 19, 27]),
-            (512, "GPU", "우선 점검", True, [8, 12, 17, 21, 18, 28, 38, 47, 55, 42, 34, 28, 26, 21, 17, 12]),
-            (850, "RAM", "참고 확인", False, [24, 14, 13, 19, 25, 29, 37, 24, 16, 9, 28, 39, 30, 22, 16, 11]),
-            (1192, "디스크", "참고 확인", False, [26, 12, 20, 18, 14, 11, 9, 13, 18, 24, 18, 15, 17, 21, 27, 19]),
+            (70, "CPU", "점검 예정", False, [15, 20, 25, 31, 38, 46, 32, 26, 23, 20, 19, 20, 22, 20, 19, 27]),
+            (287, "GPU", "우선 점검", True, [8, 12, 17, 21, 18, 28, 38, 47, 55, 42, 34, 28, 26, 21, 17, 12]),
+            (504, "RAM", "참고 확인", False, [24, 14, 13, 19, 25, 29, 37, 24, 16, 9, 28, 39, 30, 22, 16, 11]),
+            (721, "디스크", "참고 확인", False, [26, 12, 20, 18, 14, 11, 9, 13, 18, 24, 18, 15, 17, 21, 27, 19]),
         ]
         for x, title_value, subtitle, active, values in cards:
-            round_rect(x, 283, x + 316, 549, 16, "#ffffff", colors["blue"] if active else "#d9d9d9", 2 if active else 1)
-            text(x + 38, 332, title_value, 27, colors["blue"] if active else colors["text"], "semibold")
-            text(x + 38, 377, subtitle, 18, colors["blue"] if active else colors["muted"])
-            draw_sparkline(x + 34, 497, values, emphasis=active or title_value == "CPU")
+            round_rect(x, 182, x + 209, 350, 12, "#ffffff", colors["blue"] if active else "#d9d9d9", 2 if active else 1)
+            text(x + 22, 209, title_value, 18, colors["blue"] if active else colors["text"], "semibold")
+            text(x + 22, 241, subtitle, 13, colors["blue"] if active else colors["muted"])
+            draw_sparkline(x + 22, 325, values, emphasis=active or title_value == "CPU")
 
-        round_rect(163, 588, 1508, 779, 16, "#ffffff", "#dddddd")
-        canvas.create_oval(196, 620, 261, 685, fill="#f4f4f4", outline="")
-        draw_chat_icon(228, 651, 13)
-        text(290, 628, "전달받은 증상", 24, colors["text"], "semibold")
-        text(290, 670, "“게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.”", 25, colors["text"])
-        text(290, 724, "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.", 18, colors["muted"])
-        button(686, 817, 984, 889, "진단 시작", start_diagnosis, True, size=21)
+        round_rect(70, 370, 930, 530, 12, "#ffffff", "#dddddd")
+        canvas.create_oval(90, 393, 132, 435, fill="#f4f4f4", outline="")
+        draw_chat_icon(111, 414, 9)
+        text(153, 390, "전달받은 증상", 17, colors["text"], "semibold")
+        text(153, 423, "“게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.”", 16, colors["text"], width=735)
+        text(153, 477, "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.", 13, colors["muted"])
+        button(390, 555, 610, 608, "진단 시작", start_diagnosis, True, size=15)
 
     def draw_progress_ring(x: int, y: int) -> None:
-        canvas.create_oval(x - 23, y - 23, x + 23, y + 23, outline="#e8e8e8", width=5)
-        canvas.create_arc(x - 23, y - 23, x + 23, y + 23, start=90, extent=-238, style="arc", outline="#6f7478", width=5)
+        canvas.create_oval(x - 18, y - 18, x + 18, y + 18, outline="#e8e8e8", width=4)
+        canvas.create_arc(x - 18, y - 18, x + 18, y + 18, start=90, extent=-238, style="arc", outline="#6f7478", width=4)
 
     def draw_diagnosing() -> None:
-        round_rect(277, 232, 1396, 822, 15, "#ffffff", "#d7dce0")
-        canvas.create_oval(322, 269, 383, 330, fill="#ffffff", outline="#d7dce0")
-        draw_chat_icon(352, 299, 12)
-        text(419, 272, "전달받은 증상", 16, colors["muted"])
-        text(419, 299, "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.", 20, colors["text"], "regular")
-        text(419, 334, "전달받은 증상을 바탕으로 진단 범위를 설정했습니다.", 15, colors["muted"])
-        line(326, 376, 1345, 376)
-        text(836, 419, "진단 진행 중", 31, colors["text"], "semibold", "center")
-        draw_progress_ring(786, 475)
-        text(845, 475, "66%", 35, colors["text"], "regular", "center")
+        round_rect(70, 180, 930, 650, 12, "#ffffff", "#d7dce0")
+        canvas.create_oval(94, 207, 136, 249, fill="#ffffff", outline="#d7dce0")
+        draw_chat_icon(115, 228, 9)
+        text(153, 201, "전달받은 증상", 12, colors["muted"])
+        text(153, 225, "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.", 15, colors["text"], "regular")
+        text(153, 252, "전달받은 증상을 바탕으로 진단 범위를 설정했습니다.", 11, colors["muted"])
+        line(95, 278, 905, 278)
+        text(500, 298, "진단 진행 중", 21, colors["text"], "semibold", "center")
+        draw_progress_ring(462, 342)
+        text(515, 342, "66%", 24, colors["text"], "regular", "center")
         detail = ui["status"] or "전달받은 증상을 바탕으로 전체 하드웨어 검사를 진행하고 있습니다."
-        text(836, 520, str(detail), 16, colors["muted"], "regular", "center")
-        line(326, 554, 1345, 554)
+        text(500, 376, str(detail), 12, colors["muted"], "regular", "center")
+        line(95, 404, 905, 404)
 
-        centers = (438, 704, 969, 1212)
+        centers = (180, 385, 600, 805)
         labels = (("CPU", "검사 완료"), ("GPU", "집중 분석 중"), ("RAM", "대기"), ("디스크", "대기"))
         for index, (cx, values) in enumerate(zip(centers, labels, strict=False)):
             if index == 1:
-                round_rect(cx - 95, 572, cx + 122, 616, 10, "#ffffff", colors["red"])
-                canvas.create_oval(cx - 72, 587, cx - 60, 599, fill=colors["red"], outline="")
-                draw_check(cx - 66, 593, 5, "#ffffff", 1)
-                text(cx - 48, 593, values[0], 16, colors["text"], "semibold", "w")
-                text(cx + 10, 593, values[1], 15, colors["text"], "regular", "w")
+                round_rect(cx - 76, 420, cx + 92, 456, 8, "#ffffff", colors["red"])
+                canvas.create_oval(cx - 60, 432, cx - 50, 442, fill=colors["red"], outline="")
+                draw_check(cx - 55, 437, 4, "#ffffff", 1)
+                text(cx - 42, 438, values[0], 12, colors["text"], "semibold", "w")
+                text(cx + 5, 438, values[1], 11, colors["text"], "regular", "w")
             else:
                 icon_color = colors["green"] if index == 0 else "#92989d"
-                canvas.create_oval(cx - 67, 588, cx - 55, 600, fill=icon_color if index == 0 else "#ffffff", outline=icon_color)
+                canvas.create_oval(cx - 53, 432, cx - 43, 442, fill=icon_color if index == 0 else "#ffffff", outline=icon_color)
                 if index == 0:
-                    draw_check(cx - 61, 594, 5, "#ffffff", 1)
+                    draw_check(cx - 48, 437, 4, "#ffffff", 1)
                 else:
-                    canvas.create_line(cx - 61, 590, cx - 61, 594, fill=icon_color)
-                    canvas.create_line(cx - 61, 594, cx - 57, 597, fill=icon_color)
-                text(cx - 42, 594, values[0], 16, colors["text"], "semibold", "w")
-                text(cx + 16, 594, values[1], 15, colors["muted"], "regular", "w")
+                    canvas.create_line(cx - 48, 434, cx - 48, 437, fill=icon_color)
+                    canvas.create_line(cx - 48, 437, cx - 45, 440, fill=icon_color)
+                text(cx - 36, 438, values[0], 12, colors["text"], "semibold", "w")
+                text(cx + 12, 438, values[1], 11, colors["muted"], "regular", "w")
             if index < 3:
-                line(cx + 133, 577, cx + 133, 608, "#e0e0e0")
-        line(326, 631, 1345, 631)
+                line(cx + 100, 421, cx + 100, 455, "#e0e0e0")
+        line(95, 474, 905, 474)
 
-        text(326, 651, "검사 진행 내용", 17, colors["text"], "semibold")
+        text(95, 493, "검사 진행 내용", 13, colors["text"], "semibold")
         checklist = [
             ("전체 센서 수집 완료", "#9ba1a5"),
             ("온도 및 사용률 분석 중", colors["red"]),
@@ -4554,78 +4557,78 @@ def show_log_viewer(
             ("열 제한 징후 확인 예정", "#92989d"),
         ]
         for idx, (label, dot) in enumerate(checklist):
-            cy = 693 + idx * 32
-            canvas.create_oval(333, cy - 7, 347, cy + 7, fill="#ffffff" if idx != 1 else dot, outline=dot)
+            cy = 530 + idx * 25
+            canvas.create_oval(100, cy - 6, 112, cy + 6, fill="#ffffff" if idx != 1 else dot, outline=dot)
             if idx == 0:
-                draw_check(340, cy, 6, dot, 1)
+                draw_check(106, cy, 5, dot, 1)
             elif idx > 1:
-                canvas.create_line(340, cy - 4, 340, cy, fill=dot)
-                canvas.create_line(340, cy, 344, cy + 3, fill=dot)
-            text(367, cy, label, 15, colors["text"], "regular", "w")
+                canvas.create_line(106, cy - 3, 106, cy, fill=dot)
+                canvas.create_line(106, cy, 109, cy + 2, fill=dot)
+            text(128, cy, label, 11, colors["text"], "regular", "w")
 
-        text(809, 651, "실시간 진단 로그", 17, colors["text"], "semibold")
-        round_rect(809, 684, 1344, 801, 8, "#fbfbfb", "#dedede")
+        text(500, 493, "실시간 진단 로그", 13, colors["text"], "semibold")
+        round_rect(500, 520, 905, 620, 7, "#fbfbfb", "#dedede")
         logs = [
             ("10:32:41", "시스템 센서 데이터 수집을 완료했습니다.", colors["muted"]),
             ("10:32:44", "CPU 상태 검사를 완료했습니다.", colors["muted"]),
             ("10:32:45", "GPU 온도 및 사용률 분석을 시작했습니다.", colors["red"]),
         ]
         for idx, (stamp, message, color) in enumerate(logs):
-            cy = 712 + idx * 31
-            text(827, cy, stamp, 14, color, "regular", "w")
-            text(912, cy, message, 14, color, "regular", "w")
-        button(699, 848, 966, 911, "분석 계속", continue_analysis, True, disabled=bool(ui["busy"] and not ui["demo"]), size=20)
+            cy = 545 + idx * 26
+            text(517, cy, stamp, 10, color, "regular", "w")
+            text(580, cy, message, 10, color, "regular", "w")
+        button(390, 665, 610, 715, "분석 계속", continue_analysis, True, disabled=bool(ui["busy"] and not ui["demo"]), size=15)
 
     def draw_result_icon(x: int, y: int) -> None:
-        canvas.create_oval(x - 26, y - 26, x + 26, y + 26, fill="#f4f4f4", outline="")
-        canvas.create_line(x - 8, y + 11, x - 8, y - 12, x + 8, y - 12, fill="#111111", width=2)
-        canvas.create_line(x + 8, y - 12, x + 8, y + 2, fill="#111111", width=2)
-        canvas.create_line(x - 8, y + 1, x + 3, y + 1, fill="#111111", width=2)
+        canvas.create_oval(x - 20, y - 20, x + 20, y + 20, fill="#f4f4f4", outline="")
+        canvas.create_line(x - 6, y + 8, x - 6, y - 9, x + 6, y - 9, fill="#111111", width=2)
+        canvas.create_line(x + 6, y - 9, x + 6, y + 2, fill="#111111", width=2)
+        canvas.create_line(x - 6, y + 1, x + 2, y + 1, fill="#111111", width=2)
 
     def draw_result() -> None:
-        round_rect(187, 236, 1485, 896, 15, "#ffffff", "#d7dce0")
-        draw_result_icon(257, 294)
-        text(311, 285, "진단 결과", 23, colors["text"], "semibold")
-        text(311, 346, "현재 냉각 시스템 또는 하드웨어의 물리적 이상 가능성이 높습니다.", 36, colors["text"], "semibold")
-        text(311, 409, "GPU 온도 상승, 팬 회전 상태 비정상, 열 제한 징후가 함께 감지되었습니다.", 22, "#5f6368")
-        text(311, 447, "현재 환경에서는 소프트웨어를 통한 자동 복구가 불가능합니다.", 22, "#5f6368")
-        line(311, 495, 1359, 495)
-        text(311, 529, "핵심 결과", 22, colors["text"], "semibold")
-        chips = [(311, 571, 523, "GPU 온도 상승", "temp"), (566, 571, 820, "팬 회전 상태 비정상", "fan"), (864, 571, 1051, "열 제한 징후", "warn")]
+        round_rect(70, 180, 930, 670, 12, "#ffffff", "#d7dce0")
+        draw_result_icon(112, 222)
+        text(145, 214, "진단 결과", 17, colors["text"], "semibold")
+        text(145, 258, "현재 냉각 시스템 또는 하드웨어의 물리적 이상 가능성이 높습니다.", 23, colors["text"], "semibold")
+        text(145, 307, "GPU 온도 상승, 팬 회전 상태 비정상, 열 제한 징후가 함께 감지되었습니다.", 14, "#5f6368")
+        text(145, 334, "현재 환경에서는 소프트웨어를 통한 자동 복구가 불가능합니다.", 14, "#5f6368")
+        line(145, 371, 855, 371)
+        text(145, 392, "핵심 결과", 16, colors["text"], "semibold")
+        chips = [(145, 422, 315, "GPU 온도 상승", "temp"), (337, 422, 545, "팬 회전 상태 비정상", "fan"), (567, 422, 725, "열 제한 징후", "warn")]
         for x1, y1, x2, label, kind in chips:
-            round_rect(x1, y1, x2, 621, 25, "#ffeaea", "")
+            round_rect(x1, y1, x2, 458, 18, "#ffeaea", "")
             if kind == "temp":
-                canvas.create_oval(x1 + 24, 590, x1 + 34, 610, fill="#ffffff", outline=colors["red"], width=2)
-                canvas.create_line(x1 + 29, 580, x1 + 29, 599, fill=colors["red"], width=3)
+                canvas.create_oval(x1 + 17, 435, x1 + 25, 451, fill="#ffffff", outline=colors["red"], width=2)
+                canvas.create_line(x1 + 21, 429, x1 + 21, 443, fill=colors["red"], width=2)
             elif kind == "fan":
                 for angle in (0, 120, 240):
-                    canvas.create_arc(x1 + 20, 580, x1 + 43, 608, start=angle, extent=65, style="arc", outline=colors["red"], width=3)
-                canvas.create_oval(x1 + 29, 592, x1 + 34, 597, fill=colors["red"], outline="")
+                    canvas.create_arc(x1 + 14, 429, x1 + 33, 451, start=angle, extent=65, style="arc", outline=colors["red"], width=2)
+                canvas.create_oval(x1 + 22, 438, x1 + 26, 442, fill=colors["red"], outline="")
             else:
-                canvas.create_polygon(x1 + 29, 580, x1 + 17, 608, x1 + 41, 608, fill="#ffffff", outline=colors["red"], width=2)
-                text(x1 + 29, 600, "!", 14, colors["red"], "semibold", "center")
-            text(x1 + 57, 596, label, 18, colors["text"], "regular", "w")
-        line(311, 648, 1359, 648)
-        text(311, 678, "권장 조치", 22, colors["text"], "semibold")
-        actions = [(330, "GPU 냉각 팬 점검"), (674, "팬 전원 연결 상태 확인"), (1027, "AS 기사 연결 권장")]
+                canvas.create_polygon(x1 + 22, 429, x1 + 13, 451, x1 + 31, 451, fill="#ffffff", outline=colors["red"], width=2)
+                text(x1 + 22, 445, "!", 10, colors["red"], "semibold", "center")
+            text(x1 + 42, 440, label, 13, colors["text"], "regular", "w")
+        line(145, 477, 855, 477)
+        text(145, 497, "권장 조치", 16, colors["text"], "semibold")
+        actions = [(162, "GPU 냉각 팬 점검"), (420, "팬 전원 연결 상태 확인"), (690, "AS 기사 연결 권장")]
         for index, (x, label) in enumerate(actions, start=1):
-            canvas.create_oval(x - 18, 721, x + 18, 757, fill="#fff0ef", outline="")
-            text(x, 739, str(index), 15, colors["red"], "semibold", "center")
-            text(x + 42, 739, label, 18, "#333333", "regular", "w")
+            canvas.create_oval(x - 13, 523, x + 13, 549, fill="#fff0ef", outline="")
+            text(x, 536, str(index), 11, colors["red"], "semibold", "center")
+            text(x + 31, 536, label, 13, "#333333", "regular", "w")
             if index < 3:
-                line(x + 259, 724, x + 259, 754)
-        button(523, 790, 815, 861, "진단 상세", show_diagnosis_detail, False, size=20)
-        button(848, 790, 1145, 861, "AS 연결하기", connect_as, True, disabled=bool(ui["busy"]), size=20)
+                line(x + 213, 523, x + 213, 549)
+        button(270, 585, 485, 635, "진단 상세", show_diagnosis_detail, False, size=15)
+        button(515, 585, 730, 635, "AS 연결하기", connect_as, True, disabled=bool(ui["busy"]), size=15)
         if ui["status"]:
-            text(836, 876, str(ui["status"]), 14, colors["red"], "regular", "center")
+            text(500, 652, str(ui["status"]), 11, colors["red"], "regular", "center")
 
     def draw_success() -> None:
-        round_rect(306, 305, 1366, 803, 15, "#ffffff", "#d7dce0")
-        canvas.create_oval(784, 362, 888, 466, fill=colors["green_soft"], outline="#b9efd3")
-        draw_check(836, 414, 42, colors["green"], 6)
-        text(836, 508, "AS 요청이 생성되었습니다", 42, colors["text"], "semibold", "center")
-        text(836, 589, "요청 내용은 웹에서 확인할 수 있습니다.", 24, "#5f6368", "regular", "center")
-        button(662, 671, 1010, 736, "웹에서 확인하기", open_created_ticket, True, size=21)
+        round_rect(150, 205, 850, 650, 12, "#ffffff", "#d7dce0")
+        canvas.create_oval(458, 268, 542, 352, fill=colors["green_soft"], outline="#b9efd3")
+        draw_check(500, 310, 32, colors["green"], 5)
+        text(500, 392, "AS 요청이 생성되었습니다", 28, colors["text"], "semibold", "center")
+        text(500, 445, "요청 내용은 웹에서 확인할 수 있습니다.", 16, "#5f6368", "regular", "center")
+        button(370, 506, 630, 560, "웹에서 확인하기", open_created_ticket, True, size=15)
 
     def render() -> None:
         canvas.delete("all")
