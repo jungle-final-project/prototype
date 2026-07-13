@@ -241,8 +241,8 @@ export function SlotBoard({
         />
       ) : boardProblem ? (
         <SlotBoardProblemBanner
-          problem={boardProblem}
-          onExplain={() => explainIssue(undefined, boardProblem.tool)}
+          problems={boardProblems}
+          onExplain={(problem) => explainIssue(undefined, problem.tool)}
         />
       ) : null}
       {isIsometric ? (
@@ -1913,13 +1913,112 @@ function SlotBoardProblemBanner({
     return null;
   }
 
+  const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
+  const warnCount = problems.length - failCount;
+  const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
+  const sharedCardClass = 'rounded-lg border bg-white px-3.5 py-2 text-[10px] font-black';
+  const statusCardClass = (status: SlotProblemStatus) => status === 'FAIL'
+    ? 'slot-board-fail-banner-pulse border-red-400 text-red-600 shadow-[0_10px_20px_rgba(239,68,68,0.24)]'
+    : 'border-amber-400 text-amber-700 shadow-[0_10px_20px_rgba(245,158,11,0.18)]';
+
+  if (problems.length === 1) {
+    const problem = problems[0];
+    return (
+      <SlotBoardStatusRow
+        bannerTestId="slot-board-problem-banner"
+        status={problem.status}
+        message={problem.message}
+        onExplain={onExplain ? () => onExplain(problem) : undefined}
+      />
+    );
+  }
+
   return (
-    <SlotBoardStatusRow
-      bannerTestId="slot-board-problem-banner"
-      status={problem.status}
-      message={problem.message}
-      onExplain={onExplain}
-    />
+    <div
+      data-testid="slot-board-status-region"
+      data-placement="top"
+      className="w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2"
+    >
+      <div ref={rootRef} className="mx-auto w-full max-w-[576px]">
+        <button
+          type="button"
+          data-testid="slot-board-problem-banner"
+          data-status={overallStatus}
+          aria-expanded={isExpanded}
+          aria-controls="slot-board-problem-list"
+          onClick={() => setIsExpanded((expanded) => !expanded)}
+          className={[
+            sharedCardClass,
+            statusCardClass(overallStatus),
+            'flex w-full items-center justify-between gap-3 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+            overallStatus === 'FAIL'
+              ? 'hover:border-red-500 hover:bg-red-50 focus-visible:ring-red-300'
+              : 'hover:border-amber-500 hover:bg-amber-50 focus-visible:ring-amber-300'
+          ].join(' ')}
+        >
+          <span className="inline-flex min-w-0 items-center gap-2">
+            {overallStatus === 'FAIL'
+              ? <CircleX size={17} aria-hidden="true" className="shrink-0" />
+              : <AlertTriangle size={17} aria-hidden="true" className="shrink-0" />}
+            <span>
+              {failCount > 0 ? <>호환 불가 {failCount}건</> : null}
+              {failCount > 0 && warnCount > 0 ? ' · ' : null}
+              {warnCount > 0 ? <>주의 필요 {warnCount}건</> : null}
+            </span>
+          </span>
+          <ChevronDown
+            size={18}
+            aria-hidden="true"
+            className={['shrink-0 transition-transform', isExpanded ? 'rotate-180' : ''].join(' ')}
+          />
+        </button>
+        {isExpanded ? (
+          <div
+            id="slot-board-problem-list"
+            data-testid="slot-board-problem-list"
+            className={[
+              'mt-2 max-h-60 overflow-y-auto rounded-lg border bg-white',
+              overallStatus === 'FAIL'
+                ? 'border-red-300 shadow-[0_14px_30px_rgba(239,68,68,0.24)]'
+                : 'border-amber-300 shadow-[0_14px_30px_rgba(245,158,11,0.2)]'
+            ].join(' ')}
+          >
+            <ul className="divide-y divide-slate-100">
+              {problems.map((problem, index) => (
+                <li
+                  key={[problem.message, problem.categories.join('-'), index].join('-')}
+                  data-status={problem.status}
+                  className={[
+                    'flex items-center gap-3 px-4 py-3 text-left',
+                    problem.status === 'FAIL' ? 'bg-red-50/30' : 'bg-amber-50/30'
+                  ].join(' ')}
+                >
+                  {problem.status === 'FAIL'
+                    ? <CircleX size={17} aria-hidden="true" className="shrink-0 text-red-500" />
+                    : <AlertTriangle size={17} aria-hidden="true" className="shrink-0 text-amber-500" />}
+                  <span className="min-w-0 flex-1 break-keep text-[10px] font-bold leading-4 text-slate-700">
+                    {problem.message}
+                  </span>
+                  {problem.categories.length > 0 ? (
+                    <span
+                      className={[
+                        'shrink-0 rounded-md border px-2 py-1 text-[10px] font-black',
+                        problem.status === 'FAIL'
+                          ? 'border-red-200 bg-red-50 text-red-600'
+                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                      ].join(' ')}
+                    >
+                      {problem.categories.map((category) => slotConfigFor(category)?.label ?? category).join(' · ')}
+                    </span>
+                  ) : null}
+                  {onExplain ? <ExplainIssueButton onClick={() => onExplain(problem)} /> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
