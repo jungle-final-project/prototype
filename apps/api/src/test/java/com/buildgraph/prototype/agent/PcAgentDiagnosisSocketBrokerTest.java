@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.buildgraph.prototype.config.security.AgentPrincipal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -47,5 +48,26 @@ class PcAgentDiagnosisSocketBrokerTest {
         PcAgentDiagnosisSocketBroker broker = new PcAgentDiagnosisSocketBroker();
         assertThat(broker.recordResponse("other-device", "missing", "ACCEPTED", "wrong"))
                 .isFalse();
+    }
+
+    @Test
+    void diagnosisStatusDeduplicatesEventIdAndKeepsFirstRecordedState() {
+        PcAgentDiagnosisSocketBroker broker = new PcAgentDiagnosisSocketBroker();
+
+        assertThat(broker.recordStatus(
+                "device-1", "diagnosis-1", "event-1", "PROGRESS_UPDATED",
+                "DIAGNOSING", 25, "진행 중", Map.of("progress", 25)
+        )).isTrue();
+        assertThat(broker.recordStatus(
+                "device-1", "diagnosis-1", "event-1", "PROGRESS_UPDATED",
+                "COMPLETED", 100, "중복", Map.of("progress", 100)
+        )).isTrue();
+
+        assertThat(broker.latestStatus("diagnosis-1").sessionState()).isEqualTo("DIAGNOSING");
+        assertThat(broker.latestStatus("diagnosis-1").progress()).isEqualTo(25);
+        assertThat(broker.recordStatus(
+                "device-1", "diagnosis-1", "event-2", "PROGRESS_UPDATED",
+                "UNKNOWN", 30, "잘못된 상태", Map.of()
+        )).isFalse();
     }
 }

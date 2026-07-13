@@ -36,6 +36,14 @@ from diagnosis_request_agent import (
     DiagnosisRequestProcessor,
     ViewerRequestSignal,
 )
+from diagnosis_orchestrator import (
+    FINAL_SESSION_STATES,
+    DiagnosisLogStore,
+    DiagnosisOrchestrator,
+    DiagnosisRunSnapshot,
+    diagnosis_component_state,
+    diagnosis_current_task_label,
+)
 from initial_metrics import (
     ABNORMAL,
     AVAILABLE,
@@ -121,7 +129,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.9"
+DEFAULT_AGENT_VERSION = "0.1.10"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -181,6 +189,7 @@ def next_pc_agent_ui_state(current: str) -> str:
 def diagnosis_session_ui_state(
     session: DiagnosisSession | None,
     metrics: MetricsSnapshot | None,
+    diagnosis: DiagnosisRunSnapshot | None = None,
 ) -> str:
     if (
         isinstance(session, DiagnosisSession)
@@ -188,6 +197,13 @@ def diagnosis_session_ui_state(
         and metrics.diagnosis_id == session.request.diagnosis_id
         and metrics.initial_complete
     ):
+        if (
+            isinstance(diagnosis, DiagnosisRunSnapshot)
+            and diagnosis.diagnosis_id == session.request.diagnosis_id
+            and diagnosis.transition_allowed
+            and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+        ):
+            return "DIAGNOSIS_RESULT"
         return "DIAGNOSING"
     return "SYMPTOM_CONFIRM"
 
@@ -4829,6 +4845,9 @@ def show_log_viewer(
     diagnosis_session_provider: Any = None,
     connection_state_provider: Any = None,
     metrics_snapshot_provider: Any = None,
+    diagnosis_snapshot_provider: Any = None,
+    cancel_diagnosis: Any = None,
+    retry_diagnosis: Any = None,
     on_window_ready: Any = None,
     on_window_closed: Any = None,
 ) -> None:
@@ -4896,12 +4915,14 @@ def show_log_viewer(
         capture_state = "SYMPTOM_CONFIRM"
     diagnosis_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
     initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+    diagnosis_snapshot = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
     if not capture_state_override:
-        capture_state = diagnosis_session_ui_state(diagnosis_session, initial_metrics)
+        capture_state = diagnosis_session_ui_state(diagnosis_session, initial_metrics, diagnosis_snapshot)
     ui = {
         "state": capture_state,
         "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else True,
         "diagnosisSession": diagnosis_session,
+        "diagnosisSnapshot": diagnosis_snapshot,
         "requestLocked": isinstance(diagnosis_session, DiagnosisSession),
         "busy": False,
         "diagnosisReady": False,
@@ -5132,40 +5153,92 @@ def show_log_viewer(
         else:
             button(390, 555, 610, 608, "진단 시작", start_diagnosis, True, size=15)
 
-    def draw_progress_ring(x: int, y: int) -> None:
+    def draw_progress_ring(x: int, y: int, progress: int) -> None:
         canvas.create_oval(x - 18, y - 18, x + 18, y + 18, outline="#e8e8e8", width=4)
-        canvas.create_arc(x - 18, y - 18, x + 18, y + 18, start=90, extent=-238, style="arc", outline="#6f7478", width=4)
+        extent = -max(0, min(360, int(progress * 3.6)))
+        if extent:
+            canvas.create_arc(
+                x - 18,
+                y - 18,
+                x + 18,
+                y + 18,
+                start=90,
+                extent=extent,
+                style="arc",
+                outline="#6f7478",
+                width=4,
+            )
 
     def draw_diagnosing() -> None:
+        active_session = ui["diagnosisSession"]
+        snapshot = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else ui.get("diagnosisSnapshot")
+        if not isinstance(snapshot, DiagnosisRunSnapshot):
+            snapshot = DiagnosisRunSnapshot()
+        ui["diagnosisSnapshot"] = snapshot
+        symptom = (
+            active_session.request.symptom
+            if isinstance(active_session, DiagnosisSession) and active_session.request.symptom.strip()
+            else "전달받은 증상 정보가 없습니다."
+        )
+        requested_checks = active_session.request.requested_checks if isinstance(active_session, DiagnosisSession) else ()
+        check_labels = {
+            "cpu": "CPU",
+            "gpu": "GPU",
+            "memory": "RAM",
+            "ram": "RAM",
+            "disk": "디스크",
+            "cooling": "냉각",
+        }
+        scope = " · ".join(dict.fromkeys(check_labels.get(item, item.upper()) for item in requested_checks))
+        scope_text = f"점검 범위: {scope}" if scope else "요청된 점검 범위를 확인하고 있습니다."
+        progress = snapshot.progress if snapshot.diagnosis_id else 0
+        current_label = diagnosis_current_task_label(snapshot)
+
         round_rect(70, 180, 930, 650, 12, "#ffffff", "#d7dce0")
         canvas.create_oval(94, 207, 136, 249, fill="#ffffff", outline="#d7dce0")
         draw_chat_icon(115, 228, 9)
         text(153, 201, "전달받은 증상", 12, colors["muted"])
-        text(153, 225, "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다.", 15, colors["text"], "regular")
-        text(153, 252, "전달받은 증상을 바탕으로 진단 범위를 설정했습니다.", 11, colors["muted"])
+        text(153, 225, symptom, 15, colors["text"], "regular", width=735)
+        text(153, 252, scope_text, 11, colors["muted"])
         line(95, 278, 905, 278)
         text(500, 298, "진단 진행 중", 21, colors["text"], "semibold", "center")
-        draw_progress_ring(462, 342)
-        text(515, 342, "66%", 24, colors["text"], "regular", "center")
-        detail = ui["status"] or "전달받은 증상을 바탕으로 전체 하드웨어 검사를 진행하고 있습니다."
+        draw_progress_ring(462, 342, progress)
+        text(515, 342, f"{progress}%", 24, colors["text"], "regular", "center")
+        detail = ui["status"] or current_label
         text(500, 376, str(detail), 12, colors["muted"], "regular", "center")
         line(95, 404, 905, 404)
 
         centers = (180, 385, 600, 805)
-        labels = (("CPU", "검사 완료"), ("GPU", "집중 분석 중"), ("RAM", "대기"), ("디스크", "대기"))
+        labels = (
+            ("CPU", diagnosis_component_state(snapshot, "cpu")),
+            ("GPU", diagnosis_component_state(snapshot, "gpu")),
+            ("RAM", diagnosis_component_state(snapshot, "ram")),
+            ("디스크", diagnosis_component_state(snapshot, "disk")),
+        )
         for index, (cx, values) in enumerate(zip(centers, labels, strict=False)):
-            if index == 1:
-                round_rect(cx - 76, 420, cx + 92, 456, 8, "#ffffff", colors["red"])
-                canvas.create_oval(cx - 60, 432, cx - 50, 442, fill=colors["red"], outline="")
-                draw_check(cx - 55, 437, 4, "#ffffff", 1)
+            status = values[1]
+            focused = status in {"검사 중", "집중 분석 중"}
+            failed = status == "실패"
+            unavailable = status == "측정 불가"
+            if focused or failed:
+                outline = colors["red"] if focused else colors["warning"]
+                round_rect(cx - 76, 420, cx + 92, 456, 8, "#ffffff", outline)
+                canvas.create_oval(cx - 60, 432, cx - 50, 442, fill=outline, outline="")
                 text(cx - 42, 438, values[0], 12, colors["text"], "semibold", "w")
                 text(cx + 5, 438, values[1], 11, colors["text"], "regular", "w")
             else:
-                icon_color = colors["green"] if index == 0 else "#92989d"
-                canvas.create_oval(cx - 53, 432, cx - 43, 442, fill=icon_color if index == 0 else "#ffffff", outline=icon_color)
-                if index == 0:
+                icon_color = colors["green"] if status == "완료" else "#92989d"
+                canvas.create_oval(
+                    cx - 53,
+                    432,
+                    cx - 43,
+                    442,
+                    fill=icon_color if status == "완료" else "#ffffff",
+                    outline=icon_color,
+                )
+                if status == "완료":
                     draw_check(cx - 48, 437, 4, "#ffffff", 1)
-                else:
+                elif not unavailable:
                     canvas.create_line(cx - 48, 434, cx - 48, 437, fill=icon_color)
                     canvas.create_line(cx - 48, 437, cx - 45, 440, fill=icon_color)
                 text(cx - 36, 438, values[0], 12, colors["text"], "semibold", "w")
@@ -5175,34 +5248,51 @@ def show_log_viewer(
         line(95, 474, 905, 474)
 
         text(95, 493, "검사 진행 내용", 13, colors["text"], "semibold")
-        checklist = [
-            ("전체 센서 수집 완료", "#9ba1a5"),
-            ("온도 및 사용률 분석 중", colors["red"]),
-            ("냉각 팬 회전 상태 확인 중", "#92989d"),
-            ("열 제한 징후 확인 예정", "#92989d"),
-        ]
-        for idx, (label, dot) in enumerate(checklist):
+        current_index = next(
+            (index for index, task in enumerate(snapshot.tasks) if task.task_id == snapshot.current_task_id),
+            max(0, len([task for task in snapshot.tasks if task.status not in {"PENDING", "RUNNING"}]) - 1),
+        )
+        start_index = max(0, min(current_index - 1, max(0, len(snapshot.tasks) - 4)))
+        checklist = snapshot.tasks[start_index:start_index + 4]
+        task_status_labels = {
+            "PENDING": "대기",
+            "RUNNING": "검사 중",
+            "COMPLETED": "완료",
+            "UNSUPPORTED": "측정 불가",
+            "FAILED": "실패",
+            "TIMED_OUT": "시간 초과",
+            "CANCELLED": "취소",
+        }
+        for idx, task in enumerate(checklist):
             cy = 530 + idx * 25
-            canvas.create_oval(100, cy - 6, 112, cy + 6, fill="#ffffff" if idx != 1 else dot, outline=dot)
-            if idx == 0:
+            dot = colors["red"] if task.status == "RUNNING" else colors["green"] if task.status == "COMPLETED" else "#92989d"
+            canvas.create_oval(100, cy - 6, 112, cy + 6, fill=dot if task.status == "RUNNING" else "#ffffff", outline=dot)
+            if task.status == "COMPLETED":
                 draw_check(106, cy, 5, dot, 1)
-            elif idx > 1:
+            elif task.status == "PENDING":
                 canvas.create_line(106, cy - 3, 106, cy, fill=dot)
                 canvas.create_line(106, cy, 109, cy + 2, fill=dot)
-            text(128, cy, label, 11, colors["text"], "regular", "w")
+            label = DiagnosisOrchestrator.TASK_LABELS.get(task.task_id, task.task_id)
+            text(128, cy, f"{label} · {task_status_labels.get(task.status, task.status)}", 11, colors["text"], "regular", "w")
 
         text(500, 493, "실시간 진단 로그", 13, colors["text"], "semibold")
         round_rect(500, 520, 905, 620, 7, "#fbfbfb", "#dedede")
-        logs = [
-            ("10:32:41", "시스템 센서 데이터 수집을 완료했습니다.", colors["muted"]),
-            ("10:32:44", "CPU 상태 검사를 완료했습니다.", colors["muted"]),
-            ("10:32:45", "GPU 온도 및 사용률 분석을 시작했습니다.", colors["red"]),
-        ]
-        for idx, (stamp, message, color) in enumerate(logs):
+        visible_events = snapshot.events[-3:]
+        for idx, event in enumerate(visible_events):
             cy = 545 + idx * 26
+            try:
+                stamp = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00")).astimezone(KST).strftime("%H:%M:%S")
+            except ValueError:
+                stamp = "--:--:--"
+            color = colors["red"] if event.event_type in {"TASK_FAILED", "TASK_TIMED_OUT", "DIAGNOSIS_FAILED"} else colors["muted"]
             text(517, cy, stamp, 10, color, "regular", "w")
-            text(580, cy, message, 10, color, "regular", "w")
-        button(390, 665, 610, 715, "분석 계속", continue_analysis, True, disabled=bool(ui["busy"] and not ui["demo"]), size=15)
+            text(580, cy, event.message, 10, color, "regular", "w", width=310)
+        if snapshot.state in {"FAILED", "TIMED_OUT"}:
+            button(390, 665, 610, 715, "진단 재시도", request_diagnosis_retry, False, size=15)
+        elif snapshot.state == "CANCELLED":
+            text(500, 690, "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
+        else:
+            button(390, 665, 610, 715, "진단 취소", request_diagnosis_cancel, False, size=15)
 
     def draw_result_icon(x: int, y: int) -> None:
         canvas.create_oval(x - 20, y - 20, x + 20, y + 20, fill="#f4f4f4", outline="")
@@ -5256,6 +5346,22 @@ def show_log_viewer(
         button(370, 506, 630, 560, "웹에서 확인하기", open_created_ticket, True, size=15)
 
     def render() -> None:
+        if ui["requestLocked"] and ui["state"] != "AS_REQUEST_CREATED":
+            active_session = ui["diagnosisSession"]
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+            diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
+            if isinstance(diagnosis, DiagnosisRunSnapshot):
+                ui["diagnosisSnapshot"] = diagnosis
+            ui["state"] = diagnosis_session_ui_state(active_session, metrics, diagnosis)
+            if isinstance(diagnosis, DiagnosisRunSnapshot) and diagnosis.diagnosis_id:
+                if diagnosis.state == "FAILED":
+                    ui["status"] = "필수 진단 증거를 만들지 못했습니다."
+                elif diagnosis.state == "TIMED_OUT":
+                    ui["status"] = "전체 진단 시간이 초과되었습니다."
+                elif diagnosis.state == "CANCELLED":
+                    ui["status"] = "진단이 취소되었습니다."
+                elif diagnosis.state in {"DIAGNOSING", "EVALUATING"}:
+                    ui["status"] = ""
         canvas.delete("all")
         button_counter["value"] = 0
         draw_header()
@@ -5321,14 +5427,15 @@ def show_log_viewer(
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def continue_analysis() -> None:
-        if not ui["demo"] and not ui["diagnosisReady"]:
-            ui["status"] = "진단 완료 후 결과를 확인할 수 있습니다."
+    def request_diagnosis_cancel() -> None:
+        if callable(cancel_diagnosis) and cancel_diagnosis():
+            ui["status"] = "진단 취소를 요청했습니다."
             render()
-            return
-        ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
-        ui["status"] = ""
-        render()
+
+    def request_diagnosis_retry() -> None:
+        if callable(retry_diagnosis) and retry_diagnosis():
+            ui["status"] = "실패한 진단 작업을 다시 시작합니다."
+            render()
 
     def show_diagnosis_detail() -> None:
         detail = "GPU 온도 상승\n팬 회전 상태 비정상\n열 제한 징후\n\n권장 조치: GPU 냉각 팬과 전원 연결 상태를 점검하세요."
@@ -5429,7 +5536,9 @@ def show_log_viewer(
         if isinstance(session, DiagnosisSession):
             ui["demo"] = session.request.mode == "DEMO"
             metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
-            ui["state"] = diagnosis_session_ui_state(session, metrics)
+            diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
+            ui["diagnosisSnapshot"] = diagnosis
+            ui["state"] = diagnosis_session_ui_state(session, metrics, diagnosis)
             initial_complete = ui["state"] == "DIAGNOSING"
             ui["diagnosisReady"] = False
             ui["diagnosis"] = None
@@ -6229,12 +6338,21 @@ def run_background(
         connection_state = {"value": "DISCONNECTED"}
         diagnosis_store = DiagnosisSessionStore(app_data_dir() / "diagnosis-request-state.json")
         metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
+        diagnosis_log_store = DiagnosisLogStore(app_data_dir() / "diagnosis-progress-state.json")
+        diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}
+        diagnosis_client_holder: dict[str, AgentDiagnosisWebSocketClient] = {}
+        forwarded_event_ids: set[str] = set()
         viewer_controller = BackgroundViewerController(
             path,
             lambda: diagnosis_store.session,
             lambda: connection_state["value"],
             show_log_viewer,
             metrics_snapshot_provider=lambda: metrics_store.snapshot,
+            diagnosis_snapshot_provider=lambda: diagnosis_log_store.snapshot,
+            cancel_diagnosis=lambda: diagnosis_orchestrator_holder["value"].cancel()
+            if "value" in diagnosis_orchestrator_holder else False,
+            retry_diagnosis=lambda: diagnosis_orchestrator_holder["value"].retry()
+            if "value" in diagnosis_orchestrator_holder else False,
         )
 
         def on_connection_state_changed(state: str) -> None:
@@ -6243,8 +6361,54 @@ def run_background(
         def on_metrics_updated(metrics: MetricsSnapshot) -> None:
             viewer_controller.refresh_metrics()
 
+        def sync_diagnosis_events(snapshot: DiagnosisRunSnapshot) -> None:
+            client = diagnosis_client_holder.get("value")
+            if client is None:
+                return
+            for event in snapshot.events:
+                if event.event_id in forwarded_event_ids:
+                    continue
+                detail = event.to_dict()
+                detail.update({
+                    "sessionState": snapshot.state,
+                    "progress": snapshot.progress,
+                    "mode": snapshot.mode,
+                })
+                if client.send_diagnosis_status(detail):
+                    forwarded_event_ids.add(event.event_id)
+
+        def on_diagnosis_updated(snapshot: DiagnosisRunSnapshot) -> None:
+            sync_diagnosis_events(snapshot)
+            viewer_controller.refresh_metrics()
+
+        def on_diagnosis_complete(snapshot: DiagnosisRunSnapshot) -> None:
+            if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
+                diagnosis_store.update_state("COMPLETED")
+            elif snapshot.state in {"FAILED", "TIMED_OUT", "CANCELLED"}:
+                diagnosis_store.update_state("FAILED")
+            viewer_controller.refresh_metrics()
+
+        diagnosis_orchestrator = DiagnosisOrchestrator(
+            lambda: metrics_store.snapshot,
+            diagnosis_log_store,
+            on_update=on_diagnosis_updated,
+            on_complete=on_diagnosis_complete,
+        )
+        diagnosis_orchestrator_holder["value"] = diagnosis_orchestrator
+
         def on_initial_metrics_complete(metrics: MetricsSnapshot) -> None:
             viewer_controller.complete_initial_metrics()
+            session = diagnosis_store.session
+            if (
+                isinstance(session, DiagnosisSession)
+                and metrics.diagnosis_id == session.request.diagnosis_id
+                and metrics.initial_complete
+            ):
+                diagnosis_orchestrator.start(
+                    session.request.diagnosis_id,
+                    session.request.mode,
+                    session.request.requested_checks,
+                )
 
         initial_metrics_coordinator = InitialMetricsCoordinator(
             metrics_store,
@@ -6256,7 +6420,11 @@ def run_background(
 
         def on_initial_metrics_requested(session: DiagnosisSession) -> None:
             diagnosis_store.update_state("RUNNING")
-            connection_state["value"] = "RUNNING"
+            diagnosis_orchestrator.prepare(
+                session.request.diagnosis_id,
+                session.request.mode,
+                session.request.requested_checks,
+            )
             initial_metrics_coordinator.start(session.request.diagnosis_id, session.request.mode)
 
         try:
@@ -6271,15 +6439,27 @@ def run_background(
         )
         existing_session = diagnosis_store.session
         existing_metrics = metrics_store.snapshot
-        if (
-            isinstance(existing_session, DiagnosisSession)
-            and existing_session.agent_state in {"REQUEST_RECEIVED", "RUNNING"}
-            and (
-                existing_metrics.diagnosis_id != existing_session.request.diagnosis_id
-                or not existing_metrics.initial_complete
-            )
-        ):
-            on_initial_metrics_requested(existing_session)
+        if isinstance(existing_session, DiagnosisSession) and existing_session.agent_state in {"REQUEST_RECEIVED", "RUNNING"}:
+            if (
+                existing_metrics.diagnosis_id == existing_session.request.diagnosis_id
+                and existing_metrics.initial_complete
+            ):
+                existing_diagnosis = diagnosis_log_store.snapshot
+                if existing_diagnosis.diagnosis_id == existing_session.request.diagnosis_id and existing_diagnosis.state in FINAL_SESSION_STATES:
+                    on_diagnosis_complete(existing_diagnosis)
+                else:
+                    diagnosis_orchestrator.prepare(
+                        existing_session.request.diagnosis_id,
+                        existing_session.request.mode,
+                        existing_session.request.requested_checks,
+                    )
+                    diagnosis_orchestrator.start(
+                        existing_session.request.diagnosis_id,
+                        existing_session.request.mode,
+                        existing_session.request.requested_checks,
+                    )
+            else:
+                on_initial_metrics_requested(existing_session)
         diagnosis_client = None
         if current_config and current_config.agent_token:
             diagnosis_client = AgentDiagnosisWebSocketClient(
@@ -6287,7 +6467,9 @@ def run_background(
                 current_config.agent_token,
                 diagnosis_processor,
                 on_state_changed=on_connection_state_changed,
+                on_ready=lambda: sync_diagnosis_events(diagnosis_log_store.snapshot),
             )
+            diagnosis_client_holder["value"] = diagnosis_client
             diagnosis_client.start()
         else:
             on_connection_state_changed("FAILED")

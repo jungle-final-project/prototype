@@ -65,6 +65,8 @@ build-agent-exe.cmd
 
 웹 진단 요청을 수신하면 Agent Core가 요청 mode에 따라 `HardwareSensorProvider` 또는 `DemoSensorProvider`를 선택합니다. UI는 공급자를 직접 호출하지 않고 `MetricsStore`의 공통 메트릭과 실제 샘플 이력만 읽습니다. CPU/GPU/RAM/디스크의 필수 항목이 `AVAILABLE`, `UNSUPPORTED`, `PERMISSION_REQUIRED`, `FAILED` 중 하나로 확정되면 초기 수집을 완료하고 하드웨어 진단 단계로 자동 전환합니다. 웹 요청 세션에서는 1단계 버튼 입력을 다시 요구하지 않습니다.
 
+초기 수집이 끝나면 Agent Core의 `DiagnosisOrchestrator`가 초기 스냅샷, CPU, GPU 사용률·온도, GPU 냉각·팬, RAM, 디스크, 열 제한·클럭, 증거 정리 작업을 순서대로 실행합니다. 진행률은 작업별 중앙 가중치와 terminal 상태로만 계산하며, `DiagnosisEvent`에서 만든 사용자 로그와 현재 작업 상태를 `DiagnosisLogStore`에 영속합니다. 창을 닫아도 작업은 계속되고 다시 열면 진행률과 로그를 복원합니다. 연결이 끊긴 동안 발생한 상태 이벤트는 같은 `eventId`로 재연결 후 다시 전송됩니다.
+
 LIVE 수집은 기존 `psutil`, `nvidia-smi`, Windows 성능 카운터를 재사용합니다. CPU/RAM/디스크 용량과 기본 사용률에는 일반적으로 관리자 권한이 필요하지 않습니다. CPU 온도, GPU 온도·팬, 디스크 SMART는 장치와 드라이버 지원에 따라 미지원일 수 있으며, Windows 성능 카운터 권한이 부족하면 `PERMISSION_REQUIRED`로 분리합니다. 미지원·권한 부족·조회 실패는 0이나 정상 상태로 바꾸지 않습니다.
 
 사용자 등록은 웹 지원 페이지의 PCAgent 다운로드 흐름을 기준으로 합니다. 웹은 `/api/users/me/agent-activation-token`으로 activation token을 발급한 뒤 `PCAgent.zip`을 내려받게 합니다. ZIP 안에는 `PCAgent.exe`, `pcagent-activation.json`, `README.txt`가 들어 있습니다. 사용자는 압축을 풀고 `PCAgent.exe`를 실행해야 합니다. Agent는 첫 실행 때 같은 폴더 또는 다운로드 폴더의 activation JSON에서 token을 읽어 기존 `agentToken`을 지운 뒤 현재 prototype DB에 다시 등록합니다. 등록에 성공하면 activation JSON은 자동 삭제합니다. 저장소의 `apps/web/public/downloads/pc-agent/agent.exe`를 직접 실행하면 activation JSON이 없으므로, 기존 로컬 config나 demo token이 현재 DB와 맞지 않는 환경에서는 PC 진단이 등록 실패로 끝날 수 있습니다.
@@ -119,7 +121,7 @@ registration: REGISTERED
 logDir: C:\...\apps\pc-agent\out\logs
 logFile: out\logs\agent-metrics.jsonl
 logBytes: 412
-agentVersion: 0.1.9
+agentVersion: 0.1.10
 policyVersion: policy-v1
 agentToken: present
 ```
@@ -134,6 +136,7 @@ agentToken: present
 - 더블클릭 시 시작프로그램 등록과 트레이 기반 백그라운드 하드웨어 metric 수집
 - 인증 WebSocket 진단 요청 수신, 영속 중복 방지, 기존 진단 창 자동 표시
 - 웹 요청 mode별 LIVE/DEMO 공급자 분리, 실제 초기 메트릭 이력 저장, 완료 후 2단계 자동 전환
+- 실제 진단 작업 기반 진행률, 이벤트 로그, 취소·제한된 재시도, 유효한 완료 후 3단계 자동 전환
 - 트레이 아이콘에서 상태 홈과 날짜/시간별 전체 로그내용 뷰어 열기
 - 명확한 이벤트 감지 시 오른쪽 아래 알림 패널로 AS 검토 요청 연결
 - `viewer --config ...`로 같은 상태 홈을 개발 검증용으로 직접 열기

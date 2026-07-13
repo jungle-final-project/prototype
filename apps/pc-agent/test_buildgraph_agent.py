@@ -633,6 +633,34 @@ class AgentGoal1112Test(unittest.TestCase):
                 agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
             ),
         )
+        self.assertEqual(
+            "DIAGNOSIS_RESULT",
+            agent.diagnosis_session_ui_state(
+                session,
+                agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
+                agent.DiagnosisRunSnapshot(
+                    diagnosis_id=request.diagnosis_id,
+                    mode="LIVE",
+                    state="PARTIALLY_COMPLETED",
+                    progress=100,
+                    transition_allowed=True,
+                ),
+            ),
+        )
+        self.assertEqual(
+            "DIAGNOSING",
+            agent.diagnosis_session_ui_state(
+                session,
+                agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
+                agent.DiagnosisRunSnapshot(
+                    diagnosis_id=request.diagnosis_id,
+                    mode="LIVE",
+                    state="FAILED",
+                    progress=99,
+                    transition_allowed=False,
+                ),
+            ),
+        )
 
     def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
         class Collector:

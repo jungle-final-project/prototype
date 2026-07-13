@@ -5,6 +5,8 @@ import com.buildgraph.prototype.config.security.AgentPrincipal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -33,9 +35,22 @@ public class PcAgentDiagnosisSocketBroker {
             "BUSY",
             "REJECTED"
     );
+    private static final Set<String> DIAGNOSIS_STATES = Set.of(
+            "RECEIVED",
+            "COLLECTING",
+            "DIAGNOSING",
+            "EVALUATING",
+            "COMPLETED",
+            "PARTIALLY_COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "TIMED_OUT"
+    );
 
     private final Map<String, SessionRegistration> sessionsByDeviceId = new ConcurrentHashMap<>();
     private final Map<String, PendingResponse> pendingByDiagnosisId = new ConcurrentHashMap<>();
+    private final Map<String, DiagnosisStatus> latestStatusByDiagnosisId = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> statusEventIdsByDiagnosisId = new ConcurrentHashMap<>();
 
     public WebSocketSession register(AgentPrincipal principal, WebSocketSession session) {
         WebSocketSession outbound = new ConcurrentWebSocketSessionDecorator(
@@ -112,6 +127,47 @@ public class PcAgentDiagnosisSocketBroker {
         return pending.future().complete(new AgentResponse(status, message));
     }
 
+    public boolean recordStatus(
+            String deviceId,
+            String diagnosisId,
+            String eventId,
+            String eventType,
+            String sessionState,
+            int progress,
+            String message,
+            Map<String, Object> metadata
+    ) {
+        if (deviceId == null || diagnosisId == null || diagnosisId.isBlank()
+                || eventId == null || eventId.isBlank()
+                || eventType == null || eventType.isBlank()
+                || !DIAGNOSIS_STATES.contains(sessionState)
+                || progress < 0 || progress > 100) {
+            return false;
+        }
+        Set<String> eventIds = statusEventIdsByDiagnosisId.computeIfAbsent(
+                diagnosisId,
+                ignored -> ConcurrentHashMap.newKeySet()
+        );
+        if (!eventIds.add(eventId)) {
+            return true;
+        }
+        latestStatusByDiagnosisId.put(diagnosisId, new DiagnosisStatus(
+                deviceId,
+                diagnosisId,
+                eventId,
+                eventType,
+                sessionState,
+                progress,
+                message,
+                metadata == null ? Map.of() : Collections.unmodifiableMap(new HashMap<>(metadata))
+        ));
+        return true;
+    }
+
+    DiagnosisStatus latestStatus(String diagnosisId) {
+        return latestStatusByDiagnosisId.get(diagnosisId);
+    }
+
     private static boolean matches(SessionRegistration registration, WebSocketSession session) {
         return registration.session() == session
                 || Objects.equals(registration.originalSessionId(), session.getId())
@@ -129,6 +185,18 @@ public class PcAgentDiagnosisSocketBroker {
     }
 
     public record AgentResponse(String status, String message) {
+    }
+
+    record DiagnosisStatus(
+            String deviceId,
+            String diagnosisId,
+            String eventId,
+            String eventType,
+            String sessionState,
+            int progress,
+            String message,
+            Map<String, Object> metadata
+    ) {
     }
 
     private record PendingResponse(String deviceId, CompletableFuture<AgentResponse> future) {

@@ -3,12 +3,14 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from diagnosis_request_agent import (
     AgentDiagnosisWebSocketClient,
     BackgroundViewerController,
     DiagnosisRequestProcessor,
     DiagnosisSessionStore,
+    ViewerRequestSignal,
     diagnosis_websocket_url,
 )
 
@@ -76,6 +78,31 @@ class DiagnosisRequestProcessorTest(unittest.TestCase):
         self.assertEqual("DEMO", decision.session.request.mode)
 
 
+class ViewerRequestSignalTest(unittest.TestCase):
+    def test_retries_when_windows_temporarily_denies_signal_file_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "show-viewer-request.json"
+            path.write_text("{}\n", encoding="utf-8")
+            restricted = []
+            signal = ViewerRequestSignal(path, restricted.append)
+            original_replace = Path.replace
+            attempts = 0
+
+            def flaky_replace(source, target):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise PermissionError("signal file is being read")
+                return original_replace(source, target)
+
+            with patch.object(Path, "replace", autospec=True, side_effect=flaky_replace):
+                signal.signal()
+
+            self.assertEqual(2, attempts)
+            self.assertEqual([path], restricted)
+            self.assertIn("requestId", json.loads(path.read_text(encoding="utf-8")))
+
+
 class FakeSocket:
     def __init__(self):
         self.sent = []
@@ -138,6 +165,54 @@ class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
     def test_websocket_url_is_outbound_and_secure_when_api_is_https(self):
         self.assertEqual("ws://localhost:8080/ws/pc-agent/diagnosis", diagnosis_websocket_url("http://localhost:8080"))
         self.assertEqual("wss://api.example.com/ws/pc-agent/diagnosis", diagnosis_websocket_url("https://api.example.com"))
+
+    def test_status_event_is_queued_offline_and_sent_after_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ready = []
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                on_ready=lambda: ready.append(True),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            detail = {
+                "diagnosisId": "diagnosis-1",
+                "eventId": "event-1",
+                "eventType": "PROGRESS_UPDATED",
+                "sessionState": "DIAGNOSING",
+                "progress": 25,
+            }
+            self.assertTrue(client.send_diagnosis_status(detail))
+            socket = FakeSocket()
+            client._socket = socket
+            client._on_message(socket, json.dumps({"type": "READY", "detail": {"deviceId": "device-1"}}))
+
+            status_frames = [frame for frame in socket.sent if frame.get("type") == "DIAGNOSIS_STATUS"]
+            self.assertEqual([detail], [frame["detail"] for frame in status_frames])
+            self.assertEqual([True], ready)
+
+    def test_reconnect_resends_same_event_id_for_server_deduplication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            detail = {"diagnosisId": "diagnosis-1", "eventId": "event-1", "progress": 100}
+            first = FakeSocket()
+            client._socket = first
+            client._on_message(first, json.dumps({"type": "READY", "detail": {"deviceId": "device-1"}}))
+            client.send_diagnosis_status(detail)
+            client._on_close(first, 1006, "network lost")
+
+            second = FakeSocket()
+            client._socket = second
+            client._on_message(second, json.dumps({"type": "READY", "detail": {"deviceId": "device-1"}}))
+
+            self.assertEqual("event-1", first.sent[-1]["detail"]["eventId"])
+            self.assertEqual("event-1", second.sent[-1]["detail"]["eventId"])
 
 
 class BackgroundViewerControllerTest(unittest.TestCase):

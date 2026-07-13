@@ -6,6 +6,7 @@ import com.buildgraph.prototype.config.security.AgentTokenAuthenticationService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -69,6 +70,10 @@ public class PcAgentDiagnosisWebSocketHandler extends TextWebSocketHandler {
             recordDiagnosisResponse(session, payload);
             return;
         }
+        if ("DIAGNOSIS_STATUS".equals(payload.get("type"))) {
+            recordDiagnosisStatus(session, payload);
+            return;
+        }
         sendError(session, "INVALID_WS_PAYLOAD", "지원하지 않는 WebSocket 메시지입니다.");
     }
 
@@ -114,6 +119,36 @@ public class PcAgentDiagnosisWebSocketHandler extends TextWebSocketHandler {
                 || !broker.recordResponse(principal.deviceId(), diagnosisId, status, message)) {
             sendError(outbound(session), "INVALID_DIAGNOSIS_RESPONSE", "진단 응답이 현재 요청과 일치하지 않습니다.");
         }
+    }
+
+    private void recordDiagnosisStatus(WebSocketSession session, Map<String, Object> payload) throws IOException {
+        AgentPrincipal principal = (AgentPrincipal) session.getAttributes().get("agentPrincipal");
+        Map<String, Object> detail = objectMap(payload.get("detail"));
+        String diagnosisId = text(detail.get("diagnosisId"));
+        String eventId = text(detail.get("eventId"));
+        String eventType = text(detail.get("eventType"));
+        String sessionState = text(detail.get("sessionState"));
+        String message = text(detail.get("message"));
+        Number progressValue = detail.get("progress") instanceof Number number ? number : null;
+        Map<String, Object> metadata = objectMap(detail.get("metadata"));
+        int progress = progressValue == null ? -1 : progressValue.intValue();
+        if (!broker.recordStatus(
+                principal.deviceId(),
+                diagnosisId,
+                eventId,
+                eventType,
+                sessionState,
+                progress,
+                message,
+                metadata
+        )) {
+            sendError(outbound(session), "INVALID_DIAGNOSIS_STATUS", "진단 상태 이벤트 형식이 올바르지 않습니다.");
+            return;
+        }
+        send(outbound(session), "DIAGNOSIS_STATUS_ACK", Map.of(
+                "diagnosisId", diagnosisId,
+                "eventId", eventId
+        ));
     }
 
     private void rejectAuthentication(WebSocketSession session, String code, String message) throws IOException {
@@ -167,5 +202,18 @@ public class PcAgentDiagnosisWebSocketHandler extends TextWebSocketHandler {
     private static String text(Object value) {
         String result = value instanceof String text ? text.trim() : null;
         return result == null || result.isBlank() ? null : result;
+    }
+
+    private static Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> values)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new HashMap<>();
+        values.forEach((key, item) -> {
+            if (key instanceof String textKey) {
+                result.put(textKey, item);
+            }
+        });
+        return result;
     }
 }

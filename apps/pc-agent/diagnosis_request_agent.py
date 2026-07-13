@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ REQUEST_RESPONSE_STATUSES = {
 }
 DIAGNOSIS_SOCKET_PATH = "/ws/pc-agent/diagnosis"
 PROCESSED_DIAGNOSIS_LIMIT = 200
+MAX_SYNC_STATUS_FRAMES = 200
 
 
 def parse_server_datetime(value: Any) -> datetime | None:
@@ -273,6 +275,7 @@ class AgentDiagnosisWebSocketClient:
         processor: DiagnosisRequestProcessor,
         on_state_changed: Callable[[str], None] | None = None,
         on_device_identified: Callable[[str], None] | None = None,
+        on_ready: Callable[[], None] | None = None,
         websocket_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.url = diagnosis_websocket_url(api_base_url)
@@ -280,6 +283,7 @@ class AgentDiagnosisWebSocketClient:
         self.processor = processor
         self.on_state_changed = on_state_changed or (lambda state: None)
         self.on_device_identified = on_device_identified or (lambda device_id: None)
+        self.on_ready = on_ready or (lambda: None)
         self.websocket_factory = websocket_factory or (websocket.WebSocketApp if websocket is not None else None)
         self.stop_event = threading.Event()
         self.authenticated = False
@@ -287,6 +291,10 @@ class AgentDiagnosisWebSocketClient:
         self.state = "DISCONNECTED"
         self._thread: threading.Thread | None = None
         self._socket: Any = None
+        self._send_lock = threading.Lock()
+        self._status_lock = threading.Lock()
+        self._status_frames: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._pending_status_event_ids: set[str] = set()
 
     def start(self) -> None:
         if self.websocket_factory is None:
@@ -307,6 +315,24 @@ class AgentDiagnosisWebSocketClient:
             except Exception:
                 pass
         self._set_state("DISCONNECTED")
+
+    def send_diagnosis_status(self, detail: dict[str, Any]) -> bool:
+        event_id = detail.get("eventId")
+        diagnosis_id = detail.get("diagnosisId")
+        if not isinstance(event_id, str) or not event_id.strip():
+            return False
+        if not isinstance(diagnosis_id, str) or not diagnosis_id.strip():
+            return False
+        frame = {"type": "DIAGNOSIS_STATUS", "detail": dict(detail)}
+        with self._status_lock:
+            self._status_frames[event_id] = frame
+            self._status_frames.move_to_end(event_id)
+            self._pending_status_event_ids.add(event_id)
+            while len(self._status_frames) > MAX_SYNC_STATUS_FRAMES:
+                removed_event_id, _ = self._status_frames.popitem(last=False)
+                self._pending_status_event_ids.discard(removed_event_id)
+        self._flush_status_frames()
+        return True
 
     def _run(self) -> None:
         attempt = 0
@@ -354,6 +380,10 @@ class AgentDiagnosisWebSocketClient:
             self.authenticated = True
             self.ready_once = True
             self._set_state("REQUEST_RECEIVED" if self.processor.store.is_busy() else "IDLE")
+            with self._status_lock:
+                self._pending_status_event_ids.update(self._status_frames)
+            self.on_ready()
+            self._flush_status_frames()
             return
         if frame_type == "DIAGNOSIS_REQUEST":
             detail = frame.get("detail")
@@ -374,8 +404,29 @@ class AgentDiagnosisWebSocketClient:
 
     def _on_close(self, socket_app: Any, status_code: Any, message: Any) -> None:
         self.authenticated = False
+        with self._status_lock:
+            self._pending_status_event_ids.update(self._status_frames)
         if self.state != "FAILED":
             self._set_state("DISCONNECTED")
+
+    def _flush_status_frames(self) -> None:
+        socket_app = self._socket
+        if not self.authenticated or socket_app is None:
+            return
+        with self._status_lock:
+            pending = [
+                (event_id, self._status_frames[event_id])
+                for event_id in self._status_frames
+                if event_id in self._pending_status_event_ids
+            ]
+        for event_id, frame in pending:
+            try:
+                with self._send_lock:
+                    socket_app.send(json.dumps(frame, ensure_ascii=False))
+            except Exception:
+                return
+            with self._status_lock:
+                self._pending_status_event_ids.discard(event_id)
 
     def _set_state(self, state: str) -> None:
         if state not in AGENT_STATES:
@@ -392,12 +443,18 @@ class BackgroundViewerController:
         connection_state_provider: Callable[[], str],
         show_viewer: Callable[..., None],
         metrics_snapshot_provider: Callable[[], Any] | None = None,
+        diagnosis_snapshot_provider: Callable[[], Any] | None = None,
+        cancel_diagnosis: Callable[[], bool] | None = None,
+        retry_diagnosis: Callable[[], bool] | None = None,
     ) -> None:
         self.config_path = config_path
         self.diagnosis_session_provider = diagnosis_session_provider
         self.connection_state_provider = connection_state_provider
         self.show_viewer = show_viewer
         self.metrics_snapshot_provider = metrics_snapshot_provider or (lambda: None)
+        self.diagnosis_snapshot_provider = diagnosis_snapshot_provider or (lambda: None)
+        self.cancel_diagnosis = cancel_diagnosis or (lambda: False)
+        self.retry_diagnosis = retry_diagnosis or (lambda: False)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._request_focus: Any = None
@@ -444,6 +501,9 @@ class BackgroundViewerController:
             diagnosis_session_provider=self.diagnosis_session_provider,
             connection_state_provider=self.connection_state_provider,
             metrics_snapshot_provider=self.metrics_snapshot_provider,
+            diagnosis_snapshot_provider=self.diagnosis_snapshot_provider,
+            cancel_diagnosis=self.cancel_diagnosis,
+            retry_diagnosis=self.retry_diagnosis,
             on_window_ready=self._on_window_ready,
             on_window_closed=self._on_window_closed,
         )
@@ -486,7 +546,15 @@ class ViewerRequestSignal:
         temporary = self.path.with_name(f"{self.path.name}.{uuid.uuid4().hex}.tmp")
         try:
             temporary.write_text(json.dumps({"requestId": str(uuid.uuid4())}) + "\n", encoding="utf-8")
-            temporary.replace(self.path)
+            for attempt in range(5):
+                try:
+                    temporary.replace(self.path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    # The running Agent may briefly hold the signal file while polling it.
+                    time.sleep(0.05 * (attempt + 1))
         finally:
             temporary.unlink(missing_ok=True)
         self.restrict_file(self.path)
