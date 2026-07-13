@@ -1376,7 +1376,7 @@ test('selects a home AI recommendation through batch API and shows applied cart 
   const main = page.getByRole('main');
 
   await page.goto('/self-quote');
-  await expect(page.getByText('미장착 슬롯 8개가 있습니다')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('0 / 8');
   await page.goto('/');
 
   await openDesktopAiAssistant(page);
@@ -1395,7 +1395,7 @@ test('selects a home AI recommendation through batch API and shows applied cart 
   await expect(page.getByTestId('ai-selected-build-panel')).toHaveCount(0);
   await expect(page.getByTestId('checklist-GPU')).toContainText('서버 반영 RTX 5070 서버 GPU');
   await expect(page.getByTestId('quote-summary-bar')).toContainText(`${expectedTotal}원`);
-  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toHaveCount(0);
 });
 
 test('selects a chatbot recommendation and shows the applied cart without a later remove action', async ({ page }) => {
@@ -1405,7 +1405,7 @@ test('selects a chatbot recommendation and shows the applied cart without a late
   await openHomeAsUser(page);
 
   await page.goto('/self-quote');
-  await expect(page.getByText('미장착 슬롯 8개가 있습니다')).toBeVisible();
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('0 / 8');
   await page.goto('/');
 
   await openDesktopAiAssistant(page);
@@ -1418,8 +1418,8 @@ test('selects a chatbot recommendation and shows the applied cart without a late
   expect((applyRequests[0] as { conflictPolicy?: string; items?: unknown[] }).conflictPolicy).toBe('REPLACE');
   expect((applyRequests[0] as { items?: unknown[] }).items).toHaveLength(8);
   await expect(page).toHaveURL('/self-quote');
-  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toBeVisible();
-  await expect(page.getByTestId('slot-status-bar').getByText(`${expectedTotal}원`)).toBeVisible();
+  await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toHaveCount(0);
+  await expect(page.getByTestId('quote-summary-bar')).toContainText(`${expectedTotal}원`);
   await expect(page.getByText('서버 반영 RTX 5070 서버 GPU').first()).toBeVisible();
   // 슬롯 카드의 제거 버튼은 실장도 보기에서 노출된다(기본 배치도는 hover X 버튼이 담당).
   await page.getByRole('button', { name: '실장도 보기' }).click();
