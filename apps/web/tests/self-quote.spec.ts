@@ -4974,3 +4974,45 @@ test('records home recommendation detail and draft add events on product detail 
     })
   ]));
 });
+
+// 셀프견적 임베드 어시스턴트도 홈과 동일한 공용 컴포넌트라 응답 대기 버블이 떠야 한다(surface별 회귀 방지).
+test('셀프견적 임베드 챗봇도 느린 응답 동안 대기 버블을 보여준다', async ({ page }) => {
+  await loginAsUser(page);
+  // AI 세션 소유자 키는 캐시된 authUser에서 나온다. auth/me 응답을 기다리는 경합 없이
+  // 첫 제출부터 owner 키가 준비되도록 localStorage를 직접 심는다(홈 헬퍼와 동일한 패턴).
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-test', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'draft-loading-smoke', status: 'ACTIVE', name: '셀프 견적', items: [], totalPrice: 0, itemCount: 0 })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  let chatCalls = 0;
+  await page.route('**/api/ai/build-chat', async (route) => {
+    chatCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ answerType: 'GENERAL', message: '셀프견적 응답이 도착했습니다.', builds: [], warnings: [] })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('200만원 PC 추천');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  const pending = page.getByTestId('ai-chat-pending');
+  await expect(pending).toBeVisible();
+  await expect(pending).toContainText('답변을 준비하고 있어요');
+  expect(chatCalls).toBe(1);
+
+  await expect(page.getByText('셀프견적 응답이 도착했습니다.')).toBeVisible();
+  await expect(pending).toHaveCount(0);
+});
