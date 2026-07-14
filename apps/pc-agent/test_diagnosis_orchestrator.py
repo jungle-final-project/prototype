@@ -150,6 +150,40 @@ class DiagnosisOrchestratorTest(unittest.TestCase):
         self.assertEqual("FAILED", snapshot.task("disk_health").status)
         self.assertEqual("PARTIALLY_COMPLETED", snapshot.state)
 
+    def test_available_evidence_allows_partial_result_when_every_component_task_has_a_failure(self) -> None:
+        available = complete_metrics()
+        failed_latest = tuple(
+            metric(
+                reading.component,
+                reading.metric_type,
+                None,
+                reading.unit,
+                FAILED,
+                "SENSOR_FAILED",
+            )
+            for reading in available.readings
+        )
+        metrics = MetricsSnapshot(
+            available.diagnosis_id,
+            available.mode,
+            available.initial_complete,
+            available.readings + failed_latest,
+        )
+        _, snapshot = self.run_diagnosis(metrics)
+
+        component_tasks = snapshot.tasks[1:-1]
+        self.assertTrue(all(task.status == "FAILED" for task in component_tasks))
+        self.assertTrue(
+            all(
+                any(evidence["availability"] == AVAILABLE for evidence in task.evidence)
+                for task in component_tasks
+            )
+        )
+        self.assertEqual("COMPLETED", snapshot.task("evidence_finalize").status)
+        self.assertEqual("PARTIALLY_COMPLETED", snapshot.state)
+        self.assertEqual(100, snapshot.progress)
+        self.assertTrue(snapshot.transition_allowed)
+
     def test_permission_required_is_failed_not_unsupported(self) -> None:
         permission = metric(
             "cpu", "temperature", None, "°C", PERMISSION_REQUIRED, "PERMISSION_REQUIRED", "administrator required"

@@ -2541,18 +2541,18 @@ class AgentGoal1112Test(unittest.TestCase):
         acquire_lock.assert_called_once_with(agent.VIEWER_INSTANCE_MUTEX_NAME)
         load_config.assert_not_called()
 
-    def test_pc_agent_demo_ui_flow_has_four_connected_states(self) -> None:
+    def test_pc_agent_ui_flow_has_three_diagnosis_states(self) -> None:
         state = "SYMPTOM_CONFIRM"
         visited = [state]
-        for _ in range(3):
+        for _ in range(2):
             state = agent.next_pc_agent_ui_state(state)
             visited.append(state)
 
         self.assertEqual(
             visited,
-            ["SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT", "AS_REQUEST_CREATED"],
+            ["SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT"],
         )
-        self.assertEqual(agent.next_pc_agent_ui_state(state), "AS_REQUEST_CREATED")
+        self.assertEqual(agent.next_pc_agent_ui_state(state), "DIAGNOSIS_RESULT")
 
     def test_pc_agent_window_uses_legacy_dimensions_and_three_steps(self) -> None:
         self.assertEqual((agent.PC_AGENT_WINDOW_WIDTH, agent.PC_AGENT_WINDOW_HEIGHT), (1000, 740))

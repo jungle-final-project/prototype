@@ -598,21 +598,26 @@ class DiagnosisOrchestrator:
         if task.task_id == "disk_health":
             return self._evaluate_metrics(metrics, "disk", ("activity", "usage", "smart"), require_any=("activity", "usage"))
         if task.task_id == "thermal_clock":
-            readings = tuple(
-                reading
-                for reading in (
-                    metrics.latest("gpu", "thermal_throttling"),
-                    metrics.latest("gpu", "clock"),
-                    metrics.latest("cpu", "clock"),
-                )
-                if reading is not None
+            readings = (
+                self._task_readings(metrics, "gpu", ("thermal_throttling",))
+                + self._task_readings(metrics, "gpu", ("clock",))
+                + self._task_readings(metrics, "cpu", ("clock",))
             )
             return self._outcome_from_readings(readings, ("thermal_throttling", "clock"))
         if task.task_id == "evidence_finalize":
             usable = [
                 item
                 for item in tasks
-                if item.component in {"cpu", "gpu", "ram", "disk", "thermal"} and item.status == "COMPLETED"
+                if item.component in {"cpu", "gpu", "ram", "disk", "thermal"}
+                and (
+                    item.status == "COMPLETED"
+                    or any(
+                        isinstance(evidence, dict)
+                        and evidence.get("availability") == AVAILABLE
+                        and evidence.get("value") is not None
+                        for evidence in item.evidence
+                    )
+                )
             ]
             if not usable:
                 return TaskOutcome(
@@ -631,12 +636,35 @@ class DiagnosisOrchestrator:
         metric_types: tuple[str, ...],
         require_any: tuple[str, ...],
     ) -> TaskOutcome:
-        readings = tuple(
-            reading
-            for metric_type in metric_types
-            if (reading := metrics.latest(component, metric_type)) is not None
-        )
+        readings = self._task_readings(metrics, component, metric_types)
         return self._outcome_from_readings(readings, require_any)
+
+    @staticmethod
+    def _task_readings(
+        metrics: MetricsSnapshot,
+        component: str,
+        metric_types: tuple[str, ...],
+    ) -> tuple[MetricReading, ...]:
+        selected: list[MetricReading] = []
+        for metric_type in metric_types:
+            latest = metrics.latest(component, metric_type)
+            if latest is None:
+                continue
+            if latest.availability != AVAILABLE:
+                latest_available = next(
+                    (
+                        reading
+                        for reading in reversed(metrics.readings)
+                        if reading.component == component
+                        and reading.metric_type == metric_type
+                        and reading.availability == AVAILABLE
+                    ),
+                    None,
+                )
+                if latest_available is not None and latest_available != latest:
+                    selected.append(latest_available)
+            selected.append(latest)
+        return tuple(selected)
 
     @staticmethod
     def _outcome_from_readings(

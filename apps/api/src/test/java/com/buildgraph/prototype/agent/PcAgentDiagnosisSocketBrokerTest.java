@@ -29,7 +29,7 @@ class PcAgentDiagnosisSocketBrokerTest {
         }).when(session).sendMessage(any(TextMessage.class));
         broker.register(new AgentPrincipal(1L, "device-1", 7L, "ACTIVE"), session);
 
-        PcAgentDiagnosisSocketBroker.AgentResponse response = broker.dispatchAndAwait(new PcAgentDiagnosisRequest(
+        PcAgentDiagnosisRequest request = new PcAgentDiagnosisRequest(
                 "diagnosis-1",
                 "device-1",
                 "게임 실행 후 프레임 저하",
@@ -37,10 +37,13 @@ class PcAgentDiagnosisSocketBrokerTest {
                 Instant.parse("2026-07-13T01:00:00Z"),
                 Instant.parse("2026-07-13T01:02:00Z"),
                 "LIVE"
-        ));
+        );
+        PcAgentDiagnosisSocketBroker.AgentResponse response = broker.dispatchAndAwait(request);
 
         assertThat(response.status()).isEqualTo("ACCEPTED");
         assertThat(response.message()).isEqualTo("수신 완료");
+        assertThat(broker.latestRequest("diagnosis-1")).isSameAs(request);
+        assertThat(broker.latestRequest("diagnosis-1").mode()).isEqualTo("LIVE");
     }
 
     @Test

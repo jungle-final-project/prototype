@@ -123,7 +123,7 @@ registration: REGISTERED
 logDir: C:\...\apps\pc-agent\out\logs
 logFile: out\logs\agent-metrics.jsonl
 logBytes: 412
-agentVersion: 0.1.11
+agentVersion: 0.1.12
 policyVersion: policy-v1
 agentToken: present
 ```
@@ -139,6 +139,7 @@ agentToken: present
 - 인증 WebSocket 진단 요청 수신, 영속 중복 방지, 기존 진단 창 자동 표시
 - 웹 요청 mode별 LIVE/DEMO 공급자 분리, 실제 초기 메트릭 이력 저장, 완료 후 2단계 자동 전환
 - 실제 진단 작업 기반 진행률, 이벤트 로그, 취소·제한된 재시도, 유효한 완료 후 3단계 자동 전환
+- 실제 진단 결과와 전송 동의를 검증한 뒤 `POST /api/agent/as-requests`로 AS 접수하고 `/support/{requestId}`에서 확인
 - 측정 evidence 기반 결정적 결과 판정, 결과 상세, 조건부 AS 연결, 결과 재전송
 - 트레이 아이콘에서 상태 홈과 날짜/시간별 전체 로그내용 뷰어 열기
 - 명확한 이벤트 감지 시 오른쪽 아래 알림 패널로 AS 검토 요청 연결

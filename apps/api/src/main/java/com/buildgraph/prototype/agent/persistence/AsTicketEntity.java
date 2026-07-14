@@ -6,10 +6,44 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "as_tickets")
 public class AsTicketEntity extends PublicIdEntity {
+    @Column(name = "diagnosis_id", unique = true)
+    private UUID diagnosisId;
+
+    @Column(name = "agent_device_id")
+    private Long agentDeviceId;
+
+    @Column(name = "request_number", unique = true)
+    private String requestNumber;
+
+    @Column(name = "request_type")
+    private String requestType;
+
+    @Column(name = "diagnosis_title")
+    private String diagnosisTitle;
+
+    @Column(name = "diagnosis_summary")
+    private String diagnosisSummary;
+
+    @Column(name = "evidence_summary", columnDefinition = "jsonb")
+    private String evidenceSummary;
+
+    @Column(name = "diagnosed_at")
+    private Instant diagnosedAt;
+
+    @Column(name = "diagnosis_mode")
+    private String diagnosisMode;
+
+    @Column(name = "diagnosis_result", columnDefinition = "jsonb")
+    private String diagnosisResult;
+
+    @Column(name = "diagnosis_consent_accepted_at")
+    private Instant diagnosisConsentAcceptedAt;
+
     @Column(name = "user_id", nullable = false)
     private Long userId;
 

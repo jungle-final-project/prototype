@@ -51,6 +51,11 @@ public class AgentIdempotencyService {
                 .ifPresent(record -> record.complete(responseStatus, responseBody, responseContentType, Instant.now(clock)));
     }
 
+    @Transactional
+    public void abandon(Long recordId) {
+        repository.deleteById(recordId);
+    }
+
     private AgentIdempotencyDecision createRecord(
             AgentPrincipal principal,
             String requestMethod,

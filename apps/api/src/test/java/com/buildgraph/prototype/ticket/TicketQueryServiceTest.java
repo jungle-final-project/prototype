@@ -49,6 +49,13 @@ class TicketQueryServiceTest {
                         "risk_level", "MEDIUM",
                         "auto_response_allowed", false,
                         "symptom", "GPU temperature spike",
+                        "request_number", "AS-20260714-0001",
+                        "request_type", "PHYSICAL_INSPECTION",
+                        "diagnosis_mode", "LIVE",
+                        "diagnosis_title", "GPU 냉각 계통 이상 가능성",
+                        "diagnosis_summary", "고온과 열 제한 징후가 함께 감지되었습니다.",
+                        "diagnosis_evidence", "[{\"component\":\"gpu\",\"metricType\":\"temperature\",\"value\":96,\"unit\":\"°C\"}]",
+                        "diagnosed_at", "2026-07-14T01:02:03Z",
                         "log_upload_id", "log-upload-public-id",
                         "assigned_admin_id", "admin-public-id",
                         "cause_candidates", "[]",
@@ -60,6 +67,18 @@ class TicketQueryServiceTest {
 
         assertThat(response.get("id")).isEqualTo("ticket-public-id");
         assertThat(response.get("supportDecision")).isEqualTo("REMOTE_POSSIBLE");
+        assertThat(response.get("requestNumber")).isEqualTo("AS-20260714-0001");
+        assertThat(response.get("requestType")).isEqualTo("PHYSICAL_INSPECTION");
+        assertThat(response.get("diagnosisMode")).isEqualTo("LIVE");
+        assertThat(response.get("diagnosisTitle")).isEqualTo("GPU 냉각 계통 이상 가능성");
+        assertThat(response.get("diagnosisSummary")).isEqualTo("고온과 열 제한 징후가 함께 감지되었습니다.");
+        assertThat(response.get("diagnosisEvidence")).isEqualTo(List.of(Map.of(
+                "component", "gpu",
+                "metricType", "temperature",
+                "value", 96,
+                "unit", "°C"
+        )));
+        assertThat(response.get("diagnosedAt")).isEqualTo("2026-07-14T01:02:03Z");
         verify(jdbcTemplate).queryForList(contains("t.user_id = ?"), eq("ticket-public-id"), eq(20L));
     }
 

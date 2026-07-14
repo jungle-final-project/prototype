@@ -40,6 +40,8 @@ class PcAgentDiagnosisRequestServiceTest {
         when(jdbcTemplate.queryForList(contains("FROM agent_devices"), eq(7L)))
                 .thenReturn(List.of(MockData.map("device_id", "device-1")));
         when(broker.isConnected("device-1")).thenReturn(true);
+        when(jdbcTemplate.update(contains("INSERT INTO pc_agent_diagnosis_requests"), any(Object[].class)))
+                .thenReturn(1);
         when(broker.dispatchAndAwait(any())).thenReturn(
                 new PcAgentDiagnosisSocketBroker.AgentResponse("ACCEPTED", "수신 완료")
         );
@@ -56,6 +58,7 @@ class PcAgentDiagnosisRequestServiceTest {
         assertThat(captor.getValue().deviceId()).isEqualTo("device-1");
         assertThat(captor.getValue().expiresAt()).isEqualTo(Instant.parse("2026-07-13T01:02:00Z"));
         assertThat(result).containsEntry("status", "ACCEPTED");
+        verify(jdbcTemplate).update(contains("INSERT INTO pc_agent_diagnosis_requests"), any(Object[].class));
     }
 
     @Test

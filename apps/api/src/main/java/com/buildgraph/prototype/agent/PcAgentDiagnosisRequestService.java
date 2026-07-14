@@ -4,6 +4,9 @@ import com.buildgraph.prototype.common.ApiException;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -22,6 +25,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class PcAgentDiagnosisRequestService {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Set<String> ALLOWED_CHECKS = Set.of("cpu", "gpu", "memory", "disk", "cooling");
     private static final Set<String> ALLOWED_MODES = Set.of("LIVE", "DEMO");
     private static final Duration REQUEST_TTL = Duration.ofMinutes(2);
@@ -69,6 +73,7 @@ public class PcAgentDiagnosisRequestService {
                 requestedAt.plus(REQUEST_TTL),
                 mode
         );
+        storeRequest(user.internalId(), request);
         PcAgentDiagnosisSocketBroker.AgentResponse response = broker.dispatchAndAwait(request);
         return MockData.map(
                 "diagnosisId", request.diagnosisId(),
@@ -79,6 +84,52 @@ public class PcAgentDiagnosisRequestService {
                 "status", response.status(),
                 "message", response.message()
         );
+    }
+
+    private void storeRequest(Long userInternalId, PcAgentDiagnosisRequest request) {
+        int inserted = jdbcTemplate.update("""
+                INSERT INTO pc_agent_diagnosis_requests (
+                  diagnosis_id,
+                  user_id,
+                  agent_device_id,
+                  symptom,
+                  requested_checks,
+                  requested_at,
+                  expires_at,
+                  mode
+                )
+                SELECT ?::uuid, ?, d.id, ?, ?::jsonb, ?, ?, ?
+                FROM agent_devices d
+                WHERE d.public_id = ?::uuid
+                  AND d.user_id = ?
+                  AND d.status IN ('ACTIVE', 'UPDATE_REQUIRED')
+                ON CONFLICT (diagnosis_id) DO NOTHING
+                """,
+                request.diagnosisId(),
+                userInternalId,
+                request.symptom(),
+                toJson(request.requestedChecks()),
+                Timestamp.from(request.requestedAt()),
+                Timestamp.from(request.expiresAt()),
+                request.mode(),
+                request.deviceId(),
+                userInternalId
+        );
+        if (inserted != 1) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "DUPLICATE_DIAGNOSIS_ID",
+                    "진단 요청 식별자가 이미 사용되었거나 장치가 유효하지 않습니다."
+            );
+        }
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("Diagnosis request JSON serialization failed.", error);
+        }
     }
 
     private String connectedDeviceId(Long userInternalId) {

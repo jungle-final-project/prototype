@@ -59,6 +59,7 @@ public class PcAgentDiagnosisSocketBroker {
     private final Map<String, Set<String>> statusEventIdsByDiagnosisId = new ConcurrentHashMap<>();
     private final Map<String, DiagnosisResultRecord> latestResultByDiagnosisId = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> resultIdsByDiagnosisId = new ConcurrentHashMap<>();
+    private final Map<String, PcAgentDiagnosisRequest> requestsByDiagnosisId = new ConcurrentHashMap<>();
 
     public WebSocketSession register(AgentPrincipal principal, WebSocketSession session) {
         WebSocketSession outbound = new ConcurrentWebSocketSessionDecorator(
@@ -102,6 +103,7 @@ public class PcAgentDiagnosisSocketBroker {
         if (pendingByDiagnosisId.putIfAbsent(request.diagnosisId(), pending) != null) {
             throw new ApiException(HttpStatus.CONFLICT, "DUPLICATE_DIAGNOSIS_ID", "이미 전송 중인 진단 요청입니다.");
         }
+        requestsByDiagnosisId.putIfAbsent(request.diagnosisId(), request);
         try {
             registration.session().sendMessage(new TextMessage(OBJECT_MAPPER.writeValueAsString(Map.of(
                     "type", "DIAGNOSIS_REQUEST",
@@ -206,6 +208,10 @@ public class PcAgentDiagnosisSocketBroker {
 
     DiagnosisResultRecord latestResult(String diagnosisId) {
         return latestResultByDiagnosisId.get(diagnosisId);
+    }
+
+    PcAgentDiagnosisRequest latestRequest(String diagnosisId) {
+        return requestsByDiagnosisId.get(diagnosisId);
     }
 
     private static String text(Object value) {

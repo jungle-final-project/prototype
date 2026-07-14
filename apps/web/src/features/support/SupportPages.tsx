@@ -941,6 +941,7 @@ export function SupportTicketPage() {
             {ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : null}
           </div>
           {hasSafetyAdvice(ticket) ? <SafetyNoticePanel ticket={ticket} /> : null}
+          {hasAgentDiagnosis(ticket) ? <AgentDiagnosisPanel ticket={ticket} /> : null}
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
         </Panel>
         <Panel title="담당자 확인 자료" subtitle="업로드한 로그를 바탕으로 담당자가 접수 내용을 확인합니다.">
@@ -1026,6 +1027,66 @@ export function SupportTicketPage() {
       </div>
     </Screen>
   );
+}
+
+function AgentDiagnosisPanel({ ticket }: { ticket: AsTicketDto }) {
+  const evidence = ticket.diagnosisEvidence ?? [];
+  return (
+    <div className="mb-4 rounded border border-orange-200 bg-orange-50 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-bold text-orange-950">PC Agent 진단 정보</p>
+        {ticket.diagnosisMode ? <StatusBadge status={ticket.diagnosisMode} /> : null}
+      </div>
+      <div className="space-y-2 text-sm">
+        <InfoRow label="요청 번호" value={ticket.requestNumber ?? '-'} />
+        <InfoRow label="요청 유형" value={diagnosisRequestTypeLabel(ticket.requestType)} />
+        <InfoRow label="진단 시각" value={formatTime(ticket.diagnosedAt ?? undefined)} />
+      </div>
+      {ticket.diagnosisTitle ? <p className="mt-4 font-bold text-slate-900">{ticket.diagnosisTitle}</p> : null}
+      {ticket.diagnosisSummary ? <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{ticket.diagnosisSummary}</p> : null}
+      {evidence.length ? (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-bold text-slate-600">핵심 측정 근거</p>
+          <ul className="space-y-1 text-sm leading-6 text-slate-700">
+            {evidence.map((item, index) => (
+              <li key={`${item.component ?? 'evidence'}-${item.metricType ?? index}-${index}`}>• {diagnosisEvidenceText(item, index)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function hasAgentDiagnosis(ticket: AsTicketDto) {
+  return Boolean(
+    ticket.requestNumber
+    || ticket.requestType
+    || ticket.diagnosisMode
+    || ticket.diagnosisTitle
+    || ticket.diagnosisSummary
+    || ticket.diagnosisEvidence?.length
+    || ticket.diagnosedAt
+  );
+}
+
+function diagnosisRequestTypeLabel(value?: string | null) {
+  if (value === 'PHYSICAL_INSPECTION') return '하드웨어 물리 점검';
+  if (value === 'USER_ACTION') return '사용자 조치';
+  if (value === 'SOFTWARE_RECOVERY') return '소프트웨어 복구';
+  return value ?? '-';
+}
+
+function diagnosisEvidenceText(item: NonNullable<AsTicketDto['diagnosisEvidence']>[number], index: number) {
+  if (item.summary) return item.summary;
+  if (item.label) return item.label;
+  const component = item.component?.toUpperCase();
+  const metricType = item.metricType ? statusLabel(item.metricType) : undefined;
+  const measuredValue = item.value == null ? undefined : `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`;
+  const detail = [component, metricType, measuredValue, item.status ? statusLabel(item.status) : undefined]
+    .filter(Boolean)
+    .join(' · ');
+  return detail || `측정 근거 ${index + 1}`;
 }
 
 function SafetyNoticePanel({ ticket }: { ticket: AsTicketDto }) {

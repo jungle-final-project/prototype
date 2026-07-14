@@ -9,7 +9,6 @@ import json
 import mimetypes
 import os
 import platform
-import random
 import re
 import shutil
 import socket
@@ -25,9 +24,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from urllib.parse import quote, urljoin
 
+from demo_sensor_data import DEMO_SENSOR_SAMPLES
 from diagnosis_request_agent import (
     AgentDiagnosisWebSocketClient,
     BackgroundViewerController,
@@ -35,6 +35,12 @@ from diagnosis_request_agent import (
     DiagnosisSessionStore,
     DiagnosisRequestProcessor,
     ViewerRequestSignal,
+)
+from diagnosis_as_request import (
+    DiagnosisAsRequest,
+    DiagnosisAsRequestClient,
+    DiagnosisAsResponse,
+    build_diagnosis_as_request,
 )
 from diagnosis_orchestrator import (
     FINAL_SESSION_STATES,
@@ -136,7 +142,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.11"
+DEFAULT_AGENT_VERSION = "0.1.12"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -178,7 +184,6 @@ PC_AGENT_UI_FLOW = (
     "SYMPTOM_CONFIRM",
     "DIAGNOSING",
     "DIAGNOSIS_RESULT",
-    "AS_REQUEST_CREATED",
 )
 PC_AGENT_DIAGNOSIS_STEPS = ("증상 확인", "하드웨어 진단", "결과 및 조치")
 PC_AGENT_WINDOW_WIDTH = 1000
@@ -2031,13 +2036,13 @@ def metric_payload_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 def sample_metric_snapshot(ts: datetime, index: int) -> dict:
     event_type = "DISPLAY_DRIVER_WARNING" if index % 7 == 0 else "DEMO_METRIC"
     message = "Display driver warning observed." if event_type != "DEMO_METRIC" else "Demo metric collected."
-    cpu_usage = round(min(99, 38 + index * 3 + random.random() * 8), 1)
-    memory_usage = round(min(99, 62 + index * 2 + random.random() * 6), 1)
-    disk_usage = round(49 + random.random(), 1)
-    gpu_usage = round(min(98, 64 + index * 4 + random.random() * 8), 1)
-    vram_usage = round(min(95, 58 + index * 3 + random.random() * 5), 1)
-    gpu_temp = round(min(91, 70 + index * 1.8 + random.random() * 3), 1)
-    cpu_temp = round(min(86, 62 + index * 1.2 + random.random() * 2), 1)
+    scenario = DEMO_SENSOR_SAMPLES[index % len(DEMO_SENSOR_SAMPLES)]
+    cpu_usage = float(scenario["cpuUsagePercent"])
+    memory_usage = float(scenario["memoryUsedPercent"])
+    disk_usage = float(scenario["diskUsedPercent"])
+    gpu_usage = float(scenario["gpuUsagePercent"])
+    gpu_temp = float(scenario["gpuTempCelsius"])
+    cpu_temp = float(scenario["cpuTempCelsius"])
     payload = {
         "metricKind": "sample-demo",
         "cpuUsage": cpu_usage,
@@ -2047,8 +2052,8 @@ def sample_metric_snapshot(ts: datetime, index: int) -> dict:
         "memoryUsedPercent": memory_usage,
         "gpuUsage": gpu_usage,
         "gpuUsagePercent": gpu_usage,
-        "vramUsage": vram_usage,
-        "vramUsagePercent": vram_usage,
+        "vramUsage": None,
+        "vramUsagePercent": None,
         "gpuTemp": gpu_temp,
         "gpuTempCelsius": gpu_temp,
         "cpuTemp": cpu_temp,
@@ -2061,7 +2066,7 @@ def sample_metric_snapshot(ts: datetime, index: int) -> dict:
         "osErrorEvent": None if event_type == "DEMO_METRIC" else "Display driver warning",
         "topCpuProcess": "game.exe" if index % 2 else "ide64.exe",
         "topRamProcess": "game.exe",
-        "unavailableReason": {},
+        "unavailableReason": {"vramUsage": "demo scenario does not provide VRAM usage"},
     }
     return build_metric_snapshot(ts, index, event_type, payload)
 
@@ -4922,7 +4927,7 @@ def show_log_viewer(
     }
     capture_state_override = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
     capture_state = capture_state_override
-    if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT", "AS_REQUEST_CREATED"}:
+    if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT"}:
         capture_state = "SYMPTOM_CONFIRM"
     diagnosis_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
     initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
@@ -4942,6 +4947,9 @@ def show_log_viewer(
         "status": "초기 메트릭을 수집하고 있습니다." if isinstance(diagnosis_session, DiagnosisSession) else "",
         "diagnosis": None,
         "window": None,
+        "asState": "diagnosisResult",
+        "asRequest": None,
+        "asRequestPayload": None,
         "ticketUrl": None,
     }
     manual_sensor_providers: dict[str, Any] = {}
@@ -5104,7 +5112,11 @@ def show_log_viewer(
         elif state == "DIAGNOSING":
             styles = ("done-check", "active", "idle")
         elif state == "DIAGNOSIS_RESULT":
-            styles = ("idle", "idle", "active")
+            styles = (
+                ("done-black", "done-black", "done-black")
+                if ui["asState"] == "asCompleted"
+                else ("idle", "idle", "active")
+            )
         else:
             styles = ("done-black", "done-black", "done-black")
         draw_step(1, 145, PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
@@ -5369,22 +5381,44 @@ def show_log_viewer(
                 line(x + 213, 523, x + 213, 549)
         if can_offer_as(result, diagnosis if isinstance(diagnosis, DiagnosisRunSnapshot) else None):
             button(270, 585, 485, 635, "진단 상세", show_diagnosis_detail, False, size=15)
-            button(515, 585, 730, 635, "AS 연결하기", connect_as, True, disabled=bool(ui["busy"]), size=15)
+            as_label = "AS 접수 다시 시도" if ui["asState"] == "asFailed" else "AS 연결하기"
+            button(515, 585, 730, 635, as_label, connect_as, True, disabled=bool(ui["busy"]), size=15)
         else:
             button(390, 585, 610, 635, "진단 상세", show_diagnosis_detail, False, size=15)
         if ui["status"]:
             text(500, 652, str(ui["status"]), 11, colors["red"], "regular", "center")
 
     def draw_success() -> None:
-        round_rect(150, 205, 850, 650, 12, "#ffffff", "#d7dce0")
-        canvas.create_oval(458, 268, 542, 352, fill=colors["green_soft"], outline="#b9efd3")
-        draw_check(500, 310, 32, colors["green"], 5)
-        text(500, 392, "AS 요청이 생성되었습니다", 28, colors["text"], "semibold", "center")
-        text(500, 445, "요청 내용은 웹에서 확인할 수 있습니다.", 16, "#5f6368", "regular", "center")
-        button(370, 506, 630, 560, "웹에서 확인하기", open_created_ticket, True, size=15)
+        response = ui.get("asRequest")
+        payload = ui.get("asRequestPayload")
+        round_rect(145, 180, 855, 675, 12, "#ffffff", "#d7dce0")
+        canvas.create_oval(474, 202, 526, 254, fill=colors["green_soft"], outline="#b9efd3")
+        draw_check(500, 228, 22, colors["green"], 4)
+        text(500, 284, "AS 요청이 생성되었습니다", 25, colors["text"], "semibold", "center")
+        text(500, 320, "전송 완료 · 진단 정보가 기사 요청서에 첨부되었습니다.", 13, colors["green"], "semibold", "center")
+        text(500, 348, "개인 파일이나 문서 내용은 전송되지 않았습니다.", 12, colors["muted"], "regular", "center")
+        round_rect(220, 378, 780, 558, 10, "#fafafa", "#e2e2e2")
+        if isinstance(response, DiagnosisAsResponse) and isinstance(payload, DiagnosisAsRequest):
+            stored_request_type = response.request_type or payload.request_type
+            request_type = "현장 점검 요청" if stored_request_type == "PHYSICAL_INSPECTION" else stored_request_type
+            detail_rows = (
+                ("요청 번호", response.request_number),
+                ("요청 유형", request_type),
+                ("사용자 증상", response.symptom or payload.symptom or "전달된 증상 없음"),
+                ("Agent 진단", response.diagnosis_title or payload.diagnosis_title),
+            )
+            row_y = (400, 430, 462, 511)
+            for (label, value), y in zip(detail_rows, row_y):
+                text(250, y, label, 11, colors["muted"], "semibold", "w")
+                text(365, y, value, 11, colors["text"], "regular", "w", width=380)
+        else:
+            text(500, 465, "저장된 AS 요청 정보를 불러올 수 없습니다.", 13, colors["red"], "regular", "center")
+        button(370, 585, 630, 637, "웹에서 확인하기", open_created_ticket, True, size=15)
+        if ui["status"]:
+            text(500, 657, str(ui["status"]), 10, colors["red"], "regular", "center", width=640)
 
     def render() -> None:
-        if ui["requestLocked"] and ui["state"] != "AS_REQUEST_CREATED":
+        if ui["requestLocked"] and ui["asState"] != "asCompleted":
             active_session = ui["diagnosisSession"]
             metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
             diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
@@ -5412,9 +5446,12 @@ def show_log_viewer(
         elif ui["state"] == "DIAGNOSING":
             draw_diagnosing()
         elif ui["state"] == "DIAGNOSIS_RESULT":
-            draw_result()
+            if ui["asState"] == "asCompleted":
+                draw_success()
+            else:
+                draw_result()
         else:
-            draw_success()
+            draw_symptom()
 
     def toggle_demo() -> None:
         if ui["busy"] or ui["requestLocked"]:
@@ -5424,17 +5461,21 @@ def show_log_viewer(
         ui["diagnosisReady"] = False
         ui["diagnosis"] = None
         ui["window"] = None
+        ui["asState"] = "diagnosisResult"
+        ui["asRequest"] = None
+        ui["asRequestPayload"] = None
         ui["ticketUrl"] = None
         ui["status"] = ""
         render()
 
     def start_diagnosis() -> None:
+        if ui["demo"] and not ui["requestLocked"]:
+            ui["status"] = "시연 진단은 웹에서 DEMO 요청을 보낼 때 시작됩니다."
+            render()
+            return
         ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
         ui["status"] = ""
         render()
-        if ui["demo"]:
-            ui["diagnosisReady"] = True
-            return
         ui["busy"] = True
         ui["status"] = "최근 30분 로그를 준비하고 있습니다."
         render()
@@ -5515,57 +5556,226 @@ def show_log_viewer(
         panel.transient(root)
         panel.grab_set()
 
-    def connect_as() -> None:
-        if ui["demo"]:
-            ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
-            ui["ticketUrl"] = support_new_url(config)
-            render()
-            return
-        if ui["busy"]:
+    def submit_as_request(payload: DiagnosisAsRequest) -> None:
+        session = ui.get("diagnosisSession")
+        result = ui.get("diagnosisResult")
+        if (
+            ui["busy"]
+            or not isinstance(session, DiagnosisSession)
+            or not isinstance(result, DiagnosisResult)
+            or session.request.diagnosis_id != payload.diagnosis_id
+            or result.result_id != payload.result_id
+        ):
             return
         ui["busy"] = True
+        ui["asState"] = "asSubmitting"
         ui["status"] = "AS 요청을 생성하고 있습니다."
         render()
 
         def worker() -> None:
             try:
                 current_config = load_config(config_path)
-                current_path = log_file(current_config)
-                window = ui["window"] if isinstance(ui["window"], IncidentWindow) else default_incident_window(
-                    "REMOTE_DRIVER_OS", detected_at=datetime.now(KST), trigger_type="USER_REQUEST"
+                client = DiagnosisAsRequestClient(
+                    current_config.api_base_url,
+                    current_config.agent_token,
+                    web_base_url=current_config.web_base_url,
+                    device_id=current_config.device_id,
                 )
-                gzip_path = current_config.log_dir.parent / "uploads" / f"{window.incident_id}.jsonl.gz"
-                gzip_window(current_path, gzip_path, window)
-                result = upload_gzip(
-                    current_config,
-                    gzip_path,
-                    f"agent-support-{uuid.uuid4()}",
-                    "게임 실행 후 프레임 끊김 / GPU 냉각 시스템 점검 필요",
-                    window,
-                )
-                ticket_id = str(result["ticketId"])
-                url = support_url(current_config.api_base_url, ticket_id, current_config.web_base_url)
+                response = client.create_request(payload)
 
                 def apply() -> None:
+                    session = ui.get("diagnosisSession")
+                    result = ui.get("diagnosisResult")
+                    if (
+                        not isinstance(session, DiagnosisSession)
+                        or not isinstance(result, DiagnosisResult)
+                        or session.request.diagnosis_id != payload.diagnosis_id
+                        or result.result_id != payload.result_id
+                    ):
+                        return
                     ui["busy"] = False
-                    ui["ticketUrl"] = url
-                    ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
+                    ui["asState"] = "asCompleted"
+                    ui["asRequest"] = response
+                    ui["asRequestPayload"] = payload
+                    ui["ticketUrl"] = response.web_url
                     ui["status"] = ""
                     render()
 
-                root.after(0, apply)
+                schedule_ui(apply)
             except Exception as exception:
                 def fail(current: Exception = exception) -> None:
+                    session = ui.get("diagnosisSession")
+                    result = ui.get("diagnosisResult")
+                    if (
+                        not isinstance(session, DiagnosisSession)
+                        or not isinstance(result, DiagnosisResult)
+                        or session.request.diagnosis_id != payload.diagnosis_id
+                        or result.result_id != payload.result_id
+                    ):
+                        return
                     ui["busy"] = False
-                    ui["status"] = event_panel_failure_message(current)
+                    ui["asState"] = "asFailed"
+                    ui["status"] = str(current) or "AS 요청 저장에 실패했습니다. 다시 시도해 주세요."
                     render()
-                root.after(0, fail)
+                schedule_ui(fail)
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def schedule_ui(action: Callable[[], None]) -> None:
+        try:
+            if root.winfo_exists():
+                root.after(0, action)
+        except tk.TclError:
+            return
+
+    def connect_as() -> None:
+        if ui["busy"]:
+            return
+        session = ui.get("diagnosisSession")
+        result = ui.get("diagnosisResult")
+        if not isinstance(session, DiagnosisSession) or not isinstance(result, DiagnosisResult):
+            ui["asState"] = "asFailed"
+            ui["status"] = "완료된 진단 세션과 결과가 필요합니다."
+            render()
+            return
+        current_config = load_config(config_path)
+        try:
+            payload = build_diagnosis_as_request(
+                session,
+                result,
+                consent_accepted=True,
+                expected_device_id=current_config.device_id,
+            )
+        except Exception as exception:
+            ui["asState"] = "asFailed"
+            ui["status"] = str(exception)
+            render()
+            return
+        panel = tk.Toplevel(root)
+        panel.title("진단 정보 전송 동의")
+        panel.geometry("700x620")
+        panel.resizable(False, False)
+        panel.configure(background="#ffffff")
+        apply_agent_window_icon(panel)
+        tk.Label(
+            panel,
+            text="진단 정보 전송 동의",
+            font=font(22, "semibold"),
+            background="#ffffff",
+            foreground=colors["text"],
+            anchor="w",
+        ).pack(fill="x", padx=32, pady=(28, 8))
+        tk.Label(
+            panel,
+            text="AS 접수를 위해 아래 진단 정보를 전송합니다.",
+            font=font(12),
+            background="#ffffff",
+            foreground=colors["muted"],
+            anchor="w",
+        ).pack(fill="x", padx=32, pady=(0, 16))
+        evidence = [
+            f"{item['component'].upper()} {item['metricType']}: {item['value']}{item.get('unit') or ''}"
+            for item in payload.evidence_summary
+        ]
+        measured_components = ", ".join(dict.fromkeys(
+            item["component"].upper() for item in payload.evidence_summary
+        )) or "측정된 구성요소 없음"
+        summary = "\n".join((
+            "전송 정보",
+            f"• 사용자 증상: {session.request.symptom or '전달된 증상 없음'}",
+            f"• Agent 최종 진단: {result.title}",
+            "• 핵심 측정 근거:",
+            *(f"  - {item}" for item in evidence),
+            "• 요청 유형: 현장 점검 요청",
+            f"• 진단 시각: {result.evaluated_at}",
+            f"• PC 주요 구성 정보(실제 측정 구성): {measured_components}",
+            f"• 진단 모드: {session.request.mode}",
+            "",
+            "전송하지 않는 정보",
+            "• 개인 파일 내용 · 문서 내용 · 브라우저 기록",
+            "• 진단과 무관한 전체 프로세스 목록 · 불필요한 개인정보",
+        ))
+        summary_box = tk.Text(
+            panel,
+            height=17,
+            font=font(11),
+            foreground=colors["text"],
+            background="#fafafa",
+            relief="solid",
+            borderwidth=1,
+            wrap="word",
+            padx=16,
+            pady=14,
+        )
+        summary_box.insert("1.0", summary)
+        summary_box.configure(state="disabled")
+        summary_box.pack(fill="both", expand=True, padx=32)
+        consent = tk.BooleanVar(panel, value=False)
+        consent_button = tk.Button(
+            panel,
+            text="동의 후 AS 접수",
+            state="disabled",
+            font=font(12, "semibold"),
+            background="#111111",
+            foreground="#ffffff",
+            disabledforeground="#999999",
+            relief="flat",
+            padx=24,
+            pady=9,
+        )
+
+        def approve() -> None:
+            if not consent.get():
+                return
+            panel.destroy()
+            submit_as_request(payload)
+
+        consent_button.configure(command=approve)
+
+        def update_consent() -> None:
+            consent_button.configure(state="normal" if consent.get() else "disabled")
+
+        tk.Checkbutton(
+            panel,
+            text="위 진단 정보 전송에 동의합니다.",
+            variable=consent,
+            command=update_consent,
+            font=font(11),
+            background="#ffffff",
+            foreground=colors["text"],
+            activebackground="#ffffff",
+        ).pack(anchor="w", padx=32, pady=(14, 10))
+        action_row = tk.Frame(panel, background="#ffffff")
+        action_row.pack(fill="x", padx=32, pady=(0, 24))
+        tk.Button(
+            action_row,
+            text="취소",
+            command=panel.destroy,
+            font=font(12, "semibold"),
+            background="#ffffff",
+            foreground=colors["text"],
+            relief="solid",
+            borderwidth=1,
+            padx=28,
+            pady=9,
+        ).pack(side="left")
+        consent_button.pack(in_=action_row, side="right")
+        panel.transient(root)
+        panel.grab_set()
+
     def open_created_ticket() -> None:
-        url = str(ui["ticketUrl"] or support_new_url(config))
-        webbrowser.open(url)
+        url = ui.get("ticketUrl")
+        if not isinstance(url, str) or not url:
+            ui["status"] = "웹 상세 주소를 확인할 수 없습니다."
+            render()
+            return
+        try:
+            opened = webbrowser.open(url)
+        except (OSError, webbrowser.Error):
+            opened = False
+        if not opened:
+            ui["status"] = "웹 요청 상세 페이지를 열지 못했습니다."
+            render()
 
     def start_drag(event: tk.Event) -> None:
         drag_origin["x"] = event.x_root - root.winfo_x()
@@ -5594,6 +5804,11 @@ def show_log_viewer(
     root.protocol("WM_DELETE_WINDOW", close_window)
 
     def apply_diagnosis_session(session: DiagnosisSession | None) -> None:
+        previous = ui.get("diagnosisSession")
+        previous_id = previous.request.diagnosis_id if isinstance(previous, DiagnosisSession) else None
+        next_id = session.request.diagnosis_id if isinstance(session, DiagnosisSession) else None
+        if previous_id != next_id:
+            ui["busy"] = False
         ui["diagnosisSession"] = session
         ui["requestLocked"] = isinstance(session, DiagnosisSession)
         if isinstance(session, DiagnosisSession):
@@ -5608,6 +5823,9 @@ def show_log_viewer(
             ui["diagnosisReady"] = False
             ui["diagnosis"] = None
             ui["window"] = None
+            ui["asState"] = "diagnosisResult"
+            ui["asRequest"] = None
+            ui["asRequestPayload"] = None
             ui["ticketUrl"] = None
             ui["status"] = "" if initial_complete else "초기 메트릭을 수집하고 있습니다."
         render()
@@ -6453,7 +6671,9 @@ def run_background(
             client = diagnosis_client_holder.get("value")
             result = diagnosis_result_store.result
             if client is not None and isinstance(result, DiagnosisResult):
-                client.send_diagnosis_result(result.to_dict())
+                detail = result.to_dict()
+                detail["mode"] = diagnosis_log_store.snapshot.mode
+                client.send_diagnosis_result(detail)
 
         def on_diagnosis_complete(snapshot: DiagnosisRunSnapshot) -> None:
             if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
