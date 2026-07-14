@@ -7514,6 +7514,9 @@ def run_background(
 
         def on_connection_state_changed(state: str) -> None:
             connection_state["value"] = state
+            # 연결 상태가 바뀌면 열린 뷰어를 다시 그린다 — 진단 종료 후 홈 복귀 시
+            # 재접속 중 순간의 '연결 끊김'이 화면에 박제되는 문제를 막는다.
+            viewer_controller.refresh_metrics()
 
         def on_metrics_updated(metrics: MetricsSnapshot) -> None:
             viewer_controller.refresh_metrics()
