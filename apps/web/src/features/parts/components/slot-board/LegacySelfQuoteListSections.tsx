@@ -267,7 +267,7 @@ export function LegacySelfQuoteListSections() {
               </div>
               {showPartsRefreshing ? (
                 <div className="absolute inset-x-0 top-11 z-10 flex justify-center">
-                  <div className="rounded-full border border-blue-100 bg-white/95 px-3 py-1.5 text-xs font-black text-brand-blue shadow-product">
+                  <div className="rounded-full border border-blue-100 bg-white/95 px-3 py-1.5 text-xs font-black text-[#ce7237] shadow-product">
                     목록 업데이트 중
                   </div>
                 </div>
@@ -461,7 +461,7 @@ function partRows(
           aria-label={isSelected ? `${part.name} 견적에서 제거` : isReplace ? `${part.name} 견적 교체` : `${part.name} 견적 담기`}
           disabled={isPending}
           onClick={() => isSelected ? onRemovePart(part.id) : onAddPart(part)}
-          className={`rounded-md px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:cursor-wait disabled:opacity-60 ${
+          className={`rounded-md px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-[#ce7237] disabled:cursor-wait disabled:opacity-60 ${
             isSelected
               ? 'border border-commerce-point/40 bg-orange-50 text-commerce-point hover:border-commerce-point'
               : isReplace
@@ -578,7 +578,7 @@ function PartProductCell({ part }: { part: PartRow }) {
         />
       </Link>
       <div>
-        <Link to={`/parts/${part.id}`} className="font-black leading-5 text-commerce-ink hover:text-brand-blue hover:underline">{part.name}</Link>
+        <Link to={`/parts/${part.id}`} className="font-black leading-5 text-commerce-ink hover:text-[#ce7237] hover:underline">{part.name}</Link>
         <div className="mt-1 text-[11px] font-medium text-slate-500">{partShortSpec(part)}</div>
       </div>
     </div>
