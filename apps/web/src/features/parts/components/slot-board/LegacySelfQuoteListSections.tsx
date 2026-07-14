@@ -461,10 +461,10 @@ function partRows(
           aria-label={isSelected ? `${part.name} 견적에서 제거` : isReplace ? `${part.name} 견적 교체` : `${part.name} 견적 담기`}
           disabled={isPending}
           onClick={() => isSelected ? onRemovePart(part.id) : onAddPart(part)}
-          className={`inline-flex min-h-11 min-w-16 items-center justify-center whitespace-nowrap rounded-md border border-commerce-ink px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-[#ce7237] disabled:cursor-wait disabled:opacity-60 ${
+          className={`inline-flex min-h-11 min-w-16 items-center justify-center whitespace-nowrap rounded-md border px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-[#de6c2d] disabled:cursor-wait disabled:opacity-60 ${
             isSelected
-              ? 'bg-white text-commerce-ink hover:bg-slate-50'
-              : 'bg-commerce-ink text-white hover:bg-slate-800'
+              ? 'border-commerce-ink bg-white text-commerce-ink hover:bg-slate-50'
+              : 'border-[#de6c2d] bg-[#de6c2d] text-white hover:border-[#c25f27] hover:bg-[#c25f27]'
           }`}
         >
           {isPending ? (isSelected ? '빼는 중' : isReplace ? '교체 중' : '담는 중') : isSelected ? '빼기' : isReplace ? '교체' : '담기'}

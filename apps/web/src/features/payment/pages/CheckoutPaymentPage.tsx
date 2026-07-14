@@ -69,19 +69,19 @@ export function CheckoutPaymentPage() {
               <InfoLine icon={<UserRoundCheck size={17} />} label="선택 기사" value={offer.technicianName} />
               <InfoLine icon={<CalendarDays size={17} />} label="완료 예상" value={`${offer.leadTimeDays}일`} />
               <InfoLine icon={<ShieldCheck size={17} />} label="AS 정책" value="표준 AS 적용" />
-              <div className="rounded-md border border-blue-100 bg-blue-50 p-4 text-sm font-bold leading-6 text-blue-800">
+              <div className="rounded-md border border-[#f4c8b2] bg-[#fff5ef] p-4 text-sm font-bold leading-6 text-[#7a3215]">
                 <div className="flex items-center justify-between gap-4">
                   <span>보유 포인트</span>
-                  <strong className="text-base font-black">{pointWalletQuery.data ? `${balance.toLocaleString()}P` : '조회 중'}</strong>
+                  <strong className="text-base font-black text-[#de6c2d]">{pointWalletQuery.data ? `${balance.toLocaleString()}P` : '조회 중'}</strong>
                 </div>
-                <p className="mt-2 border-t border-blue-100 pt-2 text-xs leading-5 text-blue-700">토스 테스트 인증 후 실제 카드·계좌 승인 API는 호출하지 않고 포인트만 차감됩니다.</p>
+                <p className="mt-2 border-t border-[#f4c8b2] pt-2 text-xs leading-5 text-[#9a431d]">토스 테스트 인증 후 실제 카드·계좌 승인 API는 호출하지 않고 포인트만 차감됩니다.</p>
               </div>
               {insufficientPoints ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-black text-red-700">포인트가 {(request.payment.amount - balance).toLocaleString()}P 부족합니다.</div> : null}
             </div>
           </Panel>
           <section className="rounded-lg border border-commerce-line bg-white p-5 shadow-product">
             <div className="text-sm font-black text-slate-500">최종 결제 금액</div>
-            <div className="mt-2 text-3xl font-black text-commerce-sale">{request.payment.amount.toLocaleString()}원</div>
+            <div className="mt-2 text-3xl font-black text-[#de6c2d]">{request.payment.amount.toLocaleString()}원</div>
             <div className="mt-5 space-y-3 border-t border-commerce-line pt-4">
               <SummaryRow label="부품 확인가" value={`${offer.confirmedPartsPrice.toLocaleString()}원`} />
               <SummaryRow label="조립비" value={`${offer.assemblyFee.toLocaleString()}원`} />
@@ -98,7 +98,7 @@ export function CheckoutPaymentPage() {
                   tossWindowMutation.reset();
                   tossWindowMutation.mutate();
                 }}
-                className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 text-sm font-black text-white disabled:bg-slate-300"
+                className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-[#de6c2d] px-4 text-sm font-black text-white hover:bg-[#c45c22] disabled:bg-slate-300 disabled:hover:bg-slate-300"
               >
                 <CreditCard size={17} />
                 {tossWindowMutation.isPending ? '토스 결제창 준비 중...' : '결제하기'}
@@ -125,7 +125,7 @@ function selectedOfferOf(request: AssemblyRequest) {
 }
 
 function InfoLine({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return <div className="flex items-center gap-3 border-b border-commerce-line py-3"><span className="text-brand-blue">{icon}</span><div><div className="text-[11px] font-bold text-slate-500">{label}</div><div className="mt-0.5 text-sm font-black text-commerce-ink">{value}</div></div></div>;
+  return <div className="flex items-center gap-3 border-b border-commerce-line py-3"><span className="text-[#de6c2d]">{icon}</span><div><div className="text-[11px] font-bold text-slate-500">{label}</div><div className="mt-0.5 text-sm font-black text-commerce-ink">{value}</div></div></div>;
 }
 
 function SummaryRow({ label, value }: { label: string; value: string }) {

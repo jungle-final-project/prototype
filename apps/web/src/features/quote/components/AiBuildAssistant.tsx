@@ -791,7 +791,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         onWheel={(event) => event.stopPropagation()}
         onTouchMove={(event) => event.stopPropagation()}
       >
-        <div data-testid="ai-chatbot-panel" className="relative mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[1064px] flex-col">
+        <div data-testid="ai-chatbot-panel" className="relative mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[1064px] scale-[0.8] flex-col">
           {hasMessages ? (
             <div className="flex h-full min-h-0 items-center justify-center">
               <div className="relative flex max-h-full min-h-0 w-full max-w-[896px] flex-col">
@@ -882,7 +882,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
 
   const isDockedAssistant = !isEmbedded && isDesktopAssistant;
   const panelClassName = isEmbedded
-    ? 'panel flex h-full min-h-0 flex-col overflow-hidden bg-[#f8fbff]'
+    ? 'panel flex h-full min-h-0 flex-col overflow-hidden bg-[#f7f7f8]'
     : isDesktopAssistant
     ? 'ai-assistant-docked-panel fixed inset-y-0 right-0 z-50 flex h-dvh w-[390px] flex-col overflow-hidden bg-[#f7f7f8]'
     : 'fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-2xl border border-slate-200 bg-[#f8fbff] shadow-2xl';
@@ -894,15 +894,15 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       className={panelClassName}
     >
       {!isDockedAssistant ? (
-      <div className={isEmbedded ? 'border-b border-slate-200 bg-white px-4 py-3' : 'border-b border-blue-700 bg-brand-blue px-4 py-3 text-white'}>
+      <div className={isEmbedded ? 'border-b border-slate-200 bg-white px-4 py-3' : 'border-b border-[#c45c22] bg-[#de6c2d] px-4 py-3 text-white'}>
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className={isEmbedded ? 'grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-blue text-white shadow-sm' : 'grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-brand-blue shadow-sm'}>
+            <div className={isEmbedded ? 'grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#de6c2d] text-white shadow-sm' : 'grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-[#de6c2d] shadow-sm'}>
               <Sparkles size={20} />
             </div>
             <div className="min-w-0">
               <h2 className={isEmbedded ? 'truncate text-sm font-black text-commerce-ink' : 'truncate text-sm font-black text-white'}>AI 견적 어시스턴트</h2>
-              <p className={isEmbedded ? 'truncate text-xs font-bold text-slate-500' : 'truncate text-xs font-bold text-blue-100'}>{surface === 'home' ? '내부 견적 자산 기준 · 호환성 자동 체크' : '현재 견적 기준 · 부품 교체 자동 적용'}</p>
+              <p className={isEmbedded ? 'truncate text-xs font-bold text-slate-500' : 'truncate text-xs font-bold text-white/80'}>{surface === 'home' ? '내부 견적 자산 기준 · 호환성 자동 체크' : '현재 견적 기준 · 부품 교체 자동 적용'}</p>
             </div>
           </div>
           {!isEmbedded ? (
@@ -951,7 +951,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           <div ref={messagesEndRef} />
         </div>
 
-        <form autoComplete="off" onSubmit={submitPrompt} className={isDockedAssistant ? 'border-t border-slate-200 bg-[#f7f7f8] p-3' : 'border-t border-slate-200 bg-white p-3'}>
+        <form autoComplete="off" onSubmit={submitPrompt} className={isDockedAssistant || isEmbedded ? 'border-t border-slate-200 bg-[#f7f7f8] p-3' : 'border-t border-slate-200 bg-white p-3'}>
           {submitError ? (
             <div role="alert" className="mb-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
               {submitError}
@@ -971,7 +971,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
             </div>
           ) : null}
           <label className="sr-only" htmlFor="ai-build-chat-input">AI 챗봇에게 PC 사양 질문</label>
-          <div className="flex gap-2 rounded-full border border-slate-200 bg-slate-50 p-1.5 shadow-inner focus-within:border-brand-blue focus-within:ring-4 focus-within:ring-blue-100">
+          <div className="flex gap-2 rounded-full border border-slate-200 bg-white p-1.5 shadow-inner focus-within:border-[#de6c2d] focus-within:ring-4 focus-within:ring-[#de6c2d]/15">
             <input
               id="ai-build-chat-input"
               aria-label="AI 챗봇에게 PC 사양 질문"
@@ -986,7 +986,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
               type="submit"
               aria-label="질문 보내기"
               disabled={!prompt.trim() || isSending}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-blue text-white transition hover:bg-blue-700 disabled:bg-slate-300"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#de6c2d] text-white transition hover:bg-[#c45c22] disabled:bg-slate-300"
             >
               <Send size={17} />
             </button>
@@ -1201,14 +1201,14 @@ const ChatMessage = memo(function ChatMessage({
   const isUser = message.role === 'user';
   const isLarge = size === 'large';
   const messageSurfaceClassName = isUser
-    ? `${isLarge ? 'rounded-[22px] px-5 py-4 text-[20px] leading-8' : 'rounded-2xl px-3 py-2 text-sm leading-6'} bg-brand-blue text-white shadow-sm`
+    ? `${isLarge ? 'rounded-[22px] px-5 py-4 text-[20px] leading-8 bg-brand-blue' : 'rounded-2xl bg-[#de6c2d] px-3 py-2 text-sm leading-6'} text-white shadow-sm`
     : `${isLarge ? 'px-1 py-2 text-[20px] leading-8 text-white' : 'px-1 py-1 text-sm leading-6 text-slate-700'}`;
   const assistantLabelClassName = isLarge
     ? 'mb-2 gap-3 text-[15px] text-white/85'
-    : 'mb-1 gap-2 text-[11px] text-brand-blue';
+    : 'mb-1 gap-2 text-[11px] text-[#de6c2d]';
   const assistantIconClassName = isLarge
     ? 'h-7 w-7 bg-white/10 text-white'
-    : 'h-5 w-5 bg-blue-50 text-brand-blue';
+    : 'h-5 w-5 bg-[#de6c2d] text-white';
 
   // 리빌 타임라인: 문장들 → 카드(가이드/시뮬/평가/견적) 순서로 한 스텝씩 노출한다.
   const sentences = useMemo(() => (isUser ? [] : splitIntoSentences(message.text)), [isUser, message.text]);
@@ -1270,7 +1270,7 @@ const ChatMessage = memo(function ChatMessage({
                     type="button"
                     disabled={isRunning}
                     onClick={() => onQuickReply(reply, command, message.id)}
-                    className={`${isLarge ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[11px]'} rounded-full border border-slate-200 bg-white font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-60`}
+                    className={`${isLarge ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[11px]'} rounded-full border border-slate-200 bg-white font-black text-slate-600 shadow-sm transition hover:border-[#de6c2d] hover:text-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#de6c2d]/15 disabled:cursor-wait disabled:opacity-60`}
                   >
                     {isRunning ? '추가 중...' : reply}
                   </button>

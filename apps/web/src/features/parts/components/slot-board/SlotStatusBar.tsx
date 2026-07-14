@@ -148,8 +148,8 @@ export function QuoteCheckoutActions({
     ? 'inline-flex min-h-9 w-[122px] items-center justify-center gap-1 whitespace-nowrap rounded-md border border-slate-300 bg-white px-2.5 text-[11px] font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60'
     : 'inline-flex min-h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-4 text-sm font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60';
   const purchaseClassName = compact
-    ? 'inline-flex min-h-9 w-[122px] items-center justify-center gap-1 whitespace-nowrap rounded-md bg-brand-blue px-3 text-[11px] font-black text-white hover:bg-blue-700'
-    : 'inline-flex min-h-10 items-center gap-2 rounded-md bg-brand-blue px-5 text-sm font-black text-white hover:bg-blue-700';
+    ? 'inline-flex min-h-9 w-[122px] items-center justify-center gap-1 whitespace-nowrap rounded-md bg-[#de6c2d] px-3 text-[11px] font-black text-white hover:bg-[#c45c22]'
+    : 'inline-flex min-h-10 items-center gap-2 rounded-md bg-[#de6c2d] px-5 text-sm font-black text-white hover:bg-[#c45c22]';
   const disabledPurchaseClassName = compact
     ? 'inline-flex min-h-9 w-[122px] cursor-not-allowed items-center justify-center gap-1 whitespace-nowrap rounded-md bg-slate-200 px-3 text-[11px] font-black text-slate-400'
     : 'inline-flex min-h-10 cursor-not-allowed items-center gap-2 rounded-md bg-slate-200 px-5 text-sm font-black text-slate-400';
