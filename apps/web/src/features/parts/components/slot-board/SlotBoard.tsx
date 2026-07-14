@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, CircleX, Sparkles, X } from 'lucide-react';
 import {
   PART_CATEGORY_LABELS,
@@ -90,6 +90,7 @@ export function SlotBoard({
   const flashingCategories = useAttachFlashByCategory(items);
   const isIsometric = visualMode === 'isometric';
   const isMotherboard = visualMode === 'motherboard';
+  const showFusedProblemOverlay = Boolean(boardProblem) && !isRelationMapVisible && !isIsometric && !isMotherboard;
   const aiFocusSet = new Set(aiFocusCategories);
   const hasAiFocus = aiFocusSet.size > 0;
   const aiFocusLabel = aiFocusCategories
@@ -220,13 +221,7 @@ export function SlotBoard({
           </div>
         </div>
       </div>
-      {isRelationMapVisible && !isIsometric && !isMotherboard ? (
-        <RelationMapBanner
-          problem={boardProblem}
-          graph={graph}
-          onExplain={() => explainIssue(undefined, boardProblem?.tool)}
-        />
-      ) : boardProblem ? (
+      {boardProblem && !showFusedProblemOverlay && !isRelationMapVisible ? (
         <SlotBoardProblemBanner
           problems={boardProblems}
           onExplain={(problem) => explainIssue(undefined, problem.tool)}
@@ -277,6 +272,8 @@ export function SlotBoard({
           graph={graph}
           statusByCategory={statusByCategory}
           flashingCategories={flashingCategories}
+          problems={boardProblems}
+          onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
         />
       ) : (
         <FusedSlotBoardBody
@@ -293,6 +290,8 @@ export function SlotBoard({
           graph={graph}
           statusByCategory={statusByCategory}
           flashingCategories={flashingCategories}
+          problems={showFusedProblemOverlay ? boardProblems : []}
+          onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
         />
       )}
       {!isIsometric ? (
@@ -423,7 +422,9 @@ function FusedSlotBoardBody({
   isQuantityPending,
   graph,
   statusByCategory,
-  flashingCategories
+  flashingCategories,
+  problems,
+  onProblemExplain
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -438,6 +439,8 @@ function FusedSlotBoardBody({
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
+  problems: SlotBoardBannerProblem[];
+  onProblemExplain?: (problem: SlotBoardBannerProblem) => void;
 }) {
   return (
     // 보드 본체 — 배치도(기본): 실사 배치판(FusedPlateArt) 위에 부품 오버레이가 겹쳐진다(데스크톱 전용).
@@ -463,6 +466,15 @@ function FusedSlotBoardBody({
         isRemovePending={isRemovePending}
         isQuantityPending={isQuantityPending}
       />
+      {problems.length > 0 ? (
+        <div className="absolute inset-x-0 top-5 z-40 hidden px-4 lg:block">
+          <SlotBoardProblemBanner
+            problems={problems}
+            placement="overlay"
+            onExplain={onProblemExplain}
+          />
+        </div>
+      ) : null}
       <div data-testid="slot-board-mobile-slots" className="flex flex-col gap-2 lg:hidden">
         {SLOT_CONFIGS.map((slot) => (
           <MotherboardSlot
@@ -544,7 +556,9 @@ function RelationMapBoardBody({
   isRemovePending,
   graph,
   statusByCategory,
-  flashingCategories
+  flashingCategories,
+  problems,
+  onProblemExplain
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -556,6 +570,8 @@ function RelationMapBoardBody({
   graph?: BuildGraphResolveResponse;
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
+  problems: SlotBoardBannerProblem[];
+  onProblemExplain?: (problem: SlotBoardBannerProblem) => void;
 }) {
   const issueFocusCategory = firstProblemCategory(graph) ?? firstFilledCategory(items) ?? null;
   const focusCategory = selectedCategory ?? issueFocusCategory ?? 'GPU';
@@ -571,7 +587,18 @@ function RelationMapBoardBody({
       data-visual-mode="relation-map"
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white p-3"
     >
-      <div ref={frameRef} data-testid="relation-map-frame" className="grid min-h-0 flex-1 place-items-center overflow-hidden rounded-lg bg-white">
+      <div ref={frameRef} data-testid="relation-map-frame" className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-lg bg-white">
+        <div className="pointer-events-none absolute inset-x-3 top-3 z-40">
+          <SlotBoardProblemBanner
+            problems={problems}
+            placement="overlay"
+            forceSummary
+            onExplain={onProblemExplain}
+          />
+          <div className="mt-1.5 flex w-full justify-end pointer-events-auto">
+            <RelationMapStatusLegend />
+          </div>
+        </div>
         <div
           data-testid="relation-map-stage"
           className={`relative min-h-0 min-w-0 rounded-lg bg-white ${stageSize ? '' : 'h-full w-full'}`}
@@ -880,10 +907,12 @@ function RelationMapEdges({
 function RelationMapBanner({
   problem,
   graph,
+  placement = 'top',
   onExplain
 }: {
   problem: SlotBoardBannerProblem | null;
   graph?: BuildGraphResolveResponse;
+  placement?: 'top' | 'overlay';
   onExplain?: () => void;
 }) {
   const issues = relationMapIssues(graph);
@@ -899,8 +928,34 @@ function RelationMapBanner({
       bannerTestId="relation-map-bottom-banner"
       status={status}
       message={message}
+      placement={placement}
+      belowContent={<RelationMapStatusLegend />}
       onExplain={hasProblem ? onExplain : undefined}
     />
+  );
+}
+
+function RelationMapStatusLegend() {
+  return (
+    <div
+      data-testid="slot-board-legend"
+      aria-label="영향선 상태 범례"
+      className="flex shrink-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black text-slate-600"
+    >
+      <RelationMapLegendItem label="정상" lineClassName="border-emerald-500" />
+      <RelationMapLegendItem label="주의" lineClassName="border-amber-500" />
+      <RelationMapLegendItem label="불가" lineClassName="border-red-500 border-dashed" />
+      <RelationMapLegendItem label="대기" lineClassName="border-slate-400 border-dashed" />
+    </div>
+  );
+}
+
+function RelationMapLegendItem({ label, lineClassName }: { label: string; lineClassName: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      <span className={`block w-5 border-t-2 ${lineClassName}`} aria-hidden="true" />
+      {label}
+    </span>
   );
 }
 
@@ -1914,10 +1969,14 @@ type SlotBoardBannerProblem = {
 
 function SlotBoardProblemBanner({
   problems,
-  onExplain
+  onExplain,
+  placement = 'top',
+  forceSummary = false
 }: {
   problems: SlotBoardBannerProblem[];
   onExplain?: (problem: SlotBoardBannerProblem) => void;
+  placement?: 'top' | 'overlay';
+  forceSummary?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1962,25 +2021,30 @@ function SlotBoardProblemBanner({
     ? 'slot-board-fail-banner-pulse border-red-400 text-red-600 shadow-[0_10px_20px_rgba(239,68,68,0.24)]'
     : 'border-amber-400 text-amber-700 shadow-[0_10px_20px_rgba(245,158,11,0.18)]';
 
-  if (problems.length === 1) {
+  if (problems.length === 1 && !forceSummary) {
     const problem = problems[0];
     return (
       <SlotBoardStatusRow
         bannerTestId="slot-board-problem-banner"
         status={problem.status}
         message={problem.message}
+        placement={placement}
         onExplain={onExplain ? () => onExplain(problem) : undefined}
       />
     );
   }
 
+  const isOverlay = placement === 'overlay';
+
   return (
     <div
       data-testid="slot-board-status-region"
-      data-placement="top"
-      className="w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2"
+      data-placement={placement}
+      className={isOverlay
+        ? 'pointer-events-none w-full min-w-0 max-w-full shrink-0 px-3 py-0'
+        : 'w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2'}
     >
-      <div ref={rootRef} className="mx-auto w-full max-w-[576px]">
+      <div ref={rootRef} className={`mx-auto w-full max-w-[576px] ${isOverlay ? 'pointer-events-auto' : ''}`}>
         <button
           type="button"
           data-testid="slot-board-problem-banner"
@@ -2067,11 +2131,15 @@ function SlotBoardStatusRow({
   bannerTestId,
   status,
   message,
+  placement = 'top',
+  belowContent,
   onExplain
 }: {
   bannerTestId: 'slot-board-problem-banner' | 'relation-map-bottom-banner';
   status?: SlotProblemStatus;
   message: string;
+  placement?: 'top' | 'overlay';
+  belowContent?: ReactNode;
   onExplain?: () => void;
 }) {
   const borderClass = status === 'FAIL'
@@ -2085,20 +2153,29 @@ function SlotBoardStatusRow({
       ? 'text-amber-500'
       : 'text-emerald-600';
 
+  const isOverlay = placement === 'overlay';
+
   return (
     <div
       data-testid="slot-board-status-region"
-      data-placement="top"
-      className="w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2"
+      data-placement={placement}
+      className={isOverlay
+        ? 'pointer-events-none w-full min-w-0 max-w-full shrink-0 px-3 py-0'
+        : 'w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2'}
     >
       <div
         data-testid={bannerTestId}
         data-status={status ?? 'PASS'}
-        className={`flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border bg-white px-3 py-2 shadow-sm sm:flex-row sm:items-center sm:justify-between ${borderClass}`}
+        className={`mx-auto flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border bg-white px-3 py-2 shadow-sm sm:flex-row sm:items-center sm:justify-between ${isOverlay ? 'pointer-events-auto max-w-[576px]' : ''} ${borderClass}`}
       >
         <p className={`min-w-0 flex-1 break-words text-center text-[13.5px] font-semibold sm:text-left sm:text-[16px] ${textClass}`}>{message}</p>
         {status && onExplain ? <ExplainIssueButton onClick={onExplain} /> : null}
       </div>
+      {belowContent ? (
+        <div className={`mt-1.5 flex w-full justify-end ${isOverlay ? 'pointer-events-auto' : ''}`}>
+          {belowContent}
+        </div>
+      ) : null}
     </div>
   );
 }

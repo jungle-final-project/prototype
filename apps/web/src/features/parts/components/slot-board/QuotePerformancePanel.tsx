@@ -378,9 +378,11 @@ function PerfPanelBody({
         className="rounded-lg border border-commerce-line bg-white px-2.5 py-1 lg:min-h-[98px]"
       >
         <div className={`grid gap-2 lg:items-center ${
-          activeComparison ? 'lg:grid-cols-[230px_minmax(0,1fr)_auto]' : 'lg:grid-cols-[196px_minmax(0,1fr)]'
+          activeComparison
+            ? 'lg:grid-cols-[calc(clamp(248px,17vw,304px)-10px)_minmax(0,1fr)_auto]'
+            : 'lg:grid-cols-[calc(clamp(248px,17vw,304px)-10px)_minmax(0,1fr)]'
         }`}>
-          <div className={`flex items-center justify-center border-b border-commerce-line pb-1.5 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-2 ${
+          <div data-testid="quote-performance-score-column" className={`flex items-center justify-center border-b border-commerce-line pb-1.5 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-2 ${
             activeComparison ? 'min-h-[88px]' : 'min-h-[80px]'
           }`}>
             <div className="w-full min-w-0">

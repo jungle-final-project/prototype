@@ -143,19 +143,20 @@ export function QuoteCheckoutActions({
   compact = false
 }: QuoteCheckoutActionsProps) {
   const saveClassName = compact
-    ? 'inline-flex min-h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-[11px] font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60'
+    ? 'inline-flex min-h-9 w-[122px] items-center justify-center gap-1 whitespace-nowrap rounded-md border border-slate-300 bg-white px-2.5 text-[11px] font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60'
     : 'inline-flex min-h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-4 text-sm font-black text-slate-700 hover:border-commerce-ink disabled:cursor-wait disabled:opacity-60';
   const purchaseClassName = compact
-    ? 'inline-flex min-h-9 items-center gap-1 rounded-md bg-brand-blue px-3 text-[11px] font-black text-white hover:bg-blue-700'
+    ? 'inline-flex min-h-9 w-[122px] items-center justify-center gap-1 whitespace-nowrap rounded-md bg-brand-blue px-3 text-[11px] font-black text-white hover:bg-blue-700'
     : 'inline-flex min-h-10 items-center gap-2 rounded-md bg-brand-blue px-5 text-sm font-black text-white hover:bg-blue-700';
   const disabledPurchaseClassName = compact
-    ? 'inline-flex min-h-9 cursor-not-allowed items-center gap-1 rounded-md bg-slate-200 px-3 text-[11px] font-black text-slate-400'
+    ? 'inline-flex min-h-9 w-[122px] cursor-not-allowed items-center justify-center gap-1 whitespace-nowrap rounded-md bg-slate-200 px-3 text-[11px] font-black text-slate-400'
     : 'inline-flex min-h-10 cursor-not-allowed items-center gap-2 rounded-md bg-slate-200 px-5 text-sm font-black text-slate-400';
   return (
     <>
       {hasItems ? (
         <button
           type="button"
+          data-testid="quote-save-button"
           onClick={onSave}
           disabled={isSavePending}
           className={saveClassName}
@@ -167,6 +168,7 @@ export function QuoteCheckoutActions({
       {hasItems && !hasCompatibilityFail ? (
         <Link
           to="/checkout"
+          data-testid="quote-purchase-button"
           className={purchaseClassName}
         >
           <ShoppingCart size={16} />
@@ -175,6 +177,7 @@ export function QuoteCheckoutActions({
       ) : (
         <button
           type="button"
+          data-testid="quote-purchase-button"
           disabled
           title={hasItems && hasCompatibilityFail
             ? '안 맞는 부품이 있어 구매할 수 없습니다. 문제 슬롯을 교체해 주세요.'

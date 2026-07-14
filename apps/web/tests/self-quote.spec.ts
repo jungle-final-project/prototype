@@ -1168,6 +1168,14 @@ test('blocks purchase when a tool check fails without a matching edge', async ({
 
   await expect(page.getByTestId('quote-summary-bar').getByText('조건 미충족')).toBeVisible();
   const checkoutActions = page.getByTestId('quote-checkout-actions');
+  const saveButton = checkoutActions.getByTestId('quote-save-button');
+  const purchaseButton = checkoutActions.getByTestId('quote-purchase-button');
+  await expect(saveButton).toBeEnabled();
+  await expect(purchaseButton).toBeDisabled();
+  await expect.poll(async () => {
+    const [saveBox, purchaseBox] = await Promise.all([saveButton.boundingBox(), purchaseButton.boundingBox()]);
+    return Boolean(saveBox && purchaseBox && Math.abs(saveBox.width - purchaseBox.width) <= 1);
+  }).toBe(true);
   await expect(checkoutActions.getByRole('button', { name: '구매하기' })).toBeDisabled();
   await expect(checkoutActions.getByRole('button', { name: '구매하기' })).toHaveAttribute(
     'title',
@@ -1334,7 +1342,40 @@ test('shows graph edge labels on the fallback topology relationships', async ({ 
   await expect(page.getByTestId('relation-map-node-CPU')).toBeVisible();
   await expect(page.locator('[data-testid^="relation-map-node-"]')).toHaveCount(8);
   await expect(page.getByTestId('relation-map-edges')).toBeVisible();
-  await expect(page.getByTestId('relation-map-bottom-banner')).toBeVisible();
+  const relationMapProblemBanner = page.getByTestId('slot-board-problem-banner');
+  await expect(relationMapProblemBanner).toBeVisible();
+  await expect(page.getByTestId('relation-map-bottom-banner')).toHaveCount(0);
+  const relationMapStatusRegion = page.getByTestId('slot-board-status-region');
+  await expect(relationMapStatusRegion).toHaveAttribute('data-placement', 'overlay');
+  await expect.poll(async () => relationMapStatusRegion.evaluate((node) => (
+    Boolean(node.parentElement?.closest('[data-testid="relation-map-frame"]'))
+  ))).toBe(true);
+  await expect.poll(async () => {
+    const [statusBox, boardBox] = await Promise.all([
+      relationMapStatusRegion.boundingBox(),
+      page.getByTestId('relation-map-frame').boundingBox()
+    ]);
+    return Boolean(
+      statusBox
+      && boardBox
+      && statusBox.y >= boardBox.y - 1
+      && statusBox.y + statusBox.height <= boardBox.y + boardBox.height
+      && statusBox.y <= boardBox.y + boardBox.height * 0.24
+    );
+  }).toBe(true);
+  const relationMapLegend = page.getByTestId('slot-board-legend');
+  await expect(relationMapLegend).toBeVisible();
+  await expect(relationMapLegend).toContainText('정상');
+  await expect(relationMapLegend).toContainText('주의');
+  await expect(relationMapLegend).toContainText('불가');
+  await expect(relationMapLegend).toContainText('대기');
+  await expect.poll(async () => {
+    const [bannerBox, legendBox] = await Promise.all([
+      relationMapProblemBanner.boundingBox(),
+      relationMapLegend.boundingBox()
+    ]);
+    return Boolean(bannerBox && legendBox && legendBox.y >= bannerBox.y + bannerBox.height);
+  }).toBe(true);
   const relationMapFitsBoard = await page.getByTestId('relation-map-stage').evaluate((stage) => {
     const board = stage.closest('[data-testid="slot-board"]');
     if (!(board instanceof HTMLElement)) return false;
@@ -1358,6 +1399,7 @@ test('shows graph edge labels on the fallback topology relationships', async ({ 
   expect(relationMapFitsBoard).toBe(true);
   await page.getByTestId('relation-map-open').click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'fused');
+  await expect(page.getByTestId('slot-board-legend')).toHaveCount(0);
   const fusedPlate = page.getByTestId('slot-board-fused-plate');
   await expect(fusedPlate).toBeVisible();
   const fusedBoardRatio = FUSED_BOARD_SIZE.width / FUSED_BOARD_SIZE.height;
@@ -1477,11 +1519,15 @@ test('shows the current build performance panel from the resolve performance too
   await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
   const gaugeContainsScore = await panel.getByTestId('quote-composite-score-gauge').evaluate((gauge) => {
     const svg = gauge.querySelector('svg');
+    const arc = svg?.querySelector('path');
     const score = gauge.querySelector('[data-testid="quote-composite-score"]');
-    if (!(svg instanceof SVGElement) || !(score instanceof HTMLElement)) return false;
+    if (!(svg instanceof SVGElement) || !(arc instanceof SVGElement) || !(score instanceof HTMLElement)) return false;
     const svgRect = svg.getBoundingClientRect();
     const scoreRect = score.getBoundingClientRect();
     return svgRect.width >= 160
+      && svgRect.height <= 80
+      && svg.getAttribute('preserveAspectRatio') === 'none'
+      && (arc.getAttribute('d') ?? '').includes('A 102 86')
       && scoreRect.left >= svgRect.left
       && scoreRect.right <= svgRect.right
       && scoreRect.top >= svgRect.top
@@ -1681,7 +1727,7 @@ test('shows the measured fit reason in the board banner and sends the same Tool 
   });
 });
 
-test('keeps the ATX case mismatch warning in a non-overlapping top status row across every board view', async ({ page }) => {
+test('keeps the ATX case mismatch warning in context without overlapping board controls', async ({ page }) => {
   await loginAsUser(page);
   const message = '메인보드 규격 ATX / 케이스 지원 최대 M-ATX입니다. 케이스가 이 보드 규격의 장착을 지원하지 않습니다.';
   const base = buildGraphResponse();
@@ -1726,6 +1772,26 @@ test('keeps the ATX case mismatch warning in a non-overlapping top status row ac
 
   await page.goto('/self-quote');
 
+  const expectStatusOverlayInBoard = async () => {
+    const statusRegion = page.getByTestId('slot-board-status-region');
+    const board = page.getByTestId('slot-board');
+    await expect(statusRegion).toHaveAttribute('data-placement', 'overlay');
+    await expect(statusRegion).toBeVisible();
+    await expect(board).toBeVisible();
+    await expect.poll(async () => {
+      const [statusBox, boardBox] = await Promise.all([statusRegion.boundingBox(), board.boundingBox()]);
+      return Boolean(
+        statusBox
+        && boardBox
+        && statusBox.y >= boardBox.y - 1
+        && statusBox.y + statusBox.height <= boardBox.y + boardBox.height
+        && statusBox.x >= boardBox.x - 1
+        && statusBox.x + statusBox.width <= boardBox.x + boardBox.width + 1
+        && statusBox.y <= boardBox.y + boardBox.height * 0.22
+      );
+    }).toBe(true);
+  };
+
   const expectStatusAboveBoard = async () => {
     const statusRegion = page.getByTestId('slot-board-status-region');
     const board = page.getByTestId('slot-board');
@@ -1738,10 +1804,33 @@ test('keeps the ATX case mismatch warning in a non-overlapping top status row ac
     }).toBe(true);
   };
 
+  const expectStatusOverlayInRelationMapFrame = async () => {
+    const statusRegion = page.getByTestId('slot-board-status-region');
+    const frame = page.getByTestId('relation-map-frame');
+    await expect(statusRegion).toHaveAttribute('data-placement', 'overlay');
+    await expect(statusRegion).toBeVisible();
+    await expect(frame).toBeVisible();
+    await expect.poll(async () => statusRegion.evaluate((node) => (
+      Boolean(node.parentElement?.closest('[data-testid="relation-map-frame"]'))
+    ))).toBe(true);
+    await expect.poll(async () => {
+      const [statusBox, frameBox] = await Promise.all([statusRegion.boundingBox(), frame.boundingBox()]);
+      return Boolean(
+        statusBox
+        && frameBox
+        && statusBox.y >= frameBox.y - 1
+        && statusBox.y + statusBox.height <= frameBox.y + frameBox.height
+        && statusBox.x >= frameBox.x - 1
+        && statusBox.x + statusBox.width <= frameBox.x + frameBox.width + 1
+        && statusBox.y <= frameBox.y + frameBox.height * 0.22
+      );
+    }).toBe(true);
+  };
+
   const banner = page.getByTestId('slot-board-problem-banner');
   await expect(banner).toContainText(message);
   await expect(banner.getByTestId('slot-problem-ai-explain')).toBeVisible();
-  await expectStatusAboveBoard();
+  await expectStatusOverlayInBoard();
 
   for (const control of [
     page.getByTestId('relation-map-open'),
@@ -1763,14 +1852,21 @@ test('keeps the ATX case mismatch warning in a non-overlapping top status row ac
 
   await page.getByRole('button', { name: '실장도 접기' }).click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'fused');
+  await expectStatusOverlayInBoard();
   await page.getByRole('radio', { name: '3D' }).click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'isometric');
   await expectStatusAboveBoard();
 
   await page.getByRole('radio', { name: '배치도' }).click();
   await page.getByTestId('relation-map-open').click();
-  await expect(page.getByTestId('relation-map-bottom-banner')).toContainText(message);
-  await expectStatusAboveBoard();
+  const relationMapProblemBanner = page.getByTestId('slot-board-problem-banner');
+  await expect(relationMapProblemBanner).toBeVisible();
+  await expect(relationMapProblemBanner).not.toContainText(message);
+  await expect(page.getByTestId('relation-map-bottom-banner')).toHaveCount(0);
+  await expectStatusOverlayInRelationMapFrame();
+  await page.getByTestId('relation-map-open').click();
+  await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'fused');
+  await expectStatusOverlayInBoard();
 
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileStatusRegion = page.getByTestId('slot-board-status-region');
@@ -1885,6 +1981,18 @@ test('shows game FPS reference in the performance panel with game and resolution
   const fps = page.getByTestId('quote-fps-section');
   await expect(fps).toBeVisible();
   await expect(page.getByTestId('quote-performance-grid')).toBeVisible();
+  await expect(page.getByTestId('quote-performance-score-column')).toBeVisible();
+  await expect.poll(async () => {
+    const [scoreBox, checklistBox] = await Promise.all([
+      page.getByTestId('quote-performance-score-column').boundingBox(),
+      page.getByTestId('quote-checklist').boundingBox()
+    ]);
+    return Boolean(
+      scoreBox
+      && checklistBox
+      && Math.abs((scoreBox.x + scoreBox.width) - (checklistBox.x + checklistBox.width)) <= 1
+    );
+  }).toBe(true);
   // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 하위 1% 평균(1% low).
   await expect(fps.getByTestId('fps-avg')).toHaveText('130 FPS');
 
