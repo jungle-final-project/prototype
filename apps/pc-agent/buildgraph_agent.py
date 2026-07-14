@@ -5717,8 +5717,9 @@ def show_log_viewer(
             text(x, 136, str(number), 13, "#ffffff", "regular", "center")
             label_color = colors["text"]
         elif style == "done-check":
-            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#ffffff", outline="#d3d8dc")
-            draw_check(x, 136, 10, "#111111", 2)
+            # 지나온 단계: 검은 원에 하얀 체크 — 이동해 간 원의 흔적임을 강조한다.
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#050505", outline="#050505")
+            draw_check(x, 136, 10, "#ffffff", 2)
             label_color = colors["muted"]
         else:
             canvas.create_oval(x - 16, 120, x + 16, 152, fill="#ffffff", outline="#d7dce0")
@@ -5761,16 +5762,31 @@ def show_log_viewer(
                 overridden[anim["to"]] = "idle"
                 styles = tuple(overridden)
 
+        # 지나간 구간의 선은 진하고 두껍게 — 원이 지나온 경로를 남긴다.
+        step_index = ui.get("stepperIndex")
+        passed_index = step_index if isinstance(step_index, int) else 0
+        if isinstance(anim, dict) and moving_ratio is not None:
+            passed_index = anim["from"]  # 이동 중에는 아직 도착 전이므로 완주 구간은 출발 단계까지만
+        segments = ((252, 402), (570, 710))
+        for segment_index, (seg_x1, seg_x2) in enumerate(segments):
+            if segment_index < passed_index:
+                line(seg_x1, 136, seg_x2, 136, "#050505", 3)
+            else:
+                line(seg_x1, 136, seg_x2, 136, "#d9d9d9")
+
         draw_step(1, STEP_X[0], PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
-        line(252, 136, 402, 136, "#d9d9d9")
         draw_step(2, STEP_X[1], PC_AGENT_DIAGNOSIS_STEPS[1], styles[1])
-        line(570, 136, 710, 136, "#d9d9d9")
         draw_step(3, STEP_X[2], PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
 
         if moving_ratio is not None and isinstance(anim, dict):
             from_x = STEP_X[anim["from"]]
             to_x = STEP_X[anim["to"]]
             moving_x = from_x + (to_x - from_x) * moving_ratio
+            # 이동 원 뒤로 지나온 만큼 선이 진해지며 따라온다(트레일).
+            seg_x1, seg_x2 = segments[anim["from"]]
+            trail_end = max(seg_x1, min(seg_x2, moving_x))
+            if trail_end > seg_x1:
+                line(seg_x1, 136, trail_end, 136, "#050505", 3)
             canvas.create_oval(moving_x - 16, 120, moving_x + 16, 152, fill="#050505", outline="#050505")
             if not ui.get("stepTickScheduled"):
                 ui["stepTickScheduled"] = True
