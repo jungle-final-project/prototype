@@ -22,6 +22,7 @@ import com.buildgraph.prototype.agent.AgentQueryService;
 import com.buildgraph.prototype.agent.AgentDiagnosisChatService;
 import com.buildgraph.prototype.agent.PcAgentAsService;
 import com.buildgraph.prototype.agent.PcAgentController;
+import com.buildgraph.prototype.agent.PcAgentDiagnosisAsRequestService;
 import com.buildgraph.prototype.build.BuildGraphLayoutService;
 import com.buildgraph.prototype.common.PipelineJobRunRecorder;
 import com.buildgraph.prototype.rag.RagEmbeddingService;
@@ -65,6 +66,9 @@ class PcAgentControllerSecurityTest {
 
     @MockitoBean
     private PcAgentAsService pcAgentAsService;
+
+    @MockitoBean
+    private PcAgentDiagnosisAsRequestService diagnosisAsRequestService;
 
     @MockitoBean
     private AgentDiagnosisChatService agentDiagnosisChatService;
@@ -143,6 +147,76 @@ class PcAgentControllerSecurityTest {
 
         verify(pcAgentAsService).register(anyMap());
         verifyNoInteractions(agentTokenAuthenticationService);
+    }
+
+    @Test
+    void diagnosisAsRequestRequiresAgentTokenBeforeService() throws Exception {
+        mockMvc.perform(post("/api/agent/as-requests")
+                        .header("Idempotency-Key", "9a0e3c21-6648-41e7-a88e-17be1761b806")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(diagnosisAsRequestService);
+    }
+
+    @Test
+    void diagnosisAsRequestRequiresIdempotencyKey() throws Exception {
+        authenticateAgent();
+
+        mockMvc.perform(post("/api/agent/as-requests")
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(diagnosisAsRequestService);
+    }
+
+    @Test
+    void diagnosisAsRequestUsesAgentPrincipalAndIdempotencyReplayBoundary() throws Exception {
+        String diagnosisId = "9a0e3c21-6648-41e7-a88e-17be1761b806";
+        AgentPrincipal principal = authenticateAgent();
+        when(agentIdempotencyService.reserve(eq(principal), anyString(), anyString(), eq(diagnosisId), anyString()))
+                .thenReturn(AgentIdempotencyDecision.proceed(501L));
+        when(diagnosisAsRequestService.create(eq(principal), any(PcAgentDiagnosisAsRequestService.CreateRequest.class), eq(diagnosisId)))
+                .thenReturn(Map.of(
+                        "requestId", "ticket-public-id",
+                        "requestNumber", "AS-20260714-000001",
+                        "status", "OPEN",
+                        "webPath", "/support/ticket-public-id"
+                ));
+
+        mockMvc.perform(post("/api/agent/as-requests")
+                        .header("Authorization", "Bearer " + AGENT_TOKEN)
+                        .header("Idempotency-Key", diagnosisId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "diagnosisId": "9a0e3c21-6648-41e7-a88e-17be1761b806",
+                                  "resultId": "result-1",
+                                  "deviceId": "device-public-id",
+                                  "requestType": "PHYSICAL_INSPECTION",
+                                  "symptom": "게임 실행 후 프레임 저하",
+                                  "diagnosisTitle": "GPU 냉각 계통 이상 가능성이 높습니다.",
+                                  "diagnosisSummary": "고온과 팬 정지, 열 제한이 함께 확인되었습니다.",
+                                  "evidenceSummary": [{"component":"gpu","metricType":"temperature","value":95}],
+                                  "diagnosedAt": "2026-07-14T01:00:00Z",
+                                  "mode": "LIVE",
+                                  "consentAccepted": true
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.requestId").value("ticket-public-id"))
+                .andExpect(jsonPath("$.requestNumber").value("AS-20260714-000001"));
+
+        verify(diagnosisAsRequestService).create(
+                eq(principal),
+                any(PcAgentDiagnosisAsRequestService.CreateRequest.class),
+                eq(diagnosisId)
+        );
     }
 
     @Test

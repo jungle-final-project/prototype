@@ -121,6 +121,13 @@ class AgentIdempotencyServiceTest {
         assertThat(second.status()).isEqualTo(AgentIdempotencyDecision.Status.PROCEED);
     }
 
+    @Test
+    void abandonDeletesReservationSoAStorageFailureCanBeRetried() {
+        service.abandon(100L);
+
+        verify(repository).deleteById(100L);
+    }
+
     private static AgentIdempotencyRecordEntity startedRecord(String requestHash) {
         return new AgentIdempotencyRecordEntity(
                 10L,
