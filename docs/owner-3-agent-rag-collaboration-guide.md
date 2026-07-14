@@ -267,6 +267,8 @@ Semantic cache는 `build_chat_semantic_cache` 테이블과 `text-embedding-3-sma
 
 Build Chat의 route/action/simulation/LLM 분기는 내부 `BuildChatIntentRouter` decision으로 통제한다. 프론트 즉시 route는 정적 화면 이동과 명확한 category-only 이동으로 제한하고, 상품 상세/필터/시뮬레이션/장바구니 변경 판단은 서버 decision을 따른다. draft mutation 자동 실행은 `requiresConfirmation=false`, `payload.intentConfidence=HIGH`, `payload.sideEffectRisk=LOW`일 때만 허용하며, metadata가 없거나 risk가 `MEDIUM` 이상인 action은 변경안 카드로 남긴다.
 
+`SUPPORT_GUIDANCE`는 쇼핑몰 Build Chat의 접수 전 연결 계층이다. 증상을 범주화해 `supportGuidance(scope=PRE_DIAGNOSIS)`와 PC Agent 다운로드/AS 접수 CTA를 반환하며, 서버가 범주별로 고정한 `possibleCauses`를 일반적 가능성으로만 표시한다. 위험도·확정 원인·원격/방문 결정·로그 근거는 만들지 않는다. 실제 동의 로그 기반 추론은 별도 agent-token `POST /api/agent/diagnosis-chat`이 담당하므로 두 AI의 프롬프트·응답 계약·캐시를 공유하지 않는다.
+
 Build Chat 명시 예산은 `budgetMode`로 관리한다. 서버는 LLM `parsedContext`와 별개로 raw message에서 금액과 `target/max/min` 의도를 다시 파싱하고, 이 raw budget guard를 최종 추천 필터에 우선 적용한다. target budget(`800만원으로`, `800만원짜리`, `800만원 정도`)은 총액을 87.5%~112.5% 안에 맞추고, max budget(`이하`, `안으로`, `넘지 않게`)은 예산 이하를 우선하며, min budget(`이상`, `최소`, `부터`)은 기존 하한 예산 동작을 유지한다. 하드 부품 조건이 있으면 예산 초과를 허용하되 `HARD_CONSTRAINT_OVER_BUDGET` warning을 남긴다.
 
 Build Chat 추천 품질 개선을 위한 XGBoost reranker는 shadow scoring만 수행한다. 홈 하단 추천부품 랭킹은 같은 scorer를 보이는 랭킹에 사용하며, scorer 장애나 모델 부재 시 deterministic fallback을 반환해 사용자 화면을 유지한다. Docker 기본 endpoint는 `RECOMMENDATION_RERANKER_ENDPOINT=http://xgb-reranker:8091/score`이고, 로컬 jar 단독 실행 시에는 `http://localhost:8091/score`를 사용한다. Java API는 기존 Tool/규칙 필터를 통과한 후보만 external scorer에 보내고, scorer 장애나 미기동은 사용자 응답 실패로 전파하지 않는다. Build Chat의 반환 score는 `recommendation_shadow_scores`에 저장하지만 추천 순서는 바꾸지 않는다.

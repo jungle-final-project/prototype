@@ -383,6 +383,22 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
   await expect(page.getByTestId('graph-flow-canvas')).toHaveCount(0);
 });
 
+test('keeps self quote and the primary navigation inside a mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  await expect(page.getByTestId('quote-checklist')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
 test('AI part location focus spotlights all 8 categories across fused, motherboard, and 3D views', async ({ page }) => {
   await loginAsUser(page);
   await page.addInitScript(() => {
@@ -1123,6 +1139,63 @@ test('renders the quote checklist with progress, next-slot guide, and total', as
   await expect(page).toHaveURL('/self-quote?category=PSU');
   await expect(page.getByTestId('checklist-candidates-PSU')).toBeVisible();
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+});
+
+test('keeps the selected checklist category open while replacing single-slot parts repeatedly', async ({ page }) => {
+  await loginAsUser(page);
+  const putRequests: string[] = [];
+  const cpuCandidates = [
+    candidatePart('cpu-9600x', 'CPU', 'AMD Ryzen 5 9600X', { price: 320000 }),
+    candidatePart('cpu-285k', 'CPU', 'Intel Core Ultra 9 285K', { price: 780000 })
+  ];
+  let selectedCpuId: string | null = null;
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PUT') {
+      selectedCpuId = new URL(route.request().url()).pathname.split('/').pop() ?? null;
+      if (selectedCpuId) putRequests.push(selectedCpuId);
+    }
+    const selected = cpuCandidates.find((part) => part.id === selectedCpuId);
+    const items = selected ? [draftItem(selected.id, 'CPU', selected.name, selected.price)] : [];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...emptyDraft,
+        items,
+        totalPrice: items.reduce((sum, item) => sum + item.lineTotal, 0),
+        itemCount: items.reduce((sum, item) => sum + item.quantity, 0)
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: cpuCandidates, page: 0, size: 100, total: cpuCandidates.length })
+    });
+  });
+
+  await page.goto('/self-quote?category=CPU');
+  const candidates = page.getByTestId('checklist-candidates-CPU');
+  await expect(candidates).toBeVisible();
+
+  // 이미 열린 카테고리를 다시 눌러도 목록을 닫지 않는다. 빠른 연속 교체가 핵심 동선이다.
+  await page.getByTestId('checklist-CPU').click();
+  await expect(candidates).toBeVisible();
+
+  await candidates.getByRole('button', { name: /AMD Ryzen 5 9600X/ }).click();
+  await expect.poll(() => putRequests).toEqual(['cpu-9600x']);
+  await expect(page).toHaveURL('/self-quote?category=CPU');
+  await expect(candidates).toBeVisible();
+  await expect(page.getByTestId('checklist-CPU')).toContainText('AMD Ryzen 5 9600X');
+
+  await candidates.getByRole('button', { name: /Intel Core Ultra 9 285K/ }).click();
+  await expect.poll(() => putRequests).toEqual(['cpu-9600x', 'cpu-285k']);
+  await expect(page).toHaveURL('/self-quote?category=CPU');
+  await expect(candidates).toBeVisible();
+  await expect(page.getByTestId('checklist-CPU')).toContainText('Intel Core Ultra 9 285K');
 });
 
 test('blocks purchase when a tool check fails without a matching edge', async ({ page }) => {
@@ -2605,6 +2678,56 @@ test('removes a single-part slot item from the slot board', async ({ page }) => 
   await expect(page.getByTestId('quote-checklist-progress')).toHaveText('7/8 완료');
 });
 
+test('decreases an overfilled RAM kit to zero and removes it from the quote', async ({ page }) => {
+  await loginAsUser(page);
+  const partId = 'part-ram-overfilled';
+  let quantity = 3;
+  const patchedQuantities: number[] = [];
+  const deletedPartIds: string[] = [];
+  const currentDraft = () => {
+    const items = quantity > 0
+      ? [draftItem(partId, 'RAM', 'DDR5 32GB 듀얼 키트', 120_000, quantity, { moduleCount: 2 })]
+      : [];
+    return {
+      ...emptyDraft,
+      items,
+      totalPrice: items.reduce((sum, item) => sum + item.lineTotal, 0),
+      itemCount: quantity
+    };
+  };
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const method = route.request().method();
+    if (method === 'PATCH') {
+      const body = route.request().postDataJSON() as { quantity: number };
+      quantity = body.quantity;
+      patchedQuantities.push(quantity);
+    } else if (method === 'DELETE') {
+      deletedPartIds.push(new URL(route.request().url()).pathname.split('/').pop() ?? '');
+      quantity = 0;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft()) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  const ramArea = page.getByTestId('slot-fused-area-wrap-RAM');
+
+  for (const expectedCount of [4, 2]) {
+    await ramArea.hover();
+    await page.getByTestId('slot-fused-ram-decrease').click();
+    await expect(page.getByTestId('slot-fused-ram-count')).toHaveText(String(expectedCount));
+  }
+  await ramArea.hover();
+  await page.getByTestId('slot-fused-ram-decrease').click();
+
+  await expect.poll(() => patchedQuantities).toEqual([2, 1]);
+  await expect.poll(() => deletedPartIds).toEqual([partId]);
+  await expect(page.getByTestId('quote-summary-bar')).toContainText('0 / 8');
+});
+
 test.skip('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT compatibility in 20 item pages', async ({ page }) => {
   await loginAsUser(page);
   const partRequests: Array<Record<string, string | null>> = [];
@@ -3400,7 +3523,7 @@ test('shows save failure feedback while keeping the current self quote', async (
   await expect(page.getByTestId('checklist-GPU')).toContainText('RTX 5070 구매 테스트');
 });
 
-test('persists an assembly request, selects an offer, completes virtual payment, and reloads from the API', async ({ page }) => {
+test('persists an assembly request, selects an offer, and pays points after Toss authentication', async ({ page }) => {
   const quoteDraftMethods: string[] = [];
   const requestId = '00000000-0000-4000-8000-000000020001';
   let requestStatus = 'OFFERED';
@@ -3426,7 +3549,15 @@ test('persists an assembly request, selects an offer, completes virtual payment,
       { id: 'offer-fast', technicianId: 'tech-2', technicianName: '김도윤 기사', initials: '김', rating: 4.8, completedJobs: 132, responseMinutes: 8, specialties: ['당일 조립'], standardAsAccepted: true, providerType: 'INTERNAL', verified: true, status: selectedOfferId ? 'EXPIRED' : 'AVAILABLE', confirmedPartsPrice: 1_415_000, assemblyFee: 80_000, deliveryFee: 15_000, finalPrice: 1_510_000, leadTimeDays: 1, stockStatus: '주요 부품 재고 확인' },
       { id: 'offer-silent', technicianId: 'tech-3', technicianName: '최민석 기사', initials: '최', rating: 5, completedJobs: 96, responseMinutes: 18, specialties: ['저소음'], standardAsAccepted: true, providerType: 'EXTERNAL', verified: true, status: selectedOfferId ? 'EXPIRED' : 'AVAILABLE', confirmedPartsPrice: 1_388_000, assemblyFee: 95_000, deliveryFee: 20_000, finalPrice: 1_503_000, leadTimeDays: 3, stockStatus: '주요 부품 재고 확인' }
     ],
-    payment: paymentStatus ? { id: 'payment-1', amount: 1_470_000, method: 'VIRTUAL', status: paymentStatus } : null,
+    payment: paymentStatus ? {
+      id: 'payment-1',
+      amount: 1_470_000,
+      paidAmount: paymentStatus === 'PAID' ? 1_470_000 : 0,
+      currency: 'KRW',
+      provider: paymentStatus === 'PAID' ? 'BUILDGRAPH_POINT' : 'LEGACY_VIRTUAL',
+      method: paymentStatus === 'PAID' ? 'POINT' : 'VIRTUAL',
+      status: paymentStatus
+    } : null,
     statusHistory: [{ fromStatus: null, toStatus: 'REQUESTED', note: '조립 요청 등록' }]
   });
   await page.addInitScript(() => {
@@ -3448,6 +3579,13 @@ test('persists an assembly request, selects an offer, completes virtual payment,
       body: JSON.stringify({ mode: 'BUILD_OVERVIEW', summary: '호환 가능', nodes: [], edges: [], focusNodeIds: [], insights: [], toolResults: [] })
     });
   });
+  await page.route('**/api/users/me/points', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'point-wallet-1', name: '포인트', balance: 50_000_000, pointValueWon: 1, currency: 'KRW' })
+    });
+  });
   await page.route('**/api/assembly-requests**', async (route) => {
     const url = route.request().url();
     const method = route.request().method();
@@ -3462,9 +3600,26 @@ test('persists an assembly request, selects an offer, completes virtual payment,
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
       return;
     }
-    if (method === 'POST' && url.endsWith('/payments/confirm-virtual')) {
+    if (method === 'POST' && url.endsWith('/payments/points/confirm')) {
       paymentStatus = 'PAID';
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          attempt: {
+            id: '00000000-0000-4000-8000-000000020011',
+            provider: 'BUILDGRAPH_POINT',
+            merchantPaymentId: 'POINT-test-payment',
+            payMethod: 'POINT',
+            requestedAmount: 1_470_000,
+            approvedAmount: 1_470_000,
+            currency: 'KRW',
+            status: 'SUCCEEDED',
+            expiresAt: '2099-07-20T12:00:00+09:00'
+          },
+          wallet: { id: 'point-wallet-1', name: '포인트', balance: 48_530_000, pointValueWon: 1, currency: 'KRW' }
+        })
+      });
       return;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assemblyResponse()) });
@@ -3506,7 +3661,8 @@ test('persists an assembly request, selects an offer, completes virtual payment,
   await expect(page).toHaveURL(`/checkout/payment/${requestId}`);
   await page.reload();
   await expect(page.getByText('박준호 기사')).toBeVisible();
-  await page.getByRole('button', { name: '가상 결제 완료' }).click();
+  await expect(page.getByRole('button', { name: '토스 결제하기' })).toBeVisible();
+  await page.goto(`/checkout/toss/success/${requestId}?paymentType=NORMAL&paymentKey=test_payment_key&orderId=${requestId}&amount=1470000`);
 
   await expect(page).toHaveURL(`/checkout/complete/${requestId}`);
   await expect(page.getByRole('heading', { name: '조립 요청 진행 상태' })).toBeVisible();
@@ -3514,6 +3670,104 @@ test('persists an assembly request, selects an offer, completes virtual payment,
   await expect(page.getByText('1,470,000원')).toBeVisible();
   await expect(page.getByText('BuildGraph 표준 AS 적용')).toBeVisible();
   expect(quoteDraftMethods.every((method) => method === 'GET')).toBe(true);
+});
+
+test('creates an assembly request without requiring contact or delivery address fields', async ({ page }) => {
+  const requestId = '00000000-0000-4000-8000-000000020011';
+  let submittedBody: Record<string, unknown> | null = null;
+  const request = {
+    id: requestId,
+    requestNo: 'ASM-DEMO-OPTIONAL',
+    status: 'REQUESTED',
+    serviceType: 'FULL_SERVICE',
+    region: '서울',
+    preferredDate: '2099-07-20',
+    deliveryMethod: 'DELIVERY',
+    note: '',
+    contact: { name: 'Demo User', phone: null, postalCode: null, addressLine1: null, addressLine2: null },
+    asPolicyAccepted: true,
+    estimatedPartsPrice: 1_400_000,
+    itemCount: 2,
+    selectedOfferId: null,
+    canCancel: true,
+    items: [],
+    offers: [],
+    payment: null,
+    statusHistory: []
+  };
+  await page.addInitScript(() => localStorage.setItem('buildgraph.token', 'jwt-user-token'));
+  await page.route('**/api/quote-drafts/current**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(checkoutDraft) }));
+  await page.route('**/api/build-graphs/resolve', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ mode: 'BUILD_OVERVIEW', summary: '호환 가능', nodes: [], edges: [], focusNodeIds: [], insights: [], toolResults: [] }) }));
+  await page.route('**/api/assembly-requests**', async (route) => {
+    if (route.request().method() === 'POST' && route.request().url().endsWith('/api/assembly-requests')) {
+      submittedBody = route.request().postDataJSON() as Record<string, unknown>;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(request) });
+  });
+
+  await page.goto('/checkout');
+
+  await expect(page.getByLabel('조립 지역')).toHaveValue('서울');
+  await expect(page.getByLabel('희망 일정')).not.toHaveValue('');
+  await expect(page.getByLabel('수령인')).not.toHaveAttribute('required', '');
+  await expect(page.getByLabel('연락처')).not.toHaveAttribute('required', '');
+  await expect(page.getByLabel('주소', { exact: true })).not.toHaveAttribute('required', '');
+  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await page.getByRole('button', { name: '기사 제안 요청하기' }).click();
+
+  await expect(page).toHaveURL(`/checkout/offers/${requestId}`);
+  expect(submittedBody).toMatchObject({
+    region: '서울',
+    contactName: 'Demo User',
+    contactPhone: '',
+    addressLine1: '',
+    asPolicyAccepted: true
+  });
+});
+
+test('shows a newly arrived technician offer from the in-progress request without reload', async ({ page }) => {
+  const requestId = '00000000-0000-4000-8000-000000020012';
+  let detailCalls = 0;
+  const baseRequest = {
+    id: requestId,
+    requestNo: 'ASM-DEMO-RETURN',
+    serviceType: 'FULL_SERVICE',
+    region: '서울',
+    preferredDate: '2099-07-20',
+    deliveryMethod: 'DELIVERY',
+    note: '',
+    contact: { name: 'Demo User', phone: null },
+    asPolicyAccepted: true,
+    estimatedPartsPrice: 1_400_000,
+    itemCount: 2,
+    selectedOfferId: null,
+    canCancel: true,
+    items: [],
+    payment: null,
+    statusHistory: []
+  };
+  const offer = { id: 'offer-external-new', technicianId: 'tech-external', technicianName: '외부 테스트 기사', initials: '외', rating: 4.8, completedJobs: 24, responseMinutes: 10, specialties: ['게이밍 PC'], standardAsAccepted: true, providerType: 'EXTERNAL', verified: true, status: 'AVAILABLE', confirmedPartsPrice: 1_390_000, assemblyFee: 70_000, deliveryFee: 10_000, finalPrice: 1_470_000, leadTimeDays: 2, stockStatus: '재고 확인 완료' };
+  await page.addInitScript(() => localStorage.setItem('buildgraph.token', 'jwt-user-token'));
+  await page.route('**/api/assembly-requests**', async (route) => {
+    const url = route.request().url();
+    if (url.includes(`/${requestId}`)) {
+      detailCalls += 1;
+      const arrived = detailCalls > 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...baseRequest, status: arrived ? 'OFFERED' : 'REQUESTED', offers: arrived ? [offer] : [] }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ ...baseRequest, status: 'OFFERED', availableOfferCount: 1 }], page: 0, size: 20, total: 1 }) });
+  });
+
+  await page.goto(`/my/assembly-requests/${requestId}`);
+
+  await expect(page.getByText('기사 제안 대기 중')).toBeVisible();
+  const compareLink = page.getByRole('link', { name: /기사 제안 비교·선택/ });
+  await expect(compareLink).toBeVisible({ timeout: 8_000 });
+  await expect(compareLink).toHaveAttribute('href', `/checkout/offers/${requestId}`);
+
+  await page.goto('/my/assembly-requests');
+  await expect(page.locator(`a[href="/checkout/offers/${requestId}"]`)).toContainText('기사 제안 1건 비교·선택');
 });
 
 test('blocks an incompatible assembly request and does not expose a demo bypass', async ({ page }) => {
@@ -3671,6 +3925,13 @@ test('self quote chatbot sends current draft and never mutates the draft automat
   await expect(chatbotPanel.getByRole('button', { name: '800만원 PC 추천' })).toHaveCount(0);
   await expect(chatbotPanel.getByRole('button', { name: '9950X3D 상세' })).toHaveCount(0);
   await expect(chatbotPanel.getByRole('button', { name: '내 견적함' })).toHaveCount(0);
+  // 명확한 카테고리 화면 이동은 브라우저에서 즉시 처리하고 Build Chat을 호출하지 않는다.
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('GPU 보여줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page).toHaveURL('/self-quote?category=GPU');
+  expect(buildChatBodies).toHaveLength(0);
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('GPU 부품 화면으로 이동했습니다.');
+
   // 견적 완성 요청은 현재 견적(드래프트) 문맥이 필요하므로 서버로 draft가 전송돼야 한다
   await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('지금 견적 기준으로 나머지 부품 채워줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
@@ -3678,6 +3939,13 @@ test('self quote chatbot sends current draft and never mutates the draft automat
   await expect.poll(() => buildChatBodies.length).toBe(1);
   expect((buildChatBodies[0] as { currentQuoteDraft?: { items?: Array<{ partId: string }> } }).currentQuoteDraft?.items?.[0]?.partId).toBe('part-gpu-chat');
   await expect(page.getByTestId('ai-chat-messages')).toContainText('나머지 카테고리를 내부 자산 기준으로 채웠습니다.');
+
+  // 추천처럼 문장 자체에 변경 어휘가 없어도 셀프견적에서는 현재 상태를 항상 보낸다.
+  // 그래야 추천 칩 재전송과 다음 추천이 방금 적용한 draft를 기준으로 동작한다.
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('CPU 추천해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect.poll(() => buildChatBodies.length).toBe(2);
+  expect((buildChatBodies[1] as { currentQuoteDraft?: { items?: Array<{ partId: string }> } }).currentQuoteDraft?.items?.[0]?.partId).toBe('part-gpu-chat');
 
   expect(draftMutationMethods).toHaveLength(0);
   // 부품명은 체크리스트(품목 지도)와 슬롯 카드 양쪽에 반영된다. 데스크톱(lg)에서 보드 슬롯은 절대위치
@@ -4589,7 +4857,8 @@ test('returns to the product detail page after login from its redirect', async (
   await expect(page).toHaveURL('/parts/part-gpu-detail-test');
   await expect(page.getByRole('heading', { name: '상세 담기 RTX 테스트' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('buildgraph.refreshToken'))).toBe('demo-refresh-user');
-  await expect(page.getByText('로그인됨 · user@example.com · 사용자')).toBeVisible();
+  await page.getByText('계정', { exact: true }).click();
+  await expect(page.getByText('user@example.com')).toBeVisible();
 
   expect(savedToDraft).toBe(false);
 });

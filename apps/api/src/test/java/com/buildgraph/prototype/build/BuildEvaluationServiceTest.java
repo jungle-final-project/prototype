@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
@@ -15,6 +16,40 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class BuildEvaluationServiceTest {
+    @Test
+    void evaluatesRecommendationSnapshotWithoutRepeatingToolCheck() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        BuildEvaluationService service = new BuildEvaluationService(
+                jdbcTemplate,
+                toolCheckService,
+                new BuildCompositeScoreService(),
+                new BuildScoreAdviceService()
+        );
+        List<com.buildgraph.prototype.part.ToolBuildPart> parts = List.of(
+                new com.buildgraph.prototype.part.ToolBuildPart(
+                        1L, "cpu-1", "CPU", "AMD Ryzen 7 9700X", "AMD", 500_000,
+                        Map.of("cores", 8, "threads", 16), 1),
+                new com.buildgraph.prototype.part.ToolBuildPart(
+                        2L, "gpu-1", "GPU", "RTX 5060", "NVIDIA", 500_000,
+                        Map.of("gpuClass", "RTX_5060", "vramGb", 8), 1)
+        );
+        List<Map<String, Object>> toolResults = List.of(MockData.map(
+                "tool", "compatibility",
+                "status", "PASS",
+                "confidence", "HIGH",
+                "summary", "호환성 통과",
+                "details", Map.of()
+        ));
+
+        BuildEvaluationService.BuildEvaluation evaluation = service.evaluateSnapshot(
+                parts, toolResults, 2_000_000, null, null);
+
+        assertThat(evaluation.compositeScore()).containsKeys("score", "grade", "label");
+        assertThat(evaluation.toolResults()).hasSize(1);
+        verifyNoInteractions(toolCheckService);
+    }
+
     @Test
     void currentDraftParsesPostgresJsonAttributesBeforeRunningTools() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);

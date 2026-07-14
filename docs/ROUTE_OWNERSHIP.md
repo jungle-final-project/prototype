@@ -59,7 +59,7 @@ MVP 기준 결정값:
 
 | 공유 지점 | 주 owner | 협업자 | 직접 수정 가능 범위 | PR reviewer 필수 |
 |---|---|---|---|---|
-| `/my/quotes` route | 1번 | 2번 | 1번은 build history 화면, 2번은 가격 알림 widget과 `GET/POST /api/price-alerts` 연결만 수정 가능 | 2번 변경 포함 시 1번, build history 변경 포함 시 2번 |
+| `/my/quotes` route | 1번 | 2번 | 1번은 build history 화면, 2번은 가격 알림 widget 및 조립 요청 상태 진입점과 관련 API 연결만 수정 가능 | 2번 변경 포함 시 1번, build history 변경 포함 시 2번 |
 | `/builds/:buildId` route | 1번 | 2번, 3번 | 1번은 화면 composition과 `GET /api/builds/{id}`, 2번은 part 표시 DTO, 3번은 evidence link 표시만 수정 가능 | 2번 또는 3번 데이터 필드 변경 시 해당 owner |
 | `/builds/:buildId/change-part` route | 1번 | 2번 | 1번은 교체 flow와 route state, 2번은 parts 검색/필터와 category별 후보 DTO만 수정 가능 | 예, 1번과 2번 상호 review |
 | `/admin` route | 5번 | 2번, 3번, 4번 | 5번은 shell, guard, dashboard frame을 수정한다. 각 도메인 owner는 자기 admin summary card의 데이터 mapping만 수정 가능 | 도메인 card 변경 시 5번 |
@@ -113,7 +113,7 @@ Auth 화면과 Auth/User API 구현 주 owner는 1번이다. 5번은 `apps/web/s
 | frontend files | `features/support/**` 중 AS AI Chat 화면/API, `features/admin/agent/**`, `features/admin/evidence/**` |
 | backend packages | `agent`, `rag`, `recommendation` |
 | DB tables | `agent_sessions`, `tool_invocations`, `rag_evidence`, `as_chat_sessions`, `as_chat_messages`, `llm_generations`, `recommendation_events`, `recommendation_model_versions`, `recommendation_shadow_scores`, `recommendation_training_datasets`, `recommendation_training_dataset_items`, `recommendation_training_jobs`, `as_ticket_labels` 협업 |
-| API endpoints | `POST /api/ai/build-chat`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events`, `POST /api/admin/recommendation-feedback/as-tickets/{id}`, `POST /api/admin/recommendation-feedback/home-parts`, `GET /api/admin/recommendation-models`, `GET /api/admin/recommendation-models/summary`, `GET /api/admin/recommendation-shadow/summary`, `GET /api/admin/recommendation-drift`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `POST /api/admin/rag-embeddings/backfill`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
+| API endpoints | `POST /api/ai/build-chat`, `GET /api/public/home`, `GET /api/recommendations/home-builds`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events`, `POST /api/admin/recommendation-feedback/as-tickets/{id}`, `POST /api/admin/recommendation-feedback/home-parts`, `GET /api/admin/recommendation-models`, `GET /api/admin/recommendation-models/summary`, `GET /api/admin/recommendation-shadow/summary`, `GET /api/admin/recommendation-drift`, `GET /api/ai/as-chat`, `POST /api/ai/as-chat`, `POST /api/ai/as-chat/stream`, `POST /api/ai/agent-sessions`, `POST /api/ai/agent-sessions/{id}/run`, `GET /api/ai/agent-sessions/{id}`, `GET /api/rag/search`, `GET /api/rag/evidence/{id}`, `POST /api/admin/rag-embeddings/backfill`, `GET /api/admin/agent-sessions`, `GET /api/admin/agent-sessions/{id}`, `GET /api/admin/tool-invocations`, `GET /api/admin/tool-invocations/{id}`, `GET /api/admin/rag-evidence`, `GET /api/admin/rag-evidence/{id}` |
 | 협업자 | 추천 결과 UI는 1번, Tool 판정 로직은 2번, AS 원인 후보는 4번 |
 
 XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 추천부품은 `GET /api/recommendations/home-parts`에서 보이는 랭킹으로 사용한다. 3번은 추천 이벤트 수집, 홈 추천부품 관리자 라벨, 모델 버전/점수 기록, 학습 dataset/job 운영 API, Python worker/scorer, Docker scorer 운영 설정을 담당한다. 관리자 라벨은 학습 이벤트만 남기며 `parts.status`나 사용자 노출 여부를 직접 바꾸지 않는다. Tool `FAIL` 후보를 되살리거나 기존 견적 추천 순서를 바꾸지 않는다. AS feedback은 4번의 `as_tickets`와 `agent_log_summaries`를 읽어 `as_ticket_labels`를 저장하고, 조건이 맞을 때만 관리자 확정 negative 이벤트를 남긴다. 티켓 상태와 후보 JSON은 수정하지 않는다.
@@ -159,13 +159,13 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 
 | Route | 주 owner | 협업자 | 연결 API |
 |---|---|---|---|
-| `/` | 1번 | 2번 | `POST /api/ai/build-chat`, `POST /api/build-graphs/resolve`, `POST /api/parts/compatible-candidates`, `GET /api/quote-drafts/current`(챗봇이 견적 문맥 어휘에서 선조회), `PUT /api/quote-drafts/current/apply-ai-build`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events` |
+| `/` | 1번 | 2번 | `POST /api/ai/build-chat`, `POST /api/build-graphs/resolve`, `POST /api/parts/compatible-candidates`, `GET /api/quote-drafts/current`(챗봇이 견적 문맥 어휘에서 선조회), `PUT /api/quote-drafts/current/apply-ai-build`, `GET /api/public/home`, `GET /api/recommendations/home-builds`, `GET /api/recommendations/home-parts`, `POST /api/recommendation-events` |
 | `/requirements/new` | 1번 | 3번 | `POST /api/requirements/parse`, `POST /api/builds/recommend` |
 | `/builds/latest` | 1번 | 3번 | 프론트 세션 보관 AI 추천 조합 표시, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat` |
 | `/builds/:buildId` | 1번 | 2번, 3번 | `GET /api/builds/{id}`, `GET /api/rag/evidence/{id}` |
 | `/builds/:buildId/change-part` | 1번 | 2번 | `POST /api/builds/{id}/change-part`, `GET /api/parts` |
 | `/my/profile` | 1번 | 5번 | `GET /api/auth/me`, `POST /api/users/me/password-verification`, `PATCH /api/users/me` |
-| `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts` |
+| `/my/quotes` | 1번 | 2번 | `GET /api/builds/history`, `GET /api/price-alerts`, `POST /api/price-alerts`, `GET /api/assembly-requests` |
 | `/self-quote` | 2번 | 1번, 3번, 5번 | `GET /api/parts`(후보 패널은 `compatibilitySource=QUOTE_DRAFT_CURRENT`), `POST /api/parts/compatible-candidates`(슬롯보드 개편 후 이 route에서 미사용 — 홈/빌드 상세 그래프 전용), `GET /api/parts/{id}/price-history`, `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/builds/from-chat`, `POST /api/ai/build-chat`(`uiContext.capabilities=[BOARD_PART_FOCUS]`, optional read-only `boardFocus` 소비), `PUT /api/quote-drafts/current/apply-ai-build`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, 5개 Tool API |
 | `/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/quote-drafts/current`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/parts/{id}/price-history` |
 | `/checkout` | 2번 | 1번, 5번 | `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/assembly-requests` |
@@ -280,7 +280,9 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `POST /api/tools/size/check` | 2번 | 3번 |
 | `POST /api/tools/performance/check` | 2번 | 3번 |
 | `POST /api/tools/price/check` | 2번 | 3번 |
-| `GET /api/recommendations/home-parts` | 3번 | 1번 |
+| `GET /api/public/home` | 3번 | 1번, 2번 |
+| GET /api/recommendations/home-parts | 3번 | 1번 |
+| `GET /api/recommendations/home-builds` | 3번 | 1번 |
 | `POST /api/recommendation-events` | 3번 | 1번, 2번 |
 | `/api/admin/recommendation-*` 전체 (models·feedback·training) | 3번 | 5번 |
 | `GET /api/ai/as-chat` | 3번 | 4번, 5번 |
@@ -339,7 +341,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 - 사용자-관리자 상담방은 `support_chat_rooms`, `support_chat_messages` 전용 테이블을 쓰며 `as_chat_*`(3번 AS AI Chat)와 공유하지 않는다. LLM/RAG/Tool 호출을 수행하지 않고 `role=USER|ADMIN|SYSTEM`과 unread/last-message 컬럼만 사용한다.
 - AS Chat profile 비교와 `llm_generations` 기록은 3번 owner 범위다. 기본 사용자 요청은 profile 1개만 실행하고, OpenAI profile 비교는 benchmark 명령에서만 수행한다.
 - `/api/ai/build-chat`의 `X-BuildGraph-AI-Profile` header는 3번 benchmark용이다. UI는 header를 보내지 않고, 1번/프론트 owner는 기존 응답 shape만 소비한다.
-- 서버 `BuildChatIntentRouter` decision(SIMULATE_REPLACEMENT/BUILD_RECOMMEND/LOCATE_BOARD_PART/ASK_CLARIFICATION/UNSUPPORTED)과 LLM intent 판정은 3번 AI 계약이다. `LOCATE_BOARD_PART`는 `/self-quote`가 `BOARD_PART_FOCUS` capability를 보낸 순수 위치 질문에만 optional read-only `boardFocus`를 반환하며, quote draft·URL·선택 카테고리를 변경하지 않는다. 2번 Parts UI는 이 값을 배치도·실장도·3D의 페이지 로컬 강조 상태로만 소비한다. 응답에 화면 이동 action(`OPEN_ROUTE`)이나 draft mutation action은 포함하지 않으며, 실제 화면 라우팅은 프론트, 실제 견적초안 저장은 2번 quote draft API가 수행한다. draft mutation은 자동 실행하지 않는다. 견적 변경(BUILD_MODIFY) 요청은 3번 서버가 `변경 미리보기` 카드(`tier=draft-edit`, `badges=[DRAFT_EDIT_PREVIEW]`)로 응답하고, 사용자가 카드의 적용 버튼을 누를 때만 2번 `PUT /api/quote-drafts/current/apply-ai-build`로 실제 견적초안에 반영한다. 관리자 화면 자동 이동은 허용하지 않는다.
+- 서버 `BuildChatIntentRouter` decision(SIMULATE_REPLACEMENT/BUILD_RECOMMEND/SUPPORT_GUIDANCE/LOCATE_BOARD_PART/EXPLAIN_BUILD_SCORE/ASK_CLARIFICATION/UNSUPPORTED)과 LLM intent 판정은 3번 AI 계약이다. `SUPPORT_GUIDANCE`는 쇼핑몰에서 증상을 인지하고 서버가 증상 범주별로 고정한 일반적 가능성(`possibleCauses`)과 PC Agent 다운로드, 4번 소유 `/support/new` 진입을 안내하는 접수 전 계약이다. 위험도·확정 원인·지원 방식·로그 근거는 만들지 않으며, 동의 로그 기반 진단은 4번 소유 agent-token `/api/agent/diagnosis-chat`이 담당한다. `LOCATE_BOARD_PART`는 `/self-quote`가 `BOARD_PART_FOCUS` capability를 보낸 순수 위치 질문에만 optional read-only `boardFocus`를 반환하며, quote draft·URL·선택 카테고리를 변경하지 않는다. 2번 Parts UI는 이 값을 배치도·실장도·3D의 페이지 로컬 강조 상태로만 소비한다. 응답에 화면 이동 action(`OPEN_ROUTE`)이나 draft mutation action은 포함하지 않으며, 실제 화면 라우팅은 프론트, 실제 견적초안 저장은 2번 quote draft API가 수행한다. draft mutation은 자동 실행하지 않는다. 견적 변경(BUILD_MODIFY) 요청은 3번 서버가 `변경 미리보기` 카드(`tier=draft-edit`, `badges=[DRAFT_EDIT_PREVIEW]`)로 응답하고, 사용자가 카드의 적용 버튼을 누를 때만 2번 `PUT /api/quote-drafts/current/apply-ai-build`로 실제 견적초안에 반영한다. 관리자 화면 자동 이동은 허용하지 않는다.
 - `PART_DETAIL` 자동 이동은 챗봇 기능 축소로 폐지됐다. 3번 서버는 상품 상세 route를 build-chat 응답에 포함하지 않으며, 상품 상세 진입은 사용자가 `/parts/:partId` 화면으로 직접 이동하는 경우에만 이뤄진다.
 
 ## 1주차 완료 기준

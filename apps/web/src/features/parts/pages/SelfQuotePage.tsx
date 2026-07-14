@@ -270,6 +270,10 @@ function SelfQuoteSlotBoardPage() {
       navigate(loginHref);
       return;
     }
+    if (quantity <= 0) {
+      deleteMutation.mutate(partId);
+      return;
+    }
     updateQuantityMutation.mutate({ partId, quantity });
   };
 
@@ -300,8 +304,8 @@ function SelfQuoteSlotBoardPage() {
   const unmetConditionCount = failCount === 0 ? blockingToolFailures(graphQuery.data, draftItems).length : 0;
 
   return (
-    <Screen mainClassName="mx-auto w-full max-w-[1840px] px-4 py-2 sm:px-6 lg:h-[calc(100dvh-210px)] lg:overflow-hidden lg:px-[clamp(24px,2.2vw,48px)] xl:h-[calc(100dvh-167px)]">
-      <div className="space-y-4 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:gap-2 lg:space-y-0">
+    <Screen mainClassName="mx-auto w-full min-w-0 max-w-[1800px] overflow-x-clip px-4 py-2 sm:px-6 lg:h-[calc(100dvh-210px)] lg:overflow-hidden lg:px-[clamp(40px,4.5vw,88px)] xl:h-[calc(100dvh-167px)]">
+      <div className="min-w-0 space-y-4 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:gap-2 lg:space-y-0">
         {showSupplementaryQuotePanels && aiBuild ? (
           <AiSelectedBuildPanel
             build={aiBuild}
@@ -342,9 +346,9 @@ function SelfQuoteSlotBoardPage() {
         ) : null}
 
         {/* 본문: 체크리스트(품목 지도) + 보드(보조 그래프) + AI 상담 패널. */}
-        <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(248px,17vw,304px)_minmax(0,1fr)_clamp(320px,20vw,388px)] lg:grid-rows-[auto_minmax(0,1fr)_auto] lg:items-stretch lg:gap-2">
+        <div className="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(256px,18vw,320px)_minmax(0,1fr)_clamp(336px,21vw,400px)] lg:grid-rows-[auto_minmax(0,1fr)_auto] lg:items-stretch lg:gap-2">
           {/* 핵심 의사결정 지표: 체크리스트+관계도 폭에 맞추고 AI 열은 이 행부터 사용한다. */}
-          <div ref={perfPanelRef} className="min-h-0 lg:col-span-2 lg:row-start-1">
+          <div ref={perfPanelRef} className="min-h-0 min-w-0 lg:col-span-2 lg:row-start-1">
             {draftItems.length === 0 ? (
               <section
                 data-testid="quote-start-banner"
@@ -403,7 +407,7 @@ function SelfQuoteSlotBoardPage() {
             isRemovePending={deleteMutation.isPending}
             statusByCategory={statusByCategory}
           />
-          <div className="min-h-0 lg:h-full">
+          <div className="min-h-0 min-w-0 max-w-full lg:h-full">
             <SlotBoard
               items={draftItems}
               selectedCategory={selectedCategory}
@@ -422,7 +426,7 @@ function SelfQuoteSlotBoardPage() {
               connectorAnchors={anchorQuery.data?.anchors}
             />
           </div>
-          <div className="min-h-0 lg:col-start-3 lg:row-span-3 lg:row-start-1 lg:h-full">
+          <div className="min-h-0 min-w-0 max-w-full lg:col-start-3 lg:row-span-3 lg:row-start-1 lg:h-full">
             <AiBuildAssistant surface="self-quote" variant="embedded" onBoardFocus={handleBoardFocus} />
           </div>
 
@@ -574,7 +578,7 @@ function QuoteChecklist({
   }, [selectedCategory, boardSelectionRequest]);
 
   const openCategory = (category: PartCategory) => {
-    setExpandedCategory((current) => current === category ? null : category);
+    setExpandedCategory(category);
     onSelect(category);
   };
 
@@ -586,13 +590,8 @@ function QuoteChecklist({
     openCategory(category);
   };
 
-  const choosePart = (category: PartCategory, part: PartRow) => {
+  const choosePart = (part: PartRow) => {
     onAddPart(part);
-    const next = RECOMMENDED_SLOT_ORDER.find((candidate) => candidate !== category && !draftItems.some((item) => item.category === candidate));
-    setExpandedCategory(null);
-    if (next) {
-      onSelect(next);
-    }
   };
 
   const removeCategoryItems = (items: QuoteDraftItem[]) => {
@@ -605,7 +604,7 @@ function QuoteChecklist({
 
   return (
     // 데스크톱에서는 보드 높이를 따라가고, 슬롯·후보 목록만 패널 안에서 스크롤한다.
-    <aside data-testid="quote-checklist" className="panel flex h-fit flex-col p-4 lg:h-full lg:overflow-hidden">
+    <aside data-testid="quote-checklist" className="panel flex h-fit min-w-0 max-w-full flex-col p-4 lg:h-full lg:overflow-hidden">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-black text-commerce-ink">견적 체크리스트</h2>
         <span className="flex items-center gap-2">
@@ -743,7 +742,7 @@ function QuoteChecklist({
                             key={part.id}
                             type="button"
                             disabled={isMutating || isAlreadySelected}
-                            onClick={() => choosePart(category, part)}
+                            onClick={() => choosePart(part)}
                             className={`w-full rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
                               isFail
                                 ? 'border-red-100 bg-red-50/40 hover:border-red-300'

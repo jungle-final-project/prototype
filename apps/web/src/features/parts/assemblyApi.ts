@@ -1,10 +1,20 @@
 import { api } from '../../lib/api';
+import type {
+  PaymentAttempt,
+  PaymentAttemptStatus,
+  PaymentCheckoutMethod,
+  PaymentStatus,
+  PaymentSummary
+} from '../payment/paymentTypes';
 
 export type AssemblyServiceType = 'FULL_SERVICE' | 'ASSEMBLY_ONLY';
 export type AssemblyDeliveryMethod = 'DELIVERY' | 'PICKUP';
 export type AssemblyRequestStatus = 'REQUESTED' | 'OFFERED' | 'MATCHED' | 'CONFIRMED' | 'ASSEMBLING' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED';
 export type AssemblyOfferStatus = 'AVAILABLE' | 'SELECTED' | 'WITHDRAWN' | 'EXPIRED';
-export type AssemblyPaymentStatus = 'PENDING' | 'PAID' | 'CANCELLED' | 'REFUNDED';
+export type AssemblyPaymentStatus = PaymentStatus;
+export type AssemblyPaymentAttemptStatus = PaymentAttemptStatus;
+export type AssemblyCheckoutMethod = PaymentCheckoutMethod;
+export type AssemblyPaymentAttempt = PaymentAttempt;
 
 export type AssemblyRequestItem = {
   partId: string;
@@ -49,15 +59,7 @@ export type AssemblyOffer = {
   updatedAt?: string | null;
 };
 
-export type AssemblyPayment = {
-  id: string;
-  amount: number;
-  method: 'VIRTUAL';
-  status: AssemblyPaymentStatus;
-  paidAt?: string | null;
-  refundedAt?: string | null;
-  updatedAt?: string | null;
-};
+export type AssemblyPayment = PaymentSummary;
 
 export type AssemblyStatusHistory = {
   fromStatus?: string | null;
@@ -91,8 +93,8 @@ export type AssemblyRequest = {
 };
 
 export type AssemblyContact = {
-  name: string;
-  phone: string;
+  name?: string | null;
+  phone?: string | null;
   postalCode?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
@@ -104,6 +106,7 @@ export type AssemblyRequestSummary = Pick<AssemblyRequest,
   finalPrice?: number | null;
   technicianName?: string | null;
   paymentStatus?: AssemblyPaymentStatus | null;
+  availableOfferCount?: number;
   userEmail?: string | null;
   userName?: string | null;
 };
@@ -122,8 +125,8 @@ export type CreateAssemblyRequestPayload = {
   deliveryMethod: AssemblyDeliveryMethod;
   note?: string;
   asPolicyAccepted: boolean;
-  contactName: string;
-  contactPhone: string;
+  contactName?: string;
+  contactPhone?: string;
   postalCode?: string;
   addressLine1?: string;
   addressLine2?: string;
@@ -147,10 +150,6 @@ export function getAssemblyRequest(requestId: string) {
 
 export function selectAssemblyOffer(requestId: string, offerId: string) {
   return api<AssemblyRequest>(`/api/assembly-requests/${requestId}/offers/${offerId}/select`, { method: 'POST' });
-}
-
-export function confirmVirtualAssemblyPayment(requestId: string) {
-  return api<AssemblyRequest>(`/api/assembly-requests/${requestId}/payments/confirm-virtual`, { method: 'POST' });
 }
 
 export function cancelAssemblyRequest(requestId: string, reason: string) {
@@ -304,7 +303,7 @@ export function applyAsTechnician(payload: TechnicianApplicationPayload) {
 }
 
 export function getTechnicianProfile() {
-  return api<Technician>('/api/technician/profile');
+  return api<Technician | undefined>('/api/technician/profile').then((profile) => profile ?? null);
 }
 
 export function updateTechnicianProfile(payload: TechnicianApplicationPayload) {

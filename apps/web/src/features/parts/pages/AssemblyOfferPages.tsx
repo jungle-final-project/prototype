@@ -19,7 +19,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage, StatusBadge } from '../../../components/ui';
 import {
   cancelAssemblyRequest,
-  confirmVirtualAssemblyPayment,
   getAssemblyRequest,
   listAssemblyRequests,
   selectAssemblyOffer,
@@ -126,7 +125,7 @@ export function CheckoutOffersPage() {
           <section className="overflow-hidden rounded-lg border border-commerce-line bg-white shadow-product">
             <div className="border-b border-commerce-line bg-slate-950 px-5 py-4 text-white">
               <div className="flex items-center gap-2 text-sm font-black"><UserRoundCheck size={18} /> 선택 제안</div>
-              <p className="mt-1 text-xs font-bold text-white/65">최종 제안가를 확인한 뒤 가상 결제로 이동합니다.</p>
+              <p className="mt-1 text-xs font-bold text-white/65">최종 제안가를 확인한 뒤 포인트 결제로 이동합니다.</p>
             </div>
             <div className="space-y-4 p-5">
               <SummaryRow label="견적 예상가" value={`${request.estimatedPartsPrice.toLocaleString()}원`} />
@@ -163,58 +162,6 @@ export function CheckoutOffersPage() {
   );
 }
 
-export function CheckoutPaymentPage() {
-  const navigate = useNavigate();
-  const { requestId } = useParams();
-  const requestQuery = useQuery({ queryKey: ['assembly-request', requestId], queryFn: () => getAssemblyRequest(requestId!), enabled: Boolean(requestId) });
-  const paymentMutation = useMutation({
-    mutationFn: () => confirmVirtualAssemblyPayment(requestId!),
-    onSuccess: (request) => navigate(`/checkout/complete/${request.id}`)
-  });
-
-  if (!requestId) return <MissingAssemblyRequest />;
-  if (requestQuery.isLoading) return <AssemblyLoading />;
-  if (requestQuery.isError || !requestQuery.data) return <AssemblyError />;
-  const request = requestQuery.data;
-  const offer = selectedOfferOf(request);
-  if (!offer || !request.payment) return <StateWrap title="결제할 기사 제안이 없습니다" body="기사 제안을 먼저 선택해 주세요." action={`/checkout/offers/${request.id}`} actionLabel="기사 제안 보기" />;
-
-  return (
-    <Screen>
-      <div className="mx-auto max-w-4xl">
-        <Link to={`/checkout/offers/${request.id}`} className="inline-flex items-center gap-2 text-sm font-black text-brand-blue hover:underline"><ArrowLeft size={16} /> 기사 제안으로 돌아가기</Link>
-        <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <Panel title="가상 결제" subtitle="실제 금전 거래 없이 결제 이후 조립 진행 흐름을 확인합니다.">
-            <div className="space-y-4">
-              <InfoLine icon={<UserRoundCheck size={17} />} label="선택 기사" value={offer.technicianName} />
-              <InfoLine icon={<CalendarDays size={17} />} label="완료 예상" value={`${offer.leadTimeDays}일`} />
-              <InfoLine icon={<ShieldCheck size={17} />} label="AS 정책" value="BuildGraph 표준 AS 적용" />
-              <div className="rounded-md border border-blue-100 bg-blue-50 p-4 text-sm font-bold leading-6 text-brand-blue">이 결제는 서비스 흐름 검증용 가상 결제이며 카드·계좌 정보는 입력하거나 저장하지 않습니다.</div>
-            </div>
-          </Panel>
-          <section className="rounded-lg border border-commerce-line bg-white p-5 shadow-product">
-            <div className="text-sm font-black text-slate-500">최종 결제 금액</div>
-            <div className="mt-2 text-3xl font-black text-commerce-sale">{request.payment.amount.toLocaleString()}원</div>
-            <div className="mt-5 space-y-3 border-t border-commerce-line pt-4">
-              <SummaryRow label="부품 확인가" value={`${offer.confirmedPartsPrice.toLocaleString()}원`} />
-              <SummaryRow label="조립비" value={`${offer.assemblyFee.toLocaleString()}원`} />
-              <SummaryRow label="배송비" value={offer.deliveryFee ? `${offer.deliveryFee.toLocaleString()}원` : '무료'} />
-            </div>
-            {request.payment.status === 'PAID' ? (
-              <Link to={`/checkout/complete/${request.id}`} className="mt-5 flex min-h-12 items-center justify-center rounded-md bg-emerald-600 px-4 text-sm font-black text-white">결제 완료 내역 보기</Link>
-            ) : (
-              <button type="button" disabled={paymentMutation.isPending} onClick={() => paymentMutation.mutate()} className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 text-sm font-black text-white disabled:bg-slate-300">
-                <CreditCard size={17} /> {paymentMutation.isPending ? '결제 처리 중...' : '가상 결제 완료'}
-              </button>
-            )}
-            {paymentMutation.isError ? <MutationError error={paymentMutation.error} /> : null}
-          </section>
-        </div>
-      </div>
-    </Screen>
-  );
-}
-
 export function CheckoutCompletePage() {
   const { requestId } = useParams();
   const requestQuery = useQuery({ queryKey: ['assembly-request', requestId], queryFn: () => getAssemblyRequest(requestId!), enabled: Boolean(requestId) });
@@ -224,6 +171,7 @@ export function CheckoutCompletePage() {
   const request = requestQuery.data;
   const selectedOffer = selectedOfferOf(request);
   if (!selectedOffer) return <StateWrap title="선택한 기사 제안이 없습니다" body="기사 제안을 선택한 뒤 진행 상태를 확인해 주세요." action={`/checkout/offers/${request.id}`} actionLabel="기사 제안 보기" />;
+  if (request.payment?.status !== 'PAID') return <StateWrap title="결제 검증이 완료되지 않았습니다" body="결제 페이지에서 결제를 완료한 뒤 다시 확인해 주세요." action={`/checkout/payment/${request.id}`} actionLabel="결제 페이지로 이동" />;
 
   return (
     <Screen>
@@ -246,7 +194,11 @@ export function CheckoutCompletePage() {
 }
 
 export function AssemblyRequestHistoryPage() {
-  const requestsQuery = useQuery({ queryKey: ['assembly-requests'], queryFn: () => listAssemblyRequests() });
+  const requestsQuery = useQuery({
+    queryKey: ['assembly-requests'],
+    queryFn: () => listAssemblyRequests(),
+    refetchInterval: 5000
+  });
   return (
     <Screen>
       <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -264,7 +216,15 @@ export function AssemblyRequestDetailPage() {
   const queryClient = useQueryClient();
   const { requestId } = useParams();
   const [cancelReason, setCancelReason] = useState('');
-  const requestQuery = useQuery({ queryKey: ['assembly-request', requestId], queryFn: () => getAssemblyRequest(requestId!), enabled: Boolean(requestId) });
+  const requestQuery = useQuery({
+    queryKey: ['assembly-request', requestId],
+    queryFn: () => getAssemblyRequest(requestId!),
+    enabled: Boolean(requestId),
+    refetchInterval: (query) => {
+      const status = (query.state.data as AssemblyRequest | undefined)?.status;
+      return status === 'REQUESTED' || status === 'OFFERED' ? 5000 : false;
+    }
+  });
   const cancelMutation = useMutation({
     mutationFn: () => cancelAssemblyRequest(requestId!, cancelReason),
     onSuccess: () => {
@@ -277,13 +237,21 @@ export function AssemblyRequestDetailPage() {
   if (requestQuery.isError || !requestQuery.data) return <AssemblyError />;
   const request = requestQuery.data;
   const offer = selectedOfferOf(request);
+  const availableOffers = request.offers.filter((candidate) => candidate.status === 'AVAILABLE');
 
   return (
     <Screen>
       <div className="mb-4"><Link to="/my/assembly-requests" className="inline-flex items-center gap-2 text-sm font-black text-brand-blue"><ArrowLeft size={16} /> 목록으로</Link></div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
-          {offer ? <RequestProgress request={request} offer={offer} /> : <Panel title={request.requestNo} subtitle={STATUS_LABELS[request.status]}><StateMessage type="info" title="기사 제안 대기 중" body="관리자가 조건에 맞는 기사 제안을 준비하고 있습니다." /></Panel>}
+          {offer ? <RequestProgress request={request} offer={offer} /> : availableOffers.length ? (
+            <Panel title={request.requestNo} subtitle={STATUS_LABELS[request.status]}>
+              <StateMessage type="success" title={`기사 제안 ${availableOffers.length}건 도착`} body="도착한 기사별 가격과 일정을 비교하고 원하는 제안을 선택할 수 있습니다." />
+              <Link to={`/checkout/offers/${request.id}`} className="mt-4 flex min-h-12 items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 text-sm font-black text-white">
+                <UserRoundCheck size={17} /> 기사 제안 비교·선택
+              </Link>
+            </Panel>
+          ) : <Panel title={request.requestNo} subtitle={STATUS_LABELS[request.status]}><StateMessage type="info" title="기사 제안 대기 중" body="조건에 맞는 기사 제안이 등록되면 이 화면에서 자동으로 알려드립니다." /></Panel>}
           <Panel title="요청 부품 snapshot" subtitle="요청 이후 가격이나 현재 견적이 바뀌어도 이 구성은 유지됩니다.">
             <div className="divide-y divide-commerce-line">{request.items.map((item) => <div key={`${item.partId}-${item.category}`} className="flex items-center justify-between gap-4 py-3 text-sm"><div><span className="font-black text-commerce-ink">{item.name}</span><span className="ml-2 font-bold text-slate-500">{item.quantity}개</span></div><span className="shrink-0 font-black">{item.lineTotal.toLocaleString()}원</span></div>)}</div>
           </Panel>
@@ -292,6 +260,11 @@ export function AssemblyRequestDetailPage() {
           <Panel title="요청 관리">
             <SummaryRow label="현재 상태" value={STATUS_LABELS[request.status]} />
             <div className="mt-3"><SummaryRow label="결제 상태" value={request.payment?.status ?? '미생성'} /></div>
+            {availableOffers.length ? (
+              <Link to={`/checkout/offers/${request.id}`} className="mt-4 flex min-h-11 items-center justify-center rounded-md bg-brand-blue px-4 text-sm font-black text-white">
+                도착한 제안 {availableOffers.length}건 확인
+              </Link>
+            ) : null}
             {request.canCancel ? (
               <div className="mt-5 border-t border-commerce-line pt-4">
                 <label className="text-xs font-black text-slate-600">취소 사유<input value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} maxLength={1000} className="mt-2 h-10 w-full rounded border border-commerce-line px-3 text-sm" /></label>
@@ -333,7 +306,7 @@ function RequestProgress({ request, offer }: { request: AssemblyRequest; offer: 
       <div className="p-5">
         <div className="grid gap-3 border-b border-commerce-line pb-5 sm:grid-cols-3"><Metric label="조립 요청번호" value={request.requestNo} /><Metric label="선택 기사" value={offer.technicianName} /><Metric label="최종 제안가" value={`${offer.finalPrice.toLocaleString()}원`} accent /></div>
         <h2 className="mt-6 text-lg font-black text-commerce-ink">진행 상태</h2>
-        <div className="mt-4 grid gap-3 md:grid-cols-4"><TimelineStep icon={<CheckCircle2 size={17} />} label="요청·매칭" done={!['REQUESTED', 'OFFERED'].includes(request.status)} /><TimelineStep icon={<CreditCard size={17} />} label="가상 결제" done={['PAID', 'REFUNDED'].includes(request.payment?.status ?? '')} /><TimelineStep icon={<Wrench size={17} />} label="조립" done={['SHIPPED', 'COMPLETED'].includes(request.status)} active={['CONFIRMED', 'ASSEMBLING'].includes(request.status)} /><TimelineStep icon={<Truck size={17} />} label="배송·완료" done={request.status === 'COMPLETED'} active={request.status === 'SHIPPED'} /></div>
+        <div className="mt-4 grid gap-3 md:grid-cols-4"><TimelineStep icon={<CheckCircle2 size={17} />} label="요청·매칭" done={!['REQUESTED', 'OFFERED'].includes(request.status)} /><TimelineStep icon={<CreditCard size={17} />} label="포인트 결제" done={['PAID', 'REFUNDED'].includes(request.payment?.status ?? '')} /><TimelineStep icon={<Wrench size={17} />} label="조립" done={['SHIPPED', 'COMPLETED'].includes(request.status)} active={['CONFIRMED', 'ASSEMBLING'].includes(request.status)} /><TimelineStep icon={<Truck size={17} />} label="배송·완료" done={request.status === 'COMPLETED'} active={request.status === 'SHIPPED'} /></div>
         <div className="mt-6 grid gap-3 sm:grid-cols-2"><InfoLine icon={<MapPin size={17} />} label="조립 지역" value={request.region} /><InfoLine icon={<CalendarDays size={17} />} label="희망 일정" value={request.preferredDate} /><InfoLine icon={<Clock3 size={17} />} label="예상 소요" value={`${offer.leadTimeDays}일`} /><InfoLine icon={<ShieldCheck size={17} />} label="AS 정책" value="BuildGraph 표준 AS 적용" /></div>
       </div>
     </section>
@@ -341,7 +314,9 @@ function RequestProgress({ request, offer }: { request: AssemblyRequest; offer: 
 }
 
 function AssemblyHistoryCard({ request }: { request: AssemblyRequestSummary }) {
-  return <Link to={`/my/assembly-requests/${request.id}`} className="grid gap-4 rounded-lg border border-commerce-line bg-white p-5 shadow-sm transition hover:border-brand-blue md:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-commerce-ink">{request.requestNo}</h2><StatusBadge status={request.status} />{request.paymentStatus ? <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600">결제 {request.paymentStatus}</span> : null}</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span>{request.region}</span><span>{request.preferredDate}</span><span>{request.technicianName ?? '기사 배정 전'}</span><span>부품 {request.itemCount}개</span></div></div><div className="text-left md:text-right"><div className="text-xs font-bold text-slate-500">{request.finalPrice ? '최종 제안가' : '견적 예상가'}</div><div className="mt-1 text-lg font-black text-commerce-sale">{(request.finalPrice ?? request.estimatedPartsPrice).toLocaleString()}원</div></div></Link>;
+  const hasAvailableOffer = request.status === 'OFFERED' && (request.availableOfferCount ?? 1) > 0;
+  const destination = hasAvailableOffer ? `/checkout/offers/${request.id}` : `/my/assembly-requests/${request.id}`;
+  return <Link to={destination} className="grid gap-4 rounded-lg border border-commerce-line bg-white p-5 shadow-sm transition hover:border-brand-blue md:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-commerce-ink">{request.requestNo}</h2><StatusBadge status={request.status} />{request.paymentStatus ? <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600">결제 {request.paymentStatus}</span> : null}</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span>{request.region}</span><span>{request.preferredDate}</span><span>{request.technicianName ?? '기사 배정 전'}</span><span>부품 {request.itemCount}개</span></div>{hasAvailableOffer ? <span className="mt-3 inline-flex min-h-9 items-center rounded-md bg-blue-50 px-3 text-xs font-black text-brand-blue">{request.availableOfferCount == null ? '기사 제안 비교·선택' : `기사 제안 ${request.availableOfferCount}건 비교·선택`}</span> : null}</div><div className="text-left md:text-right"><div className="text-xs font-bold text-slate-500">{request.finalPrice ? '최종 제안가' : '견적 예상가'}</div><div className="mt-1 text-lg font-black text-commerce-sale">{(request.finalPrice ?? request.estimatedPartsPrice).toLocaleString()}원</div></div></Link>;
 }
 
 function selectedOfferOf(request: AssemblyRequest) { return request.offers.find((offer) => offer.id === request.selectedOfferId || offer.status === 'SELECTED') ?? null; }
