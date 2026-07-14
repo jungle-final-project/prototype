@@ -13,6 +13,7 @@
     "test:e2e:build-chat-qa": "playwright test -c playwright.build-chat-qa.config.ts"
   },
   "dependencies": {
+    "@fontsource/outfit": "^5.2.8",
     "@fullpage/react-fullpage": "^0.1.49",
     "@tanstack/react-query": "^5.66.0",
     "@xyflow/react": "^12.11.1",
