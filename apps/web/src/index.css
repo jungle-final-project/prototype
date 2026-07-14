@@ -61,7 +61,7 @@ textarea {
 }
 
 .ai-assistant-docked-panel {
-  --ai-assistant-accent: #ce7237;
+  --ai-assistant-accent: #de6c2d;
   background-color: #f7f7f8 !important;
   border: 0 !important;
   box-shadow: -12px 0 30px rgb(15 23 42 / 0.12) !important;
@@ -90,11 +90,11 @@ textarea {
 }
 
 .ai-assistant-docked-panel .border-blue-100 {
-  border-color: #f5dccb !important;
+  border-color: #f4d8c7 !important;
 }
 
 .ai-assistant-docked-panel .border-blue-50 {
-  border-color: #fdf0e7 !important;
+  border-color: #fff0e7 !important;
 }
 
 .ai-assistant-docked-panel .bg-blue-50 {
@@ -114,7 +114,7 @@ textarea {
 }
 
 .ai-assistant-docked-panel .ring-blue-100 {
-  --tw-ring-color: rgb(206 114 55 / 0.22) !important;
+  --tw-ring-color: rgb(222 108 45 / 0.22) !important;
 }
 
 .ai-assistant-docked-panel .hover\:bg-blue-50:hover {
@@ -135,11 +135,11 @@ textarea {
 }
 
 .ai-assistant-docked-panel .focus\:ring-blue-100:focus {
-  --tw-ring-color: rgb(206 114 55 / 0.22) !important;
+  --tw-ring-color: rgb(222 108 45 / 0.22) !important;
 }
 
 .ai-assistant-docked-panel .focus\:ring-blue-200:focus {
-  --tw-ring-color: rgb(206 114 55 / 0.32) !important;
+  --tw-ring-color: rgb(222 108 45 / 0.32) !important;
 }
 
 .ai-assistant-docked-panel .ai-message-author-icon {

@@ -157,7 +157,7 @@ export function MyQuotesPage() {
         <section className="rounded-md border border-commerce-line bg-white p-5 shadow-product">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
             <div>
-              <p className="text-xs font-black tracking-wide text-brand-blue">견적 데스크</p>
+              <p className="text-xs font-black tracking-wide text-[#de6c2d]">견적 데스크</p>
               <h1 className="mt-1 text-2xl font-black tracking-tight text-commerce-ink">내 견적함 / 목표가 알림</h1>
               <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-slate-600">
                 저장한 견적을 확인하고, 관심 부품의 현재가가 목표가에 가까워지는지 한 화면에서 추적합니다.
@@ -165,7 +165,7 @@ export function MyQuotesPage() {
               <Link
                 to={offeredAssemblyRequest ? `/checkout/offers/${offeredAssemblyRequest.id}` : '/my/assembly-requests'}
                 data-testid="my-assembly-requests-link"
-                className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 text-sm font-black text-commerce-ink transition hover:border-brand-blue hover:text-brand-blue"
+                className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 text-sm font-black text-commerce-ink transition hover:border-[#de6c2d] hover:text-[#de6c2d]"
               >
                 <ClipboardList size={16} />
                 {offeredAssemblyRequest
@@ -191,7 +191,7 @@ export function MyQuotesPage() {
           <Panel
             title="저장 견적"
             subtitle="상세 확인, 부품 변경, 목표가 알림 등록까지 바로 이어집니다."
-            action={<Link to="/requirements/new" className="rounded-md bg-brand-blue px-3 py-2 text-xs font-black text-white hover:bg-blue-700">AI 견적 시작</Link>}
+            action={<Link to="/requirements/new" className="rounded-md bg-[#de6c2d] px-3 py-2 text-xs font-black text-white hover:bg-[#c45c22]">AI 견적 시작</Link>}
           >
             {buildsQuery.isLoading ? (
               <SavedBuildSkeleton />
@@ -225,7 +225,7 @@ export function MyQuotesPage() {
               <div className="space-y-3">
                 <StateMessage type="info" title="저장된 견적 없음" body="AI 추천 또는 셀프 견적으로 조합을 만든 뒤 저장하면 이곳에서 다시 확인할 수 있습니다." />
                 <div className="flex flex-wrap gap-2">
-                  <Link to="/requirements/new" className="rounded-md bg-brand-blue px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700">AI 견적 시작</Link>
+                  <Link to="/requirements/new" className="rounded-md bg-[#de6c2d] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#c45c22]">AI 견적 시작</Link>
                   <Link to="/self-quote" className="rounded-md border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-commerce-ink hover:text-commerce-ink">셀프 견적 시작</Link>
                 </div>
               </div>
@@ -237,15 +237,15 @@ export function MyQuotesPage() {
               <form onSubmit={submitAlert} className="space-y-4">
                 <div>
                   {selectedAlertBuild ? (
-                    <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
-                      <div className="text-[11px] font-black text-brand-blue">선택한 저장 견적</div>
+                    <div className="mb-3 rounded-md border border-[#f4c8b2] bg-[#fff5ef] px-3 py-2">
+                      <div className="text-[11px] font-black text-[#de6c2d]">선택한 저장 견적</div>
                       <div className="mt-1 truncate text-sm font-black text-commerce-ink" title={selectedAlertBuild.name}>{selectedAlertBuild.name}</div>
                     </div>
                   ) : null}
                   <label htmlFor="quote-alert-saved-part" className="mb-1 block text-xs font-black text-slate-600">저장 견적 부품</label>
                   <select
                     id="quote-alert-saved-part"
-                    className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-commerce-ink focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-commerce-ink focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     value={selectedSavedPartId}
                     onChange={(event) => setSelectedSavedPartId(event.target.value)}
                     disabled={savedPartOptions.length === 0}
@@ -271,7 +271,7 @@ export function MyQuotesPage() {
                   <label htmlFor="quote-alert-target-price" className="mb-1 block text-xs font-black text-slate-600">목표가</label>
                   <input
                     id="quote-alert-target-price"
-                    className="h-11 w-full rounded-md border border-slate-300 px-3 text-sm font-bold text-commerce-ink focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
+                    className="h-11 w-full rounded-md border border-slate-300 px-3 text-sm font-bold text-commerce-ink focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                     inputMode="numeric"
                     value={targetPrice}
                     onChange={(event) => {
@@ -284,16 +284,16 @@ export function MyQuotesPage() {
 
                 <button
                   disabled={createAlertMutation.isPending || !selectedPartIdForSubmit || !targetPriceNumber}
-                  className="flex w-full min-h-11 items-center justify-center rounded-md bg-brand-blue px-4 py-3 text-sm font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  className="flex w-full min-h-11 items-center justify-center rounded-md bg-[#de6c2d] px-4 py-3 text-sm font-black text-white hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:hover:bg-slate-400"
                 >
                   <Save className="mr-1.5 inline" size={15} /> {createAlertMutation.isPending ? '등록 중' : '알림 등록'}
                 </button>
 
                 {nearestAlert ? (
-                  <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
+                  <div className="rounded-md border border-[#f4c8b2] bg-[#fff5ef] px-3 py-2">
                     <div className="text-xs font-black text-slate-500">가장 가까운 목표</div>
                     <div className="mt-1 text-sm font-black text-commerce-ink">{nearestAlert.partName}</div>
-                    <div className="mt-1 text-xs font-bold text-brand-blue">{priceAlertDeltaText(nearestAlert)}</div>
+                    <div className="mt-1 text-xs font-bold text-[#de6c2d]">{priceAlertDeltaText(nearestAlert)}</div>
                   </div>
                 ) : null}
 
@@ -354,7 +354,7 @@ function SummaryMetric({
     }`}
     >
       <div className="flex items-center gap-2 text-xs font-black text-slate-500">
-        <span className={tone === 'success' ? 'text-emerald-600' : 'text-brand-blue'}>{icon}</span>
+        <span className={tone === 'success' ? 'text-emerald-600' : 'text-[#de6c2d]'}>{icon}</span>
         {label}
       </div>
       <div className="mt-1 text-xl font-black text-commerce-ink">{value}</div>
@@ -368,7 +368,7 @@ function AlertStatusPill({ alert }: { alert: PriceAlert }) {
     <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-black ${
       achieved
         ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
-        : 'border-blue-200 bg-blue-50 text-brand-blue'
+        : 'border-[#f4c8b2] bg-[#fff5ef] text-[#de6c2d]'
     }`}
     >
       {achieved ? '목표 달성' : '추적 중'}
@@ -428,16 +428,16 @@ function SavedBuildCard({
   }
 
   return (
-    <article data-testid={`saved-build-card-${build.id}`} className="rounded-md border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:shadow-product">
+    <article data-testid={`saved-build-card-${build.id}`} className="rounded-md border border-slate-200 bg-white p-4 transition hover:border-[#f4c8b2] hover:shadow-product">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="rounded bg-blue-50 px-2 py-1 text-[11px] font-black text-brand-blue">{build.recommendedFor ?? '저장 견적'}</span>
+            <span className="rounded bg-[#fff5ef] px-2 py-1 text-[11px] font-black text-[#de6c2d]">{build.recommendedFor ?? '저장 견적'}</span>
             <button
               type="button"
               disabled={!hasCheckoutItems}
               onClick={() => onOpenGraph(build)}
-              className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2.5 text-[11px] font-black text-brand-blue hover:border-blue-200 hover:bg-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-[#f4c8b2] bg-[#fff5ef] px-2.5 text-[11px] font-black text-[#de6c2d] hover:border-[#de6c2d] hover:bg-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
             >
               <GitBranch size={13} />
               견적 관계 그래프 보기
@@ -456,9 +456,9 @@ function SavedBuildCard({
                   if (event.key === 'Enter') submitRename();
                   if (event.key === 'Escape') cancelRename();
                 }}
-                className="min-w-0 flex-1 rounded-md border border-brand-blue px-2 py-1 text-lg font-black leading-6 text-commerce-ink focus:outline-none focus:ring-2 focus:ring-blue-100"
+                className="min-w-0 flex-1 rounded-md border border-[#de6c2d] px-2 py-1 text-lg font-black leading-6 text-commerce-ink focus:outline-none focus:ring-2 focus:ring-[#f4c8b2]"
               />
-              <button type="button" aria-label="이름 저장" data-testid={`rename-save-${build.id}`} onClick={submitRename} className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-brand-blue text-white hover:bg-blue-700">
+              <button type="button" aria-label="이름 저장" data-testid={`rename-save-${build.id}`} onClick={submitRename} className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[#de6c2d] text-white hover:bg-[#c45c22]">
                 <Check size={15} />
               </button>
               <button type="button" aria-label="이름 변경 취소" onClick={cancelRename} className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-slate-300 bg-white text-slate-600 hover:border-commerce-ink">
@@ -492,7 +492,7 @@ function SavedBuildCard({
         </div>
         <div className="shrink-0 lg:text-right">
           <div className="text-xs font-black text-slate-500">견적 합계</div>
-          <div className="mt-1 text-2xl font-black text-brand-blue">{build.totalPrice.toLocaleString()}원</div>
+          <div className="mt-1 text-2xl font-black text-[#de6c2d]">{build.totalPrice.toLocaleString()}원</div>
           <div className="mt-1 text-xs font-semibold text-slate-500">{formatDateTime(build.createdAt)}</div>
         </div>
       </div>
@@ -501,7 +501,7 @@ function SavedBuildCard({
           type="button"
           disabled={!hasCheckoutItems || isPreparingCheckout}
           onClick={() => onCheckout(build)}
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-brand-blue px-3 text-xs font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-[#de6c2d] px-3 text-xs font-black text-white hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:hover:bg-slate-400"
         >
           <ShoppingBag size={14} /> {isPreparingCheckout ? '구매 준비 중' : '구매하기'}
         </button>
@@ -520,7 +520,7 @@ function SavedBuildCard({
           type="button"
           disabled={!hasAlertablePart}
           onClick={() => onAlertSelect(build)}
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-3 text-xs font-black text-brand-blue hover:border-blue-200 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-[#f4c8b2] bg-[#fff5ef] px-3 text-xs font-black text-[#de6c2d] hover:border-[#de6c2d] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
         >
           <Target size={14} /> 목표가 등록
         </button>
@@ -561,7 +561,7 @@ function SavedBuildCard({
               data-testid={`delete-${build.id}`}
               disabled={isDeleting}
               onClick={() => setConfirmingDelete(true)}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 text-xs font-black text-commerce-sale hover:bg-red-50 disabled:cursor-wait disabled:text-slate-400"
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 text-xs font-black text-commerce-sale hover:border-red-300 hover:text-red-700 disabled:cursor-wait disabled:text-slate-400"
             >
               <Trash2 size={14} /> {isDeleting ? '삭제 중' : '삭제'}
             </button>
@@ -649,7 +649,7 @@ function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
     <section data-testid="saved-builds-comparison" className="rounded-md border border-commerce-line bg-white p-5 shadow-product">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <p className="text-xs font-black tracking-wide text-brand-blue">견적 비교</p>
+          <p className="text-xs font-black tracking-wide text-[#de6c2d]">견적 비교</p>
           <h2 className="mt-1 text-lg font-black text-commerce-ink">견적 골라 부품·성능 비교</h2>
           <p className="mt-1 break-keep text-xs leading-5 text-slate-500">
             비교할 견적을 고르면 전 카테고리 부품과 1000점 종합 점수를 좌우로 나열합니다.
@@ -672,12 +672,12 @@ function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
               onClick={() => toggleBuild(build.id)}
               className={`inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition ${
                 active
-                  ? 'border-brand-blue bg-blue-50 text-brand-blue'
+                  ? 'border-[#de6c2d] bg-[#fff5ef] text-[#de6c2d]'
                   : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
               }`}
               title={build.name}
             >
-              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${active ? 'bg-brand-blue' : 'bg-slate-300'}`} />
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${active ? 'bg-[#de6c2d]' : 'bg-slate-300'}`} />
               <span className="truncate">{build.name}</span>
             </button>
           );
@@ -700,7 +700,7 @@ function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
                   <th key={col.build.id} scope="col" className="min-w-[140px] px-2 pb-3 align-bottom">
                     <div className="truncate text-sm font-black text-commerce-ink" title={col.build.name}>{col.build.name}</div>
                     <div className="mt-0.5 flex items-center gap-1">
-                      <span className="text-xs font-black text-brand-blue">{col.build.totalPrice.toLocaleString()}원</span>
+                      <span className="text-xs font-black text-[#de6c2d]">{col.build.totalPrice.toLocaleString()}원</span>
                       {comparing && lowestTotal !== null && col.build.totalPrice === lowestTotal ? (
                         <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] font-black text-slate-500">최저가</span>
                       ) : null}
@@ -830,7 +830,7 @@ function PriceAlertRow({ alert }: { alert: PriceAlert }) {
           <div className="flex flex-wrap items-center gap-2">
             <AlertStatusPill alert={alert} />
             <span className={`rounded px-2 py-1 text-[11px] font-black ${
-              achieved ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-50 text-brand-blue'
+              achieved ? 'bg-emerald-100 text-emerald-700' : 'bg-[#fff5ef] text-[#de6c2d]'
             }`}
             >
               {priceAlertDeltaText(alert)}
@@ -841,7 +841,7 @@ function PriceAlertRow({ alert }: { alert: PriceAlert }) {
         </div>
         <div className="shrink-0 text-right">
           <div className="text-xs font-black text-slate-500">현재가</div>
-          <div className="mt-1 text-lg font-black text-brand-blue">{alert.currentPrice.toLocaleString()}원</div>
+          <div className="mt-1 text-lg font-black text-[#de6c2d]">{alert.currentPrice.toLocaleString()}원</div>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -855,7 +855,7 @@ function PriceAlertRow({ alert }: { alert: PriceAlert }) {
         </div>
       </div>
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-        <div className={`h-full rounded-full ${achieved ? 'bg-emerald-500' : 'bg-brand-blue'}`} style={{ width: `${progress}%` }} />
+        <div className={`h-full rounded-full ${achieved ? 'bg-emerald-500' : 'bg-[#de6c2d]'}`} style={{ width: `${progress}%` }} />
       </div>
     </article>
   );
@@ -888,7 +888,7 @@ function SavedBuildGraphDialog({
       >
         <header className="flex items-start justify-between gap-4 border-b border-commerce-line px-4 py-3 sm:px-5">
           <div className="min-w-0">
-            <div className="text-xs font-black text-brand-blue">읽기 전용</div>
+            <div className="text-xs font-black text-[#de6c2d]">읽기 전용</div>
             <h2 className="mt-1 truncate text-lg font-black text-commerce-ink" title={build.name}>{build.name}</h2>
             <p className="mt-1 text-xs font-semibold text-slate-500">저장 견적의 부품 관계를 확인합니다. 이 팝업에서는 부품 교체나 담기 동작을 하지 않습니다.</p>
           </div>
@@ -896,7 +896,7 @@ function SavedBuildGraphDialog({
             type="button"
             aria-label="관계 그래프 닫기"
             onClick={onClose}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-commerce-line bg-white text-slate-500 hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-commerce-line bg-white text-slate-500 hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
           >
             <X size={18} aria-hidden="true" />
           </button>

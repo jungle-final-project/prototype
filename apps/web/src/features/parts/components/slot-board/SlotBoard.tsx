@@ -300,10 +300,10 @@ export function SlotBoard({
           aria-pressed={isMotherboard}
           onClick={toggleMotherboard}
           disabled={isMotherboardClosing}
-          className={`absolute bottom-4 right-4 z-30 hidden rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 lg:block ${
+          className={`absolute bottom-4 right-4 z-30 hidden rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] focus-visible:ring-offset-2 lg:block ${
             isMotherboard
-              ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
-              : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+              ? 'border-[#de6c2d] bg-[#de6c2d] text-white hover:bg-[#c45c22]'
+              : 'border-slate-200 bg-white text-slate-700 hover:border-[#de6c2d] hover:text-[#de6c2d]'
           }`}
         >
           {isMotherboard ? '실장도 접기' : '실장도 보기'}
@@ -315,10 +315,10 @@ export function SlotBoard({
           data-testid="relation-map-open"
           aria-pressed={isRelationMapVisible}
           onClick={toggleRelationMap}
-          className={`absolute bottom-4 left-4 z-30 hidden rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 lg:block ${
+          className={`absolute bottom-4 left-4 z-30 hidden rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] focus-visible:ring-offset-2 lg:block ${
             isRelationMapVisible
-              ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
-              : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+              ? 'border-[#de6c2d] bg-[#de6c2d] text-white hover:bg-[#c45c22]'
+              : 'border-slate-200 bg-white text-slate-700 hover:border-[#de6c2d] hover:text-[#de6c2d]'
           }`}
         >
           {isRelationMapVisible ? '기본 관계도 보기' : '영향 지도 보기'}
@@ -356,8 +356,8 @@ function SlotBoardModeSegments({
             role="radio"
             aria-checked={active}
             onClick={() => onChange?.(option.mode)}
-            className={`rounded-full px-2 py-0.5 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
-              active ? 'bg-brand-blue text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+            className={`rounded-full px-2 py-0.5 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] ${
+              active ? 'bg-[#de6c2d] text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
             }`}
           >
             {option.label}

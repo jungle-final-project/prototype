@@ -530,8 +530,8 @@ function PerfPanelBody({
                           onClick={() => setGameKey(g.key)}
                           className={`rounded-full border px-2 py-0.5 text-[9px] font-black transition ${
                             gameKey === g.key
-                              ? 'border-brand-blue bg-brand-blue text-white'
-                              : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
+                              ? 'border-[#de6c2d] bg-[#de6c2d] text-white'
+                              : 'border-commerce-line bg-white text-slate-500 hover:border-[#de6c2d]'
                           }`}
                         >
                           {g.label}
@@ -578,8 +578,8 @@ function PerfPanelBody({
                       onClick={() => setGameKey(g.key)}
                       className={`rounded-full border px-2 py-0.5 text-[9px] font-black transition ${
                         gameKey === g.key
-                          ? 'border-brand-blue bg-brand-blue text-white'
-                          : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
+                          ? 'border-[#de6c2d] bg-[#de6c2d] text-white'
+                          : 'border-commerce-line bg-white text-slate-500 hover:border-[#de6c2d]'
                       }`}
                     >
                       {g.label}
@@ -687,8 +687,8 @@ function PerfPanelBody({
             onClick={() => setGameKey(g.key)}
             className={`rounded-full border px-2.5 py-1 text-[11px] font-black transition ${
               gameKey === g.key
-                ? 'border-brand-blue bg-brand-blue text-white'
-                : 'border-commerce-line bg-white text-slate-600 hover:border-brand-blue'
+                ? 'border-[#de6c2d] bg-[#de6c2d] text-white'
+                : 'border-commerce-line bg-white text-slate-600 hover:border-[#de6c2d]'
             }`}
           >
             {g.label}
@@ -990,7 +990,7 @@ function CandidateCombo({
               }
             }}
             className={`rounded font-black transition ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-2.5 py-1 text-[10px]'} ${
-              category === pickerCategory ? 'bg-brand-blue text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
+              category === pickerCategory ? 'bg-[#de6c2d] text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
             {PART_CATEGORY_LABELS[pickerCategory]}

@@ -14,7 +14,7 @@ import type { PartRow, PartSearchParams, QuoteDraft, QuoteDraftItem } from '../.
 // /self-quote에서는 렌더링하지 않는다.
 
 const selfQuoteCategories = [
-  { label: '셀프 견적', value: '' },
+  { label: '전체', value: '' },
   { label: 'CPU', value: 'CPU' },
   { label: '메인보드', value: 'MOTHERBOARD' },
   { label: 'RAM', value: 'RAM' },
@@ -212,7 +212,7 @@ export function LegacySelfQuoteListSections() {
 
       <section className="min-w-0">
         <Panel title={categoryLabel(category)} subtitle="CPU/GPU/메인보드/파워/케이스/쿨러는 교체 저장, RAM/SSD는 여러 상품 추가가 가능합니다.">
-          <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px_128px]">
+          <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px]">
             <label className="flex min-h-11 items-center gap-2 rounded-md border border-commerce-line bg-white px-3 focus-within:border-commerce-ink focus-within:ring-4 focus-within:ring-blue-100">
               <Search size={17} className="text-slate-400" />
               <span className="sr-only">부품 검색</span>
@@ -228,9 +228,6 @@ export function LegacySelfQuoteListSections() {
                 <option value="name">이름순</option>
               </select>
             </label>
-            <button type="button" onClick={() => { selectCategory(''); updateQuery(''); }} className="min-h-11 rounded-md border border-commerce-line bg-white px-3 py-2 text-sm font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink">
-              전체 보기
-            </button>
           </div>
           {showPartsSkeleton ? <PartsTableSkeleton showCompatibility={Boolean(category)} /> : null}
           {isError && !data ? <div className="rounded-md border border-orange-200 bg-orange-50 p-5 text-sm text-orange-700">부품 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</div> : null}
@@ -464,7 +461,7 @@ function partRows(
           className={`rounded-md px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-[#ce7237] disabled:cursor-wait disabled:opacity-60 ${
             isSelected
               ? 'border border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100'
-              : 'bg-commerce-ink text-white hover:bg-slate-700'
+              : 'bg-[#de6c2d] text-white hover:bg-[#c45c22]'
           }`}
         >
           {isPending ? (isSelected ? '빼는 중' : isReplace ? '교체 중' : '담는 중') : isSelected ? '빼기' : isReplace ? '교체' : '담기'}
@@ -601,10 +598,10 @@ function SupplierCell({ part }: { part: PartRow }) {
 
 function categoryLabel(category: string) {
   if (!category) {
-    return '셀프 견적 / 전체 부품 목록';
+    return '전체 부품 목록';
   }
   const item = selfQuoteCategories.find((entry) => entry.value === category);
-  return item ? `${item.label} 부품 목록` : '셀프 견적 / 전체 부품 목록';
+  return item ? `${item.label} 부품 목록` : '전체 부품 목록';
 }
 
 function normalizeCategory(category: string | null) {

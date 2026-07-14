@@ -366,7 +366,7 @@ function SelfQuoteSlotBoardPage() {
                     type="button"
                     data-testid="quote-ai-start"
                     onClick={() => openAiAssistant()}
-                    className="rounded-md bg-brand-blue px-4 py-2 text-xs font-black text-white transition hover:bg-blue-700"
+                    className="rounded-md bg-[#de6c2d] px-4 py-2 text-xs font-black text-white transition hover:bg-[#c45c22]"
                   >
                     AI로 시작하기
                   </button>
@@ -692,7 +692,7 @@ function QuoteChecklist({
                         ? 'border-red-200 bg-red-50/50 hover:border-red-400'
                         : hasWarn
                           ? 'border-amber-200 bg-amber-50/50 hover:border-amber-400'
-                          : 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-400'
+                          : 'border-emerald-100 bg-white hover:border-emerald-300'
                       : isNext
                         ? 'slot-empty-pulse slot-hint-shimmer border-brand-blue bg-blue-50/50'
                         : 'border-dashed border-slate-300 bg-white hover:border-slate-400'
