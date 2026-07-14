@@ -52,12 +52,6 @@ type CenterScrollbarState = {
 
 const LOGIN_REQUIRED_MESSAGE = '로그인이 필요합니다. 다시 로그인해 주세요.';
 const GENERIC_SUBMIT_ERROR_MESSAGE = 'AI 추천 API 호출에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-const COMMON_QUICK_PROMPTS = [
-  { label: '200만원 게이밍 PC', prompt: '200만원으로 게이밍 PC 추천해줘' },
-  { label: '견적 마저 채우기', prompt: '지금 견적 기준으로 나머지 부품 채워줘' },
-  { label: '성능 비교', prompt: 'CPU를 9700X로 바꾸면 성능 어떻게 돼?' },
-  { label: 'PC 문제 상담', prompt: '게임하다 화면이 자꾸 멈춰' }
-];
 
 const ASSISTANT_DESKTOP_QUERY = '(min-width: 768px)';
 const CENTER_SCROLLBAR_TRACK_TOP = 8;
@@ -624,7 +618,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     const centeredMessages = session.messages.filter((message) => message.id !== 'ai-intro');
     const hasMessages = centeredMessages.length > 0;
     const centeredPromptForm = (
-      <form onSubmit={submitPrompt} className="mx-auto w-full max-w-[896px]">
+      <form autoComplete="off" onSubmit={submitPrompt} className="mx-auto w-full max-w-[896px]">
         {submitError ? (
           <div role="alert" className="mb-3 rounded-xl bg-red-50 px-4 py-3 text-base font-bold text-red-700">
             {submitError}
@@ -648,6 +642,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           <input
             id="ai-build-chat-input"
             aria-label="AI에게 PC 견적 질문"
+            autoComplete="off"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             disabled={isSending}
@@ -815,36 +810,18 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       ) : null}
 
       <div className={`${bodyClassName} ${isDockedAssistant ? 'bg-[#f7f7f8]' : ''}`}>
-        <div className={isDockedAssistant ? 'border-b border-slate-100 bg-[#f7f7f8] px-4 py-3' : 'border-b border-slate-100 bg-[#f8fbff] px-4 py-3'}>
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-[11px] font-black text-slate-400">이렇게 물어보세요</div>
-            {isDockedAssistant ? (
-              <button
-                type="button"
-                aria-label="AI 견적 챗봇 닫기"
-                onClick={() => setOpen(false)}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-slate-500 transition hover:bg-slate-200 hover:text-slate-800 focus:outline-none focus:ring-4 focus:ring-orange-100"
-              >
-                <X size={17} />
-              </button>
-            ) : null}
+        {isDockedAssistant ? (
+          <div className="flex justify-end px-4 pt-2">
+            <button
+              type="button"
+              aria-label="AI 견적 챗봇 닫기"
+              onClick={() => setOpen(false)}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-slate-500 transition hover:bg-slate-200 hover:text-slate-800 focus:outline-none focus:ring-4 focus:ring-orange-100"
+            >
+              <X size={17} />
+            </button>
           </div>
-          <div className={isDockedAssistant ? 'grid grid-cols-[1.35fr_1.15fr_0.8fr_1fr] gap-1.5' : 'flex flex-wrap gap-2'}>
-            {COMMON_QUICK_PROMPTS.map((example) => (
-              <button
-                key={example.label}
-                type="button"
-                onClick={() => setPrompt(example.prompt)}
-                className={isDockedAssistant
-                  ? 'min-w-0 whitespace-nowrap rounded-full border border-slate-200 bg-white px-1.5 py-1.5 text-[10px] font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100'
-                  : 'rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100'}
-              >
-                {example.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
+        ) : null}
         <div data-testid="ai-chat-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
           {session.messages.map((message) => (
             <ChatMessage
@@ -863,7 +840,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           <div ref={messagesEndRef} />
         </div>
 
-        <form onSubmit={submitPrompt} className={isDockedAssistant ? 'border-t border-slate-200 bg-[#f7f7f8] p-3' : 'border-t border-slate-200 bg-white p-3'}>
+        <form autoComplete="off" onSubmit={submitPrompt} className={isDockedAssistant ? 'border-t border-slate-200 bg-[#f7f7f8] p-3' : 'border-t border-slate-200 bg-white p-3'}>
           {submitError ? (
             <div role="alert" className="mb-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
               {submitError}
@@ -887,6 +864,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
             <input
               id="ai-build-chat-input"
               aria-label="AI 챗봇에게 PC 사양 질문"
+              autoComplete="off"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               disabled={isSending}
@@ -902,12 +880,6 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
               <Send size={17} />
             </button>
           </div>
-          {!isDockedAssistant ? (
-            <div className="mt-2 flex items-center gap-2 text-[11px] font-bold text-slate-500">
-              <CheckCircle2 size={14} className="text-commerce-green" />
-              추천은 서버의 부품 데이터 기준으로 계산되며 대화 기록은 브라우저에만 임시 저장됩니다(창을 닫으면 사라집니다).
-            </div>
-          ) : null}
         </form>
       </div>
     </section>
@@ -1106,6 +1078,15 @@ const ChatMessage = memo(function ChatMessage({
 }) {
   const isUser = message.role === 'user';
   const isLarge = size === 'large';
+  const messageSurfaceClassName = isUser
+    ? `${isLarge ? 'rounded-[22px] px-5 py-4 text-[20px] leading-8' : 'rounded-2xl px-3 py-2 text-sm leading-6'} bg-brand-blue text-white shadow-sm`
+    : `${isLarge ? 'px-1 py-2 text-[20px] leading-8 text-white' : 'px-1 py-1 text-sm leading-6 text-slate-700'}`;
+  const assistantLabelClassName = isLarge
+    ? 'mb-2 gap-3 text-[15px] text-white/85'
+    : 'mb-1 gap-2 text-[11px] text-brand-blue';
+  const assistantIconClassName = isLarge
+    ? 'h-7 w-7 bg-white/10 text-white'
+    : 'h-5 w-5 bg-blue-50 text-brand-blue';
 
   // 리빌 타임라인: 문장들 → 카드(가이드/시뮬/평가/견적) 순서로 한 스텝씩 노출한다.
   const sentences = useMemo(() => (isUser ? [] : splitIntoSentences(message.text)), [isUser, message.text]);
@@ -1131,10 +1112,14 @@ const ChatMessage = memo(function ChatMessage({
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-full ${isUser ? 'w-fit max-w-[86%]' : 'w-full'}`}>
-        <div className={`${isLarge ? 'rounded-[22px] px-5 py-4 text-[20px] leading-8' : 'rounded-2xl px-3 py-2 text-sm leading-6'} shadow-sm ${isUser ? 'bg-brand-blue text-white' : 'border border-slate-200 bg-white text-slate-700'}`}>
+        <div
+          data-testid={isUser ? 'ai-chat-message-user' : 'ai-chat-message-assistant'}
+          data-message-surface={isUser ? 'bubble' : 'plain'}
+          className={messageSurfaceClassName}
+        >
           {!isUser ? (
-            <div className={`${isLarge ? 'mb-2 gap-3 text-[15px]' : 'mb-1 gap-2 text-[11px]'} flex items-center font-black text-brand-blue`}>
-              <span className={`${isLarge ? 'h-7 w-7' : 'h-5 w-5'} grid place-items-center rounded-full bg-blue-50 text-brand-blue`}>
+            <div className={`${assistantLabelClassName} flex items-center font-black`}>
+              <span className={`${assistantIconClassName} grid place-items-center rounded-full`}>
                 <Sparkles size={isLarge ? 17 : 12} />
               </span>
               {message.supportGuidance ? 'PC 상태 안내' : message.buildAssessment ? '견적 점수 설명' : message.simulation ? '성능 시뮬레이션' : 'AI 견적 어시스턴트'}
@@ -1247,16 +1232,17 @@ function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSuppo
   return (
     <section
       data-testid="ai-support-guidance"
-      className={`${isLarge ? 'mt-4 p-5' : 'mt-2 p-3'} rounded-lg border border-cyan-200 bg-cyan-50/70`}
+      data-response-surface="plain"
+      className={`${isLarge ? 'mt-4 px-1 py-2' : 'mt-2 px-1 py-2'}`}
       aria-label={guidance.title}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <LifeBuoy size={isLarge ? 20 : 16} className="shrink-0 text-cyan-700" />
-            <h3 className={`${isLarge ? 'text-lg' : 'text-sm'} font-black text-commerce-ink`}>{guidance.title}</h3>
+            <h3 className={`${isLarge ? 'text-lg text-white' : 'text-sm text-commerce-ink'} font-black`}>{guidance.title}</h3>
           </div>
-          <p className={`${isLarge ? 'mt-2 text-base leading-7' : 'mt-1 text-xs leading-5'} break-keep font-semibold text-slate-600`}>
+          <p className={`${isLarge ? 'mt-2 text-base leading-7 text-white/80' : 'mt-1 text-xs leading-5 text-slate-600'} break-keep font-semibold`}>
             {guidance.summary}
           </p>
         </div>
@@ -1279,7 +1265,7 @@ function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSuppo
         </div>
       ) : null}
 
-      <ul className={`${isLarge ? 'mt-4 gap-2 text-sm' : 'mt-3 gap-1.5 text-xs'} grid text-slate-700`}>
+      <ul className={`${isLarge ? 'mt-4 gap-2 text-sm text-white/85' : 'mt-3 gap-1.5 text-xs text-slate-700'} grid`}>
         {guidance.beforeDiagnosisChecks.map((check) => (
           <li key={check} className="flex items-start gap-2">
             <CheckCircle2 size={isLarge ? 17 : 14} className="mt-0.5 shrink-0 text-cyan-700" />
@@ -1325,7 +1311,7 @@ function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSuppo
         </p>
       ) : null}
 
-      <p className={`${isLarge ? 'mt-4 text-xs' : 'mt-3 text-[10px]'} break-keep text-slate-500`}>{guidance.disclaimer}</p>
+      <p className={`${isLarge ? 'mt-4 text-xs text-white/60' : 'mt-3 text-[10px] text-slate-500'} break-keep`}>{guidance.disclaimer}</p>
     </section>
   );
 }
@@ -1335,28 +1321,29 @@ function BuildAssessmentCard({ assessment, size = 'default' }: { assessment: AiB
   return (
     <section
       data-testid="ai-build-assessment"
-      className={`${isLarge ? 'mt-4 p-5' : 'mt-2 p-3'} rounded-lg border border-blue-100 bg-blue-50/70`}
+      data-response-surface="plain"
+      className={`${isLarge ? 'mt-4 px-1 py-2' : 'mt-2 px-1 py-2'}`}
       aria-label={`현재 견적 종합 점수 ${assessment.score}점 / ${assessment.maxScore}점`}
     >
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <p className={`${isLarge ? 'text-base' : 'text-xs'} font-black text-brand-blue`}>현재 견적 종합 점수</p>
-          <p className={`${isLarge ? 'text-4xl' : 'text-2xl'} mt-1 font-black text-commerce-ink`}>
-            {assessment.score}<span className={`${isLarge ? 'text-base' : 'text-xs'} ml-1 text-slate-400`}>/ {assessment.maxScore}</span>
+          <p className={`${isLarge ? 'text-base text-blue-200' : 'text-xs text-brand-blue'} font-black`}>현재 견적 종합 점수</p>
+          <p className={`${isLarge ? 'text-4xl text-white' : 'text-2xl text-commerce-ink'} mt-1 font-black`}>
+            {assessment.score}<span className={`${isLarge ? 'text-base text-white/60' : 'text-xs text-slate-400'} ml-1`}>/ {assessment.maxScore}</span>
           </p>
         </div>
         <span className="rounded-full border border-blue-200 bg-white px-2 py-1 text-[11px] font-black text-brand-blue">
           {assessment.grade} · {assessment.label}
         </span>
       </div>
-      <p className={`${isLarge ? 'text-base leading-7' : 'text-xs leading-5'} mt-3 break-keep font-bold text-slate-700`}>
+      <p className={`${isLarge ? 'text-base leading-7 text-white/85' : 'text-xs leading-5 text-slate-700'} mt-3 break-keep font-bold`}>
         {assessment.summary}
       </p>
-      {assessment.strengths.length ? <AssessmentList title="강점" items={assessment.strengths} tone="positive" /> : null}
-      {assessment.cautions.length ? <AssessmentList title="주의점" items={assessment.cautions} tone="caution" /> : null}
+      {assessment.strengths.length ? <AssessmentList title="강점" items={assessment.strengths} tone="positive" size={size} /> : null}
+      {assessment.cautions.length ? <AssessmentList title="주의점" items={assessment.cautions} tone="caution" size={size} /> : null}
       {assessment.recommendations.length ? (
-        <div className="mt-3 border-t border-blue-100 pt-3">
-          <p className="text-[11px] font-black text-slate-500">개선 우선순위</p>
+        <div className={`${isLarge ? 'border-white/20' : 'border-blue-100'} mt-3 border-t pt-3`}>
+          <p className={`${isLarge ? 'text-white/70' : 'text-slate-500'} text-[11px] font-black`}>개선 우선순위</p>
           <ol className="mt-1.5 space-y-1.5">
             {assessment.recommendations.map((item) => (
               <li key={`${item.priority}-${item.category}`} className="flex gap-2 rounded bg-white px-2.5 py-2 text-xs leading-5 text-slate-700">
@@ -1371,14 +1358,16 @@ function BuildAssessmentCard({ assessment, size = 'default' }: { assessment: AiB
   );
 }
 
-function AssessmentList({ title, items, tone }: {
+function AssessmentList({ title, items, tone, size = 'default' }: {
   title: string;
   items: AiBuildAssessment['strengths'];
   tone: 'positive' | 'caution';
+  size?: AiChatMessageSize;
 }) {
+  const isLarge = size === 'large';
   return (
     <div className="mt-3">
-      <p className="text-[11px] font-black text-slate-500">{title}</p>
+      <p className={`${isLarge ? 'text-white/70' : 'text-slate-500'} text-[11px] font-black`}>{title}</p>
       <ul className="mt-1.5 space-y-1.5">
         {items.map((item) => (
           <li
@@ -1410,14 +1399,18 @@ function SimulationResultCard({ simulation, size = 'default' }: { simulation: Ai
   );
 
   return (
-    <section className={`${isLarge ? 'mt-4 rounded-xl p-5' : 'mt-2 rounded-lg p-3'} border border-blue-100 bg-blue-50`}>
+    <section
+      data-testid="ai-simulation-result"
+      data-response-surface="plain"
+      className={`${isLarge ? 'mt-4 px-1 py-2' : 'mt-2 px-1 py-2'}`}
+    >
       <div className={`${isLarge ? 'gap-3' : 'gap-2'} flex flex-wrap items-start justify-between`}>
         <div className="min-w-0">
-          <div className={`${isLarge ? 'gap-3 text-base' : 'gap-2 text-xs'} flex items-center font-black text-brand-blue`}>
+          <div className={`${isLarge ? 'gap-3 text-base text-blue-200' : 'gap-2 text-xs text-brand-blue'} flex items-center font-black`}>
             <BarChart3 size={isLarge ? 20 : 14} />
             성능 시뮬레이션
           </div>
-          <div className={`${isLarge ? 'mt-2 text-[20px] leading-8' : 'mt-1 text-sm'} break-keep font-black text-commerce-ink`}>
+          <div className={`${isLarge ? 'mt-2 text-[20px] leading-8 text-white' : 'mt-1 text-sm text-commerce-ink'} break-keep font-black`}>
             {simulation.currentPart.name} → {simulation.targetPart.name}
           </div>
         </div>
@@ -1492,7 +1485,7 @@ function SimulationResultCard({ simulation, size = 'default' }: { simulation: Ai
           {simulation.warnings[0]}
         </div>
       ) : null}
-      <p className={`${isLarge ? 'mt-4 text-[15px] leading-7' : 'mt-3 text-[11px] leading-5'} break-keep font-bold text-slate-500`}>
+      <p className={`${isLarge ? 'mt-4 text-[15px] leading-7 text-white/65' : 'mt-3 text-[11px] leading-5 text-slate-500'} break-keep font-bold`}>
         {simulation.disclaimer
           ?? '본 수치는 내부 벤치마크 DB 기준 참고용 추정치입니다. 실제 성능은 게임 버전, 그래픽 옵션, 드라이버, 해상도, 냉각·전원 환경에 따라 달라질 수 있습니다.'}
       </p>

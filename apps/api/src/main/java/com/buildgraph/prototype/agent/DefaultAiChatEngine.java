@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -37,7 +38,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final String BUILD_CHAT_SCHEMA_NAME = "buildgraph_ai_build_chat_plan";
     private static final String BUILD_RECOMMENDATION_CONTEXT_SCHEMA_NAME = "buildgraph_ai_build_recommendation_context";
     private static final String BUILD_ASSESSMENT_SCHEMA_NAME = "buildgraph_build_assessment_explanation";
+    private static final String LOW_INFORMATION_ACK_SCHEMA_NAME = "buildgraph_low_information_acknowledgement";
     private static final int BUILD_RECOMMENDATION_CONTEXT_MAX_OUTPUT_TOKENS = 650;
+    private static final int LOW_INFORMATION_ACK_MAX_OUTPUT_TOKENS = 96;
     private static final String CHAT_RAG_ROOT_ID = "00000000-0000-0000-0000-000000000000";
     private static final String REQUIREMENT_PARSE_SYSTEM_PROMPT = """
             당신은 BuildGraph AI의 견적 생성 입력서를 만드는 엔진입니다.
@@ -95,6 +98,14 @@ public class DefaultAiChatEngine implements AiChatEngine {
             serverFacts.buildAssessment에 이미 확정된 사실만 사용해 짧은 한국어 문장 한두 개를 작성하십시오.
             제공되지 않은 숫자, 상품명, 원인, 조치를 만들지 마십시오.
             부품을 교체·저장·적용했다고 말하지 마십시오.
+            출력은 서버가 제공한 JSON schema를 반드시 따릅니다.
+            """;
+    private static final String LOW_INFORMATION_ACK_SYSTEM_PROMPT = """
+            당신은 BuildGraph 견적 상담의 짧은 맥락 확인 문장 편집기입니다.
+            사용자가 명시한 대상, 관계, 학년, 선물 같은 상황만 자연스러운 한국어 한 문장으로 되받으십시오.
+            사용자가 말하지 않은 게임, 학습, 사무 등 용도와 예산을 추측하지 마십시오.
+            가격, 부품, 성능, 추천안, 질문을 만들지 마십시오. 60자 이내의 평서문 한 문장만 작성하십시오.
+            예: "중3 아들 피시 맞출건데" -> "중학교 3학년 아드님이 사용할 PC를 찾고 계시는군요."
             출력은 서버가 제공한 JSON schema를 반드시 따릅니다.
             """;
     private static final List<String> BUILD_CATEGORIES = List.of(
@@ -307,6 +318,51 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 List.of(),
                 List.of(),
                 null
+        );
+    }
+
+    @Override
+    public Optional<String> acknowledgeLowInformationContext(
+            AiChatEngineRequest request,
+            String requestedAiProfile
+    ) {
+        String message = requireText(request == null ? null : request.message(), "챗봇 메시지가 필요합니다.");
+        if (!openAiResponsesClient.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED, "OPENAI_API_KEY가 필요합니다.");
+        }
+        AiProfileDefinition profile = requireBuildChatProfile(requestedAiProfile);
+        LlmResponseResult result = openAiResponsesClient.createStructuredJsonResult(
+                LOW_INFORMATION_ACK_SYSTEM_PROMPT,
+                json(MockData.map("rawMessage", message)),
+                LOW_INFORMATION_ACK_SCHEMA_NAME,
+                lowInformationAcknowledgementSchema(),
+                profile.model(),
+                profile.reasoningEffort(),
+                Math.min(LOW_INFORMATION_ACK_MAX_OUTPUT_TOKENS, profile.maxOutputTokens())
+        );
+        String acknowledgement = requireText(
+                parseJsonObject(result.text()).get("acknowledgement"),
+                "저정보 요청 맥락 확인 문장이 필요합니다."
+        );
+        log.info(
+                "Build Chat lowInformationAck latencyMs={} model={} reasoningEffort={} outputTokens={} reasoningTokens={}",
+                result.latencyMs(),
+                result.model(),
+                result.reasoningEffort(),
+                result.outputTokens(),
+                result.reasoningTokens()
+        );
+        return Optional.of(acknowledgement);
+    }
+
+    private static Map<String, Object> lowInformationAcknowledgementSchema() {
+        return MockData.map(
+                "type", "object",
+                "additionalProperties", false,
+                "properties", MockData.map(
+                        "acknowledgement", MockData.map("type", "string")
+                ),
+                "required", List.of("acknowledgement")
         );
     }
 

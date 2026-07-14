@@ -6,7 +6,7 @@ type AiChatPendingBubbleProps = {
   size?: AiChatPendingBubbleSize;
 };
 
-// AI 챗봇이 응답을 준비하는 동안 대화 안에 표시하는 임시 assistant 말풍선.
+// AI 챗봇이 응답을 준비하는 동안 대화 안에 표시하는 임시 assistant 상태 행.
 // 실제 진행률을 알 수 없으므로 가짜 %나 내부 단계(RAG/DB/LLM) 문구는 노출하지 않는다.
 // 애니메이션은 Tailwind 내장(motion-safe:animate-bounce)만 사용 — reduced-motion에서는 자동으로 정지한다.
 export function AiChatPendingBubble({ excerpt, size = 'default' }: AiChatPendingBubbleProps) {
@@ -14,18 +14,19 @@ export function AiChatPendingBubble({ excerpt, size = 'default' }: AiChatPending
   return (
     <div
       data-testid="ai-chat-pending"
+      data-response-surface="plain"
       role="status"
       aria-live="polite"
       className={
         isLarge
-          ? 'rounded-[22px] bg-slate-50 px-5 py-4 text-slate-500'
-          : 'rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-500 shadow-sm'
+          ? 'px-1 py-2 text-white/70'
+          : 'px-1 py-1 text-slate-500'
       }
     >
       {excerpt ? (
         <p
           data-testid="ai-chat-pending-excerpt"
-          className={isLarge ? 'text-[18px] font-bold leading-7 text-slate-600' : 'text-[13px] font-bold text-slate-600'}
+          className={isLarge ? 'text-[18px] font-bold leading-7 text-white/85' : 'text-[13px] font-bold text-slate-600'}
         >
           “{excerpt}”
         </p>
@@ -39,7 +40,7 @@ export function AiChatPendingBubble({ excerpt, size = 'default' }: AiChatPending
             <span
               key={index}
               data-testid="ai-chat-pending-dot"
-              className={`inline-block rounded-full bg-slate-400 motion-safe:animate-bounce ${isLarge ? 'h-2 w-2' : 'h-1.5 w-1.5'}`}
+              className={`inline-block rounded-full motion-safe:animate-bounce ${isLarge ? 'h-2 w-2 bg-white/60' : 'h-1.5 w-1.5 bg-slate-400'}`}
               style={{ animationDelay: `${index * 150}ms` }}
             />
           ))}

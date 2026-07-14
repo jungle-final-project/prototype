@@ -36,6 +36,8 @@ class BuildChatIntentRouterTest {
                 c("최상급 CPU와 GPU로 추천", BuildChatIntent.BUILD_RECOMMEND),
                 // 예산·용도·모델 번호가 전혀 없는 동사+명사 요청은 이제 되묻기로 보낸다 (역질문 흐름)
                 c("오래 쓸 수 있게 업그레이드 여유 있는 구성", BuildChatIntent.ASK_CLARIFICATION),
+                c("중3 아들 피시 맞출건데 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
+                c("대학 입학하는 조카에게 컴퓨터를 선물하려고 해", BuildChatIntent.ASK_CLARIFICATION),
                 c("컴퓨터 하나 맞춰줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("해상도 좋은 피시 맞춰줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("PC 견적 짜줘", BuildChatIntent.ASK_CLARIFICATION),
@@ -306,6 +308,32 @@ class BuildChatIntentRouterTest {
                 "램 위치가 어디 있어?"
         );
         assertThat(withoutCapability.intent()).isEqualTo(BuildChatIntent.UNSUPPORTED);
+    }
+
+    @Test
+    void marksExplicitRecipientContextForContextualClarification() {
+        BuildChatIntentDecision decision = router.decide(
+                Map.of("message", "중3 아들 피시 맞출건데 추천해줘"),
+                "중3 아들 피시 맞출건데 추천해줘"
+        );
+
+        assertThat(decision.intent()).isEqualTo(BuildChatIntent.ASK_CLARIFICATION);
+        assertThat(decision.ambiguityReasons())
+                .contains("LOW_INFORMATION", "RECIPIENT_CONTEXT")
+                .doesNotContain("USAGE_ONLY");
+
+        BuildChatIntentDecision recipientWithUseCase = router.decide(
+                Map.of("message", "중3 아들이 롤 할 피시 추천해줘"),
+                "중3 아들이 롤 할 피시 추천해줘"
+        );
+        assertThat(recipientWithUseCase.ambiguityReasons())
+                .contains("RECIPIENT_CONTEXT", "USAGE_ONLY");
+
+        BuildChatIntentDecision balanceRequest = router.decide(
+                Map.of("message", "균형 있는 PC 추천해줘"),
+                "균형 있는 PC 추천해줘"
+        );
+        assertThat(balanceRequest.ambiguityReasons()).doesNotContain("RECIPIENT_CONTEXT");
     }
 
     private static Case c(String message, BuildChatIntent intent) {

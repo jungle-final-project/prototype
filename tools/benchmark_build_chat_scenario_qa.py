@@ -429,12 +429,16 @@ def build_fact_failures(
     forbidden_build_terms = [
         str(term).lower().replace(" ", "") for term in expected.get("forbiddenBuildTerms") or []
     ]
+    required_build_categories = {str(value) for value in expected.get("requiredBuildCategories") or []}
     warnings = {str(value) for value in response.get("warnings") or []}
     if len(builds) > int(expected.get("maxBuilds", 3)):
         failures.append("BUILD_COUNT_EXCEEDED")
     for build in builds:
         computed_total = 0
         build_text = json.dumps(build.get("items") or [], ensure_ascii=False).lower().replace(" ", "")
+        build_categories = {str(item.get("category") or "") for item in build.get("items") or []}
+        if required_build_categories and not required_build_categories.issubset(build_categories):
+            failures.append("BUILD_CATEGORIES_MISSING")
         for item in build.get("items") or []:
             part_id = str(item.get("partId") or "")
             detail = client.part(part_id) if part_id else None
@@ -525,6 +529,23 @@ def outcome_failures(response: dict[str, Any], expected: dict[str, Any]) -> tupl
         actual_slots = set(clarification_payload.get("missingSlots") or []) if isinstance(clarification_payload, dict) else set()
         if not required_slots.issubset(actual_slots):
             failures.append("CLARIFICATION_SLOTS_MISMATCH")
+    forbidden_slots = {str(value) for value in expected.get("forbiddenMissingSlots") or []}
+    if forbidden_slots and isinstance(clarification_payload, dict):
+        actual_slots = set(clarification_payload.get("missingSlots") or [])
+        if forbidden_slots & actual_slots:
+            failures.append("FORBIDDEN_CLARIFICATION_SLOT")
+    if expected.get("forbidClarification") and clarification:
+        failures.append("UNEXPECTED_CLARIFICATION")
+    normalized_message = str(response.get("message") or "").lower().replace(" ", "")
+    required_message_terms = [str(value).lower().replace(" ", "") for value in expected.get("messageContainsAll") or []]
+    if required_message_terms and not all(term in normalized_message for term in required_message_terms):
+        failures.append("REQUIRED_MESSAGE_TERM_MISSING")
+    alternative_message_terms = [str(value).lower().replace(" ", "") for value in expected.get("messageContainsAny") or []]
+    if alternative_message_terms and not any(term in normalized_message for term in alternative_message_terms):
+        failures.append("REQUIRED_MESSAGE_ALTERNATIVE_MISSING")
+    required_quick_replies = {str(value) for value in expected.get("requiredQuickReplies") or []}
+    if required_quick_replies and not required_quick_replies.issubset({str(value) for value in response.get("quickReplies") or []}):
+        failures.append("REQUIRED_QUICK_REPLY_MISSING")
     if outcome == "BUILDS" and not builds:
         failures.append("EXPECTED_BUILDS_MISSING")
     elif outcome == "BUILDS_OR_NEXT_ACTION" and not (builds or next_action):

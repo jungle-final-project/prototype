@@ -35,6 +35,49 @@ class StatefulCorpusTest(unittest.TestCase):
         self.assertEqual(20, sum(bool(row["webReplay"]) for row in rows))
         self.assertTrue(all(3 <= len(row["turns"]) <= 5 for row in rows))
 
+    def test_recipient_usecase_budget_chain_is_a_core_guarantee(self):
+        rows = self.generator.phase1_cases()
+        case = next(row for row in rows if row["id"] == "state-context-01-recipient-usecase-budget")
+        self.assertEqual("EMPTY", case["setupDraft"]["template"])
+        self.assertEqual("HIGH", case["risk"])
+        self.assertTrue(case["webReplay"])
+        self.assertIn("CORE_GUARANTEE", case["tags"])
+        self.assertEqual([
+            "중3 아들 피시 맞춰줄건데 피시 추천해줘",
+            "게임용으로 쓸듯",
+            "400만원 게이밍 PC 추천해줘",
+        ], [turn["message"] for turn in case["turns"]])
+        self.assertEqual(["budget", "useCase"], case["turns"][0]["expect"]["requiredMissingSlots"])
+        self.assertEqual(["budget"], case["turns"][1]["expect"]["requiredMissingSlots"])
+        self.assertEqual(3_500_000, case["turns"][2]["expect"]["minTotal"])
+        self.assertEqual(4_500_000, case["turns"][2]["expect"]["maxTotal"])
+
+    def test_core_conversation_expectations_detect_lost_recipient_context(self):
+        expected = {
+            "outcome": "CLARIFICATION",
+            "messageContainsAll": ["게이밍", "예산"],
+            "messageContainsAny": ["아들", "아드님"],
+            "requiredMissingSlots": ["budget"],
+            "forbiddenMissingSlots": ["useCase"],
+            "requiredQuickReplies": ["200만원 게이밍 PC 추천해줘"],
+        }
+        valid = {
+            "answerType": "GENERAL",
+            "message": "좋아요. 아드님이 사용하실 게이밍 PC로 맞출게요. 이제 예산만 알려주세요.",
+            "builds": [],
+            "warnings": ["LOW_INFORMATION"],
+            "quickReplies": ["200만원 게이밍 PC 추천해줘"],
+            "clarification": {"missingSlots": ["budget"], "originalMessage": "중3 아들 PC 게임용"},
+        }
+        failures, _ = self.audit.outcome_failures(valid, expected)
+        self.assertEqual([], failures)
+        broken = dict(valid)
+        broken["message"] = "용도와 예산을 다시 알려주세요."
+        broken["clarification"] = {"missingSlots": ["budget", "useCase"], "originalMessage": "게임용"}
+        failures, _ = self.audit.outcome_failures(broken, expected)
+        self.assertIn("REQUIRED_MESSAGE_ALTERNATIVE_MISSING", failures)
+        self.assertIn("FORBIDDEN_CLARIFICATION_SLOT", failures)
+
     def test_all_corpora_are_independent_hundred_case_sets(self):
         phase1 = self.generator.phase1_cases()
         phase2 = self.generator.phase2_cases()
@@ -85,6 +128,13 @@ class StatefulCorpusTest(unittest.TestCase):
             "attempts": [{"turns": [{"turn": 3, "failures": ["CATEGORY_MISMATCH"]}]}],
         }
         self.assertEqual(["BG-STATE-02"], self.audit.root_cause_ids(follow_up))
+
+    def test_report_path_accepts_relative_results_directories(self):
+        relative = ROOT / ".qa-results" / "stateful-core-recipient" / "replay.json"
+        self.assertEqual(
+            ".qa-results/stateful-core-recipient/replay.json",
+            self.audit.report_path(relative),
+        )
 
 
 if __name__ == "__main__":

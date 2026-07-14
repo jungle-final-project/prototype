@@ -53,6 +53,9 @@ HARD_INVARIANT_FAILURES = {
     "UNKNOWN_PART", "PART_NAME_MISMATCH", "PART_PRICE_MISMATCH", "BUILD_TOTAL_MISMATCH",
     "TOOL_FAIL_RECOMMENDED", "GRAPH_FAIL_RECOMMENDED", "PUBLIC_ACTIONS_EXPOSED",
     "SIMULATION_MUTATION", "BOARD_FOCUS_MUTATION", "SINGLE_SLOT_DUPLICATED",
+    "BUILD_CATEGORIES_MISSING", "FORBIDDEN_CLARIFICATION_SLOT", "UNEXPECTED_CLARIFICATION",
+    "REQUIRED_MESSAGE_TERM_MISSING", "REQUIRED_MESSAGE_ALTERNATIVE_MISSING",
+    "REQUIRED_QUICK_REPLY_MISSING",
 }
 
 
@@ -757,12 +760,20 @@ def root_cause_ids(row: dict[str, Any]) -> list[str]:
     return sorted(causes)
 
 
+def report_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def write_outputs(results: list[dict[str, Any]], summary: dict[str, Any], args: argparse.Namespace) -> tuple[Path, Path, Path]:
     now = dt.datetime.now(KST)
     date = now.strftime("%Y%m%d")
     suffix = f"-{args.report_suffix.strip('-')}" if args.report_suffix else ""
-    output_dir = Path(args.output_dir)
-    results_dir = Path(args.results_dir)
+    output_dir = Path(args.output_dir).resolve()
+    results_dir = Path(args.results_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"build-chat-stateful-audit-{date}{suffix}.json"
@@ -855,7 +866,7 @@ def write_outputs(results: list[dict[str, Any]], summary: dict[str, Any], args: 
         f"- 최대: **{summary['latencyDiagnostic']['maxMs'] / 1000:.3f}초**", "",
         "## 원본 증거", "",
         f"전체 request/response, draft 전후 fingerprint, Tool 결과, 2회 재현 기록은 `{json_path.name}`에 있다.",
-        f"웹 재현 20개 입력은 `{replay_path.relative_to(ROOT).as_posix()}`에 생성했다.",
+        f"웹 재현 입력은 `{report_path(replay_path)}`에 생성했다.",
     ])
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return md_path, json_path, replay_path

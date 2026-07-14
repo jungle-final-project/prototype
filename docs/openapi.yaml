@@ -408,7 +408,7 @@ paths:
   /api/ai/build-chat:
     post:
       summary: AI 챗봇 LLM/RAG 기반 Build 추천
-      description: AI 챗봇 Build Chat. 지원 범위는 예산/현재 견적 기반 추천 조합 생성, 부품 교체 성능 시뮬레이션(수랭/공랭·PCIe 세대·통풍 속성 요청의 1:1 스펙비교 포함), 견적 변경 미리보기, 단일 부품 제약 역제안, 다중부품 감액 안내, 명확화 질문이다. 예산·용도가 모두 없는 모호 요청과 예산 없이 용도만 있는 요청은 견적 없이 되묻기(quickReplies 칩 + clarification)로 응답하고, 프론트가 clarificationContext를 에코한 후속 답변과 합성해 추천한다. 합성 후에도 정보가 부족하면 기본 예산을 가정하지 않고 사용자 원문을 인용해 한 번 더 정확히 묻는다(quickReplies 4칩 + clarification={missingSlots:[budget,useCase], originalMessage}). 무예산 용도-only 되묻기에는 예산대 방향 칩 4종("100/200/300만원대로 추천해줘", "예산 무관 고성능으로 추천해줘")이 붙는다. 화면 이동 등 범위 밖 요청도 즉답 거절하지 않고 LLM으로 강등해 맥락 답변을 시도하며, LLM 호출이 실패한 경우에만 warnings=[UNSUPPORTED_INTENT]와 기능 안내 quickReplies 3종을 담은 거절(GENERAL)로 응답한다. 견적초안 변경 요청은 builds에 변경 미리보기 카드 1장(tier=draft-edit, badges=[DRAFT_EDIT_PREVIEW], answerType=PART)과 총액 before→after 델타·교체/제거/추가 요약 메시지로 응답하고, 카드의 적용 버튼을 눌러야 실제 견적에 반영된다. 단일 부품 추천/제약 요청은 부품 DB 대조 역제안(예산 내 TOP3 나열, 스펙 미보유 시 근접 대안, 예산 부족 시 최저가·부족액)과 담기 quickReplies로 응답한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 견적 추천 플로우에서는 428을 반환한다(그 외 강등 플로우는 LLM 실패 시 200 + warnings=[UNSUPPORTED_INTENT] 거절 응답).
+      description: AI 챗봇 Build Chat. 지원 범위는 예산/현재 견적 기반 추천 조합 생성, 부품 교체 성능 시뮬레이션(수랭/공랭·PCIe 세대·통풍 속성 요청의 1:1 스펙비교 포함), 견적 변경 미리보기, 단일 부품 제약 역제안, 다중부품 감액 안내, 명확화 질문이다. 예산·용도가 모두 없는 모호 요청과 예산 없이 용도만 있는 요청은 견적 없이 되묻기(quickReplies 칩 + clarification)로 응답하고, 프론트가 clarificationContext를 에코한 후속 답변과 합성한다. 서버는 누적 문맥에서 예산·용도 슬롯을 매 턴 다시 계산해 이미 확인한 값은 다시 묻지 않고 남은 슬롯만 요청하며, 둘 다 채워지면 추천을 시작한다. 첫 되묻기에는 ACTIVE 내부 자산으로 서버가 계산한 최소 구성가를 포함하고, 후속 턴에서 용도가 확인되면 해당 용도 최소 구성가로 갱신한다. 대상·관계·학년·선물 상황이 명시된 첫 저정보 요청은 gpt-5.4-mini가 명시 맥락만 짧게 확인하고, 가격과 누락 질문은 서버가 확정한다. 모델 호출 실패 시에도 원문 맥락을 보존한 결정적 문구와 최소가·되묻기를 HTTP 200으로 반환한다. 무예산 용도-only 되묻기의 quickReplies는 확인한 용도와 최소 구성가를 포함한 완전한 추천 문장으로 동적 생성한다. 화면 이동 등 범위 밖 요청도 즉답 거절하지 않고 LLM으로 강등해 맥락 답변을 시도하며, LLM 호출이 실패한 경우에만 warnings=[UNSUPPORTED_INTENT]와 기능 안내 quickReplies 3종을 담은 거절(GENERAL)로 응답한다. 견적초안 변경 요청은 builds에 변경 미리보기 카드 1장(tier=draft-edit, badges=[DRAFT_EDIT_PREVIEW], answerType=PART)과 총액 before→after 델타·교체/제거/추가 요약 메시지로 응답하고, 카드의 적용 버튼을 눌러야 실제 견적에 반영된다. 단일 부품 추천/제약 요청은 부품 DB 대조 역제안(예산 내 TOP3 나열, 스펙 미보유 시 근접 대안, 예산 부족 시 최저가·부족액)과 담기 quickReplies로 응답한다. LLM은 부품 ID/가격을 만들지 않으며, OPENAI_API_KEY가 없으면 견적 추천 플로우에서는 428을 반환한다(그 외 강등 플로우는 LLM 실패 시 200 + warnings=[UNSUPPORTED_INTENT] 거절 응답).
       security:
         - bearerAuth: []
       parameters:
@@ -4437,7 +4437,7 @@ components:
             - $ref: "#/components/schemas/AiBuildAssessmentContext"
         clarificationContext:
           nullable: true
-          description: 직전 되묻기(clarification) 응답의 originalMessage 에코. 서버는 이 값과 message를 합성해 한 문장처럼 라우팅한다(무상태 왕복, 되묻기 최대 1회 — 합성 후에도 정보가 부족하면 기본 예산을 가정하지 않고 사용자 원문을 인용해 한 번 더 정확히 묻는다). 라우터 되묻기 외에 LLM이 스스로 되물은 턴과 시뮬레이션 교체 대상 미해상 턴의 clarification에도 같은 방식으로 에코한다.
+          description: 직전 되묻기 응답의 originalMessage 에코. 서버는 이 값과 새 message를 합성해 무상태 문맥을 누적한다. 예산 또는 용도만 채워지면 이미 확인한 슬롯은 유지하고 남은 슬롯만 clarification.missingSlots로 다시 묻고, 둘 다 채워지면 추천 경로로 진행한다. 라우터 되묻기 외에 LLM 후속 질문과 시뮬레이션 교체 대상 미해상 턴에도 같은 방식으로 에코한다.
           type: object
           properties:
             originalMessage:
@@ -4504,7 +4504,7 @@ components:
         clarification:
           nullable: true
           type: object
-          description: 모호 요청 되묻기 정보. 라우터 되묻기 외에 LLM이 스스로 되물은 턴과 시뮬레이션 교체 대상 미해상 턴에도 부착되며, 이때 missingSlots는 빈 배열이다(원문 에코만 수행). 이미 되묻기 후속 턴이면 재부착하지 않는다(최대 1회). 프론트는 다음 요청의 clarificationContext로 originalMessage를 에코한다.
+          description: 모호 요청의 무상태 대화 문맥과 미해결 슬롯. 예산·용도 중 일부만 답하면 originalMessage에 누적 문맥을 담고 missingSlots에는 아직 필요한 값만 남긴다. 둘 다 채워지면 추천으로 진행한다. LLM 후속 질문과 시뮬레이션 교체 대상 미해상 턴에는 missingSlots가 빈 배열일 수 있다. 프론트는 다음 요청의 clarificationContext로 originalMessage를 에코한다.
           properties:
             missingSlots:
               type: array

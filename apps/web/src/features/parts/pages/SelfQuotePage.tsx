@@ -400,6 +400,7 @@ function SelfQuoteSlotBoardPage() {
             nextCategory={nextCategory}
             boardSelectionRequest={boardSelectionRequest}
             onSelect={selectSlot}
+            onClearSelection={closePanel}
             onAddPart={addPart}
             onRemoveItem={removeItem}
             onUpdateQuantity={updateQuantity}
@@ -532,6 +533,7 @@ function QuoteChecklist({
   nextCategory,
   boardSelectionRequest,
   onSelect,
+  onClearSelection,
   onAddPart,
   onRemoveItem,
   onUpdateQuantity,
@@ -544,6 +546,7 @@ function QuoteChecklist({
   nextCategory: PartCategory | null;
   boardSelectionRequest: number;
   onSelect: (category: PartCategory) => void;
+  onClearSelection: () => void;
   onAddPart: (part: PartRow) => void;
   onRemoveItem: (partId: string) => void;
   onUpdateQuantity: (partId: string, quantity: number) => void;
@@ -577,17 +580,22 @@ function QuoteChecklist({
     }
   }, [selectedCategory, boardSelectionRequest]);
 
-  const openCategory = (category: PartCategory) => {
+  const toggleCategory = (category: PartCategory) => {
+    if (expandedCategory === category) {
+      setExpandedCategory(null);
+      onClearSelection();
+      return;
+    }
     setExpandedCategory(category);
     onSelect(category);
   };
 
-  const openCategoryFromKeyboard = (event: KeyboardEvent<HTMLDivElement>, category: PartCategory) => {
+  const toggleCategoryFromKeyboard = (event: KeyboardEvent<HTMLDivElement>, category: PartCategory) => {
     if (event.key !== 'Enter' && event.key !== ' ') {
       return;
     }
     event.preventDefault();
-    openCategory(category);
+    toggleCategory(category);
   };
 
   const choosePart = (part: PartRow) => {
@@ -639,13 +647,13 @@ function QuoteChecklist({
               <div
                 role="button"
                 tabIndex={0}
-                aria-label={`${label} 후보 목록 열기`}
+                aria-label={`${label} 후보 목록 ${expandedCategory === category ? '닫기' : '열기'}`}
                 aria-expanded={expandedCategory === category}
                 data-testid={`checklist-${category}`}
                 data-filled={filled ? 'true' : 'false'}
                 data-next={isNext ? 'true' : 'false'}
-                onClick={() => openCategory(category)}
-                onKeyDown={(event) => openCategoryFromKeyboard(event, category)}
+                onClick={() => toggleCategory(category)}
+                onKeyDown={(event) => toggleCategoryFromKeyboard(event, category)}
                 className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
                   hasFail
                     ? 'checklist-problem-fill-pulse'
@@ -1139,7 +1147,7 @@ function QuoteSummaryBar({
           ? 'text-amber-600'
           : 'text-emerald-600';
   return (
-    <div data-testid="quote-summary-bar" className="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_auto] lg:gap-1.5">
+    <div data-testid="quote-summary-bar" className="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_auto] lg:grid-cols-[clamp(256px,18vw,320px)_minmax(0,1fr)_minmax(0,1fr)_auto] lg:gap-2">
       <div className="panel flex min-h-12 items-center gap-3 px-4 py-3 lg:gap-2.5 lg:px-2.5 lg:py-1.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-xl font-black text-brand-blue lg:h-7 lg:w-7 lg:text-base">₩</span>
         <div className="min-w-0">
