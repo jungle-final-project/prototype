@@ -141,6 +141,65 @@ test('renders the all parts page and keeps filter state in the /parts URL', asyn
   await expect.poll(() => partRequests[partRequests.length - 1]?.searchParams.get('q')).toBe('RTX');
 });
 
+test('restores legacy quote action colors and marks the active primary navigation item', async ({ page }) => {
+  await loginAsUser(page);
+  const currentGpu = {
+    ...draftItem(gpuPart),
+    id: 'draft-current-gpu',
+    partId: 'part-current-gpu',
+    name: 'Current Build GPU'
+  };
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(draft([currentGpu]))
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== '/api/parts') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], summary: { sampleCount: 0 } }) });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [gpuPart], page: 0, size: 20, total: 1 })
+    });
+  });
+
+  await page.goto('/parts?category=GPU');
+
+  const replaceButton = page.getByRole('button', { name: 'AllParts RTX GPU 견적 교체' });
+  await expect(replaceButton).toHaveCSS('background-color', 'rgb(17, 24, 39)');
+  await expect(replaceButton).toHaveCSS('color', 'rgb(255, 255, 255)');
+
+  const cartRemoveButton = page.getByRole('button', { name: 'Current Build GPU 견적에서 제거' });
+  await expect(cartRemoveButton).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(cartRemoveButton).toHaveCSS('border-color', 'rgb(203, 213, 225)');
+  await expect(cartRemoveButton).toHaveCSS('color', 'rgb(71, 85, 105)');
+
+  const navigation = page.getByRole('navigation', { name: '견적 및 PC 부품 카테고리' });
+  const gpuLink = navigation.getByRole('link', { name: 'GPU', exact: true });
+  await expect(gpuLink).toHaveAttribute('aria-current', 'page');
+  await expect(gpuLink).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect.poll(() => gpuLink.evaluate((element) => getComputedStyle(element, '::after').backgroundColor)).toBe('rgb(222, 108, 45)');
+
+  const allPartsLink = navigation.getByRole('link', { name: '전체 부품' });
+  await allPartsLink.click();
+  await expect(page).toHaveURL('/parts');
+  await expect(allPartsLink).toHaveAttribute('aria-current', 'page');
+  await expect(gpuLink).not.toHaveAttribute('aria-current', 'page');
+
+  const aiQuoteButton = navigation.getByRole('button', { name: 'AI 견적' });
+  await expect(aiQuoteButton).toHaveAttribute('aria-pressed', 'false');
+  await aiQuoteButton.click();
+  await expect(page.getByTestId('ai-chatbot-panel')).toBeVisible();
+  await expect(aiQuoteButton).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('adds, updates, and removes quote draft items from the all parts page', async ({ page }) => {
   await loginAsUser(page);
   let currentDraft = draft([draftItem(ramPart)]);

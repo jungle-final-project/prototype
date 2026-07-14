@@ -323,7 +323,7 @@ export function LegacySelfQuoteListSections() {
                   <span className="font-black text-commerce-ink">{part.lineTotal.toLocaleString()}원</span>
                   <div className="flex items-center gap-2">
                     {allowsQuantity(part.category) ? <DraftQuantityStepper item={part} onChange={updateQuantity} disabled={quantityMutation.isPending} /> : null}
-                    <button type="button" aria-label={`${part.name} 견적에서 제거`} onClick={() => removePart(part.partId)} className="rounded-md border border-commerce-line px-2 py-1 font-black text-commerce-point hover:border-commerce-point hover:bg-orange-50">
+                    <button type="button" aria-label={`${part.name} 견적에서 제거`} onClick={() => removePart(part.partId)} className="rounded-md border border-slate-300 bg-white px-2 py-1 font-black text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-commerce-ink focus:outline-none focus:ring-2 focus:ring-slate-300">
                       빼기
                     </button>
                   </div>
@@ -464,6 +464,8 @@ function partRows(
           className={`rounded-md px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:cursor-wait disabled:opacity-60 ${
             isSelected
               ? 'border border-commerce-point/40 bg-orange-50 text-commerce-point hover:border-commerce-point'
+              : isReplace
+                ? 'border border-commerce-ink bg-commerce-ink text-white hover:bg-slate-800'
               : 'border border-commerce-point bg-white text-commerce-point hover:bg-orange-50'
           }`}
         >

@@ -1196,7 +1196,7 @@ function CompactCompositeGhostArc({
             strokeDasharray={`${comparePercent} 100`}
           />
         </svg>
-        <div className="absolute inset-x-0 top-3 z-10 flex justify-center">
+        <div className="absolute inset-x-0 top-10 z-10 flex justify-center">
           <span
             key={compareKey}
             data-testid="quote-composite-compare-delta"
@@ -1205,17 +1205,17 @@ function CompactCompositeGhostArc({
             {delta > 0 ? '+' : ''}{delta}점
           </span>
         </div>
-        <div className="absolute inset-x-0 bottom-2 flex items-baseline justify-center gap-1 font-black leading-none">
-          <span data-testid="quote-composite-ghost-base" className="text-sm text-slate-400">
-            {Math.round(baseScore).toLocaleString('ko-KR')}
-          </span>
-          <span aria-hidden="true" className="text-xs text-slate-400">→</span>
-          <span data-testid="quote-composite-compare-score" className="text-xl text-brand-blue">
-            {Math.round(displayCompare).toLocaleString('ko-KR')}
-          </span>
-        </div>
       </div>
-      <div className="-mt-1 flex items-center justify-between px-1 text-[8px] font-bold text-slate-400" aria-hidden="true">
+      <div className="mt-1 flex items-baseline justify-center gap-1 font-black leading-none">
+        <span data-testid="quote-composite-ghost-base" className="text-sm text-slate-400">
+          {Math.round(baseScore).toLocaleString('ko-KR')}
+        </span>
+        <span aria-hidden="true" className="text-xs text-slate-400">→</span>
+        <span data-testid="quote-composite-compare-score" className="text-xl text-brand-blue">
+          {Math.round(displayCompare).toLocaleString('ko-KR')}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between px-1 text-[8px] font-bold text-slate-400" aria-hidden="true">
         <span>0</span>
         <span>{safeMax.toLocaleString('ko-KR')}</span>
       </div>

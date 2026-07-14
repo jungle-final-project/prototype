@@ -61,6 +61,8 @@ type SlotBoardProps = {
   isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   connectorAnchors?: ConnectorAnchors;
+  bodyOverlay?: ReactNode;
+  onBodyOverlayDismiss?: () => void;
 };
 
 export function SlotBoard({
@@ -78,7 +80,9 @@ export function SlotBoard({
   isRemovePending,
   isQuantityPending,
   graph,
-  connectorAnchors
+  connectorAnchors,
+  bodyOverlay,
+  onBodyOverlayDismiss
 }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
   const boardProblems = slotBoardProblems(graph);
@@ -228,75 +232,94 @@ export function SlotBoard({
           onExplain={(problem) => explainIssue(undefined, problem.tool)}
         />
       ) : null}
-      {isIsometric ? (
-        <IsometricSlotBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onClearSelection={onClearSelection}
-          onClearAiFocus={onClearAiFocus}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          overlaysVisible={overlaysVisible}
-          connectorAnchors={connectorAnchors}
-          onExplainIssue={explainIssue}
-        />
-      ) : isMotherboard ? (
-        <MotherboardSlotBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onClearAiFocus={onClearAiFocus}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          isClosing={isMotherboardClosing}
-        />
-      ) : isRelationMapVisible ? (
-        <RelationMapBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          problems={boardProblems}
-          onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
-        />
-      ) : (
-        <FusedSlotBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onClearAiFocus={onClearAiFocus}
-          onRemoveItem={onRemoveItem}
-          onUpdateQuantity={onUpdateQuantity}
-          isRemovePending={isRemovePending}
-          isQuantityPending={isQuantityPending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          problems={showFusedProblemOverlay ? boardProblems : []}
-          onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
-        />
-      )}
+      <div data-testid="slot-board-body-stage" className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {isIsometric ? (
+          <IsometricSlotBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onClearSelection={onClearSelection}
+            onClearAiFocus={onClearAiFocus}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            overlaysVisible={overlaysVisible}
+            connectorAnchors={connectorAnchors}
+            onExplainIssue={explainIssue}
+          />
+        ) : isMotherboard ? (
+          <MotherboardSlotBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onClearAiFocus={onClearAiFocus}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            isClosing={isMotherboardClosing}
+          />
+        ) : isRelationMapVisible ? (
+          <RelationMapBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            problems={boardProblems}
+            onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
+          />
+        ) : (
+          <FusedSlotBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onClearAiFocus={onClearAiFocus}
+            onRemoveItem={onRemoveItem}
+            onUpdateQuantity={onUpdateQuantity}
+            isRemovePending={isRemovePending}
+            isQuantityPending={isQuantityPending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            problems={showFusedProblemOverlay ? boardProblems : []}
+            onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
+          />
+        )}
+        {bodyOverlay ? (
+          <>
+            <button
+              type="button"
+              data-testid="slot-candidate-overlay-dismiss"
+              aria-label="상품 후보 목록 닫기"
+              onClick={onBodyOverlayDismiss}
+              className="absolute inset-0 z-40 hidden cursor-default bg-transparent lg:block"
+            />
+            <div
+              data-testid="slot-candidate-overlay-layer"
+              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))]"
+            >
+              <div className="pointer-events-auto h-full w-full">{bodyOverlay}</div>
+            </div>
+          </>
+        ) : null}
+      </div>
       {!isIsometric ? (
-        <div className="absolute bottom-4 right-4 z-30 hidden lg:block">
+        <div className="absolute bottom-4 right-4 z-[60] hidden lg:block">
           <button
             type="button"
             aria-pressed={isMotherboard}
