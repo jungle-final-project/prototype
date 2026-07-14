@@ -47,15 +47,7 @@ textarea {
 
 .screen-shell {
   min-height: 100vh;
-background:
-  linear-gradient(
-    180deg,
-    #ffffff 0,
-    #ffffff 112px,
-    #edf7ff 112px,
-    #f6fbff 55%,
-    #f3f6fa 100%
-  );
+  background: #ffffff;
 }
 
 @media (min-width: 768px) {
