@@ -379,7 +379,7 @@ export function CheckoutPage() {
 
         <aside className="min-w-0 xl:sticky xl:top-5 xl:self-start">
           <section className="overflow-hidden rounded-lg border border-commerce-line bg-white shadow-product">
-            <div className="border-b border-commerce-line bg-slate-950 px-5 py-4 text-white">
+            <div className="border-b border-commerce-line bg-[#de6c2d] px-5 py-4 text-white">
               <div className="flex items-center gap-2 text-sm font-black">
                 <ClipboardCheck size={18} />
                 조립 요청 요약
@@ -557,7 +557,7 @@ function SubmitRequestButton({
         onClick={onClick}
         disabled={disabled}
         aria-describedby={tooltipId}
-        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-commerce-ink px-4 py-3 text-sm font-black text-white transition hover:bg-slate-700 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-slate-300"
+        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-[#de6c2d] px-4 py-3 text-sm font-black text-white transition hover:bg-[#c45c22] disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-slate-300"
       >
         <Truck size={17} />
         {pending ? '요청 저장 중...' : '기사 제안 요청하기'}

@@ -331,7 +331,7 @@ function PerfPanelBody({
                 autoSubmit: true,
                 assessmentContext: { source: 'QUOTE_DRAFT_CURRENT', focusType: 'SCORE' }
               })}
-              className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+              className="inline-flex items-center gap-1 rounded border border-[#f4c8b2] bg-[#fff5ef] px-2 py-1 font-black text-[#de6c2d] transition hover:border-[#de6c2d] hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f4c8b2]"
             >
               <Sparkles size={12} aria-hidden="true" />
               AI에게 설명
@@ -411,7 +411,7 @@ function PerfPanelBody({
                         autoSubmit: true,
                         assessmentContext: { source: 'QUOTE_DRAFT_CURRENT', focusType: 'SCORE' }
                       })}
-                      className="grid h-5 w-5 shrink-0 place-items-center rounded border border-blue-200 bg-blue-50 text-brand-blue transition hover:border-brand-blue hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+                      className="grid h-5 w-5 shrink-0 place-items-center rounded border border-[#f4c8b2] bg-[#fff5ef] text-[#de6c2d] transition hover:border-[#de6c2d] hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f4c8b2]"
                     >
                       <Sparkles size={10} aria-hidden="true" />
                     </button>
@@ -540,8 +540,8 @@ function PerfPanelBody({
                           onClick={() => setGameKey(g.key)}
                           className={`rounded-full border px-2.5 py-1 text-xs font-black transition ${
                             gameKey === g.key
-                              ? 'border-brand-blue bg-brand-blue text-white'
-                              : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
+                              ? 'border-[#de6c2d] bg-[#de6c2d] text-white'
+                              : 'border-commerce-line bg-white text-slate-500 hover:border-[#de6c2d]'
                           }`}
                         >
                           {g.label}
@@ -588,8 +588,8 @@ function PerfPanelBody({
                       onClick={() => setGameKey(g.key)}
                       className={`rounded-full border px-2.5 py-1 text-xs font-black transition ${
                         gameKey === g.key
-                          ? 'border-brand-blue bg-brand-blue text-white'
-                          : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
+                          ? 'border-[#de6c2d] bg-[#de6c2d] text-white'
+                          : 'border-commerce-line bg-white text-slate-500 hover:border-[#de6c2d]'
                       }`}
                     >
                       {g.label}
@@ -616,7 +616,7 @@ function PerfPanelBody({
                     data-testid="perf-apply-replace"
                     disabled={isApplying}
                     onClick={() => void applyComparison()}
-                    className="rounded bg-brand-blue px-3 py-2 text-[11px] font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded bg-[#de6c2d] px-3 py-2 text-[11px] font-black text-white transition hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {isApplying ? '교체 중…' : '교체해 담기'}
                   </button>
@@ -697,8 +697,8 @@ function PerfPanelBody({
             onClick={() => setGameKey(g.key)}
             className={`rounded-full border px-2.5 py-1 text-[11px] font-black transition ${
               gameKey === g.key
-                ? 'border-brand-blue bg-brand-blue text-white'
-                : 'border-commerce-line bg-white text-slate-600 hover:border-brand-blue'
+                ? 'border-[#de6c2d] bg-[#de6c2d] text-white'
+                : 'border-commerce-line bg-white text-slate-600 hover:border-[#de6c2d]'
             }`}
           >
             {g.label}
@@ -891,7 +891,7 @@ function PerfPanelBody({
                 data-testid="perf-apply-replace"
                 disabled={isApplying}
                 onClick={() => void applyComparison()}
-                className="rounded bg-brand-blue px-3 py-2 text-[11px] font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded bg-[#de6c2d] px-3 py-2 text-[11px] font-black text-white transition hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isApplying ? '교체해 담는 중…' : '이 제품으로 교체해 담기'}
               </button>
@@ -1000,7 +1000,7 @@ function CandidateCombo({
               }
             }}
             className={`rounded font-black transition ${compact ? 'px-2.5 py-1 text-xs' : 'px-2.5 py-1 text-[10px]'} ${
-              category === pickerCategory ? 'bg-brand-blue text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
+              category === pickerCategory ? 'bg-[#de6c2d] text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
             {PART_CATEGORY_LABELS[pickerCategory]}

@@ -61,7 +61,7 @@ export function BuildResultPage() {
       <div className="space-y-5">
         <Panel title={`추천 견적 결과 / ${displayBuild.name}`} subtitle={isTemporaryBuild ? `임시 추천 ID ${displayBuild.id.slice(0, 8)}` : `견적 ID ${displayBuild.id.slice(0, 8)}`}>
           {isTemporaryBuild ? (
-            <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-brand-blue">
+            <div className="mb-3 rounded-md border border-[#f4c8b2] bg-[#fff5ef] px-4 py-3 text-sm font-bold text-[#de6c2d]">
               저장 전 AI 챗봇 추천
             </div>
           ) : null}
@@ -78,7 +78,7 @@ export function BuildResultPage() {
                 type="button"
                 onClick={() => saveMutation.mutate(temporaryBuild)}
                 disabled={saveMutation.isPending}
-                className="block w-full rounded bg-brand-blue px-4 py-3 text-center text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-wait disabled:bg-slate-400"
+                className="block w-full rounded bg-[#de6c2d] px-4 py-3 text-center text-sm font-bold text-white hover:bg-[#c45c22] disabled:cursor-wait disabled:bg-slate-400 disabled:hover:bg-slate-400"
               >
                 {saveMutation.isPending ? '저장 중' : '견적 저장'}
               </button>
@@ -88,7 +88,7 @@ export function BuildResultPage() {
             </>
           ) : (
             <>
-              <Link to="/my/quotes" className="block rounded bg-brand-blue px-4 py-3 text-center text-sm font-bold text-white hover:bg-blue-700">내 견적함 보기</Link>
+              <Link to="/my/quotes" className="block rounded bg-[#de6c2d] px-4 py-3 text-center text-sm font-bold text-white hover:bg-[#c45c22]">내 견적함 보기</Link>
               <Link to={`/builds/${displayBuild.id}/change-part`} className="block rounded border border-slate-300 px-4 py-3 text-center text-sm font-bold hover:border-commerce-ink">부품 변경 비교</Link>
             </>
           )}

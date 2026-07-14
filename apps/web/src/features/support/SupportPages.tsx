@@ -595,7 +595,7 @@ export function SupportNewPage() {
               <input
                 id="support-symptom-title"
                 aria-label="증상 제목"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
+                className="h-11 w-full rounded border border-slate-300 px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                 placeholder="예: 게임 중 프레임 드랍"
                 value={symptomTitle}
                 onChange={(event) => setSymptomTitle(event.target.value)}
@@ -605,7 +605,7 @@ export function SupportNewPage() {
               <div>
                 <label className="mb-1 block text-xs font-bold text-slate-600">증상 유형</label>
                 <select
-                  className="h-11 w-full rounded border border-slate-300 bg-white px-3 text-sm"
+                  className="h-11 w-full rounded border border-slate-300 bg-white px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                   value={symptomType}
                   onChange={(event) => {
                     const next = event.target.value;
@@ -622,7 +622,7 @@ export function SupportNewPage() {
                 <label className="mb-1 block text-xs font-bold text-slate-600">증상 발생 시각</label>
                 <input
                   type="datetime-local"
-                  className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
+                  className="h-11 w-full rounded border border-slate-300 px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                   value={detectedAt}
                   onChange={(event) => {
                     setDetectedAt(event.target.value);
@@ -636,7 +636,7 @@ export function SupportNewPage() {
               <textarea
                 id="support-symptom-detail"
                 aria-label="증상 상세"
-                className="h-36 w-full rounded border border-slate-300 p-4 text-sm"
+                className="h-36 w-full rounded border border-slate-300 p-4 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                 placeholder="언제부터 발생했는지, 어떤 작업 중 재현되는지 입력해 주세요."
                 value={symptomDetail}
                 onChange={(event) => setSymptomDetail(event.target.value)}
@@ -661,7 +661,7 @@ export function SupportNewPage() {
                   <label className="mb-1 block text-xs font-bold text-slate-600">시작 시각</label>
                   <input
                     type="datetime-local"
-                    className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
+                    className="h-11 w-full rounded border border-slate-300 px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                     value={windowStartedAt}
                     onChange={(event) => setWindowStartedAt(event.target.value)}
                   />
@@ -670,7 +670,7 @@ export function SupportNewPage() {
                   <label className="mb-1 block text-xs font-bold text-slate-600">종료 시각</label>
                   <input
                     type="datetime-local"
-                    className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
+                    className="h-11 w-full rounded border border-slate-300 px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                     value={windowEndedAt}
                     onChange={(event) => setWindowEndedAt(event.target.value)}
                   />
@@ -682,9 +682,10 @@ export function SupportNewPage() {
               <label className="mb-2 block text-xs font-bold text-slate-600">지원 신청 방식</label>
               <div className="grid gap-2 md:grid-cols-3">
                 {(['DIAGNOSIS_ONLY', 'REMOTE_REQUESTED', 'VISIT_REQUESTED'] as SupportRequestKind[]).map((kind) => (
-                  <label key={kind} className="flex min-h-12 items-center gap-2 rounded border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">
+                  <label key={kind} className={`flex min-h-12 items-center gap-2 rounded border px-3 py-2 text-sm font-bold transition ${supportRequestKind === kind ? 'border-[#de6c2d] bg-[#fff5ef] text-[#7a3215]' : 'border-slate-200 text-slate-700 hover:border-[#f4c8b2]'}`}>
                     <input
                       type="radio"
+                      className="accent-[#de6c2d]"
                       checked={supportRequestKind === kind}
                       onChange={() => setSupportRequestKind(kind)}
                     />
@@ -698,7 +699,7 @@ export function SupportNewPage() {
               <div className="mb-2 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  className="rounded border border-brand-blue px-3 py-2 text-xs font-bold text-brand-blue"
+                  className="rounded border border-[#de6c2d] px-3 py-2 text-xs font-bold text-[#de6c2d] hover:bg-[#fff5ef] disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
                   onClick={downloadPcAgent}
                   disabled={agentDownloadState === 'issuing'}
                 >
@@ -706,7 +707,7 @@ export function SupportNewPage() {
                 </button>
                 <button
                   type="button"
-                  className="rounded border border-brand-blue bg-brand-blue px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+                  className="rounded border border-[#de6c2d] bg-[#de6c2d] px-3 py-2 text-xs font-bold text-white hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-400"
                   onClick={diagnoseWithPcAgent}
                   disabled={agentDiagnosisState === 'requesting'}
                 >
@@ -744,14 +745,14 @@ export function SupportNewPage() {
               ) : null}
               <input
                 id="support-log-file"
-                className="block w-full rounded border border-slate-300 p-3 text-sm file:mr-4 file:rounded file:border-0 file:bg-brand-blue file:px-4 file:py-2 file:text-sm file:font-bold file:text-white"
+                className="block w-full rounded border border-slate-300 p-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2] file:mr-4 file:rounded file:border-0 file:bg-[#de6c2d] file:px-4 file:py-2 file:text-sm file:font-bold file:text-white hover:file:bg-[#c45c22]"
                 type="file"
                 accept=".jsonl,.ndjson,application/x-ndjson,application/json,text/plain"
                 onChange={handleFileChange}
               />
               {selectedFile ? <p className="mt-2 text-xs text-slate-500">{selectedFile.name} · {selectedFile.size.toLocaleString()} bytes</p> : null}
               {logFileNotice ? <p className="mt-2 text-xs font-semibold text-emerald-700">{logFileNotice}</p> : null}
-              {draftLogUploadId && !selectedFile ? <p className="mt-2 text-xs font-semibold text-brand-blue">Agent 업로드 로그 ID: {draftLogUploadId}</p> : null}
+              {draftLogUploadId && !selectedFile ? <p className="mt-2 text-xs font-semibold text-[#de6c2d]">Agent 업로드 로그 ID: {draftLogUploadId}</p> : null}
             </div>
             {asRagPreviewState === 'loading' ? <StateMessage type="info" title="AS RAG 분석 중" body="업로드한 로그를 바탕으로 적절한 지원 방식을 찾고 있습니다." /> : null}
             {asRagPreviewState === 'error' ? <StateMessage type="warn" title="AS RAG 추천 실패" body={asRagPreviewError || '추천 결과를 불러오지 못했습니다. AS 접수는 계속 진행할 수 있습니다.'} /> : null}
@@ -762,7 +763,7 @@ export function SupportNewPage() {
             </label>
             {error ? <StateMessage type="warn" title="AS 접수 확인 필요" body={error} /> : null}
             {submitState === 'ticket_created' ? <StateMessage type="success" title="AS 티켓 생성 완료" body="생성된 티켓 상세 화면으로 이동합니다." /> : null}
-            <button disabled={isSubmitDisabled} className="rounded bg-brand-blue px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+            <button disabled={isSubmitDisabled} className="rounded bg-[#de6c2d] px-5 py-3 text-sm font-bold text-white hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:hover:bg-slate-400">
               {isUploading ? '로그 업로드 및 티켓 생성 중...' : 'AS 접수하기'}
             </button>
           </div>
@@ -793,7 +794,7 @@ function ActiveSupportChatNotice({ chat }: { chat: BlockingSupportChat }) {
       />
       <Link
         to={`/support/${chat.asTicketId}?chat=1`}
-        className="inline-flex rounded bg-brand-blue px-4 py-3 text-sm font-bold text-white hover:bg-blue-700"
+        className="inline-flex rounded bg-[#de6c2d] px-4 py-3 text-sm font-bold text-white hover:bg-[#c45c22]"
       >
         진행 중인 상담방으로 이동
       </Link>
@@ -835,18 +836,18 @@ function authScopeKey(user: unknown) {
 
 function AsRagRecommendation({ analysis }: { analysis: AsRagAnalysisDto }) {
   return (
-    <div className="rounded border border-blue-200 bg-blue-50 p-4">
+    <div className="rounded border border-[#f4c8b2] bg-[#fff5ef] p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-bold text-blue-950">추천 서비스</span>
+        <span className="text-sm font-bold text-[#7a3215]">추천 서비스</span>
         <StatusBadge status={analysis.supportDecision ?? 'NEEDS_MORE_INFO'} />
         {analysis.confidence ? <StatusBadge status={analysis.confidence} /> : null}
       </div>
-      <p className="mt-2 text-base font-bold text-blue-950">
+      <p className="mt-2 text-base font-bold text-[#7a3215]">
         {analysis.recommendationMessage ?? `이 증상은 ${analysis.recommendedServiceLabel ?? '우선 진단만 받기'} 서비스를 받는 것이 좋습니다.`}
       </p>
-      {analysis.summaryText ? <p className="mt-2 text-sm leading-6 text-blue-900">{analysis.summaryText}</p> : null}
+      {analysis.summaryText ? <p className="mt-2 text-sm leading-6 text-[#7a3215]">{analysis.summaryText}</p> : null}
       {analysis.evidence?.length ? (
-        <div className="mt-3 space-y-1 text-xs leading-5 text-blue-800">
+        <div className="mt-3 space-y-1 text-xs leading-5 text-[#9a431d]">
           {analysis.evidence.slice(0, 2).map((item, index) => (
             <p key={`${String(item.sourceId ?? index)}`}>근거 {index + 1}. {String(item.summary ?? item.title ?? item.sourceId ?? 'AS RAG 근거')}</p>
           ))}

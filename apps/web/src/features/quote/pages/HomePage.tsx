@@ -485,7 +485,7 @@ function HomeLoginChoiceDialog({
         aria-labelledby="home-login-choice-title"
         aria-describedby="home-login-choice-description"
         data-testid="home-login-choice-dialog"
-        className="relative w-full max-w-[760px]"
+        className="relative w-full max-w-[760px] scale-[1.2]"
       >
         <button
           type="button"
@@ -578,7 +578,7 @@ function HomeAiFlowChoiceDialog({
         aria-labelledby="home-ai-flow-choice-title"
         aria-describedby="home-ai-flow-choice-description"
         data-testid="home-ai-flow-choice-dialog"
-        className="relative w-full max-w-[940px]"
+        className="relative w-full max-w-[940px] scale-[1.2]"
       >
         <button
           type="button"

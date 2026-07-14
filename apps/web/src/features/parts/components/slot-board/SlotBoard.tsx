@@ -325,10 +325,10 @@ export function SlotBoard({
             aria-pressed={isMotherboard}
             onClick={toggleMotherboard}
             disabled={isMotherboardClosing}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 ${
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] focus-visible:ring-offset-2 ${
               isMotherboard
-                ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
-                : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+                ? 'border-[#de6c2d] bg-[#de6c2d] text-white hover:bg-[#c45c22]'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-[#de6c2d] hover:text-[#de6c2d]'
             }`}
           >
             {isMotherboard ? '실장도 접기' : '실장도 보기'}
@@ -351,10 +351,10 @@ export function SlotBoard({
             data-testid="relation-map-open"
             aria-pressed={isRelationMapVisible}
             onClick={toggleRelationMap}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 ${
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] focus-visible:ring-offset-2 ${
               isRelationMapVisible
-                ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
-                : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+                ? 'border-[#de6c2d] bg-[#de6c2d] text-white hover:bg-[#c45c22]'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-[#de6c2d] hover:text-[#de6c2d]'
             }`}
           >
             {isRelationMapVisible ? '기본 관계도 보기' : '영향 지도 보기'}
@@ -402,8 +402,8 @@ function SlotBoardModeSegments({
             role="radio"
             aria-checked={active}
             onClick={() => onChange?.(option.mode)}
-            className={`rounded-full px-2.5 py-1 text-xs font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
-              active ? 'bg-brand-blue text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+            className={`rounded-full px-2.5 py-1 text-xs font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] ${
+              active ? 'bg-[#de6c2d] text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
             }`}
           >
             {option.label}
@@ -434,15 +434,15 @@ function SlotBoardDisplaySwitch({
       aria-label={label}
       aria-checked={checked}
       onClick={onToggle}
-      className={`hidden items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue lg:inline-flex ${
+      className={`hidden items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#de6c2d] lg:inline-flex ${
         checked
-          ? 'border-blue-200 bg-blue-50 text-brand-blue'
+          ? 'border-[#f4c8b2] bg-[#fff5ef] text-[#de6c2d]'
           : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
       }`}
     >
       <span
         aria-hidden="true"
-        className={`relative h-3.5 w-6 rounded-full transition ${checked ? 'bg-brand-blue' : 'bg-slate-300'}`}
+        className={`relative h-3.5 w-6 rounded-full transition ${checked ? 'bg-[#de6c2d]' : 'bg-slate-300'}`}
       >
         <span
           className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white shadow-sm transition ${

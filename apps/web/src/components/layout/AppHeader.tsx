@@ -1,7 +1,7 @@
 import '@fontsource/outfit/500.css';
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronDown, LifeBuoy, LogOut, Search, ShieldCheck, ShoppingCart, UserRound, Wrench } from 'lucide-react';
+import { ChevronDown, LifeBuoy, LogIn, LogOut, Search, ShieldCheck, ShoppingCart, UserRound, Wrench } from 'lucide-react';
 import { getCurrentUser, logout as logoutApi, type CurrentUser } from '../../features/auth/authApi';
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getCachedAuthUser, getRefreshToken, getToken } from '../../lib/api';
 import { openAiAssistant } from '../../lib/events';
@@ -19,8 +19,15 @@ export function AppHeader() {
     event.preventDefault();
     const prompt = searchInput.trim();
     if (!prompt) return;
+    const generalSearchTarget = `/parts?q=${encodeURIComponent(prompt)}`;
     if (!getToken()) {
-      navigate(`/login?redirect=${encodeURIComponent('/?assistant=open')}`);
+      const redirectTarget = headerSearchMode === 'general' ? generalSearchTarget : '/?assistant=open';
+      navigate(`/login?redirect=${encodeURIComponent(redirectTarget)}`);
+      return;
+    }
+    if (headerSearchMode === 'general') {
+      navigate(generalSearchTarget);
+      setSearchInput('');
       return;
     }
     openAiAssistant({ prefill: prompt, autoSubmit: true });
@@ -85,6 +92,13 @@ export function AppHeader() {
     }
   }
 
+  const isGeneralSearch = headerSearchMode === 'general';
+  const searchInputLabel = isGeneralSearch ? '부품 일반 검색' : 'AI에게 견적 질문하기';
+  const searchSubmitLabel = isGeneralSearch ? '부품 검색' : 'AI 견적 검색';
+  const searchPlaceholder = isGeneralSearch
+    ? '부품명이나 모델명을 검색해보세요. 예: RTX 5060 Ti'
+    : '어떤 PC를 맞춰드릴까요? 예: QHD 게임용 200만원 PC';
+
   return (
     <>
       <header className="bg-[#f7f7f8]">
@@ -117,11 +131,11 @@ export function AppHeader() {
             <input
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              aria-label="AI에게 견적 질문하기"
+              aria-label={searchInputLabel}
               className="min-w-0 flex-1 bg-transparent pr-3 text-sm font-semibold outline-none placeholder:font-medium placeholder:text-slate-400"
-              placeholder="어떤 PC를 맞춰드릴까요? 예: QHD 게임용 200만원 PC"
+              placeholder={searchPlaceholder}
             />
-            <button type="submit" aria-label="AI 견적 검색" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#de6c2d] text-white transition hover:bg-[#c45c22] focus:outline-none focus:ring-4 focus:ring-blue-100">
+            <button type="submit" aria-label={searchSubmitLabel} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#de6c2d] text-white transition hover:bg-[#c45c22] focus:outline-none focus:ring-4 focus:ring-blue-100">
               <Search size={18} aria-hidden="true" />
             </button>
           </form>
@@ -163,7 +177,7 @@ export function AppHeader() {
                 data-testid="header-account-slot"
                 className="flex h-10 w-[118px] shrink-0 items-center gap-2 rounded-lg px-2 text-[#595959] transition hover:bg-slate-100 hover:text-[#222222] focus:outline-none focus:ring-4 focus:ring-blue-100"
               >
-                <UserRound size={21} className="shrink-0" aria-hidden="true" />
+                <LogIn size={21} className="shrink-0" aria-hidden="true" />
                 <span data-testid="header-account-name" aria-hidden="true" className="block w-[72px] shrink-0" />
                 <span aria-hidden="true" className="block h-2.5 w-2.5 shrink-0" />
               </Link>

@@ -82,12 +82,12 @@ export function LoginPage() {
       icon={<LogIn size={20} />}
       title="로그인"
       subtitle="이메일, 비밀번호 또는 Google 계정으로 로그인하세요."
-      footer={<Link to="/signup" className="block h-11 rounded border border-slate-300 pt-3 text-center text-sm font-bold text-slate-700 transition hover:border-commerce-ink hover:text-commerce-ink">회원가입</Link>}
+      footer={<Link to="/signup" className="block h-11 rounded border border-[#de6c2d] pt-3 text-center text-sm font-bold text-[#de6c2d] transition hover:bg-[#fff5ef] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]">회원가입</Link>}
     >
       {error ? <StateMessage type="warn" title="로그인 실패" body={error} /> : null}
       <form onSubmit={submit} className="space-y-4">
         <EmailPasswordFields passwordAutocomplete="current-password" />
-        <PrimaryButton className="bg-slate-950 hover:bg-slate-800" disabled={submitting}>{submitting ? '로그인 중' : '로그인'}</PrimaryButton>
+        <PrimaryButton disabled={submitting}>{submitting ? '로그인 중' : '로그인'}</PrimaryButton>
       </form>
       <AuthDivider />
       <GoogleButton onClick={() => beginGoogleOAuth(redirect)} label="Google로 계속하기" />
@@ -132,7 +132,7 @@ export function AdminLoginPage() {
       title="관리자 로그인"
       subtitle="관리자 계정은 공개 회원가입으로 생성되지 않습니다."
       tone="admin"
-      footer={<Link to="/login" className="block h-11 rounded border border-slate-300 pt-3 text-center text-sm font-bold text-slate-700 transition hover:border-commerce-ink hover:text-commerce-ink">일반 로그인으로 이동</Link>}
+      footer={<Link to="/login" className="block h-11 rounded border border-[#de6c2d] pt-3 text-center text-sm font-bold text-[#de6c2d] transition hover:bg-[#fff5ef] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]">일반 로그인으로 이동</Link>}
     >
       {error ? <StateMessage type="warn" title="관리자 로그인 실패" body={error} /> : null}
       <form onSubmit={submit} className="space-y-4">
@@ -192,7 +192,7 @@ export function SignupPage() {
       title="회원가입"
       subtitle="가입한 계정은 일반 사용자 권한으로 시작합니다."
       wide
-      footer={<Link to="/login" className="block h-11 rounded border border-slate-300 pt-3 text-center text-sm font-bold text-slate-700 transition hover:border-commerce-ink hover:text-commerce-ink">이미 계정이 있어요</Link>}
+      footer={<Link to="/login" className="block h-11 rounded border border-[#de6c2d] pt-3 text-center text-sm font-bold text-[#de6c2d] transition hover:bg-[#fff5ef] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]">이미 계정이 있어요</Link>}
     >
       {error ? <StateMessage type="warn" title="회원가입 실패" body={error} /> : null}
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -244,7 +244,7 @@ export function SignupPage() {
           onClearError={(field) => clearContactFieldError(setContactErrors, field)}
         />
         <TermsFields className="sm:col-span-2" />
-        <PrimaryButton className="bg-slate-950 hover:bg-slate-800 sm:col-span-2" disabled={submitting}>{submitting ? '가입 중' : '회원가입'}</PrimaryButton>
+        <PrimaryButton className="sm:col-span-2" disabled={submitting}>{submitting ? '가입 중' : '회원가입'}</PrimaryButton>
       </form>
       <AuthDivider />
       <GoogleButton onClick={() => beginGoogleOAuth('/')} label="Google로 회원가입" />
@@ -368,7 +368,7 @@ export function AuthCallbackPage() {
     >
       {status === 'checking' ? <StateMessage type="info" title="로그인 처리 중" body="잠시만 기다려 주세요." /> : null}
       {status === 'error' ? <StateMessage type="warn" title="로그인 실패" body={error || 'Google 로그인에 실패했습니다.'} /> : null}
-      {status === 'error' ? <Link to="/login" className="block h-11 rounded bg-brand-blue pt-3 text-center text-sm font-bold text-white">로그인으로 이동</Link> : null}
+      {status === 'error' ? <Link to="/login" className="block h-11 rounded bg-[#de6c2d] pt-3 text-center text-sm font-bold text-white hover:bg-[#c45c22]">로그인으로 이동</Link> : null}
     </AuthShell>
   );
 }
@@ -489,7 +489,7 @@ export function MyProfilePage() {
                 비밀번호
                 <input
                   name="password"
-                  className="mt-2 h-11 w-full rounded border border-slate-300 px-3 text-sm"
+                  className="mt-2 h-11 w-full rounded border border-slate-300 px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
                   placeholder="현재 비밀번호"
                   autoComplete="current-password"
                   type="password"
@@ -503,7 +503,7 @@ export function MyProfilePage() {
             <button
               type="button"
               onClick={() => beginGoogleOAuth('/my/profile?verified=google')}
-              className="h-11 w-full rounded border border-slate-300 bg-white text-sm font-bold text-slate-700 transition hover:border-commerce-ink hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
+              className="h-11 w-full rounded border border-slate-300 bg-white text-sm font-bold text-slate-700 transition hover:border-[#de6c2d] hover:text-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
             >
               Google로 본인 확인
             </button>
@@ -519,7 +519,7 @@ export function MyProfilePage() {
             이름
             <input
               name="name"
-              className="mt-2 h-11 w-full rounded border border-slate-300 px-3 text-sm"
+              className="mt-2 h-11 w-full rounded border border-slate-300 px-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
               defaultValue={profile.name}
               autoComplete="name"
               maxLength={100}
@@ -546,7 +546,7 @@ export function MyProfilePage() {
           />
           <div className="flex flex-col gap-2 sm:col-span-2 sm:flex-row">
             <PrimaryButton className="sm:flex-1" disabled={submitting}>{submitting ? '저장 중' : '저장'}</PrimaryButton>
-            <Link to="/" className="grid h-11 place-items-center rounded border border-slate-300 px-4 text-sm font-bold text-slate-700 transition hover:border-commerce-ink hover:text-commerce-ink sm:w-28">
+            <Link to="/" className="grid h-11 place-items-center rounded border border-slate-300 px-4 text-sm font-bold text-slate-700 transition hover:border-[#de6c2d] hover:text-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2] sm:w-28">
               취소
             </Link>
           </div>
@@ -591,7 +591,7 @@ function AuthShell({ icon, title, subtitle, children, footer, wide = false, tone
       <div className={`mx-auto mt-10 w-full ${maxWidth} px-4 sm:mt-16 sm:px-0`}>
         <div className="panel p-6 sm:p-8">
           <div className="mb-6 flex items-start gap-3">
-            <div className={`grid h-10 w-10 shrink-0 place-items-center rounded ${tone === 'admin' ? 'bg-slate-900 text-white' : 'bg-brand-pale text-brand-blue'}`}>
+            <div className={`grid h-10 w-10 shrink-0 place-items-center rounded ${tone === 'admin' ? 'bg-slate-900 text-white' : 'bg-[#fff5ef] text-[#de6c2d]'}`}>
               {icon}
             </div>
             <div>
@@ -709,7 +709,7 @@ function ContactAddressFields({
           className={`mt-2 h-11 w-full rounded border px-3 text-sm focus:outline-none focus:ring-4 ${
             phoneError
               ? 'border-red-500 bg-red-50 focus:border-red-500 focus:ring-red-100'
-              : 'border-slate-300 focus:border-brand-blue focus:ring-blue-100'
+              : 'border-slate-300 focus:border-[#de6c2d] focus:ring-[#f4c8b2]'
           }`}
           placeholder="010-1234-5678"
           defaultValue={values?.phoneNumber ?? ''}
@@ -733,7 +733,7 @@ function ContactAddressFields({
             className={`h-11 min-w-0 flex-1 rounded border bg-slate-50 px-3 text-sm text-slate-700 focus:outline-none focus:ring-4 ${
               postalCodeError
                 ? 'border-red-500 focus:border-red-500 focus:ring-red-100'
-                : 'border-slate-300 focus:border-brand-blue focus:ring-blue-100'
+                : 'border-slate-300 focus:border-[#de6c2d] focus:ring-[#f4c8b2]'
             }`}
             placeholder="주소 찾기로 입력"
             defaultValue={values?.postalCode ?? ''}
@@ -748,7 +748,7 @@ function ContactAddressFields({
           <button
             type="button"
             onClick={openAddressSearch}
-            className="h-11 shrink-0 rounded border border-brand-blue px-3 text-sm font-bold text-brand-blue transition hover:bg-brand-pale focus:outline-none focus:ring-4 focus:ring-blue-100"
+            className="h-11 shrink-0 rounded border border-[#de6c2d] px-3 text-sm font-bold text-[#de6c2d] transition hover:bg-[#fff5ef] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
           >
             주소 찾기
           </button>
@@ -764,7 +764,7 @@ function ContactAddressFields({
           className={`mt-2 h-11 w-full rounded border bg-slate-50 px-3 text-sm text-slate-700 focus:outline-none focus:ring-4 ${
             addressLine1Error
               ? 'border-red-500 focus:border-red-500 focus:ring-red-100'
-              : 'border-slate-300 focus:border-brand-blue focus:ring-blue-100'
+              : 'border-slate-300 focus:border-[#de6c2d] focus:ring-[#f4c8b2]'
           }`}
           placeholder="주소 찾기로 입력"
           defaultValue={values?.addressLine1 ?? ''}
@@ -786,7 +786,7 @@ function ContactAddressFields({
           className={`mt-2 h-11 w-full rounded border px-3 text-sm focus:outline-none focus:ring-4 ${
             addressLine2Error
               ? 'border-red-500 bg-red-50 focus:border-red-500 focus:ring-red-100'
-              : 'border-slate-300 focus:border-brand-blue focus:ring-blue-100'
+              : 'border-slate-300 focus:border-[#de6c2d] focus:ring-[#f4c8b2]'
           }`}
           placeholder="101호"
           defaultValue={values?.addressLine2 ?? ''}
@@ -1021,7 +1021,7 @@ function roadAddressExtra(data: KakaoPostcodeData) {
 function PrimaryButton({ children, disabled, className = '' }: { children: ReactNode; disabled?: boolean; className?: string }) {
   return (
     <button
-      className={`h-11 w-full rounded bg-brand-blue text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400 ${className}`}
+      className={`h-11 w-full rounded bg-[#de6c2d] text-sm font-bold text-white transition hover:bg-[#c45c22] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:hover:bg-slate-400 ${className}`}
       disabled={disabled}
     >
       {children}
@@ -1034,9 +1034,9 @@ function GoogleButton({ label, onClick }: { label: string; onClick: () => void }
     <button
       type="button"
       onClick={onClick}
-      className="flex h-11 w-full items-center justify-center gap-2 rounded border border-slate-300 bg-white text-sm font-bold text-slate-800 transition hover:border-commerce-ink hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
+      className="flex h-11 w-full items-center justify-center gap-2 rounded border border-slate-300 bg-white text-sm font-bold text-slate-800 transition hover:border-[#de6c2d] hover:text-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
     >
-      <span className="grid h-5 w-5 place-items-center rounded-full border border-slate-200 text-xs font-black text-brand-blue">G</span>
+      <span className="grid h-5 w-5 place-items-center rounded-full border border-slate-200 text-xs font-black text-[#de6c2d]">G</span>
       {label}
     </button>
   );
