@@ -80,6 +80,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/buildgraph
       SPRING_DATASOURCE_USERNAME: buildgraph
       SPRING_DATASOURCE_PASSWORD: buildgraph
+      SPRING_FLYWAY_IGNORE_MIGRATION_PATTERNS: "*:missing"
       SPRING_DATA_REDIS_HOST: redis
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: buildgraph
