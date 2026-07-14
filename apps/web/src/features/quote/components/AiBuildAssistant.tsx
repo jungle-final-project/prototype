@@ -680,7 +680,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         onWheel={(event) => event.stopPropagation()}
         onTouchMove={(event) => event.stopPropagation()}
       >
-        <div data-testid="ai-chatbot-panel" className="relative mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[1064px] flex-col">
+        <div data-testid="ai-chatbot-panel" className="relative mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[1064px] scale-[0.8] flex-col">
           {hasMessages ? (
             <div className="flex h-full min-h-0 items-center justify-center">
               <div className="relative flex max-h-full min-h-0 w-full max-w-[896px] flex-col">

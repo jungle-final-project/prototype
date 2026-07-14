@@ -458,7 +458,7 @@ function partRows(
           aria-label={isSelected ? `${part.name} 견적에서 제거` : isReplace ? `${part.name} 견적 교체` : `${part.name} 견적 담기`}
           disabled={isPending}
           onClick={() => isSelected ? onRemovePart(part.id) : onAddPart(part)}
-          className={`rounded-md px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-[#ce7237] disabled:cursor-wait disabled:opacity-60 ${
+          className={`inline-flex min-w-[56px] items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-[#ce7237] disabled:cursor-wait disabled:opacity-60 ${
             isSelected
               ? 'border border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100'
               : 'bg-[#de6c2d] text-white hover:bg-[#c45c22]'
