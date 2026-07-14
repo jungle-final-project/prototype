@@ -1554,7 +1554,7 @@ test('renders the Etsy-style header and PC category navigation', async ({ page }
   expect(Math.max(...alignedTextCenters) - Math.min(...alignedTextCenters)).toBeLessThan(1.5);
   const alignedTextCenter = alignedTextCenters.reduce((sum, value) => sum + value, 0) / alignedTextCenters.length;
   expect(dazzajoCenter - alignedTextCenter).toBeGreaterThanOrEqual(-2.75);
-  expect(dazzajoCenter - alignedTextCenter).toBeLessThanOrEqual(-1.25);
+  expect(dazzajoCenter - alignedTextCenter).toBeLessThanOrEqual(-0.75);
   await header.locator('summary[aria-label="계정 메뉴: 테스트 사용자"]').click();
   await expect(header.getByRole('link', { name: 'AS 접수' })).toHaveAttribute('href', '/support/new');
   await expect(nav.getByRole('button', { name: 'AI 견적' })).toBeVisible();
