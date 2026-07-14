@@ -84,10 +84,9 @@ class PcAgentDiagnosisAsRequestServiceTest {
         StubBroker software = broker("SOFTWARE_RECOVERY", evidence(), DEVICE_ID, "LIVE");
         StubJdbcTemplate jdbc = new StubJdbcTemplate();
 
-        PcAgentDiagnosisAsRequestService.CreateResult created =
-                service(jdbc, software).create(PRINCIPAL, validRequest(), DIAGNOSIS_ID);
+        Map<String, Object> created = service(jdbc, software).create(PRINCIPAL, validRequest(), DIAGNOSIS_ID);
 
-        assertEquals("PHYSICAL_INSPECTION", created.requestType());
+        assertThat(created.get("requestType")).isEqualTo("PHYSICAL_INSPECTION");
     }
 
     @Test
