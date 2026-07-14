@@ -306,6 +306,10 @@ class DiagnosisRequestProcessor:
 
 class AgentDiagnosisWebSocketClient:
     BACKOFF_SECONDS = (1, 2, 5, 10, 30)
+    # 서버가 프레임을 거절해 연결이 끊기는 경우, 같은 프레임을 영원히 재전송하지 않는다.
+    MAX_FRAME_SEND_FAILURES = 3
+    # 이보다 짧게 살고 끊긴 연결은 '정상 연결'로 치지 않고 백오프 사다리를 태운다.
+    STABLE_CONNECTION_SECONDS = 30.0
 
     def __init__(
         self,
@@ -336,6 +340,7 @@ class AgentDiagnosisWebSocketClient:
         self._pending_status_event_ids: set[str] = set()
         self._result_frames: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._pending_result_ids: set[str] = set()
+        self._frame_send_failures: dict[str, int] = {}
 
     def start(self) -> None:
         if self.websocket_factory is None:
@@ -407,6 +412,7 @@ class AgentDiagnosisWebSocketClient:
                 on_close=self._on_close,
             )
             self._socket = socket_app
+            started_at = time.monotonic()
             try:
                 socket_app.run_forever(ping_interval=30, ping_timeout=10, suppress_origin=True)
             except Exception:
@@ -414,7 +420,10 @@ class AgentDiagnosisWebSocketClient:
             if self.stop_event.is_set():
                 break
             delay = self.BACKOFF_SECONDS[min(attempt, len(self.BACKOFF_SECONDS) - 1)]
-            attempt = 0 if self.ready_once else attempt + 1
+            # READY까지 도달했더라도 곧바로 끊긴 연결은 정상으로 치지 않는다. 그렇지 않으면
+            # 서버가 매번 연결을 끊는 상황에서 1초 간격 재접속 핫루프가 된다.
+            stable = time.monotonic() - started_at >= self.STABLE_CONNECTION_SECONDS
+            attempt = 0 if stable else attempt + 1
             self.stop_event.wait(delay)
 
     def _on_open(self, socket_app: Any) -> None:
@@ -460,6 +469,16 @@ class AgentDiagnosisWebSocketClient:
             if decision.status == "ACCEPTED":
                 self._set_state("REQUEST_RECEIVED")
             return
+        if frame_type == "DIAGNOSIS_STATUS_ACK":
+            detail = frame.get("detail")
+            if isinstance(detail, dict):
+                self._acknowledge_frame("status", detail.get("eventId"))
+            return
+        if frame_type == "DIAGNOSIS_RESULT_ACK":
+            detail = frame.get("detail")
+            if isinstance(detail, dict):
+                self._acknowledge_frame("result", detail.get("resultId"))
+            return
         if frame_type == "ERROR" and frame.get("code") in {"AUTH_FAILED", "AGENT_FORBIDDEN"}:
             self.authenticated = False
             self._set_state("FAILED")
@@ -492,6 +511,7 @@ class AgentDiagnosisWebSocketClient:
                 with self._send_lock:
                     socket_app.send(json.dumps(frame, ensure_ascii=False))
             except Exception:
+                self._record_frame_failure("status", event_id)
                 return
             with self._status_lock:
                 self._pending_status_event_ids.discard(event_id)
@@ -511,9 +531,52 @@ class AgentDiagnosisWebSocketClient:
                 with self._send_lock:
                     socket_app.send(json.dumps(frame, ensure_ascii=False))
             except Exception:
+                self._record_frame_failure("result", result_id)
                 return
             with self._status_lock:
                 self._pending_result_ids.discard(result_id)
+
+    def _record_frame_failure(self, kind: str, frame_id: str) -> None:
+        """전송에 반복 실패하는 프레임은 버린다.
+
+        서버가 특정 프레임(예: 한계를 넘는 큰 결과 프레임) 때문에 연결을 끊으면, 그 프레임을
+        계속 껴안고 재접속할 때마다 다시 보내 무한 재접속 루프가 된다. 실패를 세어 폐기한다.
+        """
+        marker = f"{kind}:{frame_id}"
+        with self._status_lock:
+            failures = self._frame_send_failures.get(marker, 0) + 1
+            self._frame_send_failures[marker] = failures
+            if failures < self.MAX_FRAME_SEND_FAILURES:
+                return
+            self._frame_send_failures.pop(marker, None)
+            if kind == "status":
+                self._status_frames.pop(frame_id, None)
+                self._pending_status_event_ids.discard(frame_id)
+            else:
+                self._result_frames.pop(frame_id, None)
+                self._pending_result_ids.discard(frame_id)
+
+    def _acknowledge_frame(self, kind: str, frame_id: str) -> None:
+        """서버가 ACK한 프레임은 보관 목록에서 지워 재전송 대상에서 뺀다."""
+        if not isinstance(frame_id, str) or not frame_id.strip():
+            return
+        with self._status_lock:
+            self._frame_send_failures.pop(f"{kind}:{frame_id}", None)
+            if kind == "status":
+                self._status_frames.pop(frame_id, None)
+                self._pending_status_event_ids.discard(frame_id)
+            else:
+                self._result_frames.pop(frame_id, None)
+                self._pending_result_ids.discard(frame_id)
+
+    def reset_sync_state(self) -> None:
+        """진단 세션을 끝낼 때 전송 버퍼를 비운다."""
+        with self._status_lock:
+            self._status_frames.clear()
+            self._pending_status_event_ids.clear()
+            self._result_frames.clear()
+            self._pending_result_ids.clear()
+            self._frame_send_failures.clear()
 
     def _set_state(self, state: str) -> None:
         if state not in AGENT_STATES:

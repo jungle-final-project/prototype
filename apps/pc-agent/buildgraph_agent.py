@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -65,6 +65,7 @@ from diagnosis_result import (
     DiagnosisRuleEngine,
     actual_device_problem_evidence,
     can_offer_as,
+    compact_result_evidence,
     format_diagnosis_result_detail,
     matching_display_driver_evidence,
 )
@@ -162,7 +163,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.14"
+DEFAULT_AGENT_VERSION = "0.1.16"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -3591,15 +3592,41 @@ def pid_file() -> Path:
     return app_data_dir() / "agent.pid"
 
 
+def running_agent_file() -> Path:
+    return app_data_dir() / "agent-running.json"
+
+
 def write_pid() -> None:
     path = pid_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(os.getpid()), encoding="utf-8")
+    # 실행 중인 Agent의 버전을 남긴다. 나중에 실행된 프로세스가 단일 인스턴스 락에 막힐 때,
+    # 자기가 새 버전인데 구버전이 계속 돌고 있는 상황을 사용자에게 알릴 수 있어야 한다.
+    try:
+        running_agent_file().write_text(
+            json.dumps({"pid": os.getpid(), "agentVersion": DEFAULT_AGENT_VERSION}),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def running_agent_version() -> str | None:
+    try:
+        payload = json.loads(running_agent_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    version = payload.get("agentVersion") if isinstance(payload, dict) else None
+    return version if isinstance(version, str) and version.strip() else None
 
 
 def remove_pid() -> None:
     try:
         pid_file().unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        running_agent_file().unlink(missing_ok=True)
     except Exception:
         return
 
@@ -6156,11 +6183,16 @@ def show_log_viewer(
         if isinstance(response, DiagnosisAsResponse) and isinstance(payload, DiagnosisAsRequest):
             stored_request_type = response.request_type or payload.request_type
             request_type = "기존 일반 AS 티켓 (PHYSICAL_INSPECTION)" if stored_request_type == "PHYSICAL_INSPECTION" else stored_request_type
+            diagnosed_result = ui.get("diagnosisResult")
+            diagnosis_problem = payload.diagnosis_title or "진단 결과 확인"
+            technician_note = "원격 기사 점검 필요"
+            if isinstance(diagnosed_result, DiagnosisResult) and not diagnosed_result.remote_as_recommended:
+                technician_note = "사용자 요청 접수"
             detail_rows = (
                 ("요청 번호", response.request_number),
                 ("요청 유형", request_type),
-                ("진단 문제", "그래픽 장치 구성 이상"),
-                ("기사 점검", "원격 기사 점검 필요"),
+                ("진단 문제", diagnosis_problem),
+                ("기사 점검", technician_note),
                 ("진단 요약", response.diagnosis_summary or payload.diagnosis_summary),
             )
             row_y = (400, 428, 456, 484, 512)
@@ -6443,6 +6475,16 @@ def show_log_viewer(
             ui["status"] = "완료된 진단 세션과 결과가 필요합니다."
             render()
             return
+        # 뷰어가 들고 있는 세션은 진단 시작 시점(RUNNING) 스냅샷이라 완료 후에도 갱신되지 않는다.
+        # 진단이 실제로 끝났으면 완료 상태로 맞춰준다 — 그러지 않으면 AS 접수가 항상 거절된다.
+        snapshot = ui.get("diagnosisSnapshot")
+        if (
+            session.agent_state != "COMPLETED"
+            and isinstance(snapshot, DiagnosisRunSnapshot)
+            and snapshot.diagnosis_id == result.diagnosis_id
+            and snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+        ):
+            session = dataclass_replace(session, agent_state="COMPLETED")
         current_config = load_config(config_path)
         try:
             payload = build_diagnosis_as_request(
@@ -7531,6 +7573,16 @@ def run_background(
 ) -> int:
     instance_lock = acquire_named_instance_lock(BACKGROUND_INSTANCE_MUTEX_NAME)
     if instance_lock is None:
+        # 이미 실행 중인 Agent가 있으면 이 프로세스는 조용히 물러난다. 다만 새 버전을 받아 실행한
+        # 경우에는 구버전이 계속 돌게 되므로, 사용자가 그 사실을 모른 채 넘어가지 않도록 알린다.
+        running_version = running_agent_version()
+        if running_version and running_version != DEFAULT_AGENT_VERSION:
+            show_agent_error_dialog(
+                "PCAgent가 이미 실행 중입니다",
+                f"실행 중인 PCAgent {running_version}이(가) 있어 새 버전 {DEFAULT_AGENT_VERSION}이(가) "
+                "적용되지 않았습니다.\n\n"
+                "작업 표시줄 트레이의 PCAgent를 종료한 뒤 새 앱을 다시 실행해 주세요.",
+            )
         if open_viewer_when_running:
             ViewerRequestSignal(
                 app_data_dir() / "show-viewer-request.json",
@@ -7622,7 +7674,9 @@ def run_background(
             initial_metrics_coordinator.stop()
             if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
                 try:
-                    result = diagnosis_rule_engine.evaluate(metrics_store.snapshot, snapshot)
+                    result = compact_result_evidence(
+                        diagnosis_rule_engine.evaluate(metrics_store.snapshot, snapshot)
+                    )
                     diagnosis_result_store.save(result)
                     sync_diagnosis_result()
                     diagnosis_store.update_state("COMPLETED")
@@ -7679,6 +7733,9 @@ def run_background(
             forwarded_event_ids.clear()
             client = diagnosis_client_holder.get("value")
             if client is not None:
+                # 전송 버퍼도 함께 비운다. 남겨두면 재접속할 때마다 지난 진단 프레임을
+                # 다시 보내고, 서버가 그 프레임을 거절하면 무한 재접속 루프가 된다.
+                client.reset_sync_state()
                 client.mark_idle()
             return True
 

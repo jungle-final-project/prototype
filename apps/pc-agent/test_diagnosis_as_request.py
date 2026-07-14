@@ -15,7 +15,7 @@ from diagnosis_as_request import (
     build_diagnosis_as_request,
     resolve_as_web_url,
 )
-from diagnosis_request_agent import DiagnosisRequest, DiagnosisSession
+from diagnosis_request_agent import STANDALONE, DiagnosisRequest, DiagnosisSession
 from diagnosis_result import DiagnosisEvidence, DiagnosisFinding, DiagnosisResult
 
 
@@ -88,6 +88,24 @@ def make_result(*items: DiagnosisEvidence, resolution_type: str = "PHYSICAL_INSP
         ("냉각 계통 이상",),
         ("GPU 냉각 팬 점검",),
         resolution_type,
+        False,
+        (),
+        "2026-07-14T01:01:45Z",
+    )
+
+
+def make_normal_result() -> DiagnosisResult:
+    """이상 근거가 없는 정상 결과 — findings가 비어 있고 resolution_type이 NONE이다."""
+    return DiagnosisResult(
+        "diagnosis-1",
+        "NORMAL",
+        "측정된 하드웨어 상태가 정상 범위입니다.",
+        "이상 근거가 확인되지 않았습니다.",
+        (make_evidence(), make_evidence("fan_rpm", 1200.0)),
+        (),
+        (),
+        ("현재 상태 유지",),
+        "NONE",
         False,
         (),
         "2026-07-14T01:01:45Z",
@@ -168,15 +186,38 @@ class DiagnosisAsRequestTest(unittest.TestCase):
             build_diagnosis_as_request(make_session(state="RUNNING"), make_result(), consent_accepted=True)
         with self.assertRaises(DiagnosisAsValidationError):
             build_diagnosis_as_request(
-                make_session(), make_result(resolution_type="USER_ACTION"), consent_accepted=True
-            )
-        with self.assertRaises(DiagnosisAsValidationError):
-            build_diagnosis_as_request(
                 make_session(), make_result(), consent_accepted=True, expected_device_id="device-2"
             )
         unsupported = make_evidence(value=None, availability="UNSUPPORTED")
         with self.assertRaises(DiagnosisAsValidationError):
             build_diagnosis_as_request(make_session(), make_result(unsupported), consent_accepted=True)
+
+    def test_normal_result_can_create_as_request_from_web_session(self) -> None:
+        normal = make_normal_result()
+
+        payload = build_diagnosis_as_request(make_session(), normal, consent_accepted=True).to_dict()
+
+        self.assertEqual("PHYSICAL_INSPECTION", payload["requestType"])
+        self.assertTrue(payload["evidenceSummary"])
+        self.assertEqual([], payload["evidenceSummary"][0]["findingCodes"])
+
+    def test_normal_result_requires_web_symptom_session(self) -> None:
+        standalone = DiagnosisSession(
+            DiagnosisRequest(
+                "diagnosis-1",
+                "device-1",
+                "",
+                ("gpu",),
+                "2026-07-14T01:00:00Z",
+                "2026-07-14T01:02:00Z",
+                "LIVE",
+                STANDALONE,
+            ),
+            "COMPLETED",
+        )
+
+        with self.assertRaises(DiagnosisAsValidationError):
+            build_diagnosis_as_request(standalone, make_normal_result(), consent_accepted=True)
 
     def test_posts_bearer_json_and_uses_diagnosis_idempotency_key(self) -> None:
         captured: dict[str, Any] = {}

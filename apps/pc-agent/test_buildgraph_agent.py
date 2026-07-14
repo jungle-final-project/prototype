@@ -2704,6 +2704,26 @@ class AgentGoal1112Test(unittest.TestCase):
         ensure_default_config.assert_not_called()
         show_log_viewer.assert_not_called()
 
+    def test_run_background_warns_when_an_older_agent_is_already_running(self) -> None:
+        with patch("buildgraph_agent.acquire_named_instance_lock", return_value=None), \
+            patch("buildgraph_agent.running_agent_version", return_value="0.1.14"), \
+            patch("buildgraph_agent.show_agent_error_dialog") as show_dialog:
+            exit_code = agent.run_background(Path("agent-config.json"), with_tray=False)
+
+        self.assertEqual(exit_code, 0)
+        show_dialog.assert_called_once()
+        self.assertIn("0.1.14", show_dialog.call_args.args[1])
+        self.assertIn(agent.DEFAULT_AGENT_VERSION, show_dialog.call_args.args[1])
+
+    def test_run_background_stays_quiet_when_the_running_agent_is_the_same_version(self) -> None:
+        with patch("buildgraph_agent.acquire_named_instance_lock", return_value=None), \
+            patch("buildgraph_agent.running_agent_version", return_value=agent.DEFAULT_AGENT_VERSION), \
+            patch("buildgraph_agent.show_agent_error_dialog") as show_dialog:
+            exit_code = agent.run_background(Path("agent-config.json"), with_tray=False)
+
+        self.assertEqual(exit_code, 0)
+        show_dialog.assert_not_called()
+
     def test_run_background_signals_existing_agent_for_user_launch_when_instance_lock_exists(self) -> None:
         config_path = Path("agent-config.json")
         with patch("buildgraph_agent.acquire_named_instance_lock", return_value=None) as acquire_lock, \
