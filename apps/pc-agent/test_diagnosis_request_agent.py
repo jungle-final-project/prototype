@@ -8,9 +8,13 @@ from unittest.mock import patch
 from diagnosis_request_agent import (
     AgentDiagnosisWebSocketClient,
     BackgroundViewerController,
+    DiagnosisRequest,
     DiagnosisRequestProcessor,
+    DiagnosisSession,
     DiagnosisSessionStore,
+    STANDALONE,
     ViewerRequestSignal,
+    WEB_REQUEST,
     diagnosis_websocket_url,
 )
 
@@ -18,11 +22,17 @@ from diagnosis_request_agent import (
 NOW = datetime(2026, 7, 13, 1, 0, tzinfo=timezone.utc)
 
 
-def request_payload(diagnosis_id="diagnosis-1", device_id="device-1", expires_at=None, mode="LIVE"):
+def request_payload(
+    diagnosis_id="diagnosis-1",
+    device_id="device-1",
+    expires_at=None,
+    mode="LIVE",
+    symptom="게임 실행 후 프레임이 급격히 저하됨",
+):
     return {
         "diagnosisId": diagnosis_id,
         "deviceId": device_id,
-        "symptom": "게임 실행 후 프레임이 급격히 저하됨",
+        "symptom": symptom,
         "requestedChecks": ["cpu", "gpu", "memory", "disk", "cooling"],
         "requestedAt": NOW.isoformat(),
         "expiresAt": (expires_at or NOW + timedelta(minutes=2)).isoformat(),
@@ -35,14 +45,12 @@ class DiagnosisRequestProcessorTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.path = Path(self.temporary.name) / "diagnosis-request-state.json"
         self.shown = []
-        self.metrics_triggers = []
         self.store = DiagnosisSessionStore(self.path)
         self.processor = DiagnosisRequestProcessor(
             self.store,
             device_id="device-1",
             now=lambda: NOW,
             on_request=self.shown.append,
-            on_initial_metrics_requested=self.metrics_triggers.append,
         )
 
     def tearDown(self):
@@ -54,8 +62,45 @@ class DiagnosisRequestProcessorTest(unittest.TestCase):
         self.assertEqual("ACCEPTED", decision.status)
         self.assertEqual("REQUEST_RECEIVED", self.store.session.agent_state)
         self.assertEqual("게임 실행 후 프레임이 급격히 저하됨", self.store.session.request.symptom)
+        self.assertEqual(WEB_REQUEST, self.store.session.request.source)
         self.assertEqual(1, len(self.shown))
-        self.assertEqual(1, len(self.metrics_triggers))
+
+    def test_preserves_each_web_symptom_without_replacing_it(self):
+        symptoms = ("게임 A에서만 화면이 멈춥니다.", "렌더링 중 GPU 온도가 상승합니다.")
+        for index, symptom in enumerate(symptoms):
+            with self.subTest(symptom=symptom):
+                store = DiagnosisSessionStore(Path(self.temporary.name) / f"state-{index}.json")
+                shown = []
+                processor = DiagnosisRequestProcessor(
+                    store,
+                    device_id="device-1",
+                    now=lambda: NOW,
+                    on_request=shown.append,
+                )
+                decision = processor.process(
+                    request_payload(diagnosis_id=f"diagnosis-{index}", symptom=symptom),
+                    authenticated=True,
+                )
+                self.assertEqual(symptom, decision.session.request.symptom)
+                self.assertEqual(symptom, shown[0].request.symptom)
+
+    def test_standalone_session_with_empty_symptom_round_trips(self):
+        request = DiagnosisRequest(
+            diagnosis_id="standalone-1",
+            device_id="device-1",
+            symptom="",
+            requested_checks=("cpu", "gpu", "memory", "disk"),
+            requested_at=NOW.isoformat(),
+            expires_at=(NOW + timedelta(minutes=2)).isoformat(),
+            mode="LIVE",
+            source=STANDALONE,
+        )
+        self.store.accept(DiagnosisSession(request))
+
+        restored = DiagnosisSessionStore(self.path).session
+
+        self.assertEqual(STANDALONE, restored.request.source)
+        self.assertEqual("", restored.request.symptom)
 
     def test_rejects_auth_device_expiry_and_busy_cases(self):
         self.assertEqual("AUTH_FAILED", self.processor.process(request_payload(), authenticated=False).status)
@@ -290,6 +335,29 @@ class BackgroundViewerControllerTest(unittest.TestCase):
         controller.shutdown()
 
         self.assertEqual(["focus", "refresh", "complete", "destroy"], events)
+
+    def test_window_close_removes_all_view_callbacks(self):
+        events = []
+        controller = BackgroundViewerController(
+            Path("agent-config.json"),
+            diagnosis_session_provider=lambda: None,
+            connection_state_provider=lambda: "RUNNING",
+            show_viewer=lambda *args, **kwargs: None,
+        )
+        controller._on_window_ready(
+            lambda: events.append("focus"),
+            lambda session: events.append("session"),
+            lambda: events.append("refresh"),
+            lambda: events.append("complete"),
+            lambda: events.append("destroy"),
+        )
+        controller._on_window_closed()
+
+        controller.refresh_metrics()
+        controller.complete_initial_metrics()
+        controller.shutdown()
+
+        self.assertEqual(["focus"], events)
 
 
 if __name__ == "__main__":

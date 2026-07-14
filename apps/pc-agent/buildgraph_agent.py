@@ -31,10 +31,13 @@ from demo_sensor_data import DEMO_SENSOR_SAMPLES
 from diagnosis_request_agent import (
     AgentDiagnosisWebSocketClient,
     BackgroundViewerController,
+    DiagnosisRequest,
     DiagnosisSession,
     DiagnosisSessionStore,
     DiagnosisRequestProcessor,
+    STANDALONE,
     ViewerRequestSignal,
+    WEB_REQUEST,
 )
 from diagnosis_as_request import (
     DiagnosisAsRequest,
@@ -64,6 +67,7 @@ from initial_metrics import (
     ERROR,
     FAILED,
     MODERATE,
+    NORMAL,
     PERMISSION_REQUIRED,
     UNAVAILABLE,
     UNSUPPORTED,
@@ -188,6 +192,70 @@ PC_AGENT_UI_FLOW = (
 PC_AGENT_DIAGNOSIS_STEPS = ("증상 확인", "하드웨어 진단", "결과 및 조치")
 PC_AGENT_WINDOW_WIDTH = 1000
 PC_AGENT_WINDOW_HEIGHT = 740
+STANDALONE_INITIAL_DESCRIPTION = (
+    "현재 PC의 하드웨어 상태를 확인할 수 있습니다.\n"
+    "상태 확인을 시작하면 CPU, GPU, 메모리, 저장장치 정보를 수집합니다."
+)
+
+
+@dataclass(frozen=True)
+class SymptomDisplayState:
+    title: str
+    description: str
+    helper: str
+
+
+def initial_status_summary(metrics: MetricsSnapshot | None) -> str:
+    if not isinstance(metrics, MetricsSnapshot) or not metrics.diagnosis_id or not metrics.readings:
+        return STANDALONE_INITIAL_DESCRIPTION
+    if not metrics.initial_complete:
+        return "CPU, GPU, 메모리, 저장장치 상태를 확인하고 있습니다."
+
+    abnormal_statuses = {WARNING, ABNORMAL}
+    gpu_usage = metrics.latest("gpu", "usage")
+    gpu_temperature = metrics.latest("gpu", "temperature")
+    if (
+        gpu_usage is not None
+        and gpu_temperature is not None
+        and gpu_usage.status in abnormal_statuses
+        and gpu_temperature.status in abnormal_statuses
+    ):
+        return "GPU 부하와 온도가 높아 냉각 상태 확인이 필요합니다."
+
+    ram_usage = metrics.latest("ram", "usage")
+    if ram_usage is not None and ram_usage.status in abnormal_statuses:
+        return "메모리 사용량이 높아 메모리 부족 가능성을 확인해야 합니다."
+
+    unavailable_components = {
+        component
+        for component in ("cpu", "gpu", "ram", "disk")
+        if (
+            (reading := metrics.latest(component, "usage", "activity")) is not None
+            and reading.availability in {UNSUPPORTED, PERMISSION_REQUIRED, FAILED}
+        )
+    }
+    if len(unavailable_components) >= 2:
+        return "일부 센서를 사용할 수 없어 초기 상태 확인이 제한됩니다."
+    return "초기 측정에서는 뚜렷한 이상이 확인되지 않았습니다. 정밀 진단을 진행해 주세요."
+
+
+def symptom_display_state(
+    source: str,
+    symptom: str,
+    metrics: MetricsSnapshot | None,
+) -> SymptomDisplayState:
+    if source == WEB_REQUEST and symptom.strip():
+        return SymptomDisplayState(
+            "전달받은 증상",
+            symptom,
+            "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.",
+        )
+    helper = (
+        "현재 하드웨어 상태를 수집하기 전입니다."
+        if not isinstance(metrics, MetricsSnapshot) or not metrics.diagnosis_id
+        else "실제 센서 측정값을 바탕으로 작성한 초기 관찰입니다."
+    )
+    return SymptomDisplayState("초기 상태 요약", initial_status_summary(metrics), helper)
 
 
 def next_pc_agent_ui_state(current: str) -> str:
@@ -203,24 +271,121 @@ def diagnosis_session_ui_state(
     metrics: MetricsSnapshot | None,
     diagnosis: DiagnosisRunSnapshot | None = None,
     result: DiagnosisResult | None = None,
+    diagnosis_started: bool = False,
+    result_requested: bool = False,
 ) -> str:
-    if (
+    result_available = diagnosis_result_available(session, diagnosis, result)
+    if result_requested and result_available:
+        return "DIAGNOSIS_RESULT"
+    if diagnosis_started or (
         isinstance(session, DiagnosisSession)
-        and isinstance(metrics, MetricsSnapshot)
-        and metrics.diagnosis_id == session.request.diagnosis_id
-        and metrics.initial_complete
+        and session.agent_state in {"RUNNING", "COMPLETED", "FAILED"}
     ):
-        if (
-            isinstance(diagnosis, DiagnosisRunSnapshot)
-            and diagnosis.diagnosis_id == session.request.diagnosis_id
-            and diagnosis.transition_allowed
-            and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
-            and isinstance(result, DiagnosisResult)
-            and result.diagnosis_id == session.request.diagnosis_id
-        ):
-            return "DIAGNOSIS_RESULT"
         return "DIAGNOSING"
     return "SYMPTOM_CONFIRM"
+
+
+def diagnosis_result_available(
+    session: DiagnosisSession | None,
+    diagnosis: DiagnosisRunSnapshot | None,
+    result: DiagnosisResult | None,
+) -> bool:
+    return (
+        isinstance(session, DiagnosisSession)
+        and isinstance(diagnosis, DiagnosisRunSnapshot)
+        and diagnosis.diagnosis_id == session.request.diagnosis_id
+        and diagnosis.transition_allowed
+        and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+        and isinstance(result, DiagnosisResult)
+        and result.diagnosis_id == session.request.diagnosis_id
+    )
+
+
+def start_diagnosis_once(
+    session: DiagnosisSession | None,
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_orchestrator: DiagnosisOrchestrator,
+) -> DiagnosisSession | None:
+    current_session = diagnosis_store.session
+    if (
+        not isinstance(session, DiagnosisSession)
+        or not isinstance(current_session, DiagnosisSession)
+        or current_session.request.diagnosis_id != session.request.diagnosis_id
+        or current_session.agent_state != "REQUEST_RECEIVED"
+    ):
+        return None
+    metrics = metrics_store.snapshot
+    if metrics.diagnosis_id != current_session.request.diagnosis_id or not metrics.initial_complete:
+        return None
+    diagnosis_orchestrator.prepare(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+        current_session.request.requested_checks,
+    )
+    diagnosis_store.update_state("RUNNING")
+    if not diagnosis_orchestrator.start(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+        current_session.request.requested_checks,
+    ):
+        diagnosis_store.update_state("REQUEST_RECEIVED")
+        return None
+    return diagnosis_store.session
+
+
+def start_initial_metrics_session(
+    session: DiagnosisSession | None,
+    mode: str,
+    device_id: str | None,
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_result_store: DiagnosisResultStore,
+    diagnosis_orchestrator: DiagnosisOrchestrator,
+    initial_metrics_coordinator: InitialMetricsCoordinator,
+    now: Callable[[], datetime] | None = None,
+) -> DiagnosisSession | None:
+    active_session = session
+    if not isinstance(active_session, DiagnosisSession):
+        normalized_mode = mode.upper()
+        if normalized_mode not in {"LIVE", "DEMO"}:
+            return None
+        requested_at = (now or (lambda: datetime.now(timezone.utc)))()
+        active_session = DiagnosisSession(DiagnosisRequest(
+            diagnosis_id=f"standalone-{uuid.uuid4()}",
+            device_id=device_id or "standalone",
+            symptom="",
+            requested_checks=("cpu", "gpu", "memory", "disk", "cooling"),
+            requested_at=requested_at.isoformat(),
+            expires_at=(requested_at + timedelta(hours=1)).isoformat(),
+            mode=normalized_mode,
+            source=STANDALONE,
+        ))
+        diagnosis_store.accept(active_session)
+    current_session = diagnosis_store.session
+    if (
+        not isinstance(current_session, DiagnosisSession)
+        or current_session.request.diagnosis_id != active_session.request.diagnosis_id
+        or current_session.agent_state != "REQUEST_RECEIVED"
+    ):
+        return None
+    existing_metrics = metrics_store.snapshot
+    if (
+        existing_metrics.diagnosis_id == current_session.request.diagnosis_id
+        and existing_metrics.initial_complete
+    ):
+        return current_session
+    diagnosis_result_store.clear()
+    diagnosis_orchestrator.prepare(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+        current_session.request.requested_checks,
+    )
+    started = initial_metrics_coordinator.start(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+    )
+    return current_session if started else None
 
 
 def resolve_ui_font_family(root: Any | None = None) -> str:
@@ -3696,9 +3861,9 @@ def component_status(
     readings = (usage, *optional)
     centralized = [reading.status for reading in readings if reading.status not in {UNAVAILABLE, ERROR}]
     if usage.availability == SENSOR_FAILED or any(item.availability == SENSOR_FAILED for item in optional):
-        return "확인 실패", "warning"
+        return "확인 실패", "danger"
     if usage.availability == SENSOR_PERMISSION_REQUIRED:
-        return "권한 필요", "warning"
+        return "권한 필요", "default"
     if usage.availability == SENSOR_PENDING:
         return "수집 중", "default"
     if usage.availability != SENSOR_COLLECTED:
@@ -3709,6 +3874,8 @@ def component_status(
         return "주의", "warning"
     if MODERATE in centralized:
         return "보통", "default"
+    if NORMAL in centralized:
+        return "정상", "default"
     usage_value = reading_number(usage) or 0.0
     temperature_value = reading_number(temperature) if temperature is not None else None
     fan_value = reading_number(fan) if fan is not None else None
@@ -4862,6 +5029,8 @@ def show_log_viewer(
     metrics_snapshot_provider: Any = None,
     diagnosis_snapshot_provider: Any = None,
     diagnosis_result_provider: Any = None,
+    start_initial_metrics: Any = None,
+    start_diagnosis: Any = None,
     cancel_diagnosis: Any = None,
     retry_diagnosis: Any = None,
     on_window_ready: Any = None,
@@ -4933,18 +5102,30 @@ def show_log_viewer(
     initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
     diagnosis_snapshot = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
     result_snapshot = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
+    diagnosis_started = (
+        isinstance(diagnosis_session, DiagnosisSession)
+        and diagnosis_session.agent_state in {"RUNNING", "COMPLETED", "FAILED"}
+    )
     if not capture_state_override:
-        capture_state = diagnosis_session_ui_state(diagnosis_session, initial_metrics, diagnosis_snapshot, result_snapshot)
+        capture_state = diagnosis_session_ui_state(
+            diagnosis_session,
+            initial_metrics,
+            diagnosis_snapshot,
+            result_snapshot,
+            diagnosis_started=diagnosis_started,
+        )
     ui = {
         "state": capture_state,
-        "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else True,
+        "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else False,
         "diagnosisSession": diagnosis_session,
         "diagnosisSnapshot": diagnosis_snapshot,
         "diagnosisResult": result_snapshot,
         "requestLocked": isinstance(diagnosis_session, DiagnosisSession),
+        "diagnosisStarted": diagnosis_started,
+        "resultRequested": False,
         "busy": False,
         "diagnosisReady": False,
-        "status": "초기 메트릭을 수집하고 있습니다." if isinstance(diagnosis_session, DiagnosisSession) else "",
+        "status": "",
         "diagnosis": None,
         "window": None,
         "asState": "diagnosisResult",
@@ -4952,7 +5133,6 @@ def show_log_viewer(
         "asRequestPayload": None,
         "ticketUrl": None,
     }
-    manual_sensor_providers: dict[str, Any] = {}
     image_refs: list[Any] = []
     button_counter = {"value": 0}
     drag_origin = {"x": 0, "y": 0}
@@ -5147,18 +5327,23 @@ def show_log_viewer(
                 active_session.request.symptom,
                 active_session.request.requested_checks,
             )
+            source = active_session.request.source
+            symptom = active_session.request.symptom
         else:
-            provider_key = "demo" if ui["demo"] else "live"
-            provider = manual_sensor_providers.get(provider_key)
-            if provider is None:
-                provider = DemoSensorProvider() if ui["demo"] else SystemSensorProvider()
-                manual_sensor_providers[provider_key] = provider
-            screen_input = provider.load(config)
+            metrics = MetricsSnapshot(None, None, False, ())
+            screen_input = metrics_snapshot_screen_input(
+                metrics,
+                "",
+                ("cpu", "gpu", "memory", "disk"),
+            )
+            source = STANDALONE
+            symptom = ""
         screen = build_symptom_screen_state(screen_input)
+        display = symptom_display_state(source, symptom, metrics)
         for x, card in zip((70, 287, 504, 721), screen.widgets, strict=False):
             tone_color = colors[card.tone] if card.tone in {"warning", "danger"} else None
-            outline = tone_color or (colors["blue"] if card.highlighted else "#d9d9d9")
-            emphasis = bool(tone_color or card.highlighted)
+            outline = tone_color or "#d9d9d9"
+            emphasis = bool(tone_color)
             round_rect(x, 182, x + 209, 350, 12, "#ffffff", outline, 2 if emphasis else 1)
             text(x + 18, 199, card.title, 17, tone_color or colors["text"], "semibold")
             text(x + 18, 227, card.primary, 13, tone_color or colors["text"], "semibold")
@@ -5170,13 +5355,20 @@ def show_log_viewer(
         round_rect(70, 370, 930, 530, 12, "#ffffff", "#dddddd")
         canvas.create_oval(90, 393, 132, 435, fill="#f4f4f4", outline="")
         draw_chat_icon(111, 414, 9)
-        text(153, 390, "전달받은 증상", 17, colors["text"], "semibold")
-        text(153, 423, f"“{screen.symptom}”", 15, colors["text"], width=735)
-        text(153, 477, "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.", 13, colors["muted"])
-        if ui["requestLocked"]:
-            button(390, 555, 610, 608, "초기 메트릭 수집 중", start_diagnosis, True, disabled=True, size=15)
+        text(153, 390, display.title, 17, colors["text"], "semibold")
+        text(153, 423, display.description, 15, colors["text"], width=735)
+        text(153, 489, display.helper, 12, colors["muted"])
+        initial_ready = (
+            isinstance(active_session, DiagnosisSession)
+            and metrics.diagnosis_id == active_session.request.diagnosis_id
+            and metrics.initial_complete
+        )
+        if not isinstance(active_session, DiagnosisSession):
+            button(390, 555, 610, 608, "상태 확인 시작", handle_symptom_action, True, size=15)
+        elif initial_ready:
+            button(390, 555, 610, 608, "진단 시작", handle_symptom_action, True, disabled=bool(ui["busy"]), size=15)
         else:
-            button(390, 555, 610, 608, "진단 시작", start_diagnosis, True, size=15)
+            button(390, 555, 610, 608, "상태 확인 중", handle_symptom_action, True, disabled=True, size=15)
 
     def draw_progress_ring(x: int, y: int, progress: int) -> None:
         canvas.create_oval(x - 18, y - 18, x + 18, y + 18, outline="#e8e8e8", width=4)
@@ -5218,6 +5410,8 @@ def show_log_viewer(
         scope_text = f"점검 범위: {scope}" if scope else "요청된 점검 범위를 확인하고 있습니다."
         progress = snapshot.progress if snapshot.diagnosis_id else 0
         current_label = diagnosis_current_task_label(snapshot)
+        result = ui.get("diagnosisResult")
+        result_available = diagnosis_result_available(active_session, snapshot, result)
 
         round_rect(70, 180, 930, 650, 12, "#ffffff", "#d7dce0")
         canvas.create_oval(94, 207, 136, 249, fill="#ffffff", outline="#d7dce0")
@@ -5226,10 +5420,10 @@ def show_log_viewer(
         text(153, 225, symptom, 15, colors["text"], "regular", width=735)
         text(153, 252, scope_text, 11, colors["muted"])
         line(95, 278, 905, 278)
-        text(500, 298, "진단 진행 중", 21, colors["text"], "semibold", "center")
+        text(500, 298, "진단 완료" if result_available else "진단 진행 중", 21, colors["text"], "semibold", "center")
         draw_progress_ring(462, 342, progress)
         text(515, 342, f"{progress}%", 24, colors["text"], "regular", "center")
-        detail = ui["status"] or current_label
+        detail = "진단 작업이 완료되었습니다." if result_available else ui["status"] or current_label
         text(500, 376, str(detail), 12, colors["muted"], "regular", "center")
         line(95, 404, 905, 404)
 
@@ -5312,7 +5506,9 @@ def show_log_viewer(
             color = colors["red"] if event.event_type in {"TASK_FAILED", "TASK_TIMED_OUT", "DIAGNOSIS_FAILED"} else colors["muted"]
             text(517, cy, stamp, 10, color, "regular", "w")
             text(580, cy, event.message, 10, color, "regular", "w", width=310)
-        if snapshot.state in {"FAILED", "TIMED_OUT"}:
+        if result_available:
+            button(390, 665, 610, 715, "진단 결과 보기", show_diagnosis_result, True, size=15)
+        elif snapshot.state in {"FAILED", "TIMED_OUT"}:
             button(390, 665, 610, 715, "진단 재시도", request_diagnosis_retry, False, size=15)
         elif snapshot.state == "CANCELLED":
             text(500, 690, "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
@@ -5427,7 +5623,16 @@ def show_log_viewer(
                 ui["diagnosisSnapshot"] = diagnosis
             if isinstance(result, DiagnosisResult):
                 ui["diagnosisResult"] = result
-            ui["state"] = diagnosis_session_ui_state(active_session, metrics, diagnosis, result)
+            ui["state"] = diagnosis_session_ui_state(
+                active_session,
+                metrics,
+                diagnosis,
+                result,
+                diagnosis_started=bool(ui["diagnosisStarted"]),
+                result_requested=bool(ui["resultRequested"]),
+            )
+            if ui["asState"] == "asCompleted":
+                ui["state"] = "DIAGNOSIS_RESULT"
             if isinstance(diagnosis, DiagnosisRunSnapshot) and diagnosis.diagnosis_id:
                 if diagnosis.state == "FAILED":
                     ui["status"] = "필수 진단 증거를 만들지 못했습니다."
@@ -5459,6 +5664,8 @@ def show_log_viewer(
         ui["demo"] = not bool(ui["demo"])
         ui["state"] = "SYMPTOM_CONFIRM"
         ui["diagnosisReady"] = False
+        ui["diagnosisStarted"] = False
+        ui["resultRequested"] = False
         ui["diagnosis"] = None
         ui["window"] = None
         ui["asState"] = "diagnosisResult"
@@ -5468,46 +5675,55 @@ def show_log_viewer(
         ui["status"] = ""
         render()
 
-    def start_diagnosis() -> None:
-        if ui["demo"] and not ui["requestLocked"]:
-            ui["status"] = "시연 진단은 웹에서 DEMO 요청을 보낼 때 시작됩니다."
+    def handle_symptom_action() -> None:
+        if ui["busy"]:
+            return
+        active_session = ui.get("diagnosisSession")
+        mode = "DEMO" if ui["demo"] else "LIVE"
+        if not isinstance(active_session, DiagnosisSession):
+            if not callable(start_initial_metrics):
+                ui["status"] = "하드웨어 상태 수집을 시작할 수 없습니다."
+                render()
+                return
+            ui["busy"] = True
+            ui["status"] = "하드웨어 상태 수집을 시작합니다."
+            render()
+            started_session = start_initial_metrics(None, mode)
+            ui["busy"] = False
+            if isinstance(started_session, DiagnosisSession):
+                apply_diagnosis_session(started_session)
+            else:
+                ui["status"] = "하드웨어 상태 수집을 시작하지 못했습니다."
+                render()
+            return
+
+        metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+        if (
+            not isinstance(metrics, MetricsSnapshot)
+            or metrics.diagnosis_id != active_session.request.diagnosis_id
+            or not metrics.initial_complete
+        ):
+            return
+        if not callable(start_diagnosis):
+            ui["status"] = "진단을 시작할 수 없습니다."
             render()
             return
-        ui["state"] = next_pc_agent_ui_state(str(ui["state"]))
-        ui["status"] = ""
-        render()
         ui["busy"] = True
-        ui["status"] = "최근 30분 로그를 준비하고 있습니다."
+        started_session = start_diagnosis(active_session, active_session.request.mode)
+        ui["busy"] = False
+        if isinstance(started_session, DiagnosisSession):
+            ui["diagnosisSession"] = started_session
+            ui["diagnosisStarted"] = True
+            ui["resultRequested"] = False
+            ui["state"] = "DIAGNOSING"
+            ui["status"] = ""
+        else:
+            ui["status"] = "진단을 시작하지 못했습니다."
         render()
 
-        def worker() -> None:
-            try:
-                current_config = load_config(config_path)
-                current_path = log_file(current_config)
-                window = default_incident_window("REMOTE_DRIVER_OS", detected_at=datetime.now(KST), trigger_type="USER_REQUEST")
-                gzip_path = current_config.log_dir.parent / "previews" / f"{window.incident_id}.jsonl.gz"
-                gzip_window(current_path, gzip_path, window)
-                result = preview_as_rag(current_config, gzip_path, f"agent-rag-preview-{uuid.uuid4()}", window)
-                record = diagnosis_history_record(result, window)
-                append_diagnosis_history(current_config, record)
-
-                def apply() -> None:
-                    ui["busy"] = False
-                    ui["diagnosisReady"] = True
-                    ui["diagnosis"] = result
-                    ui["window"] = window
-                    ui["status"] = "하드웨어 분석이 완료되었습니다."
-                    render()
-
-                root.after(0, apply)
-            except Exception as exception:
-                def fail(current: Exception = exception) -> None:
-                    ui["busy"] = False
-                    ui["status"] = event_panel_failure_message(current)
-                    render()
-                root.after(0, fail)
-
-        threading.Thread(target=worker, daemon=True).start()
+    def show_diagnosis_result() -> None:
+        ui["resultRequested"] = True
+        render()
 
     def request_diagnosis_cancel() -> None:
         if callable(cancel_diagnosis) and cancel_diagnosis():
@@ -5809,6 +6025,18 @@ def show_log_viewer(
         next_id = session.request.diagnosis_id if isinstance(session, DiagnosisSession) else None
         if previous_id != next_id:
             ui["busy"] = False
+            ui["diagnosisStarted"] = False
+            ui["resultRequested"] = False
+            ui["diagnosisSnapshot"] = None
+            ui["diagnosisResult"] = None
+            ui["diagnosisReady"] = False
+            ui["diagnosis"] = None
+            ui["window"] = None
+            ui["asState"] = "diagnosisResult"
+            ui["asRequest"] = None
+            ui["asRequestPayload"] = None
+            ui["ticketUrl"] = None
+            ui["status"] = ""
         ui["diagnosisSession"] = session
         ui["requestLocked"] = isinstance(session, DiagnosisSession)
         if isinstance(session, DiagnosisSession):
@@ -5818,16 +6046,17 @@ def show_log_viewer(
             result = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
             ui["diagnosisSnapshot"] = diagnosis
             ui["diagnosisResult"] = result
-            ui["state"] = diagnosis_session_ui_state(session, metrics, diagnosis, result)
-            initial_complete = ui["state"] != "SYMPTOM_CONFIRM"
-            ui["diagnosisReady"] = False
-            ui["diagnosis"] = None
-            ui["window"] = None
-            ui["asState"] = "diagnosisResult"
-            ui["asRequest"] = None
-            ui["asRequestPayload"] = None
-            ui["ticketUrl"] = None
-            ui["status"] = "" if initial_complete else "초기 메트릭을 수집하고 있습니다."
+            ui["diagnosisStarted"] = bool(ui["diagnosisStarted"]) or session.agent_state in {
+                "RUNNING", "COMPLETED", "FAILED"
+            }
+            ui["state"] = diagnosis_session_ui_state(
+                session,
+                metrics,
+                diagnosis,
+                result,
+                diagnosis_started=bool(ui["diagnosisStarted"]),
+                result_requested=bool(ui["resultRequested"]),
+            )
         render()
 
     def request_focus() -> None:
@@ -5840,20 +6069,7 @@ def show_log_viewer(
         root.after(0, render)
 
     def request_initial_metrics_complete() -> None:
-        def apply() -> None:
-            active_session = ui["diagnosisSession"]
-            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
-            if (
-                isinstance(active_session, DiagnosisSession)
-                and isinstance(metrics, MetricsSnapshot)
-                and metrics.diagnosis_id == active_session.request.diagnosis_id
-                and metrics.initial_complete
-                and ui["state"] == "SYMPTOM_CONFIRM"
-            ):
-                ui["state"] = "DIAGNOSING"
-                ui["status"] = ""
-                render()
-        root.after(0, apply)
+        root.after(0, render)
 
     def request_destroy() -> None:
         root.after(0, root.destroy)
@@ -6635,6 +6851,8 @@ def run_background(
             metrics_snapshot_provider=lambda: metrics_store.snapshot,
             diagnosis_snapshot_provider=lambda: diagnosis_log_store.snapshot,
             diagnosis_result_provider=lambda: diagnosis_result_store.result,
+            start_initial_metrics=lambda session, mode: begin_initial_metrics(session, mode),
+            start_diagnosis=lambda session, mode: begin_diagnosis(session, mode),
             cancel_diagnosis=lambda: diagnosis_orchestrator_holder["value"].cancel()
             if "value" in diagnosis_orchestrator_holder else False,
             retry_diagnosis=lambda: diagnosis_orchestrator_holder["value"].retry()
@@ -6698,17 +6916,6 @@ def run_background(
 
         def on_initial_metrics_complete(metrics: MetricsSnapshot) -> None:
             viewer_controller.complete_initial_metrics()
-            session = diagnosis_store.session
-            if (
-                isinstance(session, DiagnosisSession)
-                and metrics.diagnosis_id == session.request.diagnosis_id
-                and metrics.initial_complete
-            ):
-                diagnosis_orchestrator.start(
-                    session.request.diagnosis_id,
-                    session.request.mode,
-                    session.request.requested_checks,
-                )
 
         initial_metrics_coordinator = InitialMetricsCoordinator(
             metrics_store,
@@ -6718,14 +6925,35 @@ def run_background(
             on_complete=on_initial_metrics_complete,
         )
 
-        def on_initial_metrics_requested(session: DiagnosisSession) -> None:
-            diagnosis_store.update_state("RUNNING")
-            diagnosis_orchestrator.prepare(
-                session.request.diagnosis_id,
-                session.request.mode,
-                session.request.requested_checks,
+        def begin_initial_metrics(
+            session: DiagnosisSession | None,
+            mode: str,
+        ) -> DiagnosisSession | None:
+            return start_initial_metrics_session(
+                session,
+                mode,
+                current_config.device_id if current_config else None,
+                diagnosis_store,
+                metrics_store,
+                diagnosis_result_store,
+                diagnosis_orchestrator,
+                initial_metrics_coordinator,
             )
-            initial_metrics_coordinator.start(session.request.diagnosis_id, session.request.mode)
+
+        def begin_diagnosis(
+            session: DiagnosisSession | None,
+            mode: str,
+        ) -> DiagnosisSession | None:
+            return start_diagnosis_once(
+                session,
+                diagnosis_store,
+                metrics_store,
+                diagnosis_orchestrator,
+            )
+
+        def on_diagnosis_request(session: DiagnosisSession) -> None:
+            viewer_controller.show(session)
+            begin_initial_metrics(session, session.request.mode)
 
         try:
             current_config = load_config(path)
@@ -6734,12 +6962,11 @@ def run_background(
         diagnosis_processor = DiagnosisRequestProcessor(
             diagnosis_store,
             device_id=current_config.device_id if current_config else None,
-            on_request=viewer_controller.show,
-            on_initial_metrics_requested=on_initial_metrics_requested,
+            on_request=on_diagnosis_request,
         )
         existing_session = diagnosis_store.session
         existing_metrics = metrics_store.snapshot
-        if isinstance(existing_session, DiagnosisSession) and existing_session.agent_state in {"REQUEST_RECEIVED", "RUNNING"}:
+        if isinstance(existing_session, DiagnosisSession) and existing_session.agent_state == "RUNNING":
             if (
                 existing_metrics.diagnosis_id == existing_session.request.diagnosis_id
                 and existing_metrics.initial_complete
@@ -6758,8 +6985,15 @@ def run_background(
                         existing_session.request.mode,
                         existing_session.request.requested_checks,
                     )
-            else:
-                on_initial_metrics_requested(existing_session)
+        elif (
+            isinstance(existing_session, DiagnosisSession)
+            and existing_session.agent_state == "REQUEST_RECEIVED"
+            and (
+                existing_metrics.diagnosis_id != existing_session.request.diagnosis_id
+                or not existing_metrics.initial_complete
+            )
+        ):
+            begin_initial_metrics(existing_session, existing_session.request.mode)
         diagnosis_client = None
         if current_config and current_config.agent_token:
             def sync_diagnosis_state() -> None:

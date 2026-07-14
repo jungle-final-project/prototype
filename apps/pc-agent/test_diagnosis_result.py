@@ -302,6 +302,9 @@ class DiagnosisResultStoreTest(unittest.TestCase):
             self.assertTrue(store.save(result))
             self.assertFalse(store.save(result))
             self.assertEqual(result, DiagnosisResultStore(path).result)
+            store.clear()
+            self.assertIsNone(store.result)
+            self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

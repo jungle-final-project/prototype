@@ -549,6 +549,17 @@ class AgentGoal1112Test(unittest.TestCase):
 
         self.assertEqual(screen.widgets[0].status, "주의")
         self.assertEqual(screen.widgets[0].tone, "warning")
+        self.assertTrue(all(widget.tone == "default" for widget in screen.widgets[1:]))
+
+        critical_payload = dict(payload)
+        critical_payload["cpuUsagePercent"] = 95.0
+        critical_row = agent.build_metric_snapshot(
+            datetime.now(agent.KST), 1, agent.SYSTEM_METRIC_KIND, critical_payload
+        )
+        critical_screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(critical_row, [critical_row]), "CPU 상태 확인", None
+        ))
+        self.assertEqual("danger", critical_screen.widgets[0].tone)
 
     def test_symptom_screen_distinguishes_zero_fan_unsupported_and_failed_sensor(self) -> None:
         zero_fan_payload = {
@@ -570,6 +581,7 @@ class AgentGoal1112Test(unittest.TestCase):
         ))
         self.assertIn("0 RPM (정지)", zero_fan_screen.widgets[1].details[1])
         self.assertIn("측정 불가", zero_fan_screen.widgets[3].details[0])
+        self.assertEqual("default", zero_fan_screen.widgets[3].tone)
 
         failed = agent.failed_system_metric_row("system sensor collection failed")
         failed_screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(
@@ -607,7 +619,7 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(screen.symptom, "웹에서 전달받은 증상 정보가 없습니다.")
         self.assertTrue(screen.widgets[3].highlighted)
 
-    def test_completed_initial_metrics_selects_diagnosing_ui_state(self) -> None:
+    def test_ui_state_changes_only_after_diagnosis_and_result_actions(self) -> None:
         request = DiagnosisRequest(
             diagnosis_id="diagnosis-auto-transition",
             device_id="device-1",
@@ -641,7 +653,7 @@ class AgentGoal1112Test(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            "DIAGNOSING",
+            "SYMPTOM_CONFIRM",
             agent.diagnosis_session_ui_state(
                 session,
                 agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
@@ -659,6 +671,7 @@ class AgentGoal1112Test(unittest.TestCase):
                     progress=100,
                     transition_allowed=True,
                 ),
+                diagnosis_started=True,
             ),
         )
         self.assertEqual(
@@ -674,6 +687,8 @@ class AgentGoal1112Test(unittest.TestCase):
                     transition_allowed=True,
                 ),
                 result,
+                diagnosis_started=True,
+                result_requested=True,
             ),
         )
         self.assertEqual(
@@ -688,8 +703,154 @@ class AgentGoal1112Test(unittest.TestCase):
                     progress=99,
                     transition_allowed=False,
                 ),
+                diagnosis_started=True,
+                result_requested=True,
             ),
         )
+
+    def test_symptom_display_preserves_web_input_and_uses_standalone_summary(self) -> None:
+        web_symptoms = ("게임 A에서만 화면이 멈춥니다.", "영상 편집 중 GPU 부하가 증가합니다.")
+        for symptom in web_symptoms:
+            with self.subTest(symptom=symptom):
+                display = agent.symptom_display_state(
+                    "WEB_REQUEST",
+                    symptom,
+                    agent.MetricsSnapshot("diagnosis-web", "LIVE", False, ()),
+                )
+                self.assertEqual("전달받은 증상", display.title)
+                self.assertEqual(symptom, display.description)
+
+        standalone = agent.symptom_display_state(
+            "STANDALONE",
+            "",
+            agent.MetricsSnapshot(None, None, False, ()),
+        )
+        self.assertEqual("초기 상태 요약", standalone.title)
+        self.assertNotIn("전달받은 증상", standalone.title)
+        self.assertNotIn("게임", standalone.description)
+
+        readings = agent.MetricsNormalizer().normalize(agent.InitialDemoSensorProvider().collect_sample(0))
+        collecting = agent.symptom_display_state(
+            "STANDALONE",
+            "",
+            agent.MetricsSnapshot("standalone-1", "DEMO", False, readings),
+        )
+        ready = agent.symptom_display_state(
+            "STANDALONE",
+            "",
+            agent.MetricsSnapshot("standalone-1", "DEMO", True, readings),
+        )
+        self.assertIn("확인하고 있습니다", collecting.description)
+        self.assertNotEqual(collecting.description, ready.description)
+
+    def test_diagnosis_orchestrator_starts_only_once_after_initial_metrics(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-once",
+            device_id="device-1",
+            symptom="GPU 상태 확인",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request)
+        with tempfile.TemporaryDirectory() as directory:
+            diagnosis_store = agent.DiagnosisSessionStore(Path(directory) / "session.json")
+            diagnosis_store.accept(session)
+            metrics_store = agent.MetricsStore()
+            metrics_store.begin(request.diagnosis_id, request.mode)
+            metrics_store.complete(request.diagnosis_id)
+            orchestrator = SimpleNamespace(prepare=MagicMock(), start=MagicMock(return_value=True))
+
+            first = agent.start_diagnosis_once(session, diagnosis_store, metrics_store, orchestrator)
+            second = agent.start_diagnosis_once(session, diagnosis_store, metrics_store, orchestrator)
+
+        self.assertEqual("RUNNING", first.agent_state)
+        self.assertIsNone(second)
+        orchestrator.prepare.assert_called_once()
+        orchestrator.start.assert_called_once()
+
+    def test_web_and_standalone_initial_metrics_start_from_their_expected_actions(self) -> None:
+        web_request = DiagnosisRequest(
+            diagnosis_id="diagnosis-web-start",
+            device_id="device-1",
+            symptom="게임 실행 중 화면이 멈춥니다.",
+            requested_checks=("cpu", "gpu", "memory", "disk"),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            web_store = agent.DiagnosisSessionStore(Path(directory) / "web-session.json")
+            web_session = DiagnosisSession(web_request)
+            web_store.accept(web_session)
+            web_coordinator = SimpleNamespace(start=MagicMock(return_value=True))
+            web_orchestrator = SimpleNamespace(prepare=MagicMock())
+            web_started = agent.start_initial_metrics_session(
+                web_session,
+                "LIVE",
+                "device-1",
+                web_store,
+                agent.MetricsStore(),
+                agent.DiagnosisResultStore(),
+                web_orchestrator,
+                web_coordinator,
+            )
+
+            standalone_store = agent.DiagnosisSessionStore(Path(directory) / "standalone-session.json")
+            standalone_coordinator = SimpleNamespace(start=MagicMock(return_value=True))
+            standalone_orchestrator = SimpleNamespace(prepare=MagicMock())
+            self.assertIsNone(standalone_store.session)
+            standalone_started = agent.start_initial_metrics_session(
+                None,
+                "LIVE",
+                "device-1",
+                standalone_store,
+                agent.MetricsStore(),
+                agent.DiagnosisResultStore(),
+                standalone_orchestrator,
+                standalone_coordinator,
+                now=lambda: datetime(2026, 7, 13, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual("WEB_REQUEST", web_started.request.source)
+        self.assertEqual(web_request.symptom, web_started.request.symptom)
+        web_coordinator.start.assert_called_once_with(web_request.diagnosis_id, "LIVE")
+        self.assertEqual("STANDALONE", standalone_started.request.source)
+        self.assertEqual("", standalone_started.request.symptom)
+        standalone_coordinator.start.assert_called_once()
+
+    def test_result_action_is_unavailable_for_failed_cancelled_and_timed_out(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-terminal",
+            device_id="device-1",
+            symptom="하드웨어 상태 확인",
+            requested_checks=("cpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request, "FAILED")
+        for state in ("FAILED", "CANCELLED", "TIMED_OUT"):
+            with self.subTest(state=state):
+                snapshot = agent.DiagnosisRunSnapshot(
+                    diagnosis_id=request.diagnosis_id,
+                    mode="LIVE",
+                    state=state,
+                    progress=100,
+                    transition_allowed=False,
+                )
+                self.assertFalse(agent.diagnosis_result_available(session, snapshot, None))
+                self.assertEqual(
+                    "DIAGNOSING",
+                    agent.diagnosis_session_ui_state(
+                        session,
+                        agent.MetricsSnapshot(request.diagnosis_id, "LIVE", True, ()),
+                        snapshot,
+                        diagnosis_started=True,
+                        result_requested=True,
+                    ),
+                )
 
     def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
         class Collector:

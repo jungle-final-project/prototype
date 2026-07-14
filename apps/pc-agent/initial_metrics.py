@@ -506,8 +506,6 @@ class InitialMetricsCoordinator:
             if snapshot.terminal_components() == set(COMPONENTS) and self.store.complete(diagnosis_id):
                 completed = self.store.snapshot
                 self.on_update(completed)
-                if self.settings.transition_delay_seconds > 0:
-                    time.sleep(self.settings.transition_delay_seconds)
                 self.on_complete(completed)
         finally:
             with self._lock:
@@ -533,8 +531,6 @@ class InitialMetricsCoordinator:
         if self.store.complete(diagnosis_id):
             completed = self.store.snapshot
             self.on_update(completed)
-            if self.settings.transition_delay_seconds > 0:
-                time.sleep(self.settings.transition_delay_seconds)
             self.on_complete(completed)
 
     def _collect_with_timeout(

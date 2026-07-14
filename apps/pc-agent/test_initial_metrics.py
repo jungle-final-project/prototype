@@ -177,11 +177,13 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         live = StaticProvider((20.0, 80.0, 95.0))
         demo_factory_calls: list[bool] = []
         completed = []
+        updates = []
         coordinator = InitialMetricsCoordinator(
             store,
             live_provider_factory=lambda: live,
             demo_provider_factory=lambda: demo_factory_calls.append(True) or DemoSensorProvider(),
             settings=InitialCollectionSettings(3, 0.0, 0.5),
+            on_update=updates.append,
             on_complete=completed.append,
         )
 
@@ -192,6 +194,10 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         self.assertEqual([], demo_factory_calls)
         self.assertEqual(3, live.calls)
         self.assertEqual((20.0, 80.0, 95.0), snapshot.history("cpu", "usage"))
+        self.assertEqual(
+            [(20.0,), (20.0, 80.0), (20.0, 80.0, 95.0)],
+            [update.history("cpu", "usage") for update in updates[:3]],
+        )
         self.assertEqual({"cpu", "gpu", "ram", "disk"}, snapshot.terminal_components())
         self.assertTrue(snapshot.initial_complete)
         self.assertEqual(1, len(completed))
@@ -268,6 +274,19 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         self.assertEqual("diagnosis-persisted", restored.diagnosis_id)
         self.assertTrue(restored.initial_complete)
         self.assertEqual((31.0,), restored.history("cpu", "usage"))
+
+    def test_store_keeps_bounded_recent_sample_history(self) -> None:
+        store = MetricsStore()
+        normalizer = MetricsNormalizer()
+        store.begin("diagnosis-bounded", "LIVE")
+
+        for index in range(40):
+            sample = ProviderSample(complete_payload(float(index)), NOW, "hardware")
+            self.assertTrue(store.append("diagnosis-bounded", normalizer.normalize(sample)))
+
+        history = store.snapshot.history("cpu", "usage", limit=100)
+        self.assertEqual(30, len(history))
+        self.assertEqual(tuple(float(index) for index in range(10, 40)), history)
 
 
 if __name__ == "__main__":

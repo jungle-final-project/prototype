@@ -199,6 +199,12 @@ class DiagnosisResultStore:
             self._save_locked()
             return True
 
+    def clear(self) -> None:
+        with self._lock:
+            self._result = None
+            if self.path is not None:
+                self.path.unlink(missing_ok=True)
+
     def _load(self) -> None:
         if self.path is None or not self.path.exists():
             return

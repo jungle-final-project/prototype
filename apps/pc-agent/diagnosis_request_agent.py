@@ -40,6 +40,8 @@ DIAGNOSIS_SOCKET_PATH = "/ws/pc-agent/diagnosis"
 PROCESSED_DIAGNOSIS_LIMIT = 200
 MAX_SYNC_STATUS_FRAMES = 200
 MAX_SYNC_RESULT_FRAMES = 20
+WEB_REQUEST = "WEB_REQUEST"
+STANDALONE = "STANDALONE"
 
 
 def parse_server_datetime(value: Any) -> datetime | None:
@@ -72,9 +74,14 @@ class DiagnosisRequest:
     requested_at: str
     expires_at: str
     mode: str
+    source: str = WEB_REQUEST
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "DiagnosisRequest":
+    def from_payload(
+        cls,
+        payload: dict[str, Any],
+        source: str = WEB_REQUEST,
+    ) -> "DiagnosisRequest":
         requested_checks = payload.get("requestedChecks")
         if not isinstance(requested_checks, list) or not all(
             isinstance(value, str) and value.strip() for value in requested_checks
@@ -83,13 +90,15 @@ class DiagnosisRequest:
         values = {
             "diagnosis_id": payload.get("diagnosisId"),
             "device_id": payload.get("deviceId"),
-            "symptom": payload.get("symptom"),
             "requested_at": payload.get("requestedAt"),
             "expires_at": payload.get("expiresAt"),
             "mode": payload.get("mode"),
         }
         if any(not isinstance(value, str) or not value.strip() for value in values.values()):
             raise ValueError("diagnosis request has a missing text field")
+        symptom = payload.get("symptom")
+        if not isinstance(symptom, str) or (source != STANDALONE and not symptom.strip()):
+            raise ValueError("diagnosis request has a missing symptom")
         mode = str(values["mode"]).strip().upper()
         if mode not in {"LIVE", "DEMO"}:
             raise ValueError("mode must be LIVE or DEMO")
@@ -98,11 +107,12 @@ class DiagnosisRequest:
         return cls(
             diagnosis_id=str(values["diagnosis_id"]).strip(),
             device_id=str(values["device_id"]).strip(),
-            symptom=str(values["symptom"]).strip(),
+            symptom=symptom.strip(),
             requested_checks=tuple(value.strip().lower() for value in requested_checks),
             requested_at=str(values["requested_at"]).strip(),
             expires_at=str(values["expires_at"]).strip(),
             mode=mode,
+            source=source if source in {WEB_REQUEST, STANDALONE} else WEB_REQUEST,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -114,6 +124,7 @@ class DiagnosisRequest:
             "requestedAt": self.requested_at,
             "expiresAt": self.expires_at,
             "mode": self.mode,
+            "source": self.source,
         }
 
 
@@ -131,7 +142,14 @@ class DiagnosisSession:
         state = payload.get("agentState")
         if not isinstance(request, dict) or state not in AGENT_STATES:
             raise ValueError("invalid diagnosis session")
-        return cls(DiagnosisRequest.from_payload(request), str(state))
+        source = request.get("source")
+        return cls(
+            DiagnosisRequest.from_payload(
+                request,
+                source=source if source in {WEB_REQUEST, STANDALONE} else WEB_REQUEST,
+            ),
+            str(state),
+        )
 
 
 @dataclass(frozen=True)
@@ -225,13 +243,11 @@ class DiagnosisRequestProcessor:
         device_id: str | None = None,
         now: Callable[[], datetime] | None = None,
         on_request: Callable[[DiagnosisSession], None] | None = None,
-        on_initial_metrics_requested: Callable[[DiagnosisSession], None] | None = None,
     ) -> None:
         self.store = store
         self.device_id = device_id
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.on_request = on_request or (lambda session: None)
-        self.on_initial_metrics_requested = on_initial_metrics_requested or (lambda session: None)
 
     def bind_authenticated_device(self, device_id: str) -> bool:
         value = device_id.strip()
@@ -262,7 +278,6 @@ class DiagnosisRequestProcessor:
         session = DiagnosisSession(request=request)
         self.store.accept(session)
         self.on_request(session)
-        self.on_initial_metrics_requested(session)
         return DiagnosisDecision("ACCEPTED", request.diagnosis_id, "진단 요청을 수신했습니다.", session)
 
 
@@ -488,6 +503,8 @@ class BackgroundViewerController:
         metrics_snapshot_provider: Callable[[], Any] | None = None,
         diagnosis_snapshot_provider: Callable[[], Any] | None = None,
         diagnosis_result_provider: Callable[[], Any] | None = None,
+        start_initial_metrics: Callable[[DiagnosisSession | None, str], DiagnosisSession | None] | None = None,
+        start_diagnosis: Callable[[DiagnosisSession | None, str], DiagnosisSession | None] | None = None,
         cancel_diagnosis: Callable[[], bool] | None = None,
         retry_diagnosis: Callable[[], bool] | None = None,
     ) -> None:
@@ -498,6 +515,8 @@ class BackgroundViewerController:
         self.metrics_snapshot_provider = metrics_snapshot_provider or (lambda: None)
         self.diagnosis_snapshot_provider = diagnosis_snapshot_provider or (lambda: None)
         self.diagnosis_result_provider = diagnosis_result_provider or (lambda: None)
+        self.start_initial_metrics = start_initial_metrics or (lambda session, mode: None)
+        self.start_diagnosis = start_diagnosis or (lambda session, mode: None)
         self.cancel_diagnosis = cancel_diagnosis or (lambda: False)
         self.retry_diagnosis = retry_diagnosis or (lambda: False)
         self._lock = threading.Lock()
@@ -548,6 +567,8 @@ class BackgroundViewerController:
             metrics_snapshot_provider=self.metrics_snapshot_provider,
             diagnosis_snapshot_provider=self.diagnosis_snapshot_provider,
             diagnosis_result_provider=self.diagnosis_result_provider,
+            start_initial_metrics=self.start_initial_metrics,
+            start_diagnosis=self.start_diagnosis,
             cancel_diagnosis=self.cancel_diagnosis,
             retry_diagnosis=self.retry_diagnosis,
             on_window_ready=self._on_window_ready,
@@ -569,7 +590,7 @@ class BackgroundViewerController:
             self._request_initial_metrics_complete = request_initial_metrics_complete
             self._request_destroy = request_destroy
         session = self.diagnosis_session_provider()
-        if isinstance(session, DiagnosisSession):
+        if isinstance(session, DiagnosisSession) and session.agent_state in ACTIVE_DIAGNOSIS_STATES:
             request_apply_session(session)
         request_focus()
 
