@@ -24,6 +24,7 @@ import {
   saveAssistantSession,
   saveSelectedAiBuild,
   type AiAssessmentContext,
+  type AiAssistantSession,
   type AiBuildAssessment,
   type AiChatMessage,
   type AiBoardFocus,
@@ -59,6 +60,34 @@ const CENTER_SCROLLBAR_TRACK_TOP = 8;
 const CENTER_SCROLLBAR_TRACK_BOTTOM = 12;
 const CENTER_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
 const CENTER_SCROLLBAR_HIDE_DELAY_MS = 700;
+
+type NaturalApplyResolution =
+  | { status: 'READY'; build: AiRecommendedBuild }
+  | { status: 'MISSING' | 'AMBIGUOUS' | 'BLOCKED' };
+
+function isNaturalApplyCommand(message: string) {
+  const compact = message
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+  const directApply = /^(?:(?:이|그|해당)(?:거|걸|변경안|조합)(?:으?로)?)?(?:바로)?(?:적용|반영)(?:해)?(?:줘|주세요)$/;
+  const referentialReplace = /^(?:이거|이걸|그거|그걸|이변경안|그변경안|이조합|그조합)(?:으?로)?(?:바꿔|교체해)(?:줘|주세요)$/;
+  return directApply.test(compact) || referentialReplace.test(compact);
+}
+
+function resolveNaturalApplyBuild(session: AiAssistantSession): NaturalApplyResolution {
+  const lastMessage = session.messages[session.messages.length - 1];
+  if (!lastMessage || lastMessage.role !== 'assistant' || !lastMessage.builds?.length) {
+    return { status: 'MISSING' };
+  }
+  if (lastMessage.builds.length !== 1) {
+    return { status: 'AMBIGUOUS' };
+  }
+  const build = normalizeAiRecommendedBuild(lastMessage.builds[0]);
+  if (!build.items.length || build.toolResults?.some((result) => result.status === 'FAIL')) {
+    return { status: 'BLOCKED' };
+  }
+  return { status: 'READY', build };
+}
 
 const FAST_CATEGORY_ROUTE_TERMS: Array<[PartCategory, string[]]> = [
   ['MOTHERBOARD', ['메인보드', '마더보드', 'motherboard']],
@@ -336,7 +365,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
 
   async function sendMessage(rawPrompt: string, assessmentContext?: AiAssessmentContext) {
     const nextPrompt = rawPrompt.trim();
-    if (!nextPrompt || isSending) return;
+    if (!nextPrompt || isSending || applyingBuildId) return;
 
     const ownerKey = getAiStorageOwnerKey();
     if (!getToken() || !ownerKey) {
@@ -362,6 +391,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     saveAssistantSession(optimisticSession, ownerKey);
     setPrompt('');
     setSubmitError(null);
+
+    if (isNaturalApplyCommand(nextPrompt)) {
+      await applyBuildFromNaturalCommand(baseSession, optimisticSession, ownerKey);
+      return;
+    }
 
     const fastCategory = fastCategoryRouteIntent(nextPrompt);
     if (fastCategory) {
@@ -484,6 +518,83 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         setPending(null);
         setPendingVisible(false);
       }
+      setIsSending(false);
+    }
+  }
+
+  async function applyBuildFromNaturalCommand(
+    baseSession: AiAssistantSession,
+    optimisticSession: AiAssistantSession,
+    ownerKey: string
+  ) {
+    const resolution = resolveNaturalApplyBuild(baseSession);
+    const resolvedBuildId = resolution.status === 'READY' ? resolution.build.id : undefined;
+    const appendResult = (text: string, warnings: string[] = []) => {
+      const createdAt = new Date().toISOString();
+      const assistantMessage: AiChatMessage = {
+        id: createAiMessageId('draft-apply'),
+        role: 'assistant',
+        text,
+        createdAt,
+        kind: 'part',
+        warnings
+      };
+      const nextSession = {
+        ...optimisticSession,
+        messages: [...optimisticSession.messages, assistantMessage],
+        latestActiveBuildId: resolvedBuildId ?? optimisticSession.latestActiveBuildId,
+        updatedAt: createdAt
+      };
+      setSession(nextSession);
+      saveAssistantSession(nextSession, ownerKey);
+      setRevealMessageId(assistantMessage.id);
+    };
+
+    setPendingClarification(null);
+    if (resolution.status === 'MISSING') {
+      appendResult('바로 앞 대화에 적용할 변경안이 없습니다. 먼저 원하는 변경안을 요청해 주세요.');
+      return;
+    }
+    if (resolution.status === 'AMBIGUOUS') {
+      appendResult('바로 앞 대화에 선택 가능한 조합이 여러 개입니다. 원하는 카드의 적용 버튼을 눌러 주세요.');
+      return;
+    }
+    if (resolution.status === 'BLOCKED') {
+      appendResult('호환성 검증을 통과하지 못한 변경안은 적용할 수 없습니다. 다른 변경안을 요청해 주세요.', ['DRAFT_APPLY_BLOCKED']);
+      return;
+    }
+    if (resolution.status !== 'READY') return;
+
+    const build = resolution.build;
+    setIsSending(true);
+    setApplyingBuildId(build.id);
+    setApplyError(null);
+    setFailedBuild(null);
+    try {
+      const appliedDraft = await applyAiBuildToQuoteDraft({
+        buildId: build.id,
+        conflictPolicy: 'REPLACE',
+        items: build.items.map((item) => ({
+          partId: item.partId,
+          category: item.category,
+          quantity: item.quantity
+        }))
+      });
+      saveSelectedAiBuild(build);
+      queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
+      void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
+      void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
+      appendResult(`요청하신 변경안이 현재 견적에 적용되었습니다. 현재 예상가는 ${build.totalPrice.toLocaleString('ko-KR')}원입니다.`);
+      if (!isEmbedded) {
+        setOpen(false);
+      }
+      navigate('/self-quote');
+    } catch {
+      setFailedBuild(build);
+      setApplyError('AI 조합을 셀프 견적 장바구니에 적용하지 못했습니다.');
+      appendResult('변경안 자동 적용에 실패했습니다. 현재 견적은 변경되지 않았습니다. 카드의 적용 버튼으로 다시 시도해 주세요.', ['DRAFT_APPLY_FAILED']);
+    } finally {
+      setApplyingBuildId(null);
       setIsSending(false);
     }
   }

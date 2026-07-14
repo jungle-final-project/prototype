@@ -39,8 +39,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final String BUILD_RECOMMENDATION_CONTEXT_SCHEMA_NAME = "buildgraph_ai_build_recommendation_context";
     private static final String BUILD_ASSESSMENT_SCHEMA_NAME = "buildgraph_build_assessment_explanation";
     private static final String LOW_INFORMATION_ACK_SCHEMA_NAME = "buildgraph_low_information_acknowledgement";
+    private static final String VERIFIED_CHANGE_ADVICE_SCHEMA_NAME = "buildgraph_verified_change_advice";
     private static final int BUILD_RECOMMENDATION_CONTEXT_MAX_OUTPUT_TOKENS = 650;
     private static final int LOW_INFORMATION_ACK_MAX_OUTPUT_TOKENS = 96;
+    private static final int VERIFIED_CHANGE_ADVICE_MAX_OUTPUT_TOKENS = 180;
     private static final String CHAT_RAG_ROOT_ID = "00000000-0000-0000-0000-000000000000";
     private static final String REQUIREMENT_PARSE_SYSTEM_PROMPT = """
             당신은 BuildGraph AI의 견적 생성 입력서를 만드는 엔진입니다.
@@ -107,6 +109,15 @@ public class DefaultAiChatEngine implements AiChatEngine {
             가격, 부품, 성능, 추천안, 질문을 만들지 마십시오. 60자 이내의 평서문 한 문장만 작성하십시오.
             예: "중3 아들 피시 맞출건데" -> "중학교 3학년 아드님이 사용할 PC를 찾고 계시는군요."
             출력은 서버가 제공한 JSON schema를 반드시 따릅니다.
+            """;
+    private static final String VERIFIED_CHANGE_ADVICE_SYSTEM_PROMPT = """
+            당신은 BuildGraph 부품 상담의 짧은 문장 편집기입니다.
+            verifiedFacts에는 서버 DB 조회와 호환성 검사를 끝낸 후보 및 안내 문장이 들어 있습니다.
+            사용자가 앞서 말한 조건을 자연스럽게 한 번 되받고, verifiedFacts의 후보가 그 조건에 맞는 이유를
+            한국어 2~3문장으로 설명하십시오. 마지막 문장은 primaryCandidate를 교체 후보로 검토할지 묻는
+            질문으로 끝내십시오.
+            제공되지 않은 상품, 가격, 성능, 호환성, 사용자 속성은 만들지 마십시오. 적용 또는 교체가 이미
+            완료됐다고 말하지 마십시오. 220자 이내로 작성하고 JSON schema를 반드시 따릅니다.
             """;
     private static final List<String> BUILD_CATEGORIES = List.of(
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
@@ -355,6 +366,113 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return Optional.of(acknowledgement);
     }
 
+    @Override
+    public Optional<String> explainVerifiedChangeAdvice(
+            AiChatEngineRequest request,
+            String requestedAiProfile
+    ) {
+        String message = requireText(request == null ? null : request.message(), "챗봇 메시지가 필요합니다.");
+        if (!openAiResponsesClient.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED, "OPENAI_API_KEY가 필요합니다.");
+        }
+        Map<String, Object> context = request == null || request.context() == null ? Map.of() : request.context();
+        Map<String, Object> verifiedFacts = objectMap(context.get("verifiedChangeAdvice"));
+        if (verifiedFacts.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "검증된 부품 변경 근거가 필요합니다.");
+        }
+        AiProfileDefinition profile = requireBuildChatProfile(requestedAiProfile);
+        LlmResponseResult result = openAiResponsesClient.createStructuredJsonResult(
+                VERIFIED_CHANGE_ADVICE_SYSTEM_PROMPT,
+                json(MockData.map(
+                        "userRequest", message,
+                        "verifiedFacts", verifiedFacts
+                )),
+                VERIFIED_CHANGE_ADVICE_SCHEMA_NAME,
+                verifiedChangeAdviceSchema(),
+                profile.model(),
+                profile.reasoningEffort(),
+                Math.min(VERIFIED_CHANGE_ADVICE_MAX_OUTPUT_TOKENS, profile.maxOutputTokens())
+        );
+        String assistantMessage = requireText(
+                parseJsonObject(result.text()).get("assistantMessage"),
+                "검증된 변경 조언 문장이 필요합니다."
+        );
+        log.info(
+                "Build Chat verifiedChangeAdvice latencyMs={} model={} reasoningEffort={} outputTokens={} reasoningTokens={}",
+                result.latencyMs(),
+                result.model(),
+                result.reasoningEffort(),
+                result.outputTokens(),
+                result.reasoningTokens()
+        );
+        return Optional.of(assistantMessage);
+    }
+
+    private static final String SUPPORT_GUIDANCE_SYSTEM_PROMPT = """
+            당신은 BuildGraph PC AS 상담의 진단 전 안내 편집기입니다.
+            사용자 증상 원문을 근거로 한국어 존댓말로 작성하십시오.
+            message: 증상을 되짚고 원인 후보를 요약한 뒤 "PC Agent를 실행하면 증상 직후 로그로 가능성을 좁힐 수 있습니다."로 끝나는 2~3문장.
+            summary: 원인 후보를 한 문장으로 요약 ("...등이 원인 후보로 예상됩니다." 형태).
+            possibleCauses: 증상과 직접 관련된 원인 후보 3~4개, 각 20자 이내 명사구.
+            원인을 확정하지 말고, 증상에 없는 사실·가격·부품 추천을 만들지 마십시오.
+            출력은 서버가 제공한 JSON schema를 반드시 따릅니다.
+            """;
+    private static final int SUPPORT_GUIDANCE_MAX_OUTPUT_TOKENS = 400;
+
+    @Override
+    public Optional<SupportGuidanceDraft> draftSupportGuidance(
+            String symptom,
+            String symptomCategory,
+            String requestedAiProfile
+    ) {
+        String normalized = symptom == null ? "" : symptom.trim();
+        if (normalized.isEmpty() || !openAiResponsesClient.isConfigured()) {
+            return Optional.empty();
+        }
+        AiProfileDefinition profile = requireBuildChatProfile(requestedAiProfile);
+        LlmResponseResult result = openAiResponsesClient.createStructuredJsonResult(
+                SUPPORT_GUIDANCE_SYSTEM_PROMPT,
+                json(MockData.map("symptom", normalized, "symptomCategory", symptomCategory)),
+                "support_guidance_draft",
+                supportGuidanceDraftSchema(),
+                profile.model(),
+                profile.reasoningEffort(),
+                Math.min(SUPPORT_GUIDANCE_MAX_OUTPUT_TOKENS, profile.maxOutputTokens())
+        );
+        Map<String, Object> parsed = parseJsonObject(result.text());
+        String message = requireText(parsed.get("message"), "AS 안내 message가 필요합니다.");
+        String summary = requireText(parsed.get("summary"), "AS 안내 summary가 필요합니다.");
+        List<String> causes = stringList(parsed.get("possibleCauses"));
+        if (causes.isEmpty()) {
+            return Optional.empty();
+        }
+        log.info(
+                "Build Chat supportGuidance latencyMs={} model={} outputTokens={}",
+                result.latencyMs(),
+                result.model(),
+                result.outputTokens()
+        );
+        return Optional.of(new SupportGuidanceDraft(message, summary, causes));
+    }
+
+    private static Map<String, Object> supportGuidanceDraftSchema() {
+        return MockData.map(
+                "type", "object",
+                "additionalProperties", false,
+                "properties", MockData.map(
+                        "message", MockData.map("type", "string"),
+                        "summary", MockData.map("type", "string"),
+                        "possibleCauses", MockData.map(
+                                "type", "array",
+                                "items", MockData.map("type", "string"),
+                                "minItems", 3,
+                                "maxItems", 4
+                        )
+                ),
+                "required", List.of("message", "summary", "possibleCauses")
+        );
+    }
+
     private static Map<String, Object> lowInformationAcknowledgementSchema() {
         return MockData.map(
                 "type", "object",
@@ -363,6 +481,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         "acknowledgement", MockData.map("type", "string")
                 ),
                 "required", List.of("acknowledgement")
+        );
+    }
+
+    private static Map<String, Object> verifiedChangeAdviceSchema() {
+        return MockData.map(
+                "type", "object",
+                "additionalProperties", false,
+                "properties", MockData.map(
+                        "assistantMessage", MockData.map("type", "string")
+                ),
+                "required", List.of("assistantMessage")
         );
     }
 

@@ -8,6 +8,7 @@ export default defineConfig({
   use: {
     baseURL: process.env.STATEFUL_QA_WEB_BASE_URL ?? 'http://127.0.0.1:5173',
     viewport: { width: 1440, height: 1024 },
+    actionTimeout: 30_000,
     trace: 'on-first-retry'
   },
   projects: [{
