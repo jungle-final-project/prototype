@@ -1493,57 +1493,48 @@ function MiniBar({ value, max, className, size = 'default' }: { value?: number |
 // 재마운트될 때 옛 비교가 다시 켜지지 않도록 빌드 단위로 1회만 발행한다.
 const perfCompareNotifiedBuildIds = new Set<string>();
 
-// 특이점에 노출할 핵심 부품 우선순위(성능 체감이 큰 순서).
+// 특이점에서 비교할 핵심 부품(성능 체감이 큰 순서)과, 짧은 설명에 쓸 한국어 명칭.
 const DISTINCTION_CATEGORY_ORDER: PartCategory[] = ['GPU', 'CPU', 'RAM', 'STORAGE'];
+const EMPHASIS_WORD: Partial<Record<PartCategory, string>> = {
+  GPU: '그래픽',
+  CPU: 'CPU',
+  RAM: '메모리',
+  STORAGE: '저장'
+};
 
-// 긴 정품명에서 사람이 알아보는 모델 토큰만 뽑는다(실패 시 앞부분만 축약).
-function conciseModelName(name: string, category: PartCategory): string {
-  if (category === 'GPU') {
-    const match = name.match(/\b(?:RTX|GTX|RX)\s?\d{3,4}\s?(?:Ti|SUPER|XT)?\b/i);
-    if (match) return match[0].replace(/\s+/g, ' ').toUpperCase().trim();
-  }
-  if (category === 'CPU') {
-    const match = name.match(/\b(?:Ryzen\s?\d\s?\d{3,4}\w*|i[3579][\s-]?\d{3,5}\w*|\d{4,5}(?:X3D|KS|KF|K|F|X)?)\b/i);
-    if (match) return match[0].trim();
-  }
-  if (category === 'RAM') {
-    const match = name.match(/\b\d{2,3}\s?GB\b/i);
-    if (match) return match[0].replace(/\s+/g, '').toUpperCase();
-  }
-  const cleaned = name.replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim();
-  return cleaned.length > 16 ? `${cleaned.slice(0, 16)}…` : cleaned;
-}
-
-// 같은 응답의 다른 추천들과 비교해 이 조합만의 특이점을 만든다: 다른 핵심 부품 + 가격 위치.
-// 백엔드 summary가 모든 카드에 동일한 보일러플레이트라, 프런트에서 실제 차이를 뽑아 대체한다.
+// 같은 응답의 다른 추천들과 비교해 이 조합만의 특이점을 "짧은 설명"으로 만든다(부품명 X — 잘리면 의미 없음).
+// 카테고리별 지출을 다른 조합 평균과 비교해 이 조합이 가장 힘준/줄인 부분 + 가격 위치를 한 구절로 표현한다.
+// 백엔드 summary가 모든 카드에 동일한 보일러플레이트라 프런트에서 실제 차이를 뽑아 대체한다.
 function deriveBuildDistinction(build: AiRecommendedBuild, builds: AiRecommendedBuild[]): string | null {
   if (!builds || builds.length < 2) return null;
   const others = builds.filter((candidate) => candidate.id !== build.id);
   const prices = builds.map((candidate) => candidate.totalPrice);
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
-  const priceHint = minPrice === maxPrice
-    ? ''
-    : build.totalPrice === minPrice
-      ? '최저가'
-      : build.totalPrice === maxPrice
-        ? '최고 사양'
-        : '';
+  const isCheapest = build.totalPrice === minPrice && minPrice !== maxPrice;
+  const isPriciest = build.totalPrice === maxPrice && minPrice !== maxPrice;
 
-  const diffs: string[] = [];
+  const spendOf = (target: AiRecommendedBuild, category: PartCategory) => target.items
+    .filter((item) => item.category === category)
+    .reduce((sum, item) => sum + item.price * (item.quantity || 1), 0);
+
+  // 다른 조합 평균 대비 지출 차이가 가장 큰 카테고리 = 이 조합의 힘준/줄인 지점.
+  let emphasisCategory: PartCategory | null = null;
+  let emphasisDelta = 0;
   for (const category of DISTINCTION_CATEGORY_ORDER) {
-    const mine = build.items.find((item) => item.category === category);
-    if (!mine) continue;
-    const differs = others.some((candidate) => {
-      const theirs = candidate.items.find((item) => item.category === category);
-      return theirs ? theirs.name !== mine.name : false;
-    });
-    if (differs) diffs.push(`${PART_CATEGORY_LABELS[category]} ${conciseModelName(mine.name, category)}`);
-    if (diffs.length >= 2) break;
+    const mine = spendOf(build, category);
+    const avgOthers = others.reduce((sum, candidate) => sum + spendOf(candidate, category), 0) / others.length;
+    const delta = mine - avgOthers;
+    if (Math.abs(delta) > Math.abs(emphasisDelta) && Math.abs(delta) >= 30000) {
+      emphasisDelta = delta;
+      emphasisCategory = category;
+    }
   }
+  const word = emphasisCategory ? EMPHASIS_WORD[emphasisCategory] : null;
 
-  const parts = priceHint ? [...diffs, priceHint] : diffs;
-  return parts.length ? parts.join(' · ') : null;
+  if (isPriciest) return word && emphasisDelta > 0 ? `${word} 비중을 높인 고사양` : '성능을 우선한 구성';
+  if (isCheapest) return word && emphasisDelta < 0 ? `${word} 비중을 낮춘 가성비` : '가격을 아낀 구성';
+  return '성능·가격 균형';
 }
 
 function CompactBuildCard({
