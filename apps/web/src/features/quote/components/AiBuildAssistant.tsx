@@ -970,16 +970,27 @@ function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: bo
   );
 }
 
-// 새로 등장하는 카드(견적/시뮬/평가 등)를 아래에서 살짝 올라오며 페이드 인한다.
+// 카드가 통째로 뜨면 "확" 나온 느낌이라, 위에서부터 높이가 펼쳐지며(0→auto) 내용이 채워지듯 등장시킨다.
+// grid-rows 0fr→1fr 트릭으로 커스텀 keyframe 없이 auto-height를 부드럽게 애니메이션한다(index.css 무수정).
 function FadeInBlock({ children }: { children: ReactNode }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
-    const id = window.requestAnimationFrame(() => setShown(true));
-    return () => window.cancelAnimationFrame(id);
+    // 접힌 상태(0fr)를 최소 한 프레임 페인트한 뒤 펼쳐야 트랜지션이 스냅 없이 애니메이션된다(이중 rAF).
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => setShown(true));
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+    };
   }, []);
   return (
-    <div className={`transition duration-300 ${shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'}`}>
-      {children}
+    <div
+      className="grid transition-all duration-[600ms] ease-out"
+      style={{ gridTemplateRows: shown ? '1fr' : '0fr', opacity: shown ? 1 : 0 }}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
     </div>
   );
 }
@@ -1008,7 +1019,7 @@ function useSequentialReveal(sentences: string[], extraCount: number, active: bo
     for (let index = 1; index < total; index += 1) {
       const delay = index < sentences.length
         ? Math.min(240 + sentences[index].length * 16, 720) // 문장: 읽는 속도처럼
-        : 260; // 카드: 짧고 일정한 간격
+        : 650; // 카드: 펼쳐지는 애니메이션(600ms)이 충분히 보이도록 넉넉한 간격
       elapsed += delay;
       const nextCount = index + 1;
       timers.push(window.setTimeout(() => {
