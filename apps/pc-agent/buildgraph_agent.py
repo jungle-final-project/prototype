@@ -5726,6 +5726,9 @@ def show_log_viewer(
             label_color = colors["muted"]
         text(x + 27, 136, label, 14, label_color, "regular", "w")
 
+    STEP_X = (145, 432, 740)
+    STEP_ANIM_SECONDS = 0.8
+
     def draw_stepper() -> None:
         state = str(ui["state"])
         if state == "SYMPTOM_CONFIRM":
@@ -5733,18 +5736,51 @@ def show_log_viewer(
         elif state == "DIAGNOSING":
             styles = ("done-check", "active", "idle")
         elif state == "DIAGNOSIS_RESULT":
+            # 지나온 단계는 체크로 남긴다(원이 이동해 간 흔적).
             styles = (
                 ("done-black", "done-black", "done-black")
                 if ui["asState"] == "asCompleted"
-                else ("idle", "idle", "active")
+                else ("done-check", "done-check", "active")
             )
         else:
             styles = ("done-black", "done-black", "done-black")
-        draw_step(1, 145, PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
+
+        # 전이 애니메이션: 검은 원이 선을 타고 다음 단계로 이동하는 동안
+        # 출발 자리는 체크(✓), 도착 자리는 빈 원으로 그리고, 이동 원은 숫자 없이 그린다.
+        anim = ui.get("stepAnim")
+        moving_ratio = None
+        if isinstance(anim, dict):
+            elapsed = (time.monotonic() - anim["start"]) / STEP_ANIM_SECONDS
+            if elapsed >= 1.0:
+                ui["stepAnim"] = None
+                anim = None
+            else:
+                moving_ratio = 1 - (1 - elapsed) ** 3  # ease-out: 도착 직전 감속
+                overridden = list(styles)
+                overridden[anim["from"]] = "done-check"
+                overridden[anim["to"]] = "idle"
+                styles = tuple(overridden)
+
+        draw_step(1, STEP_X[0], PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
         line(252, 136, 402, 136, "#d9d9d9")
-        draw_step(2, 432, PC_AGENT_DIAGNOSIS_STEPS[1], styles[1])
+        draw_step(2, STEP_X[1], PC_AGENT_DIAGNOSIS_STEPS[1], styles[1])
         line(570, 136, 710, 136, "#d9d9d9")
-        draw_step(3, 740, PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
+        draw_step(3, STEP_X[2], PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
+
+        if moving_ratio is not None and isinstance(anim, dict):
+            from_x = STEP_X[anim["from"]]
+            to_x = STEP_X[anim["to"]]
+            moving_x = from_x + (to_x - from_x) * moving_ratio
+            canvas.create_oval(moving_x - 16, 120, moving_x + 16, 152, fill="#050505", outline="#050505")
+            if not ui.get("stepTickScheduled"):
+                ui["stepTickScheduled"] = True
+
+                def step_anim_tick() -> None:
+                    ui["stepTickScheduled"] = False
+                    if ui.get("stepAnim"):
+                        render()
+
+                root.after(30, step_anim_tick)
 
     def draw_sparkline(
         x: int,
@@ -5879,12 +5915,21 @@ def show_log_viewer(
             ui["progressSmoother"] = smoother
             ui["progressSmootherId"] = snapshot.diagnosis_id
         display_progress = smoother.update(100 if result_available else progress, time.monotonic())
-        if display_progress < 100 and not ui.get("ringTickScheduled"):
+        if result_available and display_progress >= 100 and not ui.get("autoAdvanceAt"):
+            # 100%를 1초간 보여준 뒤 결과 단계로 자동 전환한다(스텝 원 이동 애니메이션 동반).
+            ui["autoAdvanceAt"] = time.monotonic() + 1.0
+        if (display_progress < 100 or ui.get("autoAdvanceAt")) and not ui.get("ringTickScheduled"):
             # 링이 이벤트 없이도 계속 움직이도록 진단 화면이 떠 있는 동안 120ms 재렌더한다.
             ui["ringTickScheduled"] = True
 
             def ring_tick() -> None:
                 ui["ringTickScheduled"] = False
+                advance_at = ui.get("autoAdvanceAt")
+                if advance_at and time.monotonic() >= advance_at:
+                    ui["autoAdvanceAt"] = None
+                    if str(ui.get("state")) == "DIAGNOSING":
+                        show_diagnosis_result()
+                        return
                 if isinstance(ui.get("diagnosisSession"), DiagnosisSession):
                     render()
 
@@ -6142,6 +6187,14 @@ def show_log_viewer(
                     ui["status"] = "진단이 취소되었습니다."
                 elif diagnosis.state in {"DIAGNOSING", "EVALUATING"}:
                     ui["status"] = ""
+        # 스텝 전이 감지: 단계가 한 칸 전진하면 검은 원이 선을 타고 이동하는 애니메이션을 시작한다.
+        stepper_index = {"SYMPTOM_CONFIRM": 0, "DIAGNOSING": 1, "DIAGNOSIS_RESULT": 2}.get(str(ui["state"]))
+        if stepper_index is not None:
+            previous_index = ui.get("stepperIndex")
+            if isinstance(previous_index, int) and stepper_index == previous_index + 1:
+                ui["stepAnim"] = {"from": previous_index, "to": stepper_index, "start": time.monotonic()}
+            ui["stepperIndex"] = stepper_index
+
         canvas.delete("all")
         button_counter["value"] = 0
         draw_header()
