@@ -63,8 +63,10 @@ from diagnosis_result import (
     DiagnosisResult,
     DiagnosisResultStore,
     DiagnosisRuleEngine,
+    actual_device_problem_evidence,
     can_offer_as,
     format_diagnosis_result_detail,
+    matching_display_driver_evidence,
 )
 from initial_metrics import (
     ABNORMAL,
@@ -349,6 +351,18 @@ def move_terminal_session_to_idle(
         return False
     diagnosis_store.update_state("IDLE")
     return True
+
+
+def reset_diagnosis_session_state(
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_log_store: DiagnosisLogStore,
+    diagnosis_result_store: DiagnosisResultStore,
+) -> None:
+    diagnosis_store.clear_current()
+    metrics_store.clear()
+    diagnosis_log_store.replace(DiagnosisRunSnapshot(), reset=True)
+    diagnosis_result_store.clear()
 
 
 def diagnosis_result_available(
@@ -5451,6 +5465,7 @@ def show_log_viewer(
     start_diagnosis: Any = None,
     cancel_diagnosis: Any = None,
     retry_diagnosis: Any = None,
+    finish_diagnosis_session: Any = None,
     on_window_ready: Any = None,
     on_window_closed: Any = None,
 ) -> None:
@@ -5949,6 +5964,7 @@ def show_log_viewer(
     def draw_result() -> None:
         result = ui.get("diagnosisResult")
         diagnosis = ui.get("diagnosisSnapshot")
+        session = ui.get("diagnosisSession")
         round_rect(70, 180, 930, 670, 12, "#ffffff", "#d7dce0")
         draw_result_icon(112, 222)
         text(145, 214, "진단 결과", 17, colors["text"], "semibold")
@@ -5959,11 +5975,23 @@ def show_log_viewer(
             return
         text(145, 258, result.title, 22, colors["text"], "semibold", "nw", width=710)
         text(145, 307, result.summary, 14, "#5f6368", "regular", "nw", width=710)
-        recovery_label = "가능" if result.can_auto_recover else "불가"
-        remote_label = "필요" if result.remote_as_recommended else "자동 판정 없음"
-        text(145, 365, f"로컬 자동 복구: {recovery_label} · 원격 기사 점검: {remote_label}", 12, colors["muted"])
-        line(145, 385, 855, 385)
-        text(145, 404, "핵심 결과", 16, colors["text"], "semibold")
+        is_device_configuration = result.diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE"
+        if is_device_configuration:
+            text(145, 352, "문제: 그래픽 장치 구성 이상", 12, colors["text"], "semibold")
+            text(145, 373, "로컬 처리: Agent가 안전하게 로컬 자동 복구할 수 없음", 12, colors["muted"])
+            text(145, 394, "다음 조치: 원격 AS 기사 점검 필요", 12, colors["muted"])
+            result_divider_y, core_title_y, chip_y1, chip_y2 = 412, 430, 454, 490
+            action_divider_y, action_title_y, action_center_y = 510, 530, 565
+            button_y1, button_y2, status_y = 610, 650, 668
+        else:
+            recovery_label = "가능" if result.can_auto_recover else "불가"
+            remote_label = "필요" if result.remote_as_recommended else "자동 판정 없음"
+            text(145, 365, f"로컬 자동 복구: {recovery_label} · 원격 기사 점검: {remote_label}", 12, colors["muted"])
+            result_divider_y, core_title_y, chip_y1, chip_y2 = 385, 404, 434, 470
+            action_divider_y, action_title_y, action_center_y = 489, 509, 548
+            button_y1, button_y2, status_y = 585, 635, 652
+        line(145, result_divider_y, 855, result_divider_y)
+        text(145, core_title_y, "핵심 결과", 16, colors["text"], "semibold")
         visible_findings = [(finding.code, finding.title) for finding in result.findings[:3]]
         if not visible_findings:
             visible_findings = [
@@ -5979,38 +6007,43 @@ def show_log_viewer(
         for index, (finding_code, label) in enumerate(visible_findings):
             x1 = 145 + index * (chip_width + chip_gap)
             x2 = x1 + chip_width
-            y1 = 434
+            y1 = chip_y1
             kind = "temp" if "TEMPERATURE" in finding_code else "fan" if "FAN" in finding_code else "warn"
-            round_rect(x1, y1, x2, 470, 18, chip_fill, "")
+            round_rect(x1, y1, x2, chip_y2, 18, chip_fill, "")
             if kind == "temp":
-                canvas.create_oval(x1 + 17, 447, x1 + 25, 463, fill="#ffffff", outline=chip_color, width=2)
-                canvas.create_line(x1 + 21, 441, x1 + 21, 455, fill=chip_color, width=2)
+                canvas.create_oval(x1 + 17, y1 + 13, x1 + 25, y1 + 29, fill="#ffffff", outline=chip_color, width=2)
+                canvas.create_line(x1 + 21, y1 + 7, x1 + 21, y1 + 21, fill=chip_color, width=2)
             elif kind == "fan":
                 for angle in (0, 120, 240):
-                    canvas.create_arc(x1 + 14, 441, x1 + 33, 463, start=angle, extent=65, style="arc", outline=chip_color, width=2)
-                canvas.create_oval(x1 + 22, 450, x1 + 26, 454, fill=chip_color, outline="")
+                    canvas.create_arc(x1 + 14, y1 + 7, x1 + 33, y1 + 29, start=angle, extent=65, style="arc", outline=chip_color, width=2)
+                canvas.create_oval(x1 + 22, y1 + 16, x1 + 26, y1 + 20, fill=chip_color, outline="")
             else:
-                canvas.create_polygon(x1 + 22, 441, x1 + 13, 463, x1 + 31, 463, fill="#ffffff", outline=chip_color, width=2)
-                text(x1 + 22, 457, "!", 10, chip_color, "semibold", "center")
-            text(x1 + 42, 452, label, 12, colors["text"], "regular", "w", width=chip_width - 50)
-        line(145, 489, 855, 489)
-        text(145, 509, "권장 조치", 16, colors["text"], "semibold")
+                canvas.create_polygon(x1 + 22, y1 + 7, x1 + 13, y1 + 29, x1 + 31, y1 + 29, fill="#ffffff", outline=chip_color, width=2)
+                text(x1 + 22, y1 + 23, "!", 10, chip_color, "semibold", "center")
+            text(x1 + 42, y1 + 18, label, 12, colors["text"], "regular", "w", width=chip_width - 50)
+        line(145, action_divider_y, 855, action_divider_y)
+        text(145, action_title_y, "권장 조치", 16, colors["text"], "semibold")
         action_slots = (162, 420, 690)
         for index, label in enumerate(result.recommended_actions[:3], start=1):
             x = action_slots[index - 1]
-            canvas.create_oval(x - 13, 535, x + 13, 561, fill="#fff0ef", outline="")
-            text(x, 548, str(index), 11, colors["red"], "semibold", "center")
-            text(x + 31, 548, label, 12, "#333333", "regular", "w", width=195)
+            canvas.create_oval(x - 13, action_center_y - 13, x + 13, action_center_y + 13, fill="#fff0ef", outline="")
+            text(x, action_center_y, str(index), 11, colors["red"], "semibold", "center")
+            text(x + 31, action_center_y, label, 12, "#333333", "regular", "w", width=195)
             if index < len(result.recommended_actions[:3]):
-                line(x + 213, 535, x + 213, 561)
-        if can_offer_as(result, diagnosis if isinstance(diagnosis, DiagnosisRunSnapshot) else None):
-            button(270, 585, 485, 635, "진단 상세", show_diagnosis_detail, False, size=15)
-            as_label = "AS 접수 다시 시도" if ui["asState"] == "asFailed" else "AS 연결하기"
-            button(515, 585, 730, 635, as_label, connect_as, True, disabled=bool(ui["busy"]), size=15)
+                line(x + 213, action_center_y - 13, x + 213, action_center_y + 13)
+        if can_offer_as(
+            result,
+            diagnosis if isinstance(diagnosis, DiagnosisRunSnapshot) else None,
+            session,
+        ):
+            button(145, button_y1, 340, button_y2, "처음으로", go_home, False, size=14)
+            button(365, button_y1, 560, button_y2, "진단 상세", show_diagnosis_detail, False, size=14)
+            button(585, button_y1, 855, button_y2, "원격 AS 기사 연결", connect_as, True, disabled=bool(ui["busy"]), size=14)
         else:
-            button(390, 585, 610, 635, "진단 상세", show_diagnosis_detail, False, size=15)
+            button(270, button_y1, 485, button_y2, "처음으로", go_home, False, size=15)
+            button(515, button_y1, 730, button_y2, "진단 상세", show_diagnosis_detail, False, size=15)
         if ui["status"]:
-            text(500, 652, str(ui["status"]), 11, colors["red"], "regular", "center")
+            text(500, status_y, str(ui["status"]), 11, colors["red"], "regular", "center")
 
     def draw_success() -> None:
         response = ui.get("asRequest")
@@ -6024,20 +6057,22 @@ def show_log_viewer(
         round_rect(220, 378, 780, 558, 10, "#fafafa", "#e2e2e2")
         if isinstance(response, DiagnosisAsResponse) and isinstance(payload, DiagnosisAsRequest):
             stored_request_type = response.request_type or payload.request_type
-            request_type = "현장 점검 요청" if stored_request_type == "PHYSICAL_INSPECTION" else stored_request_type
+            request_type = "기존 일반 AS 티켓 (PHYSICAL_INSPECTION)" if stored_request_type == "PHYSICAL_INSPECTION" else stored_request_type
             detail_rows = (
                 ("요청 번호", response.request_number),
                 ("요청 유형", request_type),
-                ("사용자 증상", response.symptom or payload.symptom or "전달된 증상 없음"),
-                ("Agent 진단", response.diagnosis_title or payload.diagnosis_title),
+                ("진단 문제", "그래픽 장치 구성 이상"),
+                ("기사 점검", "원격 기사 점검 필요"),
+                ("진단 요약", response.diagnosis_summary or payload.diagnosis_summary),
             )
-            row_y = (400, 430, 462, 511)
+            row_y = (400, 428, 456, 484, 512)
             for (label, value), y in zip(detail_rows, row_y):
                 text(250, y, label, 11, colors["muted"], "semibold", "w")
                 text(365, y, value, 11, colors["text"], "regular", "w", width=380)
         else:
             text(500, 465, "저장된 AS 요청 정보를 불러올 수 없습니다.", 13, colors["red"], "regular", "center")
-        button(370, 585, 630, 637, "웹에서 확인하기", open_created_ticket, True, size=15)
+        button(240, 585, 475, 637, "처음으로", go_home, False, size=15)
+        button(525, 585, 760, 637, "웹에서 확인하기", open_created_ticket, True, size=15)
         if ui["status"]:
             text(500, 657, str(ui["status"]), 10, colors["red"], "regular", "center", width=640)
 
@@ -6272,6 +6307,26 @@ def show_log_viewer(
         except tk.TclError:
             return
 
+    def go_home() -> bool:
+        if ui["busy"]:
+            return False
+        if not callable(finish_diagnosis_session):
+            ui["status"] = "진단 세션을 종료할 수 없습니다."
+            render()
+            return False
+        try:
+            finished = bool(finish_diagnosis_session())
+        except Exception as exception:
+            ui["status"] = str(exception) or "진단 세션 종료에 실패했습니다."
+            render()
+            return False
+        if not finished:
+            ui["status"] = "진단 세션 종료에 실패했습니다."
+            render()
+            return False
+        apply_diagnosis_session(None)
+        return True
+
     def connect_as() -> None:
         if ui["busy"]:
             return
@@ -6321,16 +6376,28 @@ def show_log_viewer(
             f"{item['component'].upper()} {item['metricType']}: {item['value']}{item.get('unit') or ''}"
             for item in payload.evidence_summary
         ]
+        problem_device = actual_device_problem_evidence(result)
+        display_driver = matching_display_driver_evidence(result, problem_device)
+        device_value = problem_device.value if problem_device is not None and isinstance(problem_device.value, dict) else {}
+        driver_value = display_driver.value if display_driver is not None and isinstance(display_driver.value, dict) else {}
         measured_components = ", ".join(dict.fromkeys(
             item["component"].upper() for item in payload.evidence_summary
         )) or "측정된 구성요소 없음"
         summary = "\n".join((
             "전송 정보",
+            f"• diagnosisId: {result.diagnosis_id}",
             f"• 사용자 증상: {session.request.symptom or '전달된 증상 없음'}",
-            f"• Agent 최종 진단: {result.title}",
+            f"• 진단 분류: {result.diagnosis_type or '분류 없음'}",
+            f"• 결과: {result.title}",
+            f"• 요약: {result.summary}",
+            f"• 해결 유형: {result.resolution_type}",
+            f"• 로컬 자동 복구: {'가능' if result.can_auto_recover else '불가'}",
+            f"• 장치: {device_value.get('deviceName') or '확인되지 않음'}",
+            f"• problem code: {device_value.get('problemCode') if device_value.get('problemCode') is not None else '확인되지 않음'}",
+            f"• 드라이버: {driver_value.get('provider') or '확인되지 않음'} / {driver_value.get('version') or '-'} / {driver_value.get('date') or '-'}",
             "• 핵심 측정 근거:",
             *(f"  - {item}" for item in evidence),
-            "• 요청 유형: 현장 점검 요청",
+            "• 요청 유형: 기존 일반 AS 티켓 (PHYSICAL_INSPECTION)",
             f"• 진단 시각: {result.evaluated_at}",
             f"• PC 주요 구성 정보(실제 측정 구성): {measured_components}",
             f"• 진단 모드: {session.request.mode}",
@@ -6420,6 +6487,8 @@ def show_log_viewer(
         if not opened:
             ui["status"] = "웹 요청 상세 페이지를 열지 못했습니다."
             render()
+            return
+        go_home()
 
     def start_drag(event: tk.Event) -> None:
         drag_origin["x"] = event.x_root - root.winfo_x()
@@ -7289,6 +7358,7 @@ def run_background(
             if "value" in diagnosis_orchestrator_holder else False,
             retry_diagnosis=lambda: diagnosis_orchestrator_holder["value"].retry()
             if "value" in diagnosis_orchestrator_holder else False,
+            finish_diagnosis_session=lambda: finish_current_diagnosis_session(),
         )
 
         def on_connection_state_changed(state: str) -> None:
@@ -7374,6 +7444,20 @@ def run_background(
             on_update=on_metrics_updated,
             on_complete=on_initial_metrics_complete,
         )
+
+        def finish_current_diagnosis_session() -> bool:
+            initial_metrics_coordinator.stop()
+            reset_diagnosis_session_state(
+                diagnosis_store,
+                metrics_store,
+                diagnosis_log_store,
+                diagnosis_result_store,
+            )
+            forwarded_event_ids.clear()
+            client = diagnosis_client_holder.get("value")
+            if client is not None:
+                client.mark_idle()
+            return True
 
         def begin_initial_metrics(
             session: DiagnosisSession | None,

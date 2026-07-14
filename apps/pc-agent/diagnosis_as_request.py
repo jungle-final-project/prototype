@@ -8,8 +8,13 @@ from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import quote, urljoin, urlparse, urlunparse
 
-from diagnosis_request_agent import DiagnosisSession
-from diagnosis_result import DiagnosisEvidence, DiagnosisResult
+from diagnosis_request_agent import DiagnosisSession, WEB_REQUEST
+from diagnosis_result import (
+    DiagnosisEvidence,
+    DiagnosisResult,
+    actual_device_problem_evidence,
+    matching_display_driver_evidence,
+)
 
 
 AS_REQUEST_PATH = "/api/agent/as-requests"
@@ -116,7 +121,7 @@ class DiagnosisAsResponse:
             raise DiagnosisAsResponseError("AS 요청이 완료 상태로 확인되지 않았습니다.")
         created_at = _required_response_text(payload, "createdAt")
         _require_iso8601(created_at, "createdAt", DiagnosisAsResponseError)
-        raw_web_url = payload.get("webUrl")
+        raw_web_url = payload.get("webUrl") or payload.get("webPath")
         if raw_web_url is not None and not isinstance(raw_web_url, str):
             raise DiagnosisAsResponseError("AS 요청 응답의 webUrl 형식이 잘못되었습니다.")
         return cls(
@@ -157,6 +162,13 @@ def build_diagnosis_as_request(
         raise DiagnosisAsValidationError("진단 모드는 LIVE 또는 DEMO여야 합니다.")
     if result.resolution_type != AS_REQUEST_TYPE:
         raise DiagnosisAsValidationError("물리 점검 대상 진단 결과만 AS 요청을 생성할 수 있습니다.")
+    if result.diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE":
+        if request.source != WEB_REQUEST or request.mode != "LIVE" or not request.symptom.strip():
+            raise DiagnosisAsValidationError("웹에서 전달된 LIVE 증상이 현재 진단 세션에 필요합니다.")
+        if result.can_auto_recover or not result.remote_as_recommended:
+            raise DiagnosisAsValidationError("로컬 자동 복구 불가·원격 기사 점검 결과만 AS 요청을 생성할 수 있습니다.")
+        if actual_device_problem_evidence(result) is None:
+            raise DiagnosisAsValidationError("실제 problem code가 있는 Display 장치 근거가 필요합니다.")
     if not result.title.strip() or not result.summary.strip():
         raise DiagnosisAsValidationError("진단 결과 제목과 요약이 필요합니다.")
     if not result.evaluated_at.strip():
@@ -305,11 +317,18 @@ def _result_evidence_summary(result: DiagnosisResult) -> tuple[dict[str, Any], .
     for finding in result.findings:
         for key in finding.evidence_keys:
             references.setdefault(key, []).append(finding.code)
+    included_keys = set(references)
+    problem_device = actual_device_problem_evidence(result)
+    display_driver = matching_display_driver_evidence(result, problem_device)
+    if result.diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE" and problem_device is not None:
+        included_keys.add(problem_device.key)
+        if display_driver is not None:
+            included_keys.add(display_driver.key)
     summary: list[dict[str, Any]] = []
     for item in result.evidence:
-        if not _usable_evidence(item) or item.key not in references:
+        if not _usable_evidence(item) or item.key not in included_keys:
             continue
-        summary.append({
+        evidence_item = {
             "component": item.component,
             "metricType": item.metric_type,
             "value": item.value,
@@ -317,8 +336,24 @@ def _result_evidence_summary(result: DiagnosisResult) -> tuple[dict[str, Any], .
             "status": item.status,
             "source": item.source,
             "sampledAt": item.sampled_at,
-            "findingCodes": list(dict.fromkeys(references[item.key])),
-        })
+            "findingCodes": list(dict.fromkeys(references.get(item.key, ()))),
+        }
+        if item.category:
+            evidence_item["category"] = item.category
+        if item.code is not None:
+            evidence_item["code"] = item.code
+        if item.occurred_at:
+            evidence_item["occurredAt"] = item.occurred_at
+        if item.description:
+            evidence_item["description"] = item.description
+        if problem_device is not None and item is problem_device:
+            evidence_item.update({
+                "diagnosisType": result.diagnosis_type,
+                "resolutionType": result.resolution_type,
+                "canAutoRecover": result.can_auto_recover,
+                "remoteAsRecommended": result.remote_as_recommended,
+            })
+        summary.append(evidence_item)
     return tuple(summary)
 
 

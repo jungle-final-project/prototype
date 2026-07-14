@@ -673,16 +673,80 @@ class DiagnosisRuleEngine:
         return result
 
 
-def can_offer_as(result: DiagnosisResult | None, diagnosis: DiagnosisRunSnapshot | None) -> bool:
-    return bool(
+def actual_device_problem_evidence(result: DiagnosisResult | None) -> DiagnosisEvidence | None:
+    if not isinstance(result, DiagnosisResult):
+        return None
+    return next(
+        (
+            item
+            for item in result.evidence
+            if item.category == "DEVICE"
+            and item.metric_type == "display_device_status"
+            and item.availability == "AVAILABLE"
+            and isinstance(item.code, int)
+            and item.code != 0
+            and isinstance(item.value, dict)
+            and bool(item.value.get("deviceName"))
+            and bool(item.value.get("instanceId"))
+            and item.value.get("problemCode") == item.code
+            and item.value.get("problemCodeQueryStatus") == "OK"
+        ),
+        None,
+    )
+
+
+def matching_display_driver_evidence(
+    result: DiagnosisResult | None,
+    device_evidence: DiagnosisEvidence | None = None,
+) -> DiagnosisEvidence | None:
+    problem_device = device_evidence or actual_device_problem_evidence(result)
+    if not isinstance(result, DiagnosisResult) or problem_device is None or not isinstance(problem_device.value, dict):
+        return None
+    instance_id = str(problem_device.value.get("instanceId") or "").strip().upper()
+    if not instance_id:
+        return None
+    return next(
+        (
+            item
+            for item in result.evidence
+            if item.category == "DRIVER"
+            and item.metric_type == "display_driver"
+            and item.availability == "AVAILABLE"
+            and isinstance(item.value, dict)
+            and str(item.value.get("instanceId") or "").strip().upper() == instance_id
+        ),
+        None,
+    )
+
+
+def can_offer_as(
+    result: DiagnosisResult | None,
+    diagnosis: DiagnosisRunSnapshot | None,
+    session: Any = None,
+) -> bool:
+    base_eligible = bool(
         isinstance(result, DiagnosisResult)
         and isinstance(diagnosis, DiagnosisRunSnapshot)
         and result.diagnosis_id == diagnosis.diagnosis_id
         and result.resolution_type == "PHYSICAL_INSPECTION"
-        and result.diagnosis_type != "DEVICE_DRIVER_CONFIGURATION_ISSUE"
         and bool(result.evidence)
         and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
         and diagnosis.transition_allowed
+    )
+    if not base_eligible or not isinstance(result, DiagnosisResult):
+        return False
+    if result.diagnosis_type != "DEVICE_DRIVER_CONFIGURATION_ISSUE":
+        return True
+    request = getattr(session, "request", None)
+    return bool(
+        result.remote_as_recommended
+        and not result.can_auto_recover
+        and actual_device_problem_evidence(result) is not None
+        and request is not None
+        and getattr(request, "diagnosis_id", None) == result.diagnosis_id
+        and getattr(request, "source", None) == "WEB_REQUEST"
+        and getattr(request, "mode", None) == "LIVE"
+        and bool(str(getattr(request, "symptom", "") or "").strip())
     )
 
 

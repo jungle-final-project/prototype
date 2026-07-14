@@ -218,7 +218,7 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
         self.assertFalse(result.can_auto_recover)
         self.assertTrue(result.remote_as_recommended)
         self.assertEqual("PHYSICAL_INSPECTION", result.resolution_type)
-        self.assertFalse(agent.can_offer_as(result, snapshot))
+        self.assertTrue(agent.can_offer_as(result, snapshot, session))
         self.assertEqual(
             "DIAGNOSING",
             agent.diagnosis_session_ui_state(session, metrics, snapshot, result, diagnosis_started=True),
@@ -268,6 +268,73 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
                 self.assertNotIn(f"검은 화면의 원인은 Code {problem_code}입니다", rendered)
                 self.assertNotIn("메인 GPU가 고장 났습니다", rendered)
                 self.assertNotIn("자동으로 복구했습니다", rendered)
+
+    def test_reset_returns_agent_to_idle_and_accepts_a_new_web_request(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        session_store = agent.DiagnosisSessionStore(root / "session.json")
+        request = DiagnosisRequest(
+            "diagnosis-completed",
+            "device-1",
+            "게임 중 검은 화면이 나타났다가 화면이 복구됩니다.",
+            ("gpu",),
+            STARTED_AT.isoformat(),
+            (STARTED_AT + timedelta(minutes=5)).isoformat(),
+            "LIVE",
+        )
+        session_store.accept(DiagnosisSession(request, "COMPLETED"))
+        metrics_store = agent.MetricsStore(root / "metrics.json")
+        metrics_store.begin(request.diagnosis_id, "LIVE")
+        metrics_store.append(request.diagnosis_id, readings_at(STARTED_AT, 25.0))
+        log_store = agent.DiagnosisLogStore(root / "progress.json")
+        log_store.replace(agent.DiagnosisRunSnapshot(
+            diagnosis_id=request.diagnosis_id,
+            mode="LIVE",
+            state="COMPLETED",
+            progress=100,
+            transition_allowed=True,
+        ))
+        result_store = agent.DiagnosisResultStore(root / "result.json")
+        result_store.save(agent.DiagnosisResult(
+            request.diagnosis_id, "WARNING", "완료", "완료", (), (), (), (),
+            "UNKNOWN", False, (), STARTED_AT.isoformat(),
+        ))
+
+        processor = agent.DiagnosisRequestProcessor(
+            session_store,
+            device_id="device-1",
+            now=lambda: STARTED_AT,
+        )
+        states: list[str] = []
+        client = agent.AgentDiagnosisWebSocketClient(
+            "http://localhost:8080",
+            "agent-token",
+            processor,
+            on_state_changed=states.append,
+        )
+        client.authenticated = True
+
+        agent.reset_diagnosis_session_state(session_store, metrics_store, log_store, result_store)
+        self.assertTrue(client.mark_idle())
+        self.assertEqual("IDLE", client.state)
+        self.assertIsNone(session_store.session)
+        self.assertIsNone(metrics_store.snapshot.diagnosis_id)
+        self.assertEqual((), metrics_store.snapshot.readings)
+        self.assertIsNone(log_store.snapshot.diagnosis_id)
+        self.assertIsNone(result_store.result)
+
+        decision = processor.process({
+            "diagnosisId": "diagnosis-next",
+            "deviceId": "device-1",
+            "symptom": "화면이 꺼졌다가 다시 복구됩니다.",
+            "requestedChecks": ["gpu"],
+            "requestedAt": STARTED_AT.isoformat(),
+            "expiresAt": (STARTED_AT + timedelta(minutes=5)).isoformat(),
+            "mode": "LIVE",
+        }, authenticated=True)
+        self.assertEqual("ACCEPTED", decision.status)
+        self.assertEqual("diagnosis-next", session_store.session.request.diagnosis_id)
 
 
 if __name__ == "__main__":

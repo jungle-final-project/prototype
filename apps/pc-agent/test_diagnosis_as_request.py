@@ -94,7 +94,65 @@ def make_result(*items: DiagnosisEvidence, resolution_type: str = "PHYSICAL_INSP
     )
 
 
+def make_device_configuration_result() -> DiagnosisResult:
+    sampled_at = "2026-07-14T01:01:30Z"
+    instance_id = "PCI\\VEN_8086&DEV_5694"
+    device = DiagnosisEvidence(
+        "windows_display_devices", "gpu", "display_device_status",
+        {
+            "deviceName": "Intel(R) Arc(TM) A350M Graphics",
+            "instanceId": instance_id,
+            "problemCode": 22,
+            "problemCodeQueryStatus": "OK",
+        },
+        "", "AVAILABLE", "DISABLED", "Win32_PnPEntity", sampled_at,
+        category="DEVICE", code=22, occurred_at=sampled_at,
+    )
+    driver = DiagnosisEvidence(
+        "windows_display_drivers", "gpu", "display_driver",
+        {
+            "deviceName": "Intel(R) Arc(TM) A350M Graphics",
+            "instanceId": instance_id,
+            "provider": "Intel Corporation",
+            "version": "32.0.101.8826",
+            "date": "2026-05-29T00:00:00Z",
+        },
+        "", "AVAILABLE", "OK", "Win32_PnPSignedDriver", sampled_at,
+        category="DRIVER", occurred_at=sampled_at,
+    )
+    symptom = DiagnosisEvidence(
+        "symptom_correlation", "system", "symptom_correlation",
+        "게임 중 검은 화면이 나타났다가 복구됩니다.", "", "AVAILABLE", "OK", "WEB_REQUEST", sampled_at,
+        category="SYSTEM", occurred_at=sampled_at,
+    )
+    finding = DiagnosisFinding(
+        "DEVICE_DRIVER_CONFIGURATION_ISSUE", "WARNING", "그래픽 장치 비활성 상태",
+        "실제 Code 22가 확인됐습니다.", (device.key, symptom.key), (), ("원격 기사 점검",),
+        "PHYSICAL_INSPECTION",
+    )
+    return DiagnosisResult(
+        "diagnosis-1", "WARNING", "그래픽 장치 비활성 상태가 확인되었습니다",
+        "Windows에서 그래픽 장치가 비활성 상태로 확인됐습니다.",
+        (device, driver, symptom), (finding,), (), ("원격 AS 기사 점검 권장",),
+        "PHYSICAL_INSPECTION", False, (), "2026-07-14T01:01:45Z",
+        diagnosis_type="DEVICE_DRIVER_CONFIGURATION_ISSUE", remote_as_recommended=True,
+    )
+
+
 class DiagnosisAsRequestTest(unittest.TestCase):
+    def test_device_configuration_payload_includes_actual_device_driver_and_result_metadata(self) -> None:
+        payload = build_diagnosis_as_request(
+            make_session(), make_device_configuration_result(), consent_accepted=True,
+        ).to_dict()
+
+        device = next(item for item in payload["evidenceSummary"] if item["category"] == "DEVICE")
+        driver = next(item for item in payload["evidenceSummary"] if item["category"] == "DRIVER")
+        self.assertEqual(22, device["code"])
+        self.assertEqual("Intel(R) Arc(TM) A350M Graphics", device["value"]["deviceName"])
+        self.assertEqual("DEVICE_DRIVER_CONFIGURATION_ISSUE", device["diagnosisType"])
+        self.assertFalse(device["canAutoRecover"])
+        self.assertEqual("Intel Corporation", driver["value"]["provider"])
+        self.assertEqual("32.0.101.8826", driver["value"]["version"])
     def test_live_and_demo_payload_use_actual_result(self) -> None:
         live = build_diagnosis_as_request(make_session(), make_result(), consent_accepted=True).to_dict()
         demo = build_diagnosis_as_request(make_session("DEMO"), make_result(), consent_accepted=True).to_dict()

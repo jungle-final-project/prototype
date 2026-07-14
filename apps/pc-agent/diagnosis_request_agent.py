@@ -208,6 +208,11 @@ class DiagnosisSessionStore:
             self._session = DiagnosisSession(self._session.request, state)
             self._save_locked()
 
+    def clear_current(self) -> None:
+        with self._lock:
+            self._session = None
+            self._save_locked()
+
     def _load(self) -> None:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -397,6 +402,12 @@ class AgentDiagnosisWebSocketClient:
     def _on_open(self, socket_app: Any) -> None:
         socket_app.send(json.dumps({"type": "AUTH", "agentToken": self.agent_token}))
 
+    def mark_idle(self) -> bool:
+        if not self.authenticated:
+            return False
+        self._set_state("IDLE")
+        return True
+
     def _on_message(self, socket_app: Any, raw_message: str) -> None:
         try:
             frame = json.loads(raw_message)
@@ -507,6 +518,7 @@ class BackgroundViewerController:
         start_diagnosis: Callable[[DiagnosisSession | None, str], DiagnosisSession | None] | None = None,
         cancel_diagnosis: Callable[[], bool] | None = None,
         retry_diagnosis: Callable[[], bool] | None = None,
+        finish_diagnosis_session: Callable[[], bool] | None = None,
     ) -> None:
         self.config_path = config_path
         self.diagnosis_session_provider = diagnosis_session_provider
@@ -519,6 +531,7 @@ class BackgroundViewerController:
         self.start_diagnosis = start_diagnosis or (lambda session, mode: None)
         self.cancel_diagnosis = cancel_diagnosis or (lambda: False)
         self.retry_diagnosis = retry_diagnosis or (lambda: False)
+        self.finish_diagnosis_session = finish_diagnosis_session or (lambda: False)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._request_focus: Any = None
@@ -577,6 +590,7 @@ class BackgroundViewerController:
             start_diagnosis=self.start_diagnosis,
             cancel_diagnosis=self.cancel_diagnosis,
             retry_diagnosis=self.retry_diagnosis,
+            finish_diagnosis_session=self.finish_diagnosis_session,
             on_window_ready=self._on_window_ready,
             on_window_closed=self._on_window_closed,
         )

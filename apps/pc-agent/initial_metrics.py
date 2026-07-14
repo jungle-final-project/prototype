@@ -184,6 +184,14 @@ class MetricsStore:
             self._save_locked()
             return True
 
+    def clear(self) -> None:
+        with self._lock:
+            self._diagnosis_id = None
+            self._mode = None
+            self._initial_complete = False
+            self._readings = []
+            self._save_locked()
+
     @property
     def snapshot(self) -> MetricsSnapshot:
         with self._lock:
