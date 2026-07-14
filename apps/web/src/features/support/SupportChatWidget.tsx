@@ -9,6 +9,8 @@ import { getCurrentSupportChat, getSupportChatSession, openSupportChatSocket, po
 import type { SupportChatMessage, SupportChatSessionDto, VisitSupportReservation } from './types';
 
 const DEFAULT_POLL_MS = 5000;
+// 닫힌 위젯의 배지 갱신용 기본 폴링 — 서버 지시(pollingIntervalMs)가 없을 때만 적용된다.
+const CLOSED_WIDGET_DEFAULT_POLL_MS = 30_000;
 const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
 const SUPPORT_CHAT_MOBILE_QUERY = '(max-width: 767px)';
 type SocketStatus = 'polling' | 'connecting' | 'reconnecting' | 'connected' | 'disconnected';
@@ -51,7 +53,15 @@ export function SupportChatWidget() {
     queryKey: ['support-chat', authScope, 'current', routeTicketId ?? 'latest'],
     queryFn: () => getCurrentSupportChat(routeTicketId),
     enabled: hasToken && !hidden && canUseUserChat,
-    refetchInterval: (query) => open ? false : pollingInterval(query.state.data as SupportChatSessionDto | undefined),
+    // 닫힌 위젯: 서버가 지시한 주기는 그대로 따르고, 지시가 없을 때만 느슨한 기본값(30초)을 쓴다
+    // — 다탭 환경에서 배지 갱신용 기본 폴링이 요청 폭주를 만들지 않게 한다.
+    refetchInterval: (query) => {
+      if (open) return false;
+      const serverInterval = (query.state.data as SupportChatSessionDto | undefined)?.pollingIntervalMs;
+      return typeof serverInterval === 'number' && Number.isFinite(serverInterval) && serverInterval > 0
+        ? serverInterval
+        : CLOSED_WIDGET_DEFAULT_POLL_MS;
+    },
     retry: false
   });
 
