@@ -10,6 +10,7 @@ from urllib.parse import quote, urljoin, urlparse, urlunparse
 
 from diagnosis_request_agent import DiagnosisSession, WEB_REQUEST
 from diagnosis_result import (
+    WINDOWS_EVENT_METRIC_TYPE,
     DiagnosisEvidence,
     DiagnosisResult,
     actual_device_problem_evidence,
@@ -160,8 +161,12 @@ def build_diagnosis_as_request(
         raise DiagnosisAsValidationError("현재 Agent 장치와 진단 요청의 deviceId가 일치하지 않습니다.")
     if request.mode not in {"LIVE", "DEMO"}:
         raise DiagnosisAsValidationError("진단 모드는 LIVE 또는 DEMO여야 합니다.")
-    if result.resolution_type != AS_REQUEST_TYPE:
-        raise DiagnosisAsValidationError("물리 점검 대상 진단 결과만 AS 요청을 생성할 수 있습니다.")
+    if result.resolution_type != AS_REQUEST_TYPE and (
+        request.source != WEB_REQUEST or not request.symptom.strip()
+    ):
+        # 이상 근거가 없는 결과(정상·근거 부족)도 접수할 수 있게 허용하되, 서버가 증상 원문
+        # 일치를 검증하므로 웹에서 시작한 진단 세션에서만 연다.
+        raise DiagnosisAsValidationError("웹에서 전달된 증상이 있는 진단 세션에서만 AS 요청을 생성할 수 있습니다.")
     if result.diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE":
         if request.source != WEB_REQUEST or request.mode != "LIVE" or not request.symptom.strip():
             raise DiagnosisAsValidationError("웹에서 전달된 LIVE 증상이 현재 진단 세션에 필요합니다.")
@@ -324,6 +329,14 @@ def _result_evidence_summary(result: DiagnosisResult) -> tuple[dict[str, Any], .
         included_keys.add(problem_device.key)
         if display_driver is not None:
             included_keys.add(display_driver.key)
+    if not included_keys:
+        # 정상·근거 부족 결과는 findings가 없어 참조 키가 비는데, 그래도 접수는 허용한다.
+        # 서버가 제출 근거를 저장된 진단 결과와 대조하므로 실측 근거를 그대로 싣는다.
+        included_keys = {
+            item.key
+            for item in result.evidence
+            if _usable_evidence(item) and item.metric_type != WINDOWS_EVENT_METRIC_TYPE
+        }
     summary: list[dict[str, Any]] = []
     for item in result.evidence:
         if not _usable_evidence(item) or item.key not in included_keys:
