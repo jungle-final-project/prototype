@@ -9,7 +9,6 @@ import json
 import mimetypes
 import os
 import platform
-import random
 import re
 import shutil
 import socket
@@ -25,8 +24,78 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from urllib.parse import quote, urljoin
+
+from demo_sensor_data import DEMO_SENSOR_SAMPLES
+from diagnosis_request_agent import (
+    AgentDiagnosisWebSocketClient,
+    BackgroundViewerController,
+    DiagnosisRequest,
+    DiagnosisSession,
+    DiagnosisSessionStore,
+    DiagnosisRequestProcessor,
+    STANDALONE,
+    ViewerRequestSignal,
+    WEB_REQUEST,
+)
+from diagnosis_as_request import (
+    DiagnosisAsRequest,
+    DiagnosisAsRequestClient,
+    DiagnosisAsResponse,
+    build_diagnosis_as_request,
+)
+from diagnosis_orchestrator import (
+    FINAL_SESSION_STATES,
+    GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
+    GRAPHICS_DIAGNOSIS_TASK_LABELS,
+    GRAPHICS_DIAGNOSIS_TASK_WEIGHTS,
+    DiagnosisLogStore,
+    DiagnosisOrchestrator,
+    DiagnosisRunSnapshot,
+    DiagnosisSettings,
+    DiagnosisTask,
+    TaskOutcome,
+    diagnosis_component_state,
+    diagnosis_current_task_label,
+)
+from diagnosis_result import (
+    DiagnosisResult,
+    DiagnosisResultStore,
+    DiagnosisRuleEngine,
+    actual_device_problem_evidence,
+    can_offer_as,
+    format_diagnosis_result_detail,
+    matching_display_driver_evidence,
+)
+from initial_metrics import (
+    ABNORMAL,
+    AVAILABLE,
+    DEFAULT_METRIC_POLICY,
+    ERROR,
+    FAILED,
+    MODERATE,
+    NORMAL,
+    PERMISSION_REQUIRED,
+    UNAVAILABLE,
+    UNSUPPORTED,
+    WARNING,
+    DemoSensorProvider as InitialDemoSensorProvider,
+    HardwareSensorProvider,
+    InitialMetricsCoordinator,
+    MetricReading,
+    MetricsNormalizer,
+    MetricsSnapshot,
+    MetricsStore,
+    history_check_colors,
+)
+from windows_graphics_diagnostics import (
+    NO_RESULTS as WINDOWS_NO_RESULTS,
+    OK as WINDOWS_QUERY_OK,
+    PowerShellJsonRunner,
+    WindowsGraphicsDiagnosticsProvider,
+    WindowsGraphicsDiagnosticsSnapshot,
+)
 
 try:
     import tkinter as tk
@@ -93,7 +162,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.7"
+DEFAULT_AGENT_VERSION = "0.1.12"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -107,6 +176,12 @@ UPDATE_DIR_NAME = "updates"
 UPDATE_APPLY_SCRIPT_FILE = "apply-pcagent-update.cmd"
 UPDATE_PENDING_FILE = "pending-update.json"
 HOME_MEMORY_WARNING_THRESHOLD = 85.0
+PC_AGENT_USAGE_WARNING_THRESHOLD = DEFAULT_METRIC_POLICY.usage_warning
+PC_AGENT_USAGE_DANGER_THRESHOLD = DEFAULT_METRIC_POLICY.usage_abnormal
+PC_AGENT_CPU_TEMP_WARNING_THRESHOLD = DEFAULT_METRIC_POLICY.cpu_temperature_warning
+PC_AGENT_CPU_TEMP_DANGER_THRESHOLD = DEFAULT_METRIC_POLICY.cpu_temperature_abnormal
+PC_AGENT_GPU_TEMP_WARNING_THRESHOLD = DEFAULT_METRIC_POLICY.gpu_temperature_warning
+PC_AGENT_GPU_TEMP_DANGER_THRESHOLD = DEFAULT_METRIC_POLICY.gpu_temperature_abnormal
 DIAGNOSIS_DETAIL_EVENT_LIMIT = 5
 DIAGNOSIS_DETAIL_WARNING_THRESHOLD = HOME_MEMORY_WARNING_THRESHOLD
 DIAGNOSIS_DETAIL_DANGER_THRESHOLD = 95.0
@@ -125,6 +200,623 @@ CARD_ICON_FILES = {
     "startup": Path("assets/icons/startup-windows.png"),
     "version": Path("assets/icons/version-info.png"),
 }
+PC_AGENT_UI_FLOW = (
+    "SYMPTOM_CONFIRM",
+    "DIAGNOSING",
+    "DIAGNOSIS_RESULT",
+)
+PC_AGENT_DIAGNOSIS_STEPS = ("증상 확인", "하드웨어 진단", "결과 및 조치")
+PC_AGENT_WINDOW_WIDTH = 1000
+PC_AGENT_WINDOW_HEIGHT = 740
+STANDALONE_INITIAL_DESCRIPTION = (
+    "현재 PC의 하드웨어 상태를 확인할 수 있습니다.\n"
+    "상태 확인을 시작하면 CPU, GPU, 메모리, 저장장치 정보를 수집합니다."
+)
+
+
+@dataclass(frozen=True)
+class SymptomDisplayState:
+    title: str
+    description: str
+    helper: str
+
+
+def initial_status_summary(metrics: MetricsSnapshot | None) -> str:
+    if not isinstance(metrics, MetricsSnapshot) or not metrics.diagnosis_id or not metrics.readings:
+        return STANDALONE_INITIAL_DESCRIPTION
+    if not metrics.initial_complete:
+        return "CPU, GPU, 메모리, 저장장치 상태를 확인하고 있습니다."
+
+    abnormal_statuses = {WARNING, ABNORMAL}
+    gpu_usage = metrics.latest("gpu", "usage")
+    gpu_temperature = metrics.latest("gpu", "temperature")
+    if (
+        gpu_usage is not None
+        and gpu_temperature is not None
+        and gpu_usage.status in abnormal_statuses
+        and gpu_temperature.status in abnormal_statuses
+    ):
+        return "GPU 부하와 온도가 높아 냉각 상태 확인이 필요합니다."
+
+    ram_usage = metrics.latest("ram", "usage")
+    if ram_usage is not None and ram_usage.status in abnormal_statuses:
+        return "메모리 사용량이 높아 메모리 부족 가능성을 확인해야 합니다."
+
+    unavailable_components = {
+        component
+        for component in ("cpu", "gpu", "ram", "disk")
+        if (
+            (reading := metrics.latest(component, "usage", "activity")) is not None
+            and reading.availability in {UNSUPPORTED, PERMISSION_REQUIRED, FAILED}
+        )
+    }
+    if len(unavailable_components) >= 2:
+        return "일부 센서를 사용할 수 없어 초기 상태 확인이 제한됩니다."
+    return "초기 측정에서는 뚜렷한 이상이 확인되지 않았습니다. 정밀 진단을 진행해 주세요."
+
+
+def symptom_display_state(
+    source: str,
+    symptom: str,
+    metrics: MetricsSnapshot | None,
+) -> SymptomDisplayState:
+    if source == WEB_REQUEST and symptom.strip():
+        return SymptomDisplayState(
+            "전달받은 증상",
+            symptom,
+            "웹 상담 정보를 바탕으로 점검 범위를 설정했습니다.",
+        )
+    helper = (
+        "현재 하드웨어 상태를 수집하기 전입니다."
+        if not isinstance(metrics, MetricsSnapshot) or not metrics.diagnosis_id
+        else "실제 센서 측정값을 바탕으로 작성한 초기 관찰입니다."
+    )
+    return SymptomDisplayState("초기 상태 요약", initial_status_summary(metrics), helper)
+
+
+def next_pc_agent_ui_state(current: str) -> str:
+    try:
+        index = PC_AGENT_UI_FLOW.index(current)
+    except ValueError:
+        return PC_AGENT_UI_FLOW[0]
+    return PC_AGENT_UI_FLOW[min(index + 1, len(PC_AGENT_UI_FLOW) - 1)]
+
+
+def diagnosis_session_ui_state(
+    session: DiagnosisSession | None,
+    metrics: MetricsSnapshot | None,
+    diagnosis: DiagnosisRunSnapshot | None = None,
+    result: DiagnosisResult | None = None,
+    diagnosis_started: bool = False,
+    result_requested: bool = False,
+) -> str:
+    result_available = diagnosis_result_available(session, diagnosis, result)
+    if result_requested and result_available:
+        return "DIAGNOSIS_RESULT"
+    if diagnosis_started or (
+        isinstance(session, DiagnosisSession)
+        and session.agent_state in {"RUNNING", "COMPLETED", "FAILED"}
+    ):
+        return "DIAGNOSING"
+    return "SYMPTOM_CONFIRM"
+
+
+ACTIVE_VIEWER_AGENT_STATES = {"REQUEST_RECEIVED", "RUNNING"}
+ACTIVE_VIEWER_DIAGNOSIS_STATES = {"COLLECTING", "DIAGNOSING", "EVALUATING"}
+TERMINAL_VIEWER_AGENT_STATES = {"COMPLETED", "FAILED"}
+TERMINAL_VIEWER_DIAGNOSIS_STATES = {
+    "COMPLETED",
+    "PARTIALLY_COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "TIMED_OUT",
+}
+
+
+def active_viewer_session(
+    session: DiagnosisSession | None,
+    diagnosis: DiagnosisRunSnapshot | None,
+) -> DiagnosisSession | None:
+    if not isinstance(session, DiagnosisSession):
+        return None
+    diagnosis_matches = (
+        isinstance(diagnosis, DiagnosisRunSnapshot)
+        and diagnosis.diagnosis_id == session.request.diagnosis_id
+    )
+    if session.agent_state in TERMINAL_VIEWER_AGENT_STATES or (
+        diagnosis_matches and diagnosis.state in TERMINAL_VIEWER_DIAGNOSIS_STATES
+    ):
+        return None
+    if session.agent_state in ACTIVE_VIEWER_AGENT_STATES or (
+        diagnosis_matches and diagnosis.state in ACTIVE_VIEWER_DIAGNOSIS_STATES
+    ):
+        return session
+    return None
+
+
+def move_terminal_session_to_idle(
+    diagnosis_store: DiagnosisSessionStore,
+    diagnosis: DiagnosisRunSnapshot | None,
+) -> bool:
+    session = diagnosis_store.session
+    if not isinstance(session, DiagnosisSession):
+        return False
+    diagnosis_matches = (
+        isinstance(diagnosis, DiagnosisRunSnapshot)
+        and diagnosis.diagnosis_id == session.request.diagnosis_id
+    )
+    terminal = session.agent_state in TERMINAL_VIEWER_AGENT_STATES or (
+        diagnosis_matches and diagnosis.state in TERMINAL_VIEWER_DIAGNOSIS_STATES
+    )
+    if not terminal:
+        return False
+    diagnosis_store.update_state("IDLE")
+    return True
+
+
+def reset_diagnosis_session_state(
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_log_store: DiagnosisLogStore,
+    diagnosis_result_store: DiagnosisResultStore,
+) -> None:
+    diagnosis_store.clear_current()
+    metrics_store.clear()
+    diagnosis_log_store.replace(DiagnosisRunSnapshot(), reset=True)
+    diagnosis_result_store.clear()
+
+
+def diagnosis_result_available(
+    session: DiagnosisSession | None,
+    diagnosis: DiagnosisRunSnapshot | None,
+    result: DiagnosisResult | None,
+) -> bool:
+    return (
+        isinstance(session, DiagnosisSession)
+        and isinstance(diagnosis, DiagnosisRunSnapshot)
+        and diagnosis.diagnosis_id == session.request.diagnosis_id
+        and diagnosis.transition_allowed
+        and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+        and isinstance(result, DiagnosisResult)
+        and result.diagnosis_id == session.request.diagnosis_id
+    )
+
+
+def start_diagnosis_once(
+    session: DiagnosisSession | None,
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_orchestrator: DiagnosisOrchestrator,
+    diagnosis_result_store: DiagnosisResultStore | None = None,
+) -> DiagnosisSession | None:
+    current_session = diagnosis_store.session
+    if (
+        not isinstance(session, DiagnosisSession)
+        or not isinstance(current_session, DiagnosisSession)
+        or current_session.request.diagnosis_id != session.request.diagnosis_id
+        or current_session.agent_state != "REQUEST_RECEIVED"
+    ):
+        return None
+    metrics = metrics_store.snapshot
+    if metrics.diagnosis_id != current_session.request.diagnosis_id or not metrics.initial_complete:
+        return None
+    if isinstance(diagnosis_result_store, DiagnosisResultStore):
+        diagnosis_result_store.clear()
+    diagnosis_orchestrator.prepare(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+        current_session.request.requested_checks,
+        reset=True,
+    )
+    diagnosis_store.update_state("RUNNING")
+    if not diagnosis_orchestrator.start(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+        current_session.request.requested_checks,
+    ):
+        diagnosis_store.update_state("REQUEST_RECEIVED")
+        return None
+    return diagnosis_store.session
+
+
+def start_initial_metrics_session(
+    session: DiagnosisSession | None,
+    mode: str,
+    device_id: str | None,
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_result_store: DiagnosisResultStore,
+    diagnosis_orchestrator: DiagnosisOrchestrator,
+    initial_metrics_coordinator: InitialMetricsCoordinator,
+    now: Callable[[], datetime] | None = None,
+) -> DiagnosisSession | None:
+    active_session = session
+    if not isinstance(active_session, DiagnosisSession):
+        normalized_mode = mode.upper()
+        if normalized_mode not in {"LIVE", "DEMO"}:
+            return None
+        requested_at = (now or (lambda: datetime.now(timezone.utc)))()
+        active_session = DiagnosisSession(DiagnosisRequest(
+            diagnosis_id=f"standalone-{uuid.uuid4()}",
+            device_id=device_id or "standalone",
+            symptom="",
+            requested_checks=("cpu", "gpu", "memory", "disk", "cooling"),
+            requested_at=requested_at.isoformat(),
+            expires_at=(requested_at + timedelta(hours=1)).isoformat(),
+            mode=normalized_mode,
+            source=STANDALONE,
+        ))
+        diagnosis_store.accept(active_session)
+    current_session = diagnosis_store.session
+    if (
+        not isinstance(current_session, DiagnosisSession)
+        or current_session.request.diagnosis_id != active_session.request.diagnosis_id
+        or current_session.agent_state != "REQUEST_RECEIVED"
+    ):
+        return None
+    existing_metrics = metrics_store.snapshot
+    if (
+        existing_metrics.diagnosis_id == current_session.request.diagnosis_id
+        and existing_metrics.initial_complete
+    ):
+        return current_session
+    diagnosis_result_store.clear()
+    diagnosis_orchestrator.prepare(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+        current_session.request.requested_checks,
+    )
+    started = initial_metrics_coordinator.start(
+        current_session.request.diagnosis_id,
+        current_session.request.mode,
+    )
+    return current_session if started else None
+
+
+SUPPORTED_GRAPHICS_SYMPTOM_FRAGMENTS = (
+    "검은 화면",
+    "화면이 꺼졌다가 복구",
+    "화면이 나오지 않",
+    "그래픽 출력 중단",
+    "화면 복구",
+)
+
+
+def is_supported_graphics_symptom(symptom: str) -> bool:
+    normalized = " ".join(symptom.strip().split())
+    return bool(normalized) and any(fragment in normalized for fragment in SUPPORTED_GRAPHICS_SYMPTOM_FRAGMENTS)
+
+
+def graphics_diagnosis_task_handlers(
+    session_provider: Callable[[], DiagnosisSession | None],
+    metrics_snapshot_provider: Callable[[], MetricsSnapshot],
+    diagnosis_snapshot_provider: Callable[[], DiagnosisRunSnapshot],
+    windows_snapshot_provider: Callable[[], WindowsGraphicsDiagnosticsSnapshot],
+    observation_timeout_seconds: float = 8.0,
+    monotonic: Callable[[], float] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> dict[str, Callable[[DiagnosisTask, MetricsSnapshot, tuple[DiagnosisTask, ...]], TaskOutcome]]:
+    clock = monotonic or time.monotonic
+    sleep = sleeper or time.sleep
+    windows_cache: dict[str, Any] = {
+        "key": None,
+        "attempted": False,
+        "snapshot": None,
+        "error": None,
+    }
+
+    def current_run_key() -> tuple[str | None, int]:
+        snapshot = diagnosis_snapshot_provider()
+        return snapshot.diagnosis_id, snapshot.retry_count
+
+    def windows_snapshot() -> WindowsGraphicsDiagnosticsSnapshot:
+        key = current_run_key()
+        if windows_cache["key"] != key:
+            windows_cache.update({"key": key, "attempted": False, "snapshot": None, "error": None})
+        if not windows_cache["attempted"]:
+            windows_cache["attempted"] = True
+            try:
+                windows_cache["snapshot"] = windows_snapshot_provider()
+            except Exception as exception:
+                windows_cache["error"] = exception
+        error = windows_cache["error"]
+        if isinstance(error, Exception):
+            raise error
+        snapshot = windows_cache["snapshot"]
+        if not isinstance(snapshot, WindowsGraphicsDiagnosticsSnapshot):
+            raise RuntimeError("Windows graphics diagnostics returned no snapshot")
+        return snapshot
+
+    def query_outcome(
+        query: Any,
+        evidence: tuple[dict[str, Any], ...],
+        no_results_completed: bool,
+    ) -> TaskOutcome:
+        if query.status == WINDOWS_QUERY_OK:
+            return TaskOutcome("COMPLETED", evidence)
+        if query.status == WINDOWS_NO_RESULTS:
+            status = "COMPLETED" if no_results_completed else "UNSUPPORTED"
+            return TaskOutcome(
+                status,
+                evidence,
+                None if no_results_completed else "NO_RESULTS",
+                None if no_results_completed else "조회된 Windows 장치 정보가 없습니다.",
+            )
+        if query.status == UNSUPPORTED:
+            return TaskOutcome("UNSUPPORTED", evidence, "UNSUPPORTED", query.error or "지원되지 않는 Windows 조회입니다.")
+        return TaskOutcome("FAILED", evidence, query.status, query.error or "Windows 진단 정보 조회에 실패했습니다.")
+
+    def evidence_for(snapshot: WindowsGraphicsDiagnosticsSnapshot, *task_ids: str) -> tuple[dict[str, Any], ...]:
+        allowed = set(task_ids)
+        return tuple(item.to_dict() for item in snapshot.to_evidence() if item.task_id in allowed)
+
+    def current_system_status(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        run = diagnosis_snapshot_provider()
+        started_at = _parse_iso_datetime(run.started_at)
+        deadline = clock() + max(0.0, observation_timeout_seconds)
+        current = metrics
+        sample_timestamps: tuple[str, ...] = ()
+        while True:
+            current = metrics_snapshot_provider()
+            timestamps = {
+                reading.sampled_at
+                for reading in current.readings
+                if reading.component in {"cpu", "gpu", "ram", "disk"}
+                and reading.source != "demo-scenario"
+                and (
+                    started_at is None
+                    or (
+                        (sampled_at := _parse_iso_datetime(reading.sampled_at)) is not None
+                        and sampled_at > started_at
+                    )
+                )
+            }
+            sample_timestamps = tuple(sorted(timestamps))
+            if len(sample_timestamps) >= 3 or clock() >= deadline:
+                break
+            sleep(min(0.05, max(0.0, deadline - clock())))
+
+        selected_timestamps = set(sample_timestamps[:3])
+        evidence: list[dict[str, Any]] = []
+        metric_preferences = {
+            "cpu": ("usage",),
+            "gpu": ("usage",),
+            "ram": ("usage",),
+            "disk": ("activity", "usage"),
+        }
+        for sampled_at in sorted(selected_timestamps):
+            for component, metric_types in metric_preferences.items():
+                reading = next(
+                    (
+                        item
+                        for metric_type in metric_types
+                        for item in current.readings
+                        if item.sampled_at == sampled_at
+                        and item.component == component
+                        and item.metric_type == metric_type
+                        and item.availability == AVAILABLE
+                    ),
+                    None,
+                )
+                if reading is None:
+                    continue
+                payload = reading.to_dict()
+                payload.update({
+                    "category": "PERFORMANCE",
+                    "code": f"{component.upper()}_{reading.metric_type.upper()}",
+                    "occurredAt": reading.sampled_at,
+                    "description": "MetricsStore actual sensor sample",
+                })
+                evidence.append(payload)
+
+        observed_at = sample_timestamps[min(2, len(sample_timestamps) - 1)] if sample_timestamps else (run.started_at or "")
+        evidence.append({
+            "component": "system",
+            "metricType": "observation_window",
+            "value": {
+                "sampleCount": min(3, len(sample_timestamps)),
+                "sampleTimestamps": list(sample_timestamps[:3]),
+                "timeoutSeconds": max(0.0, observation_timeout_seconds),
+            },
+            "unit": "count",
+            "availability": AVAILABLE,
+            "status": "OBSERVED" if len(sample_timestamps) >= 3 else "OBSERVATION_WINDOW_COMPLETED",
+            "source": "MetricsStore",
+            "sampledAt": observed_at,
+            "category": "PERFORMANCE",
+            "code": "ACTUAL_SAMPLE_TIMESTAMPS",
+            "occurredAt": observed_at,
+            "description": "Actual samples observed after diagnosis start",
+        })
+        return TaskOutcome("COMPLETED", tuple(evidence))
+
+    def display_devices(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        return query_outcome(
+            snapshot.device_query,
+            evidence_for(snapshot, "windows_display_devices"),
+            no_results_completed=False,
+        )
+
+    def display_drivers(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        return query_outcome(
+            snapshot.driver_query,
+            evidence_for(snapshot, "windows_display_drivers"),
+            no_results_completed=False,
+        )
+
+    def graphics_events(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        evidence = evidence_for(snapshot, "windows_graphics_events", "windows_kernel_power_events")
+        return query_outcome(snapshot.graphics_event_query, evidence, no_results_completed=True)
+
+    def whea_events(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        return query_outcome(
+            snapshot.whea_event_query,
+            evidence_for(snapshot, "windows_whea_events"),
+            no_results_completed=True,
+        )
+
+    def symptom_correlation(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        session = session_provider()
+        run = diagnosis_snapshot_provider()
+        if not isinstance(session, DiagnosisSession) or session.request.diagnosis_id != run.diagnosis_id:
+            return TaskOutcome("FAILED", error_code="SESSION_MISMATCH", failure_reason="현재 웹 진단 요청을 확인할 수 없습니다.")
+        snapshot = windows_snapshot()
+        supported = is_supported_graphics_symptom(session.request.symptom)
+        occurred_at = session.request.requested_at
+        value = {
+            "symptom": session.request.symptom,
+            "requestedAt": session.request.requested_at,
+            "supported": supported,
+            "deviceInstanceIds": [device.instance_id for device in snapshot.devices],
+            "graphicsEventOccurredAt": [event.occurred_at for event in snapshot.graphics_events],
+            "components": sorted({event.component for event in snapshot.graphics_events} | ({"gpu"} if snapshot.devices else set())),
+        }
+        evidence = ({
+            "component": "system",
+            "metricType": "symptom_correlation",
+            "value": value,
+            "unit": "",
+            "availability": AVAILABLE if supported else UNSUPPORTED,
+            "status": "MATCHED" if supported else "UNSUPPORTED_SYMPTOM",
+            "source": "DiagnosisSession",
+            "sampledAt": occurred_at,
+            "category": "SYSTEM",
+            "code": "SUPPORTED_GRAPHICS_SYMPTOM" if supported else "UNSUPPORTED_GRAPHICS_SYMPTOM",
+            "occurredAt": occurred_at,
+            "description": "Web symptom and Windows graphics evidence context",
+        },)
+        return TaskOutcome("COMPLETED" if supported else "UNSUPPORTED", evidence)
+
+    def evidence_finalize(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        run = diagnosis_snapshot_provider()
+        summary = [
+            {"taskId": item.task_id, "status": item.status, "evidenceCount": len(item.evidence)}
+            for item in tasks
+            if item.task_id not in {"evidence_finalize", "final_classification"}
+        ]
+        evidence = ({
+            "component": "system",
+            "metricType": "evidence_summary",
+            "value": summary,
+            "unit": "count",
+            "availability": AVAILABLE,
+            "status": "COMPLETED",
+            "source": "DiagnosisOrchestrator",
+            "sampledAt": run.started_at or "",
+            "category": "SYSTEM",
+            "code": "EVIDENCE_SUMMARY",
+            "occurredAt": run.started_at or "",
+            "description": "Terminal task evidence summary",
+        },)
+        return TaskOutcome("COMPLETED", evidence)
+
+    def final_classification(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        run = diagnosis_snapshot_provider()
+        symptom_matched = any(
+            item.get("metricType") == "symptom_correlation"
+            and item.get("status") == "MATCHED"
+            for diagnosis_task in tasks
+            for item in diagnosis_task.evidence
+        )
+        problem_devices = [
+            item
+            for diagnosis_task in tasks
+            for item in diagnosis_task.evidence
+            if item.get("metricType") == "display_device_status"
+            and isinstance(item.get("code"), int)
+            and item.get("code") != 0
+            and isinstance(item.get("value"), dict)
+            and item["value"].get("deviceName")
+            and item["value"].get("instanceId")
+            and item["value"].get("problemCode") == item.get("code")
+            and item["value"].get("problemCodeQueryStatus") == WINDOWS_QUERY_OK
+        ]
+        diagnosis_type = (
+            "DEVICE_DRIVER_CONFIGURATION_ISSUE"
+            if symptom_matched and problem_devices
+            else "INSUFFICIENT_EVIDENCE"
+        )
+        value: dict[str, Any] = {
+            "diagnosisType": diagnosis_type,
+            "symptomMatched": symptom_matched,
+            "problemDeviceCount": len(problem_devices),
+        }
+        if problem_devices:
+            value["device"] = problem_devices[0]["value"]
+        evidence = ({
+            "component": "system",
+            "metricType": "diagnosis_type",
+            "value": value,
+            "unit": "",
+            "availability": AVAILABLE,
+            "status": "CLASSIFIED" if diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE" else "INSUFFICIENT_EVIDENCE",
+            "source": "DiagnosisOrchestrator",
+            "sampledAt": run.started_at or "",
+            "category": "SYSTEM",
+            "code": diagnosis_type,
+            "occurredAt": run.started_at or "",
+            "description": "Evidence-backed graphics diagnosis classification",
+        },)
+        return TaskOutcome("COMPLETED", evidence)
+
+    return {
+        "current_system_status": current_system_status,
+        "windows_display_devices": display_devices,
+        "windows_display_drivers": display_drivers,
+        "windows_graphics_events": graphics_events,
+        "windows_whea_events": whea_events,
+        "symptom_correlation": symptom_correlation,
+        "evidence_finalize": evidence_finalize,
+        "final_classification": final_classification,
+    }
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def resolve_ui_font_family(root: Any | None = None) -> str:
@@ -459,6 +1151,9 @@ class AgentConfig:
     schema_version: int = DEFAULT_SCHEMA_VERSION
     web_base_url: str | None = None
     environment: str = "local"
+    symptom: str | None = None
+    symptom_type: str | None = None
+    device_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
@@ -474,6 +1169,9 @@ class AgentConfig:
             schema_version=optional_config_int(data, "schemaVersion", DEFAULT_SCHEMA_VERSION),
             web_base_url=optional_config_text(data, "webBaseUrl"),
             environment=optional_config_text(data, "environment") or "local",
+            symptom=optional_config_text(data, "symptom"),
+            symptom_type=optional_config_text(data, "symptomType"),
+            device_id=optional_config_text(data, "deviceId"),
         )
 
     def registration_status(self) -> str:
@@ -959,7 +1657,7 @@ def import_activation_config(config_path: Path, activation_path: Path | None = N
 
     config_data = read_config_json(config_path)
     changed = False
-    for field in ("apiBaseUrl", "webBaseUrl", "environment"):
+    for field in ("apiBaseUrl", "webBaseUrl", "environment", "symptom", "symptomType"):
         value = optional_config_text(activation_data, field)
         if value and config_data.get(field) != value:
             config_data[field] = value
@@ -981,6 +1679,17 @@ def log_file(config: AgentConfig) -> Path:
 
 
 def print_status(config_path: Path) -> None:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
     config = load_config(config_path)
     print(config.registration_status())
 
@@ -1144,15 +1853,33 @@ GPU_FIELDS = (
     "vramUsagePercent",
     "gpuTemp",
     "gpuTempCelsius",
+    "gpuFanRpm",
+    "gpuFanPercent",
 )
 CPU_TEMP_FIELDS = ("cpuTemp", "cpuTempCelsius", "cpuTemperatureCelsius")
 CPU_USAGE_FIELDS = ("cpuUsage", "cpuUsagePercent")
+CPU_CLOCK_FIELDS = ("cpuClockMhz",)
 MEMORY_USAGE_FIELDS = ("memoryUsage", "ramUsage", "memoryUsedPercent")
+MEMORY_USED_FIELDS = ("memoryUsedBytes",)
+MEMORY_TOTAL_FIELDS = ("memoryTotalBytes",)
 DISK_USAGE_FIELDS = ("diskUsage", "diskUsedPercent")
+DISK_USED_BYTES_FIELDS = ("diskUsedBytes",)
+DISK_TOTAL_BYTES_FIELDS = ("diskTotalBytes",)
+DISK_ACTIVE_FIELDS = ("diskBusyEstimatePercent",)
+DISK_HEALTH_FIELDS = ("diskSmartStatus", "diskHealth")
 GPU_USAGE_FIELDS = ("gpuUsage", "gpuUsagePercent")
 GPU_VRAM_FIELDS = ("vramUsage", "vramUsagePercent")
 GPU_TEMP_FIELDS = ("gpuTemp", "gpuTempCelsius")
-OPTIONAL_SENSOR_STATUS_FIELDS = ("vramUsagePercent", "cpuTempCelsius", "gpuTempCelsius")
+GPU_FAN_RPM_FIELDS = ("gpuFanRpm",)
+GPU_FAN_PERCENT_FIELDS = ("gpuFanPercent",)
+OPTIONAL_SENSOR_STATUS_FIELDS = (
+    "vramUsagePercent",
+    "cpuTempCelsius",
+    "gpuTempCelsius",
+    "gpuFanRpm",
+    "gpuFanPercent",
+    "diskSmartStatus",
+)
 WINDOWS_GPU_ENGINE_COUNTER = r"\GPU Engine(*)\Utilization Percentage"
 WINDOWS_DISK_BUSY_COUNTER = r"\PhysicalDisk(_Total)\% Disk Time"
 SYSTEM_METRIC_KIND = "SYSTEM_METRIC"
@@ -1197,6 +1924,17 @@ def mark_unavailable(
     for field in fields:
         payload[field] = None
         reasons.setdefault(field, reason)
+
+
+def sensor_reason_is_failure(reason: str | None) -> bool:
+    normalized = (reason or "").casefold()
+    return any(token in normalized for token in ("failed", "timed out", "exception"))
+
+
+def sensor_exception_reason(prefix: str, exception: Exception) -> str:
+    if isinstance(exception, PermissionError):
+        return f"{prefix} permission required"
+    return f"{prefix} query failed"
 
 
 def safe_process_name(value: Any) -> str | None:
@@ -1265,8 +2003,8 @@ def read_windows_disk_busy_percent_powershell(
         return None, "PowerShell unavailable"
     except subprocess.TimeoutExpired:
         return None, "PowerShell disk counter timed out"
-    except Exception:
-        return None, "PowerShell disk counter query failed"
+    except Exception as exception:
+        return None, sensor_exception_reason("PowerShell disk counter", exception)
     if getattr(result, "returncode", 1) != 0:
         return None, "PowerShell disk counter query failed"
     lines = [line.strip() for line in str(getattr(result, "stdout", "")).splitlines() if line.strip()]
@@ -1329,8 +2067,8 @@ def read_windows_gpu_usage_percent_win32pdh(win32pdh_module: Any = None) -> tupl
         # GPU Engine exposes per-engine utilization. Sum active engines, then clamp
         # to a task-manager-like 0-100 estimate for the single UI percentage column.
         return round(max(0.0, min(100.0, sum(values))), 1), None
-    except Exception:
-        return None, "Windows GPU performance counter query failed"
+    except Exception as exception:
+        return None, sensor_exception_reason("Windows GPU performance counter", exception)
     finally:
         if query is not None:
             try:
@@ -1362,8 +2100,8 @@ def read_windows_gpu_usage_percent_powershell(
         return None, "PowerShell unavailable"
     except subprocess.TimeoutExpired:
         return None, "PowerShell GPU counter timed out"
-    except Exception:
-        return None, "PowerShell GPU counter query failed"
+    except Exception as exception:
+        return None, sensor_exception_reason("PowerShell GPU counter", exception)
     if getattr(result, "returncode", 1) != 0:
         return None, "PowerShell GPU counter query failed"
     lines = [line.strip() for line in str(getattr(result, "stdout", "")).splitlines() if line.strip()]
@@ -1430,6 +2168,12 @@ class HardwareMetricCollector:
         self._last_process_at: float | None = None
 
     def collect(self, ts: datetime, index: int) -> dict:
+        return self._collect(ts, index, include_processes=True)
+
+    def collect_initial(self, ts: datetime, index: int) -> dict:
+        return self._collect(ts, index, include_processes=False)
+
+    def _collect(self, ts: datetime, index: int, include_processes: bool) -> dict:
         observed_at = float(self.time_fn())
         payload: dict[str, Any] = {
             "metricKind": "system",
@@ -1442,9 +2186,16 @@ class HardwareMetricCollector:
         self.collect_cpu_memory(payload, reasons)
         self.collect_disk_usage(payload, reasons)
         self.collect_disk_io(payload, reasons, observed_at)
+        mark_unavailable(
+            payload,
+            reasons,
+            DISK_HEALTH_FIELDS,
+            "SMART health unsupported by this collector",
+        )
         self.collect_gpu(payload, reasons)
         self.collect_cpu_temperature(payload, reasons)
-        self.collect_top_processes(payload, reasons, observed_at)
+        if include_processes:
+            self.collect_top_processes(payload, reasons, observed_at)
         self.collect_sensor_status(payload, reasons)
 
         payload["unavailableReason"] = reasons
@@ -1453,37 +2204,87 @@ class HardwareMetricCollector:
     def collect_cpu_memory(self, payload: dict[str, Any], reasons: dict[str, str]) -> None:
         if self.psutil is None:
             mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, CPU_CLOCK_FIELDS, "psutil unavailable")
             mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil unavailable")
             return
         try:
             cpu_usage = clamp_percent(self.psutil.cpu_percent(interval=0.05))
-        except Exception:
+        except Exception as exception:
             cpu_usage = None
+            mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, sensor_exception_reason("psutil cpu_percent", exception))
         try:
-            memory_usage = clamp_percent(self.psutil.virtual_memory().percent)
-        except Exception:
+            frequency = self.psutil.cpu_freq()
+            cpu_clock = rounded_or_none(getattr(frequency, "current", None)) if frequency is not None else None
+        except Exception as exception:
+            cpu_clock = None
+            mark_unavailable(payload, reasons, CPU_CLOCK_FIELDS, sensor_exception_reason("psutil cpu_freq", exception))
+        try:
+            memory = self.psutil.virtual_memory()
+            memory_usage = clamp_percent(getattr(memory, "percent", None))
+            memory_used = rounded_or_none(getattr(memory, "used", None))
+            memory_total = rounded_or_none(getattr(memory, "total", None))
+        except Exception as exception:
             memory_usage = None
+            memory_used = None
+            memory_total = None
+            reason = sensor_exception_reason("psutil virtual_memory", exception)
+            mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, reason)
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, reason)
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, reason)
         if cpu_usage is None:
             mark_unavailable(payload, reasons, CPU_USAGE_FIELDS, "psutil cpu_percent unavailable")
         else:
             set_metric_aliases(payload, CPU_USAGE_FIELDS, cpu_usage)
+        if cpu_clock is None:
+            mark_unavailable(payload, reasons, CPU_CLOCK_FIELDS, "psutil cpu_freq unavailable")
+        else:
+            set_metric_aliases(payload, CPU_CLOCK_FIELDS, cpu_clock)
         if memory_usage is None:
             mark_unavailable(payload, reasons, MEMORY_USAGE_FIELDS, "psutil virtual_memory unavailable")
         else:
             set_metric_aliases(payload, MEMORY_USAGE_FIELDS, memory_usage)
+        if memory_used is None:
+            mark_unavailable(payload, reasons, MEMORY_USED_FIELDS, "psutil memory used bytes unavailable")
+        else:
+            set_metric_aliases(payload, MEMORY_USED_FIELDS, memory_used)
+        if memory_total is None:
+            mark_unavailable(payload, reasons, MEMORY_TOTAL_FIELDS, "psutil memory total bytes unavailable")
+        else:
+            set_metric_aliases(payload, MEMORY_TOTAL_FIELDS, memory_total)
 
     def collect_disk_usage(self, payload: dict[str, Any], reasons: dict[str, str]) -> None:
         if self.psutil is None:
             mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil unavailable")
+            mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, "psutil unavailable")
             return
         try:
-            disk_usage = clamp_percent(self.psutil.disk_usage(disk_usage_root()).percent)
-        except Exception:
+            usage = self.psutil.disk_usage(disk_usage_root())
+            disk_usage = clamp_percent(getattr(usage, "percent", None))
+            disk_used = rounded_or_none(getattr(usage, "used", None))
+            disk_total = rounded_or_none(getattr(usage, "total", None))
+        except Exception as exception:
             disk_usage = None
+            disk_used = None
+            disk_total = None
+            reason = sensor_exception_reason("psutil disk_usage", exception)
+            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, reason)
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, reason)
+            mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, reason)
         if disk_usage is None:
             mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage unavailable")
         else:
             set_metric_aliases(payload, DISK_USAGE_FIELDS, disk_usage)
+        if disk_used is None:
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil disk used bytes unavailable")
+        else:
+            set_metric_aliases(payload, DISK_USED_BYTES_FIELDS, disk_used)
+        if disk_total is None:
+            mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, "psutil disk total bytes unavailable")
+        else:
+            set_metric_aliases(payload, DISK_TOTAL_BYTES_FIELDS, disk_total)
 
     def collect_disk_io(self, payload: dict[str, Any], reasons: dict[str, str], observed_at: float) -> None:
         if self.psutil is None:
@@ -1492,8 +2293,11 @@ class HardwareMetricCollector:
             return
         try:
             current = self.psutil.disk_io_counters()
-        except Exception:
-            current = None
+        except Exception as exception:
+            reason = sensor_exception_reason("psutil disk_io_counters", exception)
+            mark_unavailable(payload, reasons, DISK_DELTA_FIELDS, reason)
+            payload["diskCollectorSource"] = "unavailable"
+            return
         if current is None:
             mark_unavailable(payload, reasons, DISK_DELTA_FIELDS, "psutil disk_io_counters unavailable")
             payload["diskCollectorSource"] = "unavailable"
@@ -1555,7 +2359,7 @@ class HardwareMetricCollector:
         return subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,fan.speed",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -1572,9 +2376,12 @@ class HardwareMetricCollector:
             return False, "nvidia-smi unavailable"
         except subprocess.TimeoutExpired:
             return False, "nvidia-smi timed out"
-        except Exception:
-            return False, "nvidia-smi query failed"
+        except Exception as exception:
+            return False, sensor_exception_reason("nvidia-smi", exception)
         if getattr(result, "returncode", 1) != 0:
+            error_text = str(getattr(result, "stderr", "")).casefold()
+            if "access denied" in error_text or "permission" in error_text:
+                return False, "nvidia-smi permission required"
             return False, "nvidia-smi query failed"
         lines = [line.strip() for line in str(getattr(result, "stdout", "")).splitlines() if line.strip()]
         if not lines:
@@ -1586,6 +2393,7 @@ class HardwareMetricCollector:
         memory_used = parse_float(parts[1])
         memory_total = parse_float(parts[2])
         gpu_temp = rounded_or_none(parse_float(parts[3]))
+        gpu_fan = clamp_percent(parse_float(parts[4])) if len(parts) >= 5 else None
         if gpu_usage is None:
             payload["gpuUsage"] = None
             payload["gpuUsagePercent"] = None
@@ -1611,6 +2419,13 @@ class HardwareMetricCollector:
         else:
             payload["gpuTemp"] = gpu_temp
             payload["gpuTempCelsius"] = gpu_temp
+        payload["gpuFanRpm"] = None
+        reasons["gpuFanRpm"] = "GPU fan RPM unsupported by nvidia-smi"
+        if gpu_fan is None:
+            payload["gpuFanPercent"] = None
+            reasons["gpuFanPercent"] = "nvidia-smi GPU fan sensor unavailable"
+        else:
+            payload["gpuFanPercent"] = gpu_fan
         payload["gpuCollectorSource"] = "nvidia-smi"
         return True, None
 
@@ -1623,14 +2438,16 @@ class HardwareMetricCollector:
     ) -> tuple[bool, str | None]:
         try:
             usage, reason = reader()
-        except Exception:
-            return False, f"{source} query failed"
+        except Exception as exception:
+            return False, sensor_exception_reason(source, exception)
         usage = clamp_percent(usage)
         if usage is None:
             return False, reason or f"{source} unavailable"
         set_metric_aliases(payload, GPU_USAGE_FIELDS, usage)
         mark_unavailable(payload, reasons, GPU_VRAM_FIELDS, f"VRAM utilization unavailable from {source}")
         mark_unavailable(payload, reasons, GPU_TEMP_FIELDS, f"GPU temperature unavailable from {source}")
+        mark_unavailable(payload, reasons, GPU_FAN_RPM_FIELDS, f"GPU fan RPM unavailable from {source}")
+        mark_unavailable(payload, reasons, GPU_FAN_PERCENT_FIELDS, f"GPU fan sensor unavailable from {source}")
         payload["gpuCollectorSource"] = source
         return True, None
 
@@ -1675,8 +2492,9 @@ class HardwareMetricCollector:
             return
         try:
             readings = sensors(fahrenheit=False) or {}
-        except Exception:
-            readings = {}
+        except Exception as exception:
+            mark_unavailable(payload, reasons, CPU_TEMP_FIELDS, sensor_exception_reason("CPU temperature sensor", exception))
+            return
         selected: float | None = None
         fallback: float | None = None
         for entries in readings.values():
@@ -1704,10 +2522,14 @@ class HardwareMetricCollector:
             "vramUsagePercent": "VRAM sensor currently unsupported by this collector",
             "cpuTempCelsius": "CPU temperature sensor currently unsupported by this collector",
             "gpuTempCelsius": "GPU temperature sensor currently unsupported by this collector",
+            "gpuFanRpm": "GPU fan RPM sensor currently unsupported by this collector",
+            "gpuFanPercent": "GPU fan sensor currently unsupported by this collector",
+            "diskSmartStatus": "SMART health currently unsupported by this collector",
         }
         for field in OPTIONAL_SENSOR_STATUS_FIELDS:
             if payload.get(field) is None:
-                status[field] = "unsupported"
+                reason = reasons.get(field, default_reasons[field])
+                status[field] = "failed" if sensor_reason_is_failure(reason) else "unsupported"
                 reasons.setdefault(field, default_reasons[field])
             else:
                 status[field] = "collected"
@@ -1810,13 +2632,13 @@ def metric_payload_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 def sample_metric_snapshot(ts: datetime, index: int) -> dict:
     event_type = "DISPLAY_DRIVER_WARNING" if index % 7 == 0 else "DEMO_METRIC"
     message = "Display driver warning observed." if event_type != "DEMO_METRIC" else "Demo metric collected."
-    cpu_usage = round(min(99, 38 + index * 3 + random.random() * 8), 1)
-    memory_usage = round(min(99, 62 + index * 2 + random.random() * 6), 1)
-    disk_usage = round(49 + random.random(), 1)
-    gpu_usage = round(min(98, 64 + index * 4 + random.random() * 8), 1)
-    vram_usage = round(min(95, 58 + index * 3 + random.random() * 5), 1)
-    gpu_temp = round(min(91, 70 + index * 1.8 + random.random() * 3), 1)
-    cpu_temp = round(min(86, 62 + index * 1.2 + random.random() * 2), 1)
+    scenario = DEMO_SENSOR_SAMPLES[index % len(DEMO_SENSOR_SAMPLES)]
+    cpu_usage = float(scenario["cpuUsagePercent"])
+    memory_usage = float(scenario["memoryUsedPercent"])
+    disk_usage = float(scenario["diskUsedPercent"])
+    gpu_usage = float(scenario["gpuUsagePercent"])
+    gpu_temp = float(scenario["gpuTempCelsius"])
+    cpu_temp = float(scenario["cpuTempCelsius"])
     payload = {
         "metricKind": "sample-demo",
         "cpuUsage": cpu_usage,
@@ -1826,8 +2648,8 @@ def sample_metric_snapshot(ts: datetime, index: int) -> dict:
         "memoryUsedPercent": memory_usage,
         "gpuUsage": gpu_usage,
         "gpuUsagePercent": gpu_usage,
-        "vramUsage": vram_usage,
-        "vramUsagePercent": vram_usage,
+        "vramUsage": None,
+        "vramUsagePercent": None,
         "gpuTemp": gpu_temp,
         "gpuTempCelsius": gpu_temp,
         "cpuTemp": cpu_temp,
@@ -1840,7 +2662,7 @@ def sample_metric_snapshot(ts: datetime, index: int) -> dict:
         "osErrorEvent": None if event_type == "DEMO_METRIC" else "Display driver warning",
         "topCpuProcess": "game.exe" if index % 2 else "ide64.exe",
         "topRamProcess": "game.exe",
-        "unavailableReason": {},
+        "unavailableReason": {"vramUsage": "demo scenario does not provide VRAM usage"},
     }
     return build_metric_snapshot(ts, index, event_type, payload)
 
@@ -3177,6 +3999,423 @@ def numeric_log_value(row: dict[str, Any], *fields: str) -> float | None:
         return None
 
 
+SENSOR_COLLECTED = "collected"
+SENSOR_UNSUPPORTED = "unsupported"
+SENSOR_FAILED = "failed"
+SENSOR_PERMISSION_REQUIRED = "permission_required"
+SENSOR_PENDING = "pending"
+
+
+@dataclass(frozen=True)
+class SensorReading:
+    value: float | str | None
+    availability: str
+    reason: str | None = None
+    unit: str = ""
+    status: str = UNAVAILABLE
+    source: str = "unknown"
+    sampled_at: str | None = None
+    error_code: str | None = None
+
+
+@dataclass(frozen=True)
+class HardwareSensorSnapshot:
+    cpu_usage: SensorReading
+    cpu_temp: SensorReading
+    gpu_usage: SensorReading
+    gpu_temp: SensorReading
+    gpu_fan: SensorReading
+    memory_usage: SensorReading
+    memory_used: SensorReading
+    memory_total: SensorReading
+    disk_activity: SensorReading
+    disk_usage: SensorReading
+    disk_health: SensorReading
+    cpu_history: tuple[float, ...]
+    gpu_history: tuple[float, ...]
+    memory_history: tuple[float, ...]
+    disk_history: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class SymptomScreenInput:
+    snapshot: HardwareSensorSnapshot
+    symptom: str
+    symptom_type: str | None
+    requested_checks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HardwareWidgetState:
+    key: str
+    title: str
+    primary: str
+    details: tuple[str, ...]
+    status: str
+    tone: str
+    history: tuple[float, ...]
+    highlighted: bool = False
+
+
+@dataclass(frozen=True)
+class SymptomScreenState:
+    widgets: tuple[HardwareWidgetState, ...]
+    symptom: str
+    suspected_components: tuple[str, ...]
+
+
+def metric_metadata(row: dict[str, Any], field: str) -> dict[str, Any]:
+    payload = log_payload(row)
+    value = row.get(field)
+    if not isinstance(value, dict):
+        value = payload.get(field)
+    return value if isinstance(value, dict) else {}
+
+
+def sensor_reading(row: dict[str, Any], *fields: str, unit: str = "") -> SensorReading:
+    value = log_value(row, *fields)
+    if value is not None and (not isinstance(value, str) or value.strip()):
+        normalized = rounded_or_none(value)
+        return SensorReading(normalized if normalized is not None else str(value).strip(), SENSOR_COLLECTED, unit=unit)
+
+    statuses = metric_metadata(row, "sensorStatus")
+    reasons = metric_metadata(row, "unavailableReason")
+    reason = next((str(reasons[field]) for field in fields if reasons.get(field)), None)
+    explicit_status = next((str(statuses[field]) for field in fields if statuses.get(field)), None)
+    availability = SENSOR_FAILED if explicit_status == SENSOR_FAILED or sensor_reason_is_failure(reason) else SENSOR_UNSUPPORTED
+    return SensorReading(None, availability, reason, unit)
+
+
+def sensor_history(rows: Sequence[dict[str, Any]], *fields: str) -> tuple[float, ...]:
+    history: list[float] = []
+    for row in rows[-16:]:
+        value = numeric_log_value(row, *fields)
+        if value is not None:
+            history.append(max(0.0, min(100.0, value)))
+    return tuple(history)
+
+
+def hardware_sensor_snapshot(current: dict[str, Any], rows: Sequence[dict[str, Any]]) -> HardwareSensorSnapshot:
+    fan_rpm = sensor_reading(current, *GPU_FAN_RPM_FIELDS, unit="RPM")
+    fan_percent = sensor_reading(current, *GPU_FAN_PERCENT_FIELDS, unit="%")
+    gpu_fan = fan_rpm if fan_rpm.availability == SENSOR_COLLECTED else fan_percent
+    if gpu_fan.availability != SENSOR_COLLECTED and fan_rpm.availability == SENSOR_FAILED:
+        gpu_fan = fan_rpm
+
+    disk_history = sensor_history(rows, *DISK_ACTIVE_FIELDS)
+    if not disk_history:
+        disk_history = sensor_history(rows, *DISK_USAGE_FIELDS)
+    return HardwareSensorSnapshot(
+        cpu_usage=sensor_reading(current, *CPU_USAGE_FIELDS),
+        cpu_temp=sensor_reading(current, *CPU_TEMP_FIELDS),
+        gpu_usage=sensor_reading(current, *GPU_USAGE_FIELDS),
+        gpu_temp=sensor_reading(current, *GPU_TEMP_FIELDS),
+        gpu_fan=gpu_fan,
+        memory_usage=sensor_reading(current, *MEMORY_USAGE_FIELDS),
+        memory_used=sensor_reading(current, *MEMORY_USED_FIELDS),
+        memory_total=sensor_reading(current, *MEMORY_TOTAL_FIELDS),
+        disk_activity=sensor_reading(current, *DISK_ACTIVE_FIELDS),
+        disk_usage=sensor_reading(current, *DISK_USAGE_FIELDS),
+        disk_health=sensor_reading(current, *DISK_HEALTH_FIELDS),
+        cpu_history=sensor_history(rows, *CPU_USAGE_FIELDS),
+        gpu_history=sensor_history(rows, *GPU_USAGE_FIELDS),
+        memory_history=sensor_history(rows, *MEMORY_USAGE_FIELDS),
+        disk_history=disk_history,
+    )
+
+
+def metric_sensor_reading(reading: MetricReading | None) -> SensorReading:
+    if reading is None:
+        return SensorReading(None, SENSOR_PENDING, "initial sensor collection pending")
+    availability = {
+        AVAILABLE: SENSOR_COLLECTED,
+        UNSUPPORTED: SENSOR_UNSUPPORTED,
+        PERMISSION_REQUIRED: SENSOR_PERMISSION_REQUIRED,
+        FAILED: SENSOR_FAILED,
+    }.get(reading.availability, SENSOR_FAILED)
+    return SensorReading(
+        reading.value,
+        availability,
+        reading.failure_reason,
+        reading.unit,
+        reading.status,
+        reading.source,
+        reading.sampled_at,
+        reading.error_code,
+    )
+
+
+def metrics_snapshot_screen_input(
+    metrics: MetricsSnapshot,
+    symptom: str | None,
+    requested_checks: Sequence[str] = (),
+) -> SymptomScreenInput:
+    rpm = metric_sensor_reading(metrics.latest("gpu", "fan_rpm"))
+    percent = metric_sensor_reading(metrics.latest("gpu", "fan_percent"))
+    gpu_fan = rpm
+    if rpm.availability == SENSOR_UNSUPPORTED and percent.availability != SENSOR_UNSUPPORTED:
+        gpu_fan = percent
+    return SymptomScreenInput(
+        snapshot=HardwareSensorSnapshot(
+            cpu_usage=metric_sensor_reading(metrics.latest("cpu", "usage")),
+            cpu_temp=metric_sensor_reading(metrics.latest("cpu", "temperature")),
+            gpu_usage=metric_sensor_reading(metrics.latest("gpu", "usage")),
+            gpu_temp=metric_sensor_reading(metrics.latest("gpu", "temperature")),
+            gpu_fan=gpu_fan,
+            memory_usage=metric_sensor_reading(metrics.latest("ram", "usage")),
+            memory_used=metric_sensor_reading(metrics.latest("ram", "used_bytes")),
+            memory_total=metric_sensor_reading(metrics.latest("ram", "total_bytes")),
+            disk_activity=metric_sensor_reading(metrics.latest("disk", "activity")),
+            disk_usage=metric_sensor_reading(metrics.latest("disk", "usage")),
+            disk_health=metric_sensor_reading(metrics.latest("disk", "smart")),
+            cpu_history=metrics.history("cpu", "usage"),
+            gpu_history=metrics.history("gpu", "usage"),
+            memory_history=metrics.history("ram", "usage"),
+            disk_history=metrics.history("disk", "activity") or metrics.history("disk", "usage"),
+        ),
+        symptom=(symptom or "").strip() or "웹에서 전달받은 증상 정보가 없습니다.",
+        symptom_type=None,
+        requested_checks=tuple(requested_checks),
+    )
+
+
+def failed_system_metric_row(reason: str) -> dict[str, Any]:
+    fields = (
+        *CPU_USAGE_FIELDS,
+        *CPU_TEMP_FIELDS,
+        *CPU_CLOCK_FIELDS,
+        *GPU_USAGE_FIELDS,
+        *GPU_TEMP_FIELDS,
+        *GPU_FAN_RPM_FIELDS,
+        *GPU_FAN_PERCENT_FIELDS,
+        *MEMORY_USAGE_FIELDS,
+        *MEMORY_USED_FIELDS,
+        *MEMORY_TOTAL_FIELDS,
+        *DISK_ACTIVE_FIELDS,
+        *DISK_USAGE_FIELDS,
+        *DISK_USED_BYTES_FIELDS,
+        *DISK_TOTAL_BYTES_FIELDS,
+        *DISK_HEALTH_FIELDS,
+    )
+    payload: dict[str, Any] = {field: None for field in fields}
+    payload["unavailableReason"] = {field: reason for field in fields}
+    payload["sensorStatus"] = {field: SENSOR_FAILED for field in fields}
+    return build_metric_snapshot(datetime.now(KST), 0, SYSTEM_METRIC_KIND, payload)
+
+
+class SystemSensorProvider:
+    def __init__(self, collector: HardwareMetricCollector | None = None) -> None:
+        self.collector = collector or HardwareMetricCollector()
+
+    def load(self, config: AgentConfig) -> SymptomScreenInput:
+        rows = [row for row in read_log_tail(log_file(config), 16) if is_system_metric_row(row)]
+        if rows:
+            current = rows[-1]
+            snapshot_rows = rows
+        else:
+            try:
+                current = self.collector.collect(datetime.now(KST), 0)
+            except Exception:
+                current = failed_system_metric_row("system sensor collection failed")
+            snapshot_rows = [current]
+        return SymptomScreenInput(
+            snapshot=hardware_sensor_snapshot(current, snapshot_rows),
+            symptom=config.symptom or "웹에서 전달받은 증상이 없습니다.",
+            symptom_type=config.symptom_type,
+        )
+
+
+class DemoSensorProvider:
+    DEMO_SYMPTOM = "게임을 실행하면 처음에는 괜찮은데, 조금 지나면 프레임이 심하게 끊깁니다."
+
+    def load(self, config: AgentConfig) -> SymptomScreenInput:
+        provider = InitialDemoSensorProvider()
+        normalizer = MetricsNormalizer()
+        store = MetricsStore()
+        store.begin("manual-demo", "DEMO")
+        for index in range(3):
+            store.append("manual-demo", normalizer.normalize(provider.collect_sample(index)))
+        return metrics_snapshot_screen_input(
+            store.snapshot,
+            config.symptom or self.DEMO_SYMPTOM,
+            ("cpu", "gpu", "cooling"),
+        )
+
+
+def reading_number(reading: SensorReading) -> float | None:
+    return float(reading.value) if is_number(reading.value) else None
+
+
+def reading_text(reading: SensorReading, unit: str = "") -> str:
+    if reading.availability == SENSOR_FAILED:
+        return "확인 실패"
+    if reading.availability == SENSOR_PERMISSION_REQUIRED:
+        return "권한 필요"
+    if reading.availability == SENSOR_PENDING:
+        return "수집 중"
+    if reading.availability == SENSOR_UNSUPPORTED:
+        return "센서 미지원"
+    if reading.availability != SENSOR_COLLECTED:
+        return "측정 불가"
+    if isinstance(reading.value, str):
+        return reading.value
+    value = reading_number(reading)
+    if value is None:
+        return "측정 불가"
+    formatted = f"{value:.0f}" if value.is_integer() else f"{value:.1f}"
+    return f"{formatted}{unit}"
+
+
+def memory_size_text(reading: SensorReading) -> str:
+    value = reading_number(reading)
+    if reading.availability != SENSOR_COLLECTED or value is None:
+        return reading_text(reading)
+    return f"{value / 1024**3:.1f}GB"
+
+
+def fan_text(reading: SensorReading) -> str:
+    value = reading_number(reading)
+    if reading.availability != SENSOR_COLLECTED or value is None:
+        return reading_text(reading)
+    unit = reading.unit or "%"
+    if value == 0:
+        return f"0 {unit} (정지)"
+    return f"정상 회전 · {value:.0f}{unit}"
+
+
+def component_status(
+    usage: SensorReading,
+    optional: Sequence[SensorReading] = (),
+    temperature: SensorReading | None = None,
+    fan: SensorReading | None = None,
+    temperature_warning: float = 1000.0,
+    temperature_danger: float = 1000.0,
+) -> tuple[str, str]:
+    readings = (usage, *optional)
+    centralized = [reading.status for reading in readings if reading.status not in {UNAVAILABLE, ERROR}]
+    if usage.availability == SENSOR_FAILED or any(item.availability == SENSOR_FAILED for item in optional):
+        return "확인 실패", "danger"
+    if usage.availability == SENSOR_PERMISSION_REQUIRED:
+        return "권한 필요", "default"
+    if usage.availability == SENSOR_PENDING:
+        return "수집 중", "default"
+    if usage.availability != SENSOR_COLLECTED:
+        return "측정 불가", "default"
+    if ABNORMAL in centralized:
+        return "이상", "danger"
+    if WARNING in centralized:
+        return "주의", "warning"
+    if MODERATE in centralized:
+        return "보통", "default"
+    if NORMAL in centralized:
+        return "정상", "default"
+    usage_value = reading_number(usage) or 0.0
+    temperature_value = reading_number(temperature) if temperature is not None else None
+    fan_value = reading_number(fan) if fan is not None else None
+    if usage_value >= PC_AGENT_USAGE_DANGER_THRESHOLD or (
+        temperature_value is not None and temperature_value >= temperature_danger
+    ):
+        return "이상", "danger"
+    if usage_value >= PC_AGENT_USAGE_WARNING_THRESHOLD or (
+        temperature_value is not None and temperature_value >= temperature_warning
+    ):
+        return "주의", "warning"
+    if fan_value == 0 or any(item.availability != SENSOR_COLLECTED for item in optional):
+        return "보통", "default"
+    if usage_value >= 50.0:
+        return "보통", "default"
+    return "정상", "default"
+
+
+def suspected_hardware_components(
+    symptom: str,
+    symptom_type: str | None,
+    requested_checks: Sequence[str] = (),
+) -> tuple[str, ...]:
+    normalized = symptom.casefold()
+    matches: set[str] = set()
+    keyword_groups = {
+        "cpu": ("cpu", "프로세서", "과열", "발열"),
+        "gpu": ("gpu", "그래픽", "프레임", "게임", "화면", "냉각", "팬", "온도"),
+        "ram": ("ram", "메모리"),
+        "disk": ("disk", "디스크", "ssd", "저장", "부팅"),
+    }
+    for component, keywords in keyword_groups.items():
+        if any(keyword in normalized for keyword in keywords):
+            matches.add(component)
+    type_components = {
+        "REMOTE_DRIVER_OS": ("gpu",),
+        "REMOTE_STORAGE_MEMORY": ("ram", "disk"),
+        "VISIT_FAN_THERMAL": ("cpu", "gpu"),
+        "VISIT_DISK_FAILURE": ("disk",),
+    }
+    matches.update(type_components.get(symptom_type or "", ()))
+    requested_components = {
+        "cpu": ("cpu",),
+        "gpu": ("gpu",),
+        "memory": ("ram",),
+        "disk": ("disk",),
+        "cooling": ("cpu", "gpu"),
+    }
+    for check in requested_checks:
+        matches.update(requested_components.get(str(check).casefold(), ()))
+    return tuple(component for component in ("cpu", "gpu", "ram", "disk") if component in matches)
+
+
+def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScreenState:
+    snapshot = screen_input.snapshot
+    symptom = screen_input.symptom.strip() or "웹에서 전달받은 증상 정보가 없습니다."
+    suspected = suspected_hardware_components(symptom, screen_input.symptom_type, screen_input.requested_checks)
+
+    cpu_status, cpu_tone = component_status(
+        snapshot.cpu_usage,
+        (snapshot.cpu_temp,),
+        temperature=snapshot.cpu_temp,
+        temperature_warning=PC_AGENT_CPU_TEMP_WARNING_THRESHOLD,
+        temperature_danger=PC_AGENT_CPU_TEMP_DANGER_THRESHOLD,
+    )
+    gpu_status, gpu_tone = component_status(
+        snapshot.gpu_usage,
+        (snapshot.gpu_temp, snapshot.gpu_fan),
+        temperature=snapshot.gpu_temp,
+        fan=snapshot.gpu_fan,
+        temperature_warning=PC_AGENT_GPU_TEMP_WARNING_THRESHOLD,
+        temperature_danger=PC_AGENT_GPU_TEMP_DANGER_THRESHOLD,
+    )
+    memory_status, memory_tone = component_status(
+        snapshot.memory_usage,
+        (snapshot.memory_used, snapshot.memory_total),
+    )
+    disk_primary = snapshot.disk_activity if snapshot.disk_activity.availability == SENSOR_COLLECTED else snapshot.disk_usage
+    disk_status, disk_tone = component_status(disk_primary, (snapshot.disk_health,))
+
+    memory_capacity = f"{memory_size_text(snapshot.memory_used)} / {memory_size_text(snapshot.memory_total)}"
+    disk_label = "활성 시간" if snapshot.disk_activity.availability == SENSOR_COLLECTED else "사용률"
+    widgets = (
+        HardwareWidgetState(
+            "cpu", "CPU", f"사용률 {reading_text(snapshot.cpu_usage, '%')}",
+            (f"온도 {reading_text(snapshot.cpu_temp, '°C')}",), cpu_status, cpu_tone,
+            snapshot.cpu_history, "cpu" in suspected,
+        ),
+        HardwareWidgetState(
+            "gpu", "GPU", f"사용률 {reading_text(snapshot.gpu_usage, '%')}",
+            (f"온도 {reading_text(snapshot.gpu_temp, '°C')}", f"팬 {fan_text(snapshot.gpu_fan)}"), gpu_status, gpu_tone,
+            snapshot.gpu_history, "gpu" in suspected,
+        ),
+        HardwareWidgetState(
+            "ram", "RAM", f"사용률 {reading_text(snapshot.memory_usage, '%')}",
+            (memory_capacity,), memory_status, memory_tone,
+            snapshot.memory_history, "ram" in suspected,
+        ),
+        HardwareWidgetState(
+            "disk", "디스크", f"{disk_label} {reading_text(disk_primary, '%')}",
+            (f"SMART {reading_text(snapshot.disk_health)}",), disk_status, disk_tone,
+            snapshot.disk_history, "disk" in suspected,
+        ),
+    )
+    return SymptomScreenState(widgets, symptom, suspected)
+
+
 def home_usage_detection(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     now = datetime.now(KST)
     cutoff = now - timedelta(minutes=HOME_USAGE_LOOKBACK_MINUTES)
@@ -3831,9 +5070,9 @@ function Hide-SensitiveText {{
   param($Value)
   if ($null -eq $Value) {{ return "-" }}
   $text = [string]$Value
-  $text = [regex]::Replace($text, "(?i)(authorization|agenttoken|activationtoken|token|password)\s*[:=]\s*\S+", '$1=[hidden]')
-  $text = [regex]::Replace($text, "[A-Za-z]:\\\\[^\s\t\r\n]+", "[path hidden]")
-  $text = [regex]::Replace($text, "(/[^\s\t\r\n]+){{2,}}", "[path hidden]")
+  $text = [regex]::Replace($text, "(?i)(authorization|agenttoken|activationtoken|token|password)\\s*[:=]\\s*\\S+", '$1=[hidden]')
+  $text = [regex]::Replace($text, "[A-Za-z]:\\\\[^\\s\\t\\r\\n]+", "[path hidden]")
+  $text = [regex]::Replace($text, "(/[^\\s\\t\\r\\n]+){{2,}}", "[path hidden]")
   if ($text.Length -gt 120) {{ $text = $text.Substring(0, 117) + "..." }}
   return $text
 }}
@@ -4217,7 +5456,21 @@ def show_log_viewer(
     config_path: Path,
     focus_signal: dict[str, Any] | None = None,
     support_signal: dict[str, Any] | None = None,
+    background_mode: bool = False,
+    diagnosis_session_provider: Any = None,
+    connection_state_provider: Any = None,
+    metrics_snapshot_provider: Any = None,
+    diagnosis_snapshot_provider: Any = None,
+    diagnosis_result_provider: Any = None,
+    start_initial_metrics: Any = None,
+    start_diagnosis: Any = None,
+    cancel_diagnosis: Any = None,
+    retry_diagnosis: Any = None,
+    finish_diagnosis_session: Any = None,
+    on_window_ready: Any = None,
+    on_window_closed: Any = None,
 ) -> None:
+    """Render the reference PC diagnosis flow while preserving the existing Agent boundaries."""
     if tk is None or ttk is None:
         show_log_viewer_powershell(config_path)
         return
@@ -4228,2191 +5481,1160 @@ def show_log_viewer(
 
     config = load_config(config_path)
     config.log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_file(config)
-
-    def reload_viewer_config() -> AgentConfig:
-        nonlocal config, path
-        config = load_config(config_path)
-        config.log_dir.mkdir(parents=True, exist_ok=True)
-        path = log_file(config)
-        return config
-
     root = tk.Tk()
     root.title(DISPLAY_APP_NAME)
     apply_agent_window_icon(root)
-    root.geometry("1000x740")
-    root.minsize(1000, 740)
-    root.maxsize(1000, 740)
+    root.geometry(f"{PC_AGENT_WINDOW_WIDTH}x{PC_AGENT_WINDOW_HEIGHT}")
+    root.minsize(PC_AGENT_WINDOW_WIDTH, PC_AGENT_WINDOW_HEIGHT)
+    root.maxsize(PC_AGENT_WINDOW_WIDTH, PC_AGENT_WINDOW_HEIGHT)
     root.resizable(False, False)
-    colors = {
-        "app_bg": "#f5f7f8",
-        "sidebar_bg": "#e7f2ef",
-        "sidebar_active": "#ffffff",
-        "sidebar_active_bar": "#1f8a70",
-        "text": "#172b3a",
-        "muted": "#5c6b73",
-        "subtle": "#7b8a92",
-        "border": "#d7e0e3",
-        "card_bg": "#ffffff",
-        "section_bg": "#ffffff",
-        "table_header": "#edf3f4",
-        "row_alt": "#f8fbfb",
-        "signal_bg": "#f8fbfb",
-        "signal_hover": "#edf7f4",
-    }
+    root.overrideredirect(os.environ.get("PC_AGENT_CAPTURE_NATIVE") != "1")
+    root.configure(background="#ffffff")
+    root.attributes("-topmost", True)
+    root.after(15000, lambda: root.attributes("-topmost", False))
+    root.lift()
+    root.focus_force()
+    try:
+        root.tk.call("tk", "scaling", 1.0)
+    except tk.TclError:
+        pass
+
     ui_font_family = resolve_ui_font_family(root)
 
-    def ui_font(size_px: int, weight: str = "regular", underline: bool = False) -> tuple[Any, ...]:
-        return tk_ui_font(ui_font_family, size_px, weight, underline)
+    def font(size: int, weight: str = "regular") -> tuple[Any, ...]:
+        return tk_ui_font(ui_font_family, size, weight)
 
-    root.option_add("*Font", ui_font(FONT_BODY_PX))
+    canvas = tk.Canvas(
+        root,
+        width=PC_AGENT_WINDOW_WIDTH,
+        height=PC_AGENT_WINDOW_HEIGHT,
+        background="#ffffff",
+        highlightthickness=0,
+        borderwidth=0,
+    )
+    canvas.pack(fill="both", expand=True)
 
-    def create_round_rect(
-        canvas: tk.Canvas,
+    colors = {
+        "text": "#111111",
+        "muted": "#767676",
+        "subtle": "#9a9a9a",
+        "line": "#dedede",
+        "soft": "#f5f5f5",
+        "blue": "#1677ff",
+        "red": "#ff4d3d",
+        "red_soft": "#fff0ef",
+        "green": "#12bd67",
+        "green_soft": "#effbf5",
+        "warning": "#f59e0b",
+        "danger": "#c2410c",
+    }
+    capture_state_override = os.environ.get("PC_AGENT_CAPTURE_STATE", "").strip()
+    capture_state = capture_state_override
+    if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT"}:
+        capture_state = "SYMPTOM_CONFIRM"
+    stored_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
+    stored_diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
+    diagnosis_session = active_viewer_session(stored_session, stored_diagnosis)
+    if isinstance(diagnosis_session, DiagnosisSession):
+        initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+        diagnosis_snapshot = stored_diagnosis
+        result_snapshot = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
+    else:
+        initial_metrics = None
+        diagnosis_snapshot = None
+        result_snapshot = None
+    diagnosis_started = (
+        isinstance(diagnosis_session, DiagnosisSession)
+        and diagnosis_session.agent_state in {"RUNNING", "COMPLETED", "FAILED"}
+    )
+    if not capture_state_override:
+        capture_state = diagnosis_session_ui_state(
+            diagnosis_session,
+            initial_metrics,
+            diagnosis_snapshot,
+            result_snapshot,
+            diagnosis_started=diagnosis_started,
+        )
+    ui = {
+        "state": capture_state,
+        "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else False,
+        "diagnosisSession": diagnosis_session,
+        "diagnosisSnapshot": diagnosis_snapshot,
+        "diagnosisResult": result_snapshot,
+        "requestLocked": isinstance(diagnosis_session, DiagnosisSession),
+        "diagnosisStarted": diagnosis_started,
+        "resultRequested": False,
+        "busy": False,
+        "diagnosisReady": False,
+        "status": "",
+        "diagnosis": None,
+        "window": None,
+        "asState": "diagnosisResult",
+        "asRequest": None,
+        "asRequestPayload": None,
+        "ticketUrl": None,
+    }
+    image_refs: list[Any] = []
+    button_counter = {"value": 0}
+    drag_origin = {"x": 0, "y": 0}
+
+    def round_rect(
         x1: int,
         y1: int,
         x2: int,
         y2: int,
         radius: int,
-        **kwargs: Any,
-    ) -> None:
+        fill: str,
+        outline: str = "",
+        width: int = 1,
+        tags: tuple[str, ...] | str = (),
+    ) -> int:
         points = [
-            x1 + radius,
-            y1,
-            x2 - radius,
-            y1,
-            x2,
-            y1,
-            x2,
-            y1 + radius,
-            x2,
-            y2 - radius,
-            x2,
-            y2,
-            x2 - radius,
-            y2,
-            x1 + radius,
-            y2,
-            x1,
-            y2,
-            x1,
-            y2 - radius,
-            x1,
-            y1 + radius,
-            x1,
-            y1,
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
         ]
-        canvas.create_polygon(points, smooth=True, **kwargs)
-
-    def rounded_container(
-        parent: tk.Misc,
-        height: int,
-        padding: tuple[int, int] = (14, 12),
-        radius: int = 16,
-    ) -> tuple[tk.Canvas, tk.Frame]:
-        canvas = tk.Canvas(
-            parent,
-            height=height,
-            background=colors["app_bg"],
-            highlightthickness=0,
-            borderwidth=0,
+        return canvas.create_polygon(
+            points,
+            smooth=True,
+            splinesteps=24,
+            fill=fill,
+            outline=outline,
+            width=width,
+            tags=tags,
         )
-        inner = tk.Frame(canvas, background=colors["card_bg"])
-        window_id = canvas.create_window(padding[0], padding[1], anchor="nw", window=inner)
 
-        def redraw(event: tk.Event) -> None:
-            canvas.delete("rounded-bg")
-            width = max(2, event.width)
-            actual_height = max(2, event.height)
-            create_round_rect(
-                canvas,
-                1,
-                1,
-                width - 1,
-                actual_height - 1,
-                radius,
-                fill=colors["card_bg"],
-                outline=colors["border"],
-                tags="rounded-bg",
-            )
-            canvas.tag_lower("rounded-bg")
-            canvas.coords(window_id, padding[0], padding[1])
-            canvas.itemconfigure(
-                window_id,
-                width=max(1, width - padding[0] * 2),
-                height=max(1, actual_height - padding[1] * 2),
-            )
+    def text(
+        x: int,
+        y: int,
+        value: str,
+        size: int,
+        color: str | None = None,
+        weight: str = "regular",
+        anchor: str = "nw",
+        width: int | None = None,
+        tags: tuple[str, ...] | str = (),
+    ) -> int:
+        options: dict[str, Any] = {
+            "text": value,
+            "font": font(size, weight),
+            "fill": color or colors["text"],
+            "anchor": anchor,
+            "tags": tags,
+        }
+        if width is not None:
+            options["width"] = width
+        return canvas.create_text(x, y, **options)
 
-        canvas.bind("<Configure>", redraw)
-        return canvas, inner
+    def line(x1: int, y1: int, x2: int, y2: int, color: str | None = None, width: int = 1) -> int:
+        return canvas.create_line(x1, y1, x2, y2, fill=color or colors["line"], width=width)
 
-    def rounded_button(
-        parent: tk.Misc,
-        text: str,
+    def bind_click(tag: str, command: Any) -> None:
+        canvas.tag_bind(tag, "<Button-1>", lambda event: command())
+        canvas.tag_bind(tag, "<Enter>", lambda event: canvas.configure(cursor="hand2"))
+        canvas.tag_bind(tag, "<Leave>", lambda event: canvas.configure(cursor=""))
+
+    def button(
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        label: str,
         command: Any,
-        variant: str = "secondary",
-        width: int = 112,
-        height: int = 32,
-    ) -> tk.Canvas:
-        is_primary = variant == "primary"
-        fill = "#197b8f" if is_primary else "#eef7f7"
-        hover = "#156a7a" if is_primary else "#dcefed"
-        foreground = "#ffffff" if is_primary else colors["text"]
-        try:
-            parent_bg = str(parent.cget("background"))  # type: ignore[attr-defined]
-        except Exception:
-            parent_bg = colors["app_bg"]
-        canvas = tk.Canvas(
-            parent,
-            width=width,
-            height=height,
-            background=parent_bg,
-            highlightthickness=0,
-            borderwidth=0,
-            cursor="hand2",
-        )
-
-        def draw(background: str) -> None:
-            canvas.delete("all")
-            create_round_rect(canvas, 1, 1, width - 1, height - 1, 12, fill=background, outline=background)
-            canvas.create_text(
-                width // 2,
-                height // 2,
-                text=text,
-                fill=foreground,
-                font=ui_font(FONT_BUTTON_PX, "semibold" if is_primary else "regular"),
-            )
-
-        def invoke(event: object = None) -> None:
-            command()
-
-        draw(fill)
-        canvas.bind("<Button-1>", invoke)
-        canvas.bind("<Enter>", lambda event: draw(hover))
-        canvas.bind("<Leave>", lambda event: draw(fill))
-        return canvas
-
-    def disabled_button(parent: tk.Misc, text: str, width: int = 112, height: int = 32) -> tk.Canvas:
-        try:
-            parent_bg = str(parent.cget("background"))  # type: ignore[attr-defined]
-        except Exception:
-            parent_bg = colors["app_bg"]
-        canvas = tk.Canvas(
-            parent,
-            width=width,
-            height=height,
-            background=parent_bg,
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        create_round_rect(canvas, 1, 1, width - 1, height - 1, 12, fill="#edf3f4", outline=colors["border"])
-        canvas.create_text(
-            width // 2,
-            height // 2,
-            text=text,
-            fill=colors["subtle"],
-            font=ui_font(FONT_BUTTON_PX),
-        )
-        return canvas
-
-    root.configure(background=colors["app_bg"])
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except tk.TclError:
-        pass
-    style.configure(
-        "Agent.TEntry",
-        padding=(8, 5),
-        fieldbackground=colors["card_bg"],
-        foreground=colors["text"],
-        bordercolor=colors["border"],
-        lightcolor=colors["border"],
-        darkcolor=colors["border"],
-    )
-    style.configure(
-        "Agent.TCombobox",
-        padding=(8, 5),
-        fieldbackground=colors["card_bg"],
-        foreground=colors["text"],
-        bordercolor=colors["border"],
-        lightcolor=colors["border"],
-        darkcolor=colors["border"],
-        arrowcolor=colors["muted"],
-    )
-    style.map(
-        "Agent.TCombobox",
-        fieldbackground=[("readonly", colors["card_bg"])],
-        foreground=[("readonly", colors["text"])],
-        bordercolor=[("focus", colors["sidebar_active_bar"])],
-        arrowcolor=[("focus", colors["sidebar_active_bar"])],
-    )
-    style.configure("Agent.Toolbar.TButton", padding=(12, 5), font=ui_font(FONT_BUTTON_PX, "semibold"))
-    style.configure(
-        "Agent.Treeview",
-        background=colors["section_bg"],
-        fieldbackground=colors["section_bg"],
-        foreground=colors["text"],
-        bordercolor=colors["border"],
-        rowheight=28,
-        font=ui_font(FONT_LOG_PX),
-    )
-    style.configure(
-        "Agent.Treeview.Heading",
-        background=colors["table_header"],
-        foreground=colors["muted"],
-        relief="flat",
-        font=ui_font(FONT_LOG_PX, "semibold"),
-    )
-    style.map(
-        "Agent.Treeview",
-        background=[("selected", "#dcefed")],
-        foreground=[("selected", colors["text"])],
-    )
-
-    range_status = tk.StringVar(value="")
-    pc_status = tk.StringVar(value="-")
-    pc_detail = tk.StringVar(value="-")
-    upload_status = tk.StringVar(value="-")
-    upload_detail = tk.StringVar(value="-")
-    startup_status = tk.StringVar(value="-")
-    startup_detail = tk.StringVar(value="-")
-    version_status = tk.StringVar(value="-")
-    version_detail = tk.StringVar(value="-")
-    selected_nav = tk.StringVar(value="상태")
-    home_ai_summary = tk.StringVar(
-        value="최근 진단 결과 없음\nPC 진단받기 후 기록 탭에 저장됩니다."
-    )
-    home_detection_title = tk.StringVar(value="최근 감지 신호 없음")
-    home_detection_detail = tk.StringVar(value="최근 로그에서 AS 접수가 필요한 신호는 아직 없습니다.")
-    home_support_status = tk.StringVar(value="")
-    update_status = tk.StringVar(value="")
-    home_consent = tk.BooleanVar(value=False)
-    home_detection_value: dict[str, Any] = {"signal": None}
-    home_diagnosis_ready = {"ready": False}
-
-    shell = tk.Frame(root, background=colors["app_bg"])
-    shell.pack(fill="both", expand=True)
-
-    sidebar = tk.Frame(shell, width=150, background=colors["sidebar_bg"])
-    sidebar.pack(side="left", fill="y")
-    sidebar.pack_propagate(False)
-    tk.Frame(sidebar, height=22, background=colors["sidebar_bg"]).pack(fill="x")
-    nav_items: list[tuple[str, tk.Frame]] = []
-
-    def render_nav() -> None:
-        for name, item in nav_items:
-            active = selected_nav.get() == name
-            item.configure(
-                background=colors["sidebar_active"] if active else colors["sidebar_bg"],
-                highlightbackground=colors["border"] if active else colors["sidebar_bg"],
-            )
-            for child in item.winfo_children():
-                role = getattr(child, "_agent_nav_role", "")
-                if role == "bar":
-                    child.configure(background=colors["sidebar_active_bar"] if active else colors["sidebar_bg"])
-                else:
-                    child.configure(
-                        background=colors["sidebar_active"] if active else colors["sidebar_bg"],
-                        foreground=colors["text"] if active else colors["muted"],
-                    )
-
-    def add_nav_item(name: str, icon: str, command: Any) -> None:
-        item = tk.Frame(
-            sidebar,
-            height=44,
-            background=colors["sidebar_bg"],
-            highlightthickness=1,
-            highlightbackground=colors["sidebar_bg"],
-        )
-        item.pack(fill="x", padx=12, pady=5)
-        item.pack_propagate(False)
-        bar = tk.Frame(item, width=4, background=colors["sidebar_bg"])
-        bar._agent_nav_role = "bar"  # type: ignore[attr-defined]
-        bar.pack(side="left", fill="y")
-        label = tk.Label(
-            item,
-            text=f"{icon}  {name}",
-            font=ui_font(FONT_BUTTON_PX, "semibold" if name == "상태" else "regular"),
-            anchor="w",
-            padx=12,
-            background=colors["sidebar_bg"],
-            foreground=colors["muted"],
-        )
-        label.pack(side="left", fill="both", expand=True)
-
-        def activate(event: object = None) -> None:
-            selected_nav.set(name)
-            render_nav()
-            command()
-
-        for widget in (item, bar, label):
-            widget.configure(cursor="hand2")
-            widget.bind("<Button-1>", activate)
-        nav_items.append((name, item))
-
-    add_nav_item("상태", "●", lambda: show_status_tab())
-    add_nav_item("AI 진단", "+", lambda: show_support_tab())
-    add_nav_item("기록", "≡", lambda: show_log_tab())
-    add_nav_item("설정", "○", lambda: open_log_folder(config_path))
-    render_nav()
-
-    content = tk.Frame(shell, background=colors["app_bg"], padx=14, pady=0)
-    content.pack(side="left", fill="both", expand=True)
-
-    header = tk.Frame(content, background=colors["app_bg"])
-    header.pack(fill="x")
-    range_badge = tk.Label(
-        header,
-        textvariable=range_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background="#e9f3f1",
-        padx=12,
-        pady=5,
-    )
-
-    view_stack = tk.Frame(content, background=colors["app_bg"])
-    view_stack.pack(fill="both", expand=True)
-    status_view = tk.Frame(view_stack, background=colors["app_bg"])
-    log_view = tk.Frame(view_stack, background=colors["app_bg"])
-    support_view = tk.Frame(view_stack, background=colors["app_bg"])
-
-    status_header = tk.Frame(status_view, background=colors["app_bg"])
-    status_header.pack(fill="x", pady=(0, 8))
-    status_title_row = tk.Frame(status_header, background=colors["app_bg"])
-    status_title_row.pack(fill="x")
-    tk.Label(
-        status_title_row,
-        text="상태 홈",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(side="left", fill="x", expand=True)
-    rounded_button(
-        status_title_row,
-        "업데이트 확인",
-        lambda: check_for_agent_update(),
-        "primary",
-        width=118,
-        height=32,
-    ).pack(side="right", padx=(8, 0))
-    tk.Label(
-        status_title_row,
-        textvariable=update_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="e",
-    ).pack(side="right", fill="x", expand=True)
-    tk.Label(
-        status_header,
-        text="PCAgent가 시스템을 안전하게 보호하고 있습니다.",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(4, 0))
-
-    cards = tk.Frame(status_view, background=colors["app_bg"])
-    cards.pack(fill="x", pady=(0, 10))
-    for index in range(4):
-        cards.columnconfigure(index, weight=1, uniform="status-card")
-
-    card_icons: dict[str, tk.Label] = {}
-    card_title_labels: dict[str, tk.Label] = {}
-    card_value_labels: dict[str, tk.Label] = {}
-    tone_colors = {
-        "ok": "#0f8f83",
-        "warning": "#b7791f",
-        "danger": "#b42318",
-        "muted": colors["muted"],
-    }
-    tone_icon_styles = {
-        "ok": ("#e8f7f4", "#a9ddd5"),
-        "warning": ("#fff7e6", "#f6d18b"),
-        "danger": ("#fff1f0", "#f4b4ad"),
-        "muted": ("#f7fafb", colors["border"]),
-    }
-
-    def card_tone_color(tone: str) -> str:
-        return tone_colors.get(tone, tone_colors["muted"])
-
-    def draw_card_icon(label: tk.Label, kind: str, tone: str) -> None:
-        stroke_hex = card_tone_color(tone)
-        soft, line = tone_icon_styles.get(tone, tone_icon_styles["muted"])
-        if Image is not None:
-            try:
-                def color(value: str) -> tuple[int, int, int, int]:
-                    value = value.lstrip("#")
-                    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16), 255)
-
-                icon_path = runtime_asset_path(CARD_ICON_FILES[kind])
-                original = Image.open(icon_path).convert("RGBA")
-                alpha = original.getchannel("A")
-                if alpha.getextrema() == (255, 255):
-                    grayscale = original.convert("L")
-                    mask = Image.eval(grayscale, lambda pixel: 255 - pixel)
-                else:
-                    mask = alpha
-                tinted = Image.new("RGBA", original.size, color(stroke_hex))
-                tinted.putalpha(mask)
-                size = 34
-                resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
-                tinted.thumbnail((size, size), resampling)
-                image = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-                if ImageDraw is not None:
-                    draw = ImageDraw.Draw(image)
-                    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=10, fill=color(soft), outline=color(line), width=1)
-                offset = ((size - tinted.width) // 2, (size - tinted.height) // 2)
-                image.alpha_composite(tinted, offset)
-                buffer = BytesIO()
-                image.save(buffer, format="PNG")
-                photo = tk.PhotoImage(data=base64.b64encode(buffer.getvalue()).decode("ascii"))
-                label.configure(image=photo, text="", background=colors["card_bg"], borderwidth=0, highlightthickness=0)
-                label._agent_card_photo = photo  # type: ignore[attr-defined]
-                return
-            except Exception:
-                pass
-        fallback_text = {"pc": "PC", "server": "PC", "upload": "UP", "startup": "ST", "version": "i"}.get(kind, "i")
-        label.configure(
-            image="",
-            text=fallback_text,
-            width=3,
-            height=1,
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=stroke_hex,
-            background=soft,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=line,
-        )
-
-    def add_card(
-        parent: tk.Frame,
-        key: str,
-        index: int,
-        title: str,
-        value: tk.StringVar,
-        detail: tk.StringVar,
-        icon_kind: str,
+        primary: bool = True,
+        disabled: bool = False,
+        size: int = 20,
     ) -> None:
-        card_canvas, card = rounded_container(parent, 88, padding=(14, 12), radius=12)
-        card_canvas.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 8, 0))
-        card.columnconfigure(0, weight=1)
-        card.columnconfigure(1, weight=0)
-        title_label = tk.Label(
-            card,
-            text=title,
-            font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        title_label.grid(row=0, column=0, sticky="ew")
-        card_title_labels[key] = title_label
-        icon_label = tk.Label(card, background=colors["card_bg"], borderwidth=0, highlightthickness=0)
-        icon_label.grid(row=0, column=1, rowspan=2, sticky="ne", padx=(8, 0))
-        draw_card_icon(icon_label, icon_kind, "muted")
-        card_icons[key] = icon_label
-        value_label = tk.Label(
-            card,
-            textvariable=value,
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        value_label.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        card_value_labels[key] = value_label
-        tk.Label(
-            card,
-            textvariable=detail,
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["subtle"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        button_counter["value"] += 1
+        tag = f"button-{button_counter['value']}"
+        if primary:
+            fill, stroke, foreground = ("#111111", "#111111", "#ffffff")
+        else:
+            fill, stroke, foreground = ("#ffffff", "#111111", "#111111")
+        if disabled:
+            fill, stroke, foreground = ("#f2f2f2", "#dedede", "#999999")
+        round_rect(x1, y1, x2, y2, 10, fill, stroke, 1, tag)
+        text((x1 + x2) // 2, (y1 + y2) // 2, label, size, foreground, "semibold", "center", tags=tag)
+        if not disabled:
+            bind_click(tag, command)
 
-    add_card(cards, "pc", 0, "PC 상태", pc_status, pc_detail, "pc")
-    add_card(cards, "upload", 1, "마지막 업로드", upload_status, upload_detail, "upload")
-    add_card(cards, "startup", 2, "시작프로그램", startup_status, startup_detail, "startup")
-    add_card(cards, "version", 3, "버전", version_status, version_detail, "version")
-
-    diagnosis_section, diagnosis_inner = rounded_container(status_view, 286, padding=(14, 12), radius=16)
-    diagnosis_section.pack(fill="x", pady=(0, 10))
-    diagnosis_inner.columnconfigure(0, weight=1)
-    diagnosis_inner.rowconfigure(0, weight=1, uniform="diagnosis_halves")
-    diagnosis_inner.rowconfigure(2, weight=1, uniform="diagnosis_halves")
-    ai_summary_row = tk.Frame(diagnosis_inner, background=colors["card_bg"])
-    ai_summary_row.grid(row=0, column=0, sticky="nsew")
-    ai_summary_row.columnconfigure(0, weight=1)
-    ai_summary_row.rowconfigure(0, minsize=76, weight=1)
-    ai_text = tk.Frame(ai_summary_row, background=colors["card_bg"])
-    ai_text.grid(row=0, column=0, sticky="sw", padx=(0, 16), pady=(0, 20))
-    ai_text.columnconfigure(0, weight=1)
-    tk.Label(
-        ai_text,
-        text="진단 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    tk.Label(
-        ai_text,
-        textvariable=home_ai_summary,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        justify="left",
-        anchor="w",
-        wraplength=640,
-        height=3,
-    ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
-    rounded_button(
-        ai_summary_row,
-        "PC 진단받기",
-        lambda: run_home_diagnosis(),
-        "primary",
-        width=118,
-        height=32,
-    ).grid(row=0, column=1, sticky="se", pady=(0, 20))
-    tk.Frame(diagnosis_inner, height=1, background=colors["border"]).grid(row=1, column=0, sticky="ew", pady=(8, 8))
-    detection_block = tk.Frame(diagnosis_inner, background=colors["card_bg"])
-    detection_block.grid(row=2, column=0, sticky="nsew")
-    detection_block.columnconfigure(0, weight=1)
-    detection_block.rowconfigure(0, weight=1)
-    detection_row = tk.Frame(detection_block, background=colors["card_bg"])
-    detection_row.grid(row=0, column=0, sticky="nsew")
-    detection_row.columnconfigure(0, weight=1)
-    tk.Label(
-        detection_row,
-        text="최근 감지 신호",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    tk.Label(
-        detection_row,
-        textvariable=home_detection_title,
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground="#b7791f",
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
-    tk.Label(
-        detection_row,
-        textvariable=home_detection_detail,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=540,
-    ).grid(row=2, column=0, sticky="ew", pady=(3, 0))
-    action_row = tk.Frame(detection_block, background=colors["card_bg"])
-    action_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-    action_row.columnconfigure(1, weight=1)
-    consent_row = tk.Frame(
-        action_row,
-        background=colors["card_bg"],
-        cursor="hand2",
-    )
-    consent_row.grid(row=0, column=0, sticky="w")
-    consent_marker = tk.Canvas(
-        consent_row,
-        width=48,
-        height=24,
-        background=colors["card_bg"],
-        highlightthickness=0,
-        borderwidth=0,
-        cursor="hand2",
-    )
-    consent_marker.pack(side="left", padx=(0, 8), pady=2)
-    consent_text = tk.Label(
-        consent_row,
-        text="최근 30분 진단 로그 전송 동의",
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        font=ui_font(FONT_BODY_PX),
-        cursor="hand2",
-    )
-    consent_text.pack(side="left", padx=(0, 10), pady=2)
-
-    def paint_home_consent() -> None:
-        selected = bool(home_consent.get())
-        background = colors["card_bg"]
-        track_fill = colors["sidebar_active_bar"] if selected else "#dce7ea"
-        track_outline = colors["sidebar_active_bar"] if selected else "#c7d5d9"
-        text_color = colors["text"] if selected else colors["muted"]
-        consent_row.configure(background=background)
-        consent_marker.configure(background=background)
-        consent_text.configure(background=background, foreground=text_color)
-        consent_marker.delete("all")
-        create_round_rect(
-            consent_marker,
-            1,
-            1,
-            47,
-            23,
-            12,
-            fill=track_fill,
-            outline=track_outline,
-        )
-        knob_left = 27 if selected else 4
-        consent_marker.create_oval(knob_left, 4, knob_left + 16, 20, fill="#ffffff", outline="#ffffff")
-        if selected:
-            consent_marker.create_line(9, 12, 13, 16, 20, 8, fill="#ffffff", width=1.6, capstyle="round", joinstyle="round")
-
-    def toggle_home_consent(event: object = None) -> None:
-        home_consent.set(not bool(home_consent.get()))
-        paint_home_consent()
-
-    for widget in (consent_row, consent_marker, consent_text):
-        widget.bind("<Button-1>", toggle_home_consent)
-    paint_home_consent()
-
-    tk.Label(
-        action_row,
-        textvariable=home_support_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground="#16766b",
-        background=colors["card_bg"],
-        anchor="e",
-    ).grid(row=0, column=1, sticky="ew", padx=(8, 8))
-    rounded_button(
-        action_row,
-        "AS 접수 신청",
-        lambda: submit_home_support_request(),
-        "primary",
-        width=118,
-        height=32,
-    ).grid(row=0, column=2, sticky="e")
-
-    summary_section, summary_inner = rounded_container(status_view, 150, padding=(14, 10), radius=16)
-    summary_section.pack(fill="x", expand=False)
-    tk.Label(
-        summary_inner,
-        text="로그 현황",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 6))
-    summary_columns = ("time", "cpu", "memory", "disk", "gpu", "event")
-    summary_table = ttk.Treeview(
-        summary_inner,
-        columns=summary_columns,
-        show="headings",
-        height=8,
-        style="Agent.Treeview",
-    )
-    summary_table.heading("time", text="시간")
-    summary_table.heading("cpu", text="CPU")
-    summary_table.heading("memory", text="메모리")
-    summary_table.heading("disk", text="디스크")
-    summary_table.heading("gpu", text="GPU")
-    summary_table.heading("event", text="이벤트")
-    summary_table.column("time", width=86, minwidth=72, anchor="w", stretch=False)
-    summary_table.column("cpu", width=78, minwidth=64, anchor="e", stretch=False)
-    summary_table.column("memory", width=86, minwidth=72, anchor="e", stretch=False)
-    summary_table.column("disk", width=82, minwidth=68, anchor="e", stretch=False)
-    summary_table.column("gpu", width=78, minwidth=64, anchor="e", stretch=False)
-    summary_table.column("event", width=260, minwidth=180, anchor="w")
-    summary_table.tag_configure("odd", background=colors["row_alt"])
-    summary_table.tag_configure("even", background=colors["section_bg"])
-    summary_table.pack(fill="both", expand=True)
-    summary_empty = tk.Frame(summary_inner, background=colors["card_bg"])
-    tk.Label(
-        summary_empty,
-        text="표시할 로그가 없습니다",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-    ).pack(pady=(24, 3))
-    tk.Label(
-        summary_empty,
-        text="백그라운드 수집이 시작되면 최근 로그가 표시됩니다",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-    ).pack()
-
-    log_mode = tk.StringVar(value="diagnosis")
-    log_mode_bar = tk.Frame(log_view, background=colors["app_bg"])
-    log_mode_bar.pack(fill="x", pady=(0, 8))
-    rounded_button(log_mode_bar, "진단 기록", lambda: set_log_mode("diagnosis"), "primary", width=104, height=32).pack(
-        side="left",
-    )
-    rounded_button(log_mode_bar, "원본 로그", lambda: set_log_mode("raw"), "secondary", width=104, height=32).pack(
-        side="left",
-        padx=(8, 0),
-    )
-
-    diagnosis_history_records: dict[str, dict[str, Any]] = {}
-    diagnosis_history_frame = tk.Frame(
-        log_view,
-        background=colors["section_bg"],
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-    )
-    diagnosis_history_frame.columnconfigure(0, weight=1)
-    diagnosis_history_frame.rowconfigure(1, weight=1)
-    tk.Label(
-        diagnosis_history_frame,
-        text="진단 기록",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 6))
-    diagnosis_history_columns = ("time", "service", "summary", "confidence")
-    diagnosis_history_tree = ttk.Treeview(
-        diagnosis_history_frame,
-        columns=diagnosis_history_columns,
-        show="headings",
-        height=12,
-        style="Agent.Treeview",
-    )
-    diagnosis_history_tree.heading("time", text="시간")
-    diagnosis_history_tree.heading("service", text="추천")
-    diagnosis_history_tree.heading("summary", text="간단 문제")
-    diagnosis_history_tree.heading("confidence", text="신뢰도")
-    diagnosis_history_tree.column("time", width=128, minwidth=112, anchor="w", stretch=False)
-    diagnosis_history_tree.column("service", width=128, minwidth=112, anchor="w", stretch=False)
-    diagnosis_history_tree.column("summary", width=470, minwidth=300, anchor="w")
-    diagnosis_history_tree.column("confidence", width=76, minwidth=64, anchor="center", stretch=False)
-    diagnosis_history_tree.tag_configure("odd", background=colors["row_alt"])
-    diagnosis_history_tree.tag_configure("even", background=colors["section_bg"])
-    diagnosis_history_scroll = ttk.Scrollbar(
-        diagnosis_history_frame,
-        orient="vertical",
-        command=diagnosis_history_tree.yview,
-    )
-    diagnosis_history_tree.configure(yscrollcommand=diagnosis_history_scroll.set)
-    diagnosis_history_tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 12))
-    diagnosis_history_scroll.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 12))
-    diagnosis_history_empty = tk.Label(
-        diagnosis_history_frame,
-        text="아직 저장된 진단 기록이 없습니다. 상태 탭에서 PC 진단받기를 실행해 주세요.",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["subtle"],
-        background=colors["section_bg"],
-    )
-
-    filters = tk.Frame(log_view, background=colors["app_bg"])
-    tk.Label(
-        filters,
-        text="날짜",
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left")
-    now_for_filter = datetime.now(KST)
-    year_value = tk.StringVar(value=str(now_for_filter.year))
-    month_value = tk.StringVar(value=f"{now_for_filter.month:02d}")
-    day_value = tk.StringVar(value=f"{now_for_filter.day:02d}")
-    year_select = ttk.Combobox(
-        filters,
-        textvariable=year_value,
-        values=[str(year) for year in range(now_for_filter.year - 3, now_for_filter.year + 2)],
-        width=6,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    year_select.pack(side="left", padx=(6, 4))
-    tk.Label(
-        filters,
-        text="년",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left", padx=(0, 6))
-    month_select = ttk.Combobox(
-        filters,
-        textvariable=month_value,
-        values=[f"{month:02d}" for month in range(1, 13)],
-        width=4,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    month_select.pack(side="left", padx=(0, 4))
-    tk.Label(
-        filters,
-        text="월",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left", padx=(0, 6))
-    day_select = ttk.Combobox(
-        filters,
-        textvariable=day_value,
-        values=[f"{day:02d}" for day in range(1, 32)],
-        width=4,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    day_select.pack(side="left", padx=(0, 4))
-    tk.Label(
-        filters,
-        text="일",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left", padx=(0, 14))
-    tk.Label(
-        filters,
-        text="시간",
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-    ).pack(side="left")
-    hour_value = tk.StringVar(value=f"{datetime.now(KST).hour:02d}:00")
-    hour_select = ttk.Combobox(
-        filters,
-        textvariable=hour_value,
-        values=[f"{hour:02d}:00" for hour in range(24)],
-        width=7,
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    hour_select.pack(side="left", padx=(6, 14))
-
-    columns = ("time", "kind", "cpu", "memory", "disk", "gpu", "vram", "cpu_temp", "gpu_temp", "message")
-    table_frame = tk.Frame(
-        log_view,
-        background=colors["section_bg"],
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-    )
-    tk.Label(
-        table_frame,
-        text="전체 로그내용",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 6))
-    tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12, style="Agent.Treeview")
-    tree.heading("time", text="시간")
-    tree.heading("kind", text="이벤트")
-    tree.heading("cpu", text="CPU")
-    tree.heading("memory", text="메모리")
-    tree.heading("disk", text="디스크")
-    tree.heading("gpu", text="GPU")
-    tree.heading("vram", text="VRAM")
-    tree.heading("cpu_temp", text="CPU 온도")
-    tree.heading("gpu_temp", text="GPU 온도")
-    tree.heading("message", text="메시지")
-    tree.column("time", width=78, minwidth=70, anchor="w", stretch=False)
-    tree.column("kind", width=138, minwidth=120, anchor="w", stretch=False)
-    tree.column("cpu", width=62, minwidth=58, anchor="e", stretch=False)
-    tree.column("memory", width=74, minwidth=68, anchor="e", stretch=False)
-    tree.column("disk", width=70, minwidth=64, anchor="e", stretch=False)
-    tree.column("gpu", width=62, minwidth=58, anchor="e", stretch=False)
-    tree.column("vram", width=64, minwidth=60, anchor="e", stretch=False)
-    tree.column("cpu_temp", width=76, minwidth=70, anchor="e", stretch=False)
-    tree.column("gpu_temp", width=76, minwidth=70, anchor="e", stretch=False)
-    tree.column("message", width=280, minwidth=220, anchor="w")
-    tree.tag_configure("odd", background=colors["row_alt"])
-    tree.tag_configure("even", background=colors["section_bg"])
-
-    vertical = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-    horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
-    tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
-    tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 0))
-    vertical.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 0))
-    horizontal.grid(row=2, column=0, sticky="ew", padx=(12, 0), pady=(0, 12))
-    table_frame.columnconfigure(0, weight=1)
-    table_frame.rowconfigure(1, weight=1)
-    log_empty_label = tk.Label(
-        table_frame,
-        text="표시할 로그가 없습니다",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["subtle"],
-        background=colors["section_bg"],
-    )
-
-    diagnosis_header = tk.Frame(support_view, background=colors["app_bg"])
-    diagnosis_header.pack(fill="x", pady=(0, 8))
-    tk.Label(
-        diagnosis_header,
-        text="진단 결과 상세",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(fill="x")
-    tk.Label(
-        diagnosis_header,
-        text="최근 로컬 로그를 기준으로 상태, 이유, 조치 방향만 확인합니다.",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["app_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(4, 0))
-
-    diagnosis_summary_status = tk.StringVar(value="-")
-    diagnosis_summary_time = tk.StringVar(value="-")
-    diagnosis_summary_text = tk.StringVar(value="-")
-    diagnosis_empty_text = tk.StringVar(value="")
-    diagnosis_ai_summary = tk.StringVar(value="AI 분석 결과 없음")
-    diagnosis_ai_cause = tk.StringVar(value="-")
-    diagnosis_ai_action = tk.StringVar(value="-")
-    diagnosis_ai_admin = tk.StringVar(value="AI 분석 결과가 저장되어 있지 않습니다.")
-
-    diagnosis_summary_card, diagnosis_summary_inner = rounded_container(
-        support_view,
-        104,
-        padding=(14, 12),
-        radius=16,
-    )
-    diagnosis_summary_card.pack(fill="x", pady=(0, 8))
-    diagnosis_summary_inner.columnconfigure(0, weight=1)
-    diagnosis_title_row = tk.Frame(diagnosis_summary_inner, background=colors["card_bg"])
-    diagnosis_title_row.grid(row=0, column=0, sticky="ew")
-    diagnosis_title_row.columnconfigure(0, weight=1)
-    tk.Label(
-        diagnosis_title_row,
-        text="진단 결과 상세",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    diagnosis_status_badge = tk.Label(
-        diagnosis_title_row,
-        textvariable=diagnosis_summary_status,
-        font=ui_font(FONT_BUTTON_PX, "semibold"),
-        foreground=colors["muted"],
-        background="#edf3f4",
-        padx=10,
-        pady=4,
-    )
-    diagnosis_status_badge.grid(row=0, column=1, sticky="e")
-    tk.Label(
-        diagnosis_summary_inner,
-        textvariable=diagnosis_summary_time,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
-    tk.Label(
-        diagnosis_summary_inner,
-        textvariable=diagnosis_summary_text,
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=720,
-    ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
-    tk.Label(
-        diagnosis_summary_inner,
-        textvariable=diagnosis_empty_text,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=720,
-    ).grid(row=3, column=0, sticky="ew", pady=(3, 0))
-
-    diagnosis_metric_grid = tk.Frame(support_view, background=colors["app_bg"])
-    diagnosis_metric_grid.pack(fill="x", pady=(0, 8))
-    for index in range(4):
-        diagnosis_metric_grid.columnconfigure(index, weight=1, uniform="diagnosis-metric")
-    diagnosis_metric_widgets: list[dict[str, tk.Label]] = []
-    for index, title in enumerate(("CPU", "메모리", "디스크", "GPU")):
-        metric_canvas, metric_inner = rounded_container(diagnosis_metric_grid, 124, padding=(12, 10), radius=12)
-        metric_canvas.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 8, 0))
-        metric_inner.columnconfigure(0, weight=1)
-        tk.Label(
-            metric_inner,
-            text=title,
-            font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).grid(row=0, column=0, sticky="ew")
-        status_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        status_label.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        current_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        current_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        threshold_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["subtle"],
-            background=colors["card_bg"],
-            anchor="w",
-        )
-        threshold_label.grid(row=3, column=0, sticky="ew", pady=(2, 0))
-        description_label = tk.Label(
-            metric_inner,
-            text="-",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-            wraplength=160,
-        )
-        description_label.grid(row=4, column=0, sticky="ew", pady=(4, 0))
-        diagnosis_metric_widgets.append(
-            {
-                "status": status_label,
-                "current": current_label,
-                "threshold": threshold_label,
-                "description": description_label,
-            }
+    def draw_check(x: int, y: int, size: int, color: str, width: int = 3) -> None:
+        canvas.create_line(
+            x - int(size * 0.42), y, x - int(size * 0.12), y + int(size * 0.30),
+            x + int(size * 0.48), y - int(size * 0.36), fill=color, width=width,
+            capstyle="round", joinstyle="round",
         )
 
-    diagnosis_events_card, diagnosis_events_inner = rounded_container(
-        support_view,
-        150,
-        padding=(14, 10),
-        radius=16,
-    )
-    diagnosis_events_card.pack(fill="x", pady=(0, 8))
-    tk.Label(
-        diagnosis_events_inner,
-        text="이벤트 로그 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 6))
-    diagnosis_event_columns = ("time", "type", "content", "status")
-    diagnosis_event_tree = ttk.Treeview(
-        diagnosis_events_inner,
-        columns=diagnosis_event_columns,
-        show="headings",
-        height=4,
-        style="Agent.Treeview",
-    )
-    diagnosis_event_tree.heading("time", text="시간")
-    diagnosis_event_tree.heading("type", text="유형")
-    diagnosis_event_tree.heading("content", text="내용")
-    diagnosis_event_tree.heading("status", text="상태")
-    diagnosis_event_tree.column("time", width=80, minwidth=70, anchor="w", stretch=False)
-    diagnosis_event_tree.column("type", width=110, minwidth=92, anchor="w", stretch=False)
-    diagnosis_event_tree.column("content", width=430, minwidth=260, anchor="w")
-    diagnosis_event_tree.column("status", width=70, minwidth=58, anchor="center", stretch=False)
-    diagnosis_event_tree.tag_configure("odd", background=colors["row_alt"])
-    diagnosis_event_tree.tag_configure("even", background=colors["section_bg"])
-    diagnosis_event_tree.pack(fill="both", expand=True)
-    diagnosis_event_empty = tk.Label(
-        diagnosis_events_inner,
-        text="표시할 이벤트가 없습니다",
-        font=ui_font(FONT_BODY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-    )
+    def draw_chat_icon(x: int, y: int, size: int = 22) -> None:
+        round_rect(x - size, y - int(size * 0.72), x + size, y + int(size * 0.60), 6, "#f4f4f4", "#333333", 2)
+        canvas.create_line(x - 8, y + int(size * 0.58), x - 13, y + int(size * 0.92), x - 2, y + int(size * 0.58), fill="#333333", width=2)
+        for dx in (-7, 0, 7):
+            canvas.create_oval(x + dx - 1, y - 1, x + dx + 1, y + 1, fill="#333333", outline="#333333")
 
-    diagnosis_ai_card, diagnosis_ai_inner = rounded_container(support_view, 104, padding=(14, 10), radius=16)
-    diagnosis_ai_card.pack(fill="x", pady=(0, 8))
-    tk.Label(
-        diagnosis_ai_inner,
-        text="AI 분석 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 4))
-    for label, variable in (
-        ("AI 요약", diagnosis_ai_summary),
-        ("의심 원인", diagnosis_ai_cause),
-        ("권장 조치", diagnosis_ai_action),
-        ("관리자 확인", diagnosis_ai_admin),
-    ):
-        row = tk.Frame(diagnosis_ai_inner, background=colors["card_bg"])
-        row.pack(fill="x")
-        tk.Label(
-            row,
-            text=f"{label}:",
-            font=ui_font(FONT_SECONDARY_PX, "semibold"),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            width=10,
-            anchor="w",
-        ).pack(side="left")
-        tk.Label(
-            row,
-            textvariable=variable,
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-
-    diagnosis_actions = tk.Frame(support_view, background=colors["app_bg"], pady=2)
-    diagnosis_actions.pack(fill="x")
-    rounded_button(
-        diagnosis_actions,
-        "홈으로 돌아가기",
-        lambda: show_status_tab(),
-        "secondary",
-        width=128,
-        height=32,
-    ).pack(side="left")
-    rounded_button(
-        diagnosis_actions,
-        "새로고침",
-        lambda: refresh_diagnosis_detail(),
-        "primary",
-        width=104,
-        height=32,
-    ).pack(side="right")
-
-    support_card, support_inner = rounded_container(support_view, 520, padding=(18, 16), radius=16)
-    support_card.pack(fill="both", expand=True, pady=(6, 0))
-    support_card.pack_forget()
-    tk.Label(
-        support_inner,
-        text="진단",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x")
-    tk.Label(
-        support_inner,
-        text="AI 로그 요약과 AS 접수에 필요한 상세 정보를 확인합니다.",
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(4, 14))
-
-    symptom_title = tk.StringVar(value="")
-    symptom_type = tk.StringVar(value="REMOTE_DRIVER_OS")
-    symptom_time = tk.StringVar(value="")
-    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
-    support_mode = tk.StringVar(value="우선 진단만 받기")
-    rag_preview_status = tk.StringVar(value="AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
-    support_status = tk.StringVar(value="")
-    incident_window_value = tk.StringVar(value="전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
-    support_signal_value: dict[str, Any] | None = None
-    preview_running = {"active": False}
-
-    def add_form_label(parent: tk.Misc, text: str) -> None:
-        tk.Label(
-            parent,
-            text=text,
-            font=ui_font(FONT_BUTTON_PX, "semibold"),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(fill="x", pady=(0, 4))
-
-    def add_form_field(parent: tk.Misc, label: str, widget: tk.Widget) -> None:
-        block = tk.Frame(parent, background=colors["card_bg"])
-        block.pack(fill="x", pady=(0, 10))
-        add_form_label(block, label)
-        widget.pack(fill="x")
-
-    form_grid = tk.Frame(support_inner, background=colors["card_bg"])
-    form_grid.pack(fill="x")
-    left_form = tk.Frame(form_grid, background=colors["card_bg"])
-    right_form = tk.Frame(form_grid, background=colors["card_bg"])
-    left_form.pack(side="left", fill="both", expand=True, padx=(0, 10))
-    right_form.pack(side="left", fill="both", expand=True, padx=(10, 0))
-    add_form_field(left_form, "증상 제목", ttk.Entry(left_form, textvariable=symptom_title, style="Agent.TEntry"))
-    type_select = ttk.Combobox(
-        left_form,
-        textvariable=symptom_type,
-        values=sorted(REMOTE_SYMPTOM_TYPES | VISIT_SYMPTOM_TYPES),
-        state="readonly",
-        style="Agent.TCombobox",
-    )
-    add_form_field(left_form, "증상 유형", type_select)
-    add_form_field(right_form, "증상 발생 시각", ttk.Entry(right_form, textvariable=symptom_time, style="Agent.TEntry"))
-
-    detail_block = tk.Frame(support_inner, background=colors["card_bg"])
-    detail_block.pack(fill="both", expand=True, pady=(0, 10))
-    add_form_label(detail_block, "증상 상세")
-    symptom_detail = tk.Text(
-        detail_block,
-        height=5,
-        wrap="word",
-        relief="flat",
-        borderwidth=1,
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        font=ui_font(FONT_BODY_PX),
-    )
-    symptom_detail.pack(fill="both", expand=True)
-
-    mode_block = tk.Frame(support_inner, background=colors["card_bg"])
-    mode_block.pack(fill="x", pady=(0, 8))
-    add_form_label(mode_block, "지원 신청 방식")
-    for label in ("우선 진단만 받기", "원격지원 신청", "방문지원 신청"):
-        tk.Radiobutton(
-            mode_block,
-            text=label,
-            variable=support_mode,
-            value=label,
-            foreground=colors["text"],
-            background=colors["card_bg"],
-            activebackground=colors["card_bg"],
-            selectcolor=colors["card_bg"],
-            font=ui_font(FONT_BODY_PX),
-        ).pack(side="left", padx=(0, 16))
-
-    preview_block = tk.Frame(
-        support_inner,
-        background=colors["section_bg"],
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        padx=12,
-        pady=10,
-    )
-    preview_block.pack(fill="x", pady=(0, 10))
-    tk.Label(
-        preview_block,
-        text="AI 로그 요약",
-        font=ui_font(FONT_SECTION_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 4))
-    tk.Label(
-        preview_block,
-        textvariable=rag_preview_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["section_bg"],
-        justify="left",
-        anchor="w",
-        wraplength=720,
-    ).pack(fill="x")
-
-    tk.Label(
-        support_inner,
-        textvariable=incident_window_value,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["subtle"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 8))
-    tk.Label(
-        support_inner,
-        textvariable=support_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground="#16766b",
-        background=colors["card_bg"],
-        anchor="w",
-    ).pack(fill="x", pady=(0, 8))
-
-    support_actions = tk.Frame(support_inner, background=colors["card_bg"])
-    support_actions.pack(fill="x")
-
-    for legacy_widget in (
-        diagnosis_header,
-        diagnosis_summary_card,
-        diagnosis_metric_grid,
-        diagnosis_events_card,
-        diagnosis_ai_card,
-        diagnosis_actions,
-    ):
-        legacy_widget.pack_forget()
-
-    diagnosis_chat_context_text = tk.StringVar(value="상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
-    diagnosis_chat_status = tk.StringVar(value="")
-    diagnosis_chat_current: dict[str, Any] = {"record": None}
-    diagnosis_chat_running = {"active": False}
-
-    diagnosis_chat_card, diagnosis_chat_inner = rounded_container(
-        support_view,
-        520,
-        padding=(18, 16),
-        radius=16,
-    )
-    diagnosis_chat_card.pack(fill="both", expand=True)
-    diagnosis_chat_inner.columnconfigure(0, weight=1)
-    diagnosis_chat_inner.rowconfigure(2, weight=1)
-    tk.Label(
-        diagnosis_chat_inner,
-        text="AI 진단",
-        font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-        foreground=colors["text"],
-        background=colors["card_bg"],
-        anchor="w",
-    ).grid(row=0, column=0, sticky="ew")
-    tk.Label(
-        diagnosis_chat_inner,
-        textvariable=diagnosis_chat_context_text,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["muted"],
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=760,
-    ).grid(row=1, column=0, sticky="ew", pady=(4, 12))
-
-    diagnosis_chat_transcript = tk.Text(
-        diagnosis_chat_inner,
-        height=15,
-        wrap="word",
-        relief="flat",
-        borderwidth=1,
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        font=ui_font(FONT_BODY_PX),
-        background=colors["section_bg"],
-        foreground=colors["text"],
-        state="disabled",
-        padx=10,
-        pady=8,
-    )
-    diagnosis_chat_transcript.grid(row=2, column=0, sticky="nsew")
-    diagnosis_chat_transcript.tag_configure("user", foreground="#155f8b", spacing3=8)
-    diagnosis_chat_transcript.tag_configure("assistant", foreground=colors["text"], spacing3=8)
-    diagnosis_chat_transcript.tag_configure("system", foreground=colors["muted"], spacing3=8)
-
-    quick_question_row = tk.Frame(diagnosis_chat_inner, background=colors["card_bg"])
-    quick_question_row.grid(row=3, column=0, sticky="ew", pady=(10, 8))
-
-    diagnosis_chat_input = tk.Text(
-        diagnosis_chat_inner,
-        height=3,
-        wrap="word",
-        relief="flat",
-        borderwidth=1,
-        highlightthickness=1,
-        highlightbackground=colors["border"],
-        font=ui_font(FONT_BODY_PX),
-    )
-    diagnosis_chat_input.grid(row=4, column=0, sticky="ew")
-
-    diagnosis_chat_bottom = tk.Frame(diagnosis_chat_inner, background=colors["card_bg"])
-    diagnosis_chat_bottom.grid(row=5, column=0, sticky="ew", pady=(8, 0))
-    diagnosis_chat_bottom.columnconfigure(0, weight=1)
-    tk.Label(
-        diagnosis_chat_bottom,
-        textvariable=diagnosis_chat_status,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground="#16766b",
-        background=colors["card_bg"],
-        anchor="w",
-        wraplength=560,
-    ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
-
-    diagnosis_chat_escalation = tk.Frame(diagnosis_chat_inner, background=colors["section_bg"], padx=12, pady=10)
-    diagnosis_chat_escalation_text = tk.StringVar(value="")
-    tk.Label(
-        diagnosis_chat_escalation,
-        textvariable=diagnosis_chat_escalation_text,
-        font=ui_font(FONT_SECONDARY_PX),
-        foreground=colors["text"],
-        background=colors["section_bg"],
-        anchor="w",
-        wraplength=560,
-    ).pack(side="left", fill="x", expand=True)
-
-    def set_chat_transcript(messages: list[dict[str, Any]], empty_text: str) -> None:
-        diagnosis_chat_transcript.configure(state="normal")
-        diagnosis_chat_transcript.delete("1.0", "end")
-        if not messages:
-            diagnosis_chat_transcript.insert("end", empty_text + "\n", "system")
-        for item in messages:
-            role = str(item.get("role") or "")
-            content = sanitize_display_text(item.get("content"), 2000)
-            if role == "user":
-                diagnosis_chat_transcript.insert("end", f"나: {content}\n\n", "user")
-            elif role == "assistant":
-                diagnosis_chat_transcript.insert("end", f"AI: {content}\n\n", "assistant")
-        diagnosis_chat_transcript.configure(state="disabled")
-        diagnosis_chat_transcript.see("end")
-
-    def update_chat_escalation(response: dict[str, Any] | None) -> None:
-        escalation = response.get("escalation") if isinstance(response, dict) else None
-        if not isinstance(escalation, dict) or not bool(escalation.get("recommended")):
-            diagnosis_chat_escalation.grid_forget()
-            return
-        reason = sanitize_display_text(escalation.get("reason"), 220)
-        diagnosis_chat_escalation_text.set(f"AS 접수가 필요할 수 있습니다. {reason}")
-        if not diagnosis_chat_escalation.winfo_ismapped():
-            diagnosis_chat_escalation.grid(row=6, column=0, sticky="ew", pady=(10, 0))
-
-    rounded_button(
-        diagnosis_chat_escalation,
-        "AS 접수로 이동",
-        lambda: show_status_tab(),
-        "primary",
-        width=118,
-        height=30,
-    ).pack(side="right", padx=(10, 0))
-
-    def refresh_diagnosis_chat_context() -> None:
+    def draw_header() -> None:
+        canvas.create_rectangle(0, 0, PC_AGENT_WINDOW_WIDTH, 56, fill="#ffffff", outline="")
+        line(0, 55, PC_AGENT_WINDOW_WIDTH, 55, "#e0e0e0")
         try:
-            current_config = reload_viewer_config()
-            record = latest_diagnosis_record(current_config)
-        except Exception as exception:
-            diagnosis_chat_current["record"] = None
-            diagnosis_chat_context_text.set("진단 기록을 읽을 수 없습니다.")
-            diagnosis_chat_status.set(event_panel_failure_message(exception))
-            set_chat_transcript([], "진단 기록을 다시 확인해 주세요.")
-            update_chat_escalation(None)
-            return
+            if Image is not None:
+                original = Image.open(runtime_asset_path(AGENT_ICON_PNG)).convert("RGBA")
+                resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+                original.thumbnail((24, 24), resampling)
+                buffer = BytesIO()
+                original.save(buffer, format="PNG")
+                photo = tk.PhotoImage(data=base64.b64encode(buffer.getvalue()).decode("ascii"))
+                image_refs.append(photo)
+                canvas.create_image(28, 28, image=photo)
+            else:
+                canvas.create_rectangle(16, 16, 40, 40, fill="#111111", outline="")
+        except Exception:
+            canvas.create_rectangle(16, 16, 40, 40, fill="#111111", outline="")
+        canvas.create_polygon(22, 21, 33, 21, 33, 32, 29, 32, 29, 26, 22, 26, fill="#ffffff", outline="")
+        canvas.create_polygon(22, 26, 26, 30, 26, 35, 22, 31, fill="#ffffff", outline="")
+        text(52, 28, "PC Agent", 16, colors["text"], "regular", "w")
+        text(909, 28, "—", 18, colors["text"], "regular", "center", tags="window-min")
+        canvas.create_rectangle(941, 21, 953, 35, fill="", outline="#111111", width=2, tags="window-max")
+        canvas.create_line(974, 21, 986, 35, fill="#111111", width=2, tags="window-close")
+        canvas.create_line(986, 21, 974, 35, fill="#111111", width=2, tags="window-close")
+        bind_click("window-min", root.iconify)
+        bind_click("window-close", close_window)
+        canvas.tag_bind("window-max", "<Button-1>", lambda event: None)
+        canvas.tag_bind("window-max", "<Enter>", lambda event: canvas.configure(cursor="hand2"))
+        canvas.tag_bind("window-max", "<Leave>", lambda event: canvas.configure(cursor=""))
 
-        diagnosis_chat_current["record"] = record
-        if record is None:
-            diagnosis_chat_context_text.set("상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
-            diagnosis_chat_status.set("")
-            set_chat_transcript([], "최근 진단 결과가 있으면 여기서 바로 질문할 수 있습니다.")
-            update_chat_escalation(None)
-            return
+        connection_state = connection_state_provider() if callable(connection_state_provider) else "IDLE"
+        connected = connection_state in {"IDLE", "REQUEST_RECEIVED", "RUNNING", "COMPLETED"}
+        round_rect(778, 68, 866, 102, 8, "#ffffff", "#d8d8d8")
+        canvas.create_oval(791, 81, 799, 89, fill=colors["green"] if connected else colors["subtle"], outline="")
+        text(809, 85, "연결됨" if connected else "연결 끊김", 13, colors["text"], "regular", "w")
+        tag = "demo-toggle"
+        round_rect(878, 68, 970, 102, 8, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1, tag)
+        text(924, 85, "시연 모드", 13, colors["text"], "regular", "center", tags=tag)
+        bind_click(tag, toggle_demo)
 
-        diagnosis_id = str(record.get("id") or "")
-        label = sanitize_display_text(record.get("recommendedServiceLabel"), 50)
-        confidence = sanitize_display_text(record.get("confidence"), 20)
-        diagnosis_chat_context_text.set(
-            f"최근 진단 기준: {format_diagnosis_history_time(record.get('createdAt'))} / {label} / 신뢰도 {confidence}"
-        )
-        messages = read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT)
-        set_chat_transcript(messages, "최근 진단 결과에 대해 궁금한 점을 물어보세요.")
-        last_response = next(
-            (
-                item.get("payload")
-                for item in reversed(messages)
-                if item.get("role") == "assistant" and isinstance(item.get("payload"), dict)
-            ),
-            None,
-        )
-        update_chat_escalation(last_response if isinstance(last_response, dict) else None)
-        diagnosis_chat_status.set("")
+    def draw_step(number: int, x: int, label: str, style: str) -> None:
+        if style == "active" or style == "done-black":
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#050505", outline="#050505")
+            text(x, 136, str(number), 13, "#ffffff", "regular", "center")
+            label_color = colors["text"]
+        elif style == "done-check":
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#ffffff", outline="#d3d8dc")
+            draw_check(x, 136, 10, "#111111", 2)
+            label_color = colors["muted"]
+        else:
+            canvas.create_oval(x - 16, 120, x + 16, 152, fill="#ffffff", outline="#d7dce0")
+            text(x, 136, str(number), 13, colors["subtle"], "regular", "center")
+            label_color = colors["muted"]
+        text(x + 27, 136, label, 14, label_color, "regular", "w")
 
-    def submit_diagnosis_chat(question: str | None = None) -> None:
-        if diagnosis_chat_running["active"]:
-            return
-        text = (question if question is not None else diagnosis_chat_input.get("1.0", "end")).strip()
-        if not text:
-            diagnosis_chat_status.set("질문을 입력해 주세요.")
-            return
-        try:
-            current_config = reload_viewer_config()
-            record = diagnosis_chat_current.get("record") or latest_diagnosis_record(current_config)
-        except Exception as exception:
-            diagnosis_chat_status.set(event_panel_failure_message(exception))
-            return
-        if not isinstance(record, dict):
-            diagnosis_chat_status.set("상태 탭에서 PC 진단받기를 먼저 실행해 주세요.")
-            return
-
-        diagnosis_id = str(record.get("id") or "")
-        history = read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT)
-        append_diagnosis_chat_message(current_config, diagnosis_id, "user", text)
-        diagnosis_chat_input.delete("1.0", "end")
-        set_chat_transcript(
-            read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT),
-            "",
-        )
-        diagnosis_chat_running["active"] = True
-        diagnosis_chat_status.set("AI가 최근 진단 결과를 확인하고 있습니다.")
-
-        def apply_success(response: dict[str, Any]) -> None:
-            assistant_message = sanitize_display_text(response.get("assistantMessage"), 2000)
-            append_diagnosis_chat_message(current_config, diagnosis_id, "assistant", assistant_message, response)
-            set_chat_transcript(
-                read_diagnosis_chat_history(current_config, diagnosis_id, limit=DIAGNOSIS_CHAT_HISTORY_LIMIT),
-                "",
+    def draw_stepper() -> None:
+        state = str(ui["state"])
+        if state == "SYMPTOM_CONFIRM":
+            styles = ("active", "idle", "idle")
+        elif state == "DIAGNOSING":
+            styles = ("done-check", "active", "idle")
+        elif state == "DIAGNOSIS_RESULT":
+            styles = (
+                ("done-black", "done-black", "done-black")
+                if ui["asState"] == "asCompleted"
+                else ("idle", "idle", "active")
             )
-            update_chat_escalation(response)
-            diagnosis_chat_status.set("")
-            diagnosis_chat_running["active"] = False
+        else:
+            styles = ("done-black", "done-black", "done-black")
+        draw_step(1, 145, PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
+        line(252, 136, 402, 136, "#d9d9d9")
+        draw_step(2, 432, PC_AGENT_DIAGNOSIS_STEPS[1], styles[1])
+        line(570, 136, 710, 136, "#d9d9d9")
+        draw_step(3, 740, PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
 
-        def apply_error(exception: Exception) -> None:
-            diagnosis_chat_status.set(event_panel_failure_message(exception))
-            diagnosis_chat_running["active"] = False
+    def draw_sparkline(
+        x: int,
+        y: int,
+        values: Sequence[float],
+        emphasis: bool = False,
+        check_colors: Sequence[str | None] | None = None,
+    ) -> None:
+        # 막대는 표본이 올 때마다 기존처럼 쌓인다. 상태 확인 중에는 검사가 끝난 구간의
+        # 막대만 파랑(정상)/빨강(문제)으로 칠하고, 아직 검사 전인 최신 막대는 회색을 유지한다.
+        for index, value in enumerate(values):
+            shade = "#8e8e8e" if emphasis and 6 <= index <= 9 else "#e7e7e7"
+            if check_colors and index < len(check_colors) and check_colors[index]:
+                shade = "#e53935" if check_colors[index] == "error" else "#1e88e5"
+            height = max(4, int(min(100.0, max(0.0, value)) * 0.38))
+            canvas.create_rectangle(x + index * 10, y - height, x + index * 10 + 6, y, fill=shade, outline="")
 
-        def run_chat() -> None:
+    def draw_symptom() -> None:
+        active_session = ui["diagnosisSession"]
+        if isinstance(active_session, DiagnosisSession):
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else MetricsSnapshot(
+                active_session.request.diagnosis_id,
+                active_session.request.mode,
+                False,
+                (),
+            )
+            if not isinstance(metrics, MetricsSnapshot) or metrics.diagnosis_id != active_session.request.diagnosis_id:
+                metrics = MetricsSnapshot(active_session.request.diagnosis_id, active_session.request.mode, False, ())
+            screen_input = metrics_snapshot_screen_input(
+                metrics,
+                active_session.request.symptom,
+                active_session.request.requested_checks,
+            )
+            source = active_session.request.source
+            symptom = active_session.request.symptom
+        else:
+            metrics = MetricsSnapshot(None, None, False, ())
+            screen_input = metrics_snapshot_screen_input(
+                metrics,
+                "",
+                ("cpu", "gpu", "memory", "disk"),
+            )
+            source = STANDALONE
+            symptom = ""
+        screen = build_symptom_screen_state(screen_input)
+        display = symptom_display_state(source, symptom, metrics)
+        checking_active = isinstance(active_session, DiagnosisSession) and bool(metrics.readings)
+        for x, component, card in zip((70, 287, 504, 721), ("cpu", "gpu", "ram", "disk"), screen.widgets, strict=False):
+            tone_color = colors[card.tone] if card.tone in {"warning", "danger"} else None
+            outline = tone_color or "#d9d9d9"
+            emphasis = bool(tone_color)
+            round_rect(x, 182, x + 209, 350, 12, "#ffffff", outline, 2 if emphasis else 1)
+            text(x + 18, 199, card.title, 17, tone_color or colors["text"], "semibold")
+            text(x + 18, 227, card.primary, 13, tone_color or colors["text"], "semibold")
+            for detail_index, detail in enumerate(card.details[:2]):
+                text(x + 18, 251 + detail_index * 18, detail, 10, colors["muted"])
+            text(x + 18, 291, f"상태 {card.status}", 11, tone_color or colors["muted"], "semibold")
+            check_colors: list[str | None] | None = None
+            if checking_active:
+                # 상태 확인 단계: 검사가 끝난 구간(막대 묶음)만 색으로 확정한다. 그래프 자체는 기존 그대로.
+                metric_type = "usage"
+                if component == "disk":
+                    metric_type = "activity" if metrics.history("disk", "activity") else "usage"
+                check_colors = history_check_colors(metrics.readings, component, metric_type, datetime.now(KST))
+            draw_sparkline(x + 18, 336, card.history, emphasis=emphasis, check_colors=check_colors)
+
+        round_rect(70, 370, 930, 530, 12, "#ffffff", "#dddddd")
+        canvas.create_oval(90, 393, 132, 435, fill="#f4f4f4", outline="")
+        draw_chat_icon(111, 414, 9)
+        text(153, 390, display.title, 17, colors["text"], "semibold")
+        text(153, 423, display.description, 15, colors["text"], width=735)
+        text(153, 489, display.helper, 12, colors["muted"])
+        initial_ready = (
+            isinstance(active_session, DiagnosisSession)
+            and metrics.diagnosis_id == active_session.request.diagnosis_id
+            and metrics.initial_complete
+        )
+        if not isinstance(active_session, DiagnosisSession):
+            button(390, 555, 610, 608, "상태 확인 시작", handle_symptom_action, True, size=15)
+        elif initial_ready:
+            button(390, 555, 610, 608, "진단 시작", handle_symptom_action, True, disabled=bool(ui["busy"]), size=15)
+        else:
+            button(390, 555, 610, 608, "상태 확인 중", handle_symptom_action, True, disabled=True, size=15)
+
+    def draw_progress_ring(x: int, y: int, progress: int) -> None:
+        canvas.create_oval(x - 18, y - 18, x + 18, y + 18, outline="#e8e8e8", width=4)
+        extent = -max(0, min(360, int(progress * 3.6)))
+        if extent:
+            canvas.create_arc(
+                x - 18,
+                y - 18,
+                x + 18,
+                y + 18,
+                start=90,
+                extent=extent,
+                style="arc",
+                outline="#6f7478",
+                width=4,
+            )
+
+    def draw_diagnosing() -> None:
+        active_session = ui["diagnosisSession"]
+        snapshot = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else ui.get("diagnosisSnapshot")
+        if not isinstance(snapshot, DiagnosisRunSnapshot):
+            snapshot = DiagnosisRunSnapshot()
+        ui["diagnosisSnapshot"] = snapshot
+        symptom = (
+            active_session.request.symptom
+            if isinstance(active_session, DiagnosisSession) and active_session.request.symptom.strip()
+            else "전달받은 증상 정보가 없습니다."
+        )
+        requested_checks = active_session.request.requested_checks if isinstance(active_session, DiagnosisSession) else ()
+        check_labels = {
+            "cpu": "CPU",
+            "gpu": "GPU",
+            "memory": "RAM",
+            "ram": "RAM",
+            "disk": "디스크",
+            "cooling": "냉각",
+        }
+        scope = " · ".join(dict.fromkeys(check_labels.get(item, item.upper()) for item in requested_checks))
+        scope_text = f"점검 범위: {scope}" if scope else "요청된 점검 범위를 확인하고 있습니다."
+        progress = snapshot.progress if snapshot.diagnosis_id else 0
+        current_label = diagnosis_current_task_label(snapshot)
+        result = ui.get("diagnosisResult")
+        result_available = diagnosis_result_available(active_session, snapshot, result)
+
+        # 실제 진행률은 태스크 종료 시에만 계단식으로 뛰므로 표시용 스무딩을 거친다.
+        smoother = ui.get("progressSmoother")
+        if not isinstance(smoother, SmoothedProgress) or ui.get("progressSmootherId") != snapshot.diagnosis_id:
+            smoother = SmoothedProgress()
+            ui["progressSmoother"] = smoother
+            ui["progressSmootherId"] = snapshot.diagnosis_id
+        display_progress = smoother.update(100 if result_available else progress, time.monotonic())
+        if display_progress < 100 and not ui.get("ringTickScheduled"):
+            # 링이 이벤트 없이도 계속 움직이도록 진단 화면이 떠 있는 동안 120ms 재렌더한다.
+            ui["ringTickScheduled"] = True
+
+            def ring_tick() -> None:
+                ui["ringTickScheduled"] = False
+                if isinstance(ui.get("diagnosisSession"), DiagnosisSession):
+                    render()
+
+            root.after(120, ring_tick)
+
+        round_rect(70, 180, 930, 650, 12, "#ffffff", "#d7dce0")
+        canvas.create_oval(94, 207, 136, 249, fill="#ffffff", outline="#d7dce0")
+        draw_chat_icon(115, 228, 9)
+        text(153, 201, "전달받은 증상", 12, colors["muted"])
+        text(153, 225, symptom, 15, colors["text"], "regular", width=735)
+        text(153, 252, scope_text, 11, colors["muted"])
+        line(95, 278, 905, 278)
+        text(500, 298, "진단 완료" if result_available else "진단 진행 중", 21, colors["text"], "semibold", "center")
+        draw_progress_ring(462, 342, display_progress)
+        text(515, 342, f"{display_progress}%", 24, colors["text"], "regular", "center")
+        detail = "진단 작업이 완료되었습니다." if result_available else ui["status"] or current_label
+        text(500, 376, str(detail), 12, colors["muted"], "regular", "center")
+        line(95, 404, 905, 404)
+
+        centers = (180, 385, 600, 805)
+        labels = (
+            ("CPU", diagnosis_component_state(snapshot, "cpu")),
+            ("GPU", diagnosis_component_state(snapshot, "gpu")),
+            ("RAM", diagnosis_component_state(snapshot, "ram")),
+            ("디스크", diagnosis_component_state(snapshot, "disk")),
+        )
+        for index, (cx, values) in enumerate(zip(centers, labels, strict=False)):
+            status = values[1]
+            focused = status in {"검사 중", "집중 분석 중"}
+            failed = status == "실패"
+            unavailable = status == "측정 불가"
+            if focused or failed:
+                outline = colors["red"] if focused else colors["warning"]
+                round_rect(cx - 76, 420, cx + 92, 456, 8, "#ffffff", outline)
+                canvas.create_oval(cx - 60, 432, cx - 50, 442, fill=outline, outline="")
+                text(cx - 42, 438, values[0], 12, colors["text"], "semibold", "w")
+                text(cx + 5, 438, values[1], 11, colors["text"], "regular", "w")
+            else:
+                icon_color = colors["green"] if status == "완료" else "#92989d"
+                canvas.create_oval(
+                    cx - 53,
+                    432,
+                    cx - 43,
+                    442,
+                    fill=icon_color if status == "완료" else "#ffffff",
+                    outline=icon_color,
+                )
+                if status == "완료":
+                    draw_check(cx - 48, 437, 4, "#ffffff", 1)
+                elif not unavailable:
+                    canvas.create_line(cx - 48, 434, cx - 48, 437, fill=icon_color)
+                    canvas.create_line(cx - 48, 437, cx - 45, 440, fill=icon_color)
+                text(cx - 36, 438, values[0], 12, colors["text"], "semibold", "w")
+                text(cx + 12, 438, values[1], 11, colors["muted"], "regular", "w")
+            if index < 3:
+                line(cx + 100, 421, cx + 100, 455, "#e0e0e0")
+        line(95, 474, 905, 474)
+
+        text(95, 493, "검사 진행 내용", 13, colors["text"], "semibold")
+        current_index = next(
+            (index for index, task in enumerate(snapshot.tasks) if task.task_id == snapshot.current_task_id),
+            max(0, len([task for task in snapshot.tasks if task.status not in {"PENDING", "RUNNING"}]) - 1),
+        )
+        start_index = max(0, min(current_index - 1, max(0, len(snapshot.tasks) - 4)))
+        checklist = snapshot.tasks[start_index:start_index + 4]
+        task_status_labels = {
+            "PENDING": "대기",
+            "RUNNING": "검사 중",
+            "COMPLETED": "완료",
+            "UNSUPPORTED": "측정 불가",
+            "FAILED": "실패",
+            "TIMED_OUT": "시간 초과",
+            "CANCELLED": "취소",
+        }
+        for idx, task in enumerate(checklist):
+            cy = 530 + idx * 25
+            dot = colors["red"] if task.status == "RUNNING" else colors["green"] if task.status == "COMPLETED" else "#92989d"
+            canvas.create_oval(100, cy - 6, 112, cy + 6, fill=dot if task.status == "RUNNING" else "#ffffff", outline=dot)
+            if task.status == "COMPLETED":
+                draw_check(106, cy, 5, dot, 1)
+            elif task.status == "PENDING":
+                canvas.create_line(106, cy - 3, 106, cy, fill=dot)
+                canvas.create_line(106, cy, 109, cy + 2, fill=dot)
+            label = DiagnosisOrchestrator.TASK_LABELS.get(task.task_id, task.task_id)
+            text(128, cy, f"{label} · {task_status_labels.get(task.status, task.status)}", 11, colors["text"], "regular", "w")
+
+        text(500, 493, "실시간 진단 로그", 13, colors["text"], "semibold")
+        round_rect(500, 520, 905, 620, 7, "#fbfbfb", "#dedede")
+        visible_events = snapshot.events[-3:]
+        for idx, event in enumerate(visible_events):
+            cy = 545 + idx * 26
             try:
-                response = send_diagnosis_chat(current_config, record, history, text)
-                root.after(0, lambda: apply_success(response))
-            except Exception as exception:
-                root.after(0, lambda current=exception: apply_error(current))
+                stamp = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00")).astimezone(KST).strftime("%H:%M:%S")
+            except ValueError:
+                stamp = "--:--:--"
+            color = colors["red"] if event.event_type in {"TASK_FAILED", "TASK_TIMED_OUT", "DIAGNOSIS_FAILED"} else colors["muted"]
+            text(517, cy, stamp, 10, color, "regular", "w")
+            text(580, cy, event.message, 10, color, "regular", "w", width=310)
+        if result_available:
+            button(390, 665, 610, 715, "진단 결과 보기", show_diagnosis_result, True, size=15)
+        elif snapshot.state in {"FAILED", "TIMED_OUT"}:
+            button(390, 665, 610, 715, "진단 재시도", request_diagnosis_retry, False, size=15)
+        elif snapshot.state == "CANCELLED":
+            text(500, 690, "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
+        else:
+            button(390, 665, 610, 715, "진단 취소", request_diagnosis_cancel, False, size=15)
 
-        threading.Thread(target=run_chat, daemon=True).start()
+    def draw_result_icon(x: int, y: int) -> None:
+        canvas.create_oval(x - 20, y - 20, x + 20, y + 20, fill="#f4f4f4", outline="")
+        canvas.create_line(x - 6, y + 8, x - 6, y - 9, x + 6, y - 9, fill="#111111", width=2)
+        canvas.create_line(x + 6, y - 9, x + 6, y + 2, fill="#111111", width=2)
+        canvas.create_line(x - 6, y + 1, x + 2, y + 1, fill="#111111", width=2)
 
-    for quick_text in ("원인 쉽게 설명", "직접 해볼 조치", "위험한 상태야?", "AS 접수해야 해?"):
-        rounded_button(
-            quick_question_row,
-            quick_text,
-            lambda value=quick_text: submit_diagnosis_chat(value),
-            "secondary",
-            width=116,
-            height=30,
-        ).pack(side="left", padx=(0, 8))
-    rounded_button(
-        diagnosis_chat_bottom,
-        "보내기",
-        lambda: submit_diagnosis_chat(),
-        "primary",
-        width=88,
-        height=32,
-    ).grid(row=0, column=1, sticky="e")
-    log_filter_state = {"logTabOpened": False, "userTouched": False}
-
-    def selected_date_text() -> str:
-        return f"{year_value.get()}-{month_value.get()}-{day_value.get()}"
-
-    def set_date_filter(date_text: str) -> None:
-        try:
-            parsed = datetime.strptime(date_text, "%Y-%m-%d")
-        except ValueError:
-            parsed = datetime.now(KST)
-        year_value.set(f"{parsed.year:04d}")
-        month_value.set(f"{parsed.month:02d}")
-        day_value.set(f"{parsed.day:02d}")
-        sync_day_values()
-
-    def pack_log_body(widget: tk.Widget, **options: Any) -> None:
-        try:
-            widget.pack(**options, before=buttons)
-        except NameError:
-            widget.pack(**options)
-
-    def refresh_diagnosis_history_list() -> None:
-        reload_viewer_config()
-        records = read_diagnosis_history(config)
-        diagnosis_history_records.clear()
-        diagnosis_history_tree.delete(*diagnosis_history_tree.get_children())
-        if not records:
-            diagnosis_history_tree.grid_remove()
-            diagnosis_history_scroll.grid_remove()
-            diagnosis_history_empty.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=12, pady=(36, 12))
+    def draw_result() -> None:
+        result = ui.get("diagnosisResult")
+        diagnosis = ui.get("diagnosisSnapshot")
+        session = ui.get("diagnosisSession")
+        round_rect(70, 180, 930, 670, 12, "#ffffff", "#d7dce0")
+        draw_result_icon(112, 222)
+        text(145, 214, "진단 결과", 17, colors["text"], "semibold")
+        if not isinstance(result, DiagnosisResult):
+            text(145, 258, "진단 결과를 불러올 수 없습니다.", 23, colors["text"], "semibold")
+            text(145, 307, "저장된 측정 근거를 확인한 뒤 다시 시도하세요.", 14, "#5f6368")
+            button(390, 585, 610, 635, "진단 상세", show_diagnosis_detail, False, disabled=True, size=15)
             return
-        diagnosis_history_empty.grid_remove()
-        diagnosis_history_tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 12))
-        diagnosis_history_scroll.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 12))
-        for index, record in enumerate(records):
-            item_id = f"diagnosis-{index}-{record['id']}"
-            diagnosis_history_records[item_id] = record
-            diagnosis_history_tree.insert(
-                "",
-                "end",
-                iid=item_id,
-                values=(
-                    format_diagnosis_history_time(record.get("createdAt")),
-                    sanitize_display_text(record.get("recommendedServiceLabel"), 40),
-                    sanitize_display_text(record.get("summaryText") or record.get("recommendationMessage"), 96),
-                    sanitize_display_text(record.get("confidence"), 20),
-                ),
-                tags=("odd" if index % 2 else "even",),
-            )
+        text(145, 258, result.title, 22, colors["text"], "semibold", "nw", width=710)
+        text(145, 307, result.summary, 14, "#5f6368", "regular", "nw", width=710)
+        is_device_configuration = result.diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE"
+        if is_device_configuration:
+            text(145, 352, "문제: 그래픽 장치 구성 이상", 12, colors["text"], "semibold")
+            text(145, 373, "로컬 처리: Agent가 안전하게 로컬 자동 복구할 수 없음", 12, colors["muted"])
+            text(145, 394, "다음 조치: 원격 AS 기사 점검 필요", 12, colors["muted"])
+            result_divider_y, core_title_y, chip_y1, chip_y2 = 412, 430, 454, 490
+            action_divider_y, action_title_y, action_center_y = 510, 530, 565
+            button_y1, button_y2, status_y = 610, 650, 668
+        else:
+            recovery_label = "가능" if result.can_auto_recover else "불가"
+            remote_label = "필요" if result.remote_as_recommended else "자동 판정 없음"
+            text(145, 365, f"로컬 자동 복구: {recovery_label} · 원격 기사 점검: {remote_label}", 12, colors["muted"])
+            result_divider_y, core_title_y, chip_y1, chip_y2 = 385, 404, 434, 470
+            action_divider_y, action_title_y, action_center_y = 489, 509, 548
+            button_y1, button_y2, status_y = 585, 635, 652
+        line(145, result_divider_y, 855, result_divider_y)
+        text(145, core_title_y, "핵심 결과", 16, colors["text"], "semibold")
+        visible_findings = [(finding.code, finding.title) for finding in result.findings[:3]]
+        if not visible_findings:
+            visible_findings = [
+                (
+                    "NO_ABNORMAL_EVIDENCE" if result.severity == "NORMAL" else "INSUFFICIENT_MEASUREMENTS",
+                    "이상 근거 없음" if result.severity == "NORMAL" else "측정 정보 부족",
+                )
+            ]
+        chip_width = 220 if len(visible_findings) <= 2 else 205
+        chip_gap = 18
+        chip_fill = "#effbf5" if result.severity == "NORMAL" else "#f4f4f4" if result.severity == "INFO" else "#ffeaea"
+        chip_color = colors["green"] if result.severity == "NORMAL" else colors["muted"] if result.severity == "INFO" else colors["red"]
+        for index, (finding_code, label) in enumerate(visible_findings):
+            x1 = 145 + index * (chip_width + chip_gap)
+            x2 = x1 + chip_width
+            y1 = chip_y1
+            kind = "temp" if "TEMPERATURE" in finding_code else "fan" if "FAN" in finding_code else "warn"
+            round_rect(x1, y1, x2, chip_y2, 18, chip_fill, "")
+            if kind == "temp":
+                canvas.create_oval(x1 + 17, y1 + 13, x1 + 25, y1 + 29, fill="#ffffff", outline=chip_color, width=2)
+                canvas.create_line(x1 + 21, y1 + 7, x1 + 21, y1 + 21, fill=chip_color, width=2)
+            elif kind == "fan":
+                for angle in (0, 120, 240):
+                    canvas.create_arc(x1 + 14, y1 + 7, x1 + 33, y1 + 29, start=angle, extent=65, style="arc", outline=chip_color, width=2)
+                canvas.create_oval(x1 + 22, y1 + 16, x1 + 26, y1 + 20, fill=chip_color, outline="")
+            else:
+                canvas.create_polygon(x1 + 22, y1 + 7, x1 + 13, y1 + 29, x1 + 31, y1 + 29, fill="#ffffff", outline=chip_color, width=2)
+                text(x1 + 22, y1 + 23, "!", 10, chip_color, "semibold", "center")
+            text(x1 + 42, y1 + 18, label, 12, colors["text"], "regular", "w", width=chip_width - 50)
+        line(145, action_divider_y, 855, action_divider_y)
+        text(145, action_title_y, "권장 조치", 16, colors["text"], "semibold")
+        action_slots = (162, 420, 690)
+        for index, label in enumerate(result.recommended_actions[:3], start=1):
+            x = action_slots[index - 1]
+            canvas.create_oval(x - 13, action_center_y - 13, x + 13, action_center_y + 13, fill="#fff0ef", outline="")
+            text(x, action_center_y, str(index), 11, colors["red"], "semibold", "center")
+            text(x + 31, action_center_y, label, 12, "#333333", "regular", "w", width=195)
+            if index < len(result.recommended_actions[:3]):
+                line(x + 213, action_center_y - 13, x + 213, action_center_y + 13)
+        if can_offer_as(
+            result,
+            diagnosis if isinstance(diagnosis, DiagnosisRunSnapshot) else None,
+            session,
+        ):
+            button(145, button_y1, 340, button_y2, "처음으로", go_home, False, size=14)
+            button(365, button_y1, 560, button_y2, "진단 상세", show_diagnosis_detail, False, size=14)
+            button(585, button_y1, 855, button_y2, "원격 AS 기사 연결", connect_as, True, disabled=bool(ui["busy"]), size=14)
+        else:
+            button(270, button_y1, 485, button_y2, "처음으로", go_home, False, size=15)
+            button(515, button_y1, 730, button_y2, "진단 상세", show_diagnosis_detail, False, size=15)
+        if ui["status"]:
+            text(500, status_y, str(ui["status"]), 11, colors["red"], "regular", "center")
 
-    def show_diagnosis_history_detail(record: dict[str, Any]) -> None:
+    def draw_success() -> None:
+        response = ui.get("asRequest")
+        payload = ui.get("asRequestPayload")
+        round_rect(145, 180, 855, 675, 12, "#ffffff", "#d7dce0")
+        canvas.create_oval(474, 202, 526, 254, fill=colors["green_soft"], outline="#b9efd3")
+        draw_check(500, 228, 22, colors["green"], 4)
+        text(500, 284, "AS 요청이 생성되었습니다", 25, colors["text"], "semibold", "center")
+        text(500, 320, "전송 완료 · 진단 정보가 기사 요청서에 첨부되었습니다.", 13, colors["green"], "semibold", "center")
+        text(500, 348, "개인 파일이나 문서 내용은 전송되지 않았습니다.", 12, colors["muted"], "regular", "center")
+        round_rect(220, 378, 780, 558, 10, "#fafafa", "#e2e2e2")
+        if isinstance(response, DiagnosisAsResponse) and isinstance(payload, DiagnosisAsRequest):
+            stored_request_type = response.request_type or payload.request_type
+            request_type = "기존 일반 AS 티켓 (PHYSICAL_INSPECTION)" if stored_request_type == "PHYSICAL_INSPECTION" else stored_request_type
+            detail_rows = (
+                ("요청 번호", response.request_number),
+                ("요청 유형", request_type),
+                ("진단 문제", "그래픽 장치 구성 이상"),
+                ("기사 점검", "원격 기사 점검 필요"),
+                ("진단 요약", response.diagnosis_summary or payload.diagnosis_summary),
+            )
+            row_y = (400, 428, 456, 484, 512)
+            for (label, value), y in zip(detail_rows, row_y):
+                text(250, y, label, 11, colors["muted"], "semibold", "w")
+                text(365, y, value, 11, colors["text"], "regular", "w", width=380)
+        else:
+            text(500, 465, "저장된 AS 요청 정보를 불러올 수 없습니다.", 13, colors["red"], "regular", "center")
+        button(240, 585, 475, 637, "처음으로", go_home, False, size=15)
+        button(525, 585, 760, 637, "웹에서 확인하기", open_created_ticket, True, size=15)
+        if ui["status"]:
+            text(500, 657, str(ui["status"]), 10, colors["red"], "regular", "center", width=640)
+
+    def render() -> None:
+        if ui["requestLocked"] and ui["asState"] != "asCompleted":
+            active_session = ui["diagnosisSession"]
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+            diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
+            result = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
+            if isinstance(diagnosis, DiagnosisRunSnapshot):
+                ui["diagnosisSnapshot"] = diagnosis
+            if isinstance(result, DiagnosisResult):
+                ui["diagnosisResult"] = result
+            ui["state"] = diagnosis_session_ui_state(
+                active_session,
+                metrics,
+                diagnosis,
+                result,
+                diagnosis_started=bool(ui["diagnosisStarted"]),
+                result_requested=bool(ui["resultRequested"]),
+            )
+            if ui["asState"] == "asCompleted":
+                ui["state"] = "DIAGNOSIS_RESULT"
+            if isinstance(diagnosis, DiagnosisRunSnapshot) and diagnosis.diagnosis_id:
+                if diagnosis.state == "FAILED":
+                    ui["status"] = "필수 진단 증거를 만들지 못했습니다."
+                elif diagnosis.state == "TIMED_OUT":
+                    ui["status"] = "전체 진단 시간이 초과되었습니다."
+                elif diagnosis.state == "CANCELLED":
+                    ui["status"] = "진단이 취소되었습니다."
+                elif diagnosis.state in {"DIAGNOSING", "EVALUATING"}:
+                    ui["status"] = ""
+        canvas.delete("all")
+        button_counter["value"] = 0
+        draw_header()
+        draw_stepper()
+        if ui["state"] == "SYMPTOM_CONFIRM":
+            draw_symptom()
+        elif ui["state"] == "DIAGNOSING":
+            draw_diagnosing()
+        elif ui["state"] == "DIAGNOSIS_RESULT":
+            if ui["asState"] == "asCompleted":
+                draw_success()
+            else:
+                draw_result()
+        else:
+            draw_symptom()
+
+    def toggle_demo() -> None:
+        if ui["busy"] or ui["requestLocked"]:
+            return
+        ui["demo"] = not bool(ui["demo"])
+        ui["state"] = "SYMPTOM_CONFIRM"
+        ui["diagnosisReady"] = False
+        ui["diagnosisStarted"] = False
+        ui["resultRequested"] = False
+        ui["diagnosis"] = None
+        ui["window"] = None
+        ui["asState"] = "diagnosisResult"
+        ui["asRequest"] = None
+        ui["asRequestPayload"] = None
+        ui["ticketUrl"] = None
+        ui["status"] = ""
+        render()
+
+    def handle_symptom_action() -> None:
+        if ui["busy"]:
+            return
+        active_session = ui.get("diagnosisSession")
+        mode = "DEMO" if ui["demo"] else "LIVE"
+        if not isinstance(active_session, DiagnosisSession):
+            if not callable(start_initial_metrics):
+                ui["status"] = "하드웨어 상태 수집을 시작할 수 없습니다."
+                render()
+                return
+            ui["busy"] = True
+            ui["status"] = "하드웨어 상태 수집을 시작합니다."
+            render()
+            started_session = start_initial_metrics(None, mode)
+            ui["busy"] = False
+            if isinstance(started_session, DiagnosisSession):
+                apply_diagnosis_session(started_session)
+            else:
+                ui["status"] = "하드웨어 상태 수집을 시작하지 못했습니다."
+                render()
+            return
+
+        metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+        if (
+            not isinstance(metrics, MetricsSnapshot)
+            or metrics.diagnosis_id != active_session.request.diagnosis_id
+            or not metrics.initial_complete
+        ):
+            return
+        if not callable(start_diagnosis):
+            ui["status"] = "진단을 시작할 수 없습니다."
+            render()
+            return
+        ui["busy"] = True
+        started_session = start_diagnosis(active_session, active_session.request.mode)
+        ui["busy"] = False
+        if isinstance(started_session, DiagnosisSession):
+            ui["diagnosisSession"] = started_session
+            ui["diagnosisStarted"] = True
+            ui["resultRequested"] = False
+            ui["state"] = "DIAGNOSING"
+            ui["status"] = ""
+        else:
+            ui["status"] = "진단을 시작하지 못했습니다."
+        render()
+
+    def show_diagnosis_result() -> None:
+        ui["resultRequested"] = True
+        render()
+
+    def request_diagnosis_cancel() -> None:
+        if callable(cancel_diagnosis) and cancel_diagnosis():
+            ui["status"] = "진단 취소를 요청했습니다."
+            render()
+
+    def request_diagnosis_retry() -> None:
+        if callable(retry_diagnosis) and retry_diagnosis():
+            ui["status"] = "실패한 진단 작업을 다시 시작합니다."
+            render()
+
+    def show_diagnosis_detail() -> None:
+        result = ui.get("diagnosisResult")
+        diagnosis = ui.get("diagnosisSnapshot")
+        if not isinstance(result, DiagnosisResult):
+            return
+        detail = format_diagnosis_result_detail(
+            result,
+            diagnosis if isinstance(diagnosis, DiagnosisRunSnapshot) else None,
+        )
         panel = tk.Toplevel(root)
         panel.title("진단 상세")
-        panel.geometry("560x420")
-        panel.minsize(520, 380)
-        panel.configure(background=colors["app_bg"])
+        panel.geometry("680x520")
+        panel.configure(background="#ffffff")
         apply_agent_window_icon(panel)
-        panel.transient(root)
-        container = tk.Frame(panel, background=colors["card_bg"], padx=18, pady=16)
-        container.pack(fill="both", expand=True, padx=14, pady=14)
-        tk.Label(
-            container,
-            text=sanitize_display_text(record.get("recommendedServiceLabel"), 80),
-            font=ui_font(FONT_PAGE_TITLE_PX, "semibold"),
-            foreground=card_tone_color(str(record.get("tone", "muted"))),
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(fill="x")
-        tk.Label(
-            container,
-            text=f"{format_diagnosis_history_time(record.get('createdAt'))} · 신뢰도 {sanitize_display_text(record.get('confidence'), 20)}",
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["muted"],
-            background=colors["card_bg"],
-            anchor="w",
-        ).pack(fill="x", pady=(4, 10))
-        detail_frame = tk.Frame(container, background=colors["card_bg"])
-        detail_frame.pack(fill="both", expand=True)
+        tk.Label(panel, text="진단 상세", font=font(24, "semibold"), background="#ffffff", anchor="w").pack(fill="x", padx=28, pady=(28, 14))
+        detail_frame = tk.Frame(panel, background="#ffffff")
+        detail_frame.pack(fill="both", expand=True, padx=28)
         detail_text = tk.Text(
             detail_frame,
+            font=font(13),
+            foreground=colors["muted"],
+            background="#ffffff",
+            relief="flat",
             wrap="word",
-            height=12,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=colors["border"],
-            padx=10,
-            pady=10,
-            font=ui_font(FONT_SECONDARY_PX),
-            foreground=colors["text"],
-            background="#f8fbfb",
+            padx=4,
+            pady=4,
         )
-        detail_scroll = ttk.Scrollbar(detail_frame, orient="vertical", command=detail_text.yview)
-        detail_text.configure(yscrollcommand=detail_scroll.set)
-        detail_text.pack(side="left", fill="both", expand=True)
-        detail_scroll.pack(side="right", fill="y")
-        detail_text.insert("1.0", diagnosis_history_detail_text(record))
+        scrollbar = ttk.Scrollbar(detail_frame, orient="vertical", command=detail_text.yview)
+        detail_text.configure(yscrollcommand=scrollbar.set)
+        detail_text.insert("1.0", detail)
         detail_text.configure(state="disabled")
-        rounded_button(container, "닫기", panel.destroy, "primary", width=96, height=32).pack(side="right", pady=(12, 0))
+        detail_text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        tk.Button(panel, text="닫기", command=panel.destroy, font=font(15), background="#111111", foreground="#ffffff", relief="flat", padx=30, pady=8).pack(pady=24)
+        panel.transient(root)
         panel.grab_set()
-        panel.focus_set()
 
-    def open_selected_diagnosis_history(event: object = None) -> None:
-        selected = diagnosis_history_tree.selection()
-        if not selected:
+    def submit_as_request(payload: DiagnosisAsRequest) -> None:
+        session = ui.get("diagnosisSession")
+        result = ui.get("diagnosisResult")
+        if (
+            ui["busy"]
+            or not isinstance(session, DiagnosisSession)
+            or not isinstance(result, DiagnosisResult)
+            or session.request.diagnosis_id != payload.diagnosis_id
+            or result.result_id != payload.result_id
+        ):
             return
-        record = diagnosis_history_records.get(selected[0])
-        if record is not None:
-            show_diagnosis_history_detail(record)
+        ui["busy"] = True
+        ui["asState"] = "asSubmitting"
+        ui["status"] = "AS 요청을 생성하고 있습니다."
+        render()
 
-    diagnosis_history_tree.bind("<Double-1>", open_selected_diagnosis_history)
-    diagnosis_history_tree.bind("<Return>", open_selected_diagnosis_history)
-
-    def set_log_mode(mode: str) -> None:
-        log_mode.set(mode)
-        if mode == "raw":
-            diagnosis_history_frame.pack_forget()
-            if not range_badge.winfo_ismapped():
-                range_badge.pack(side="right")
-            pack_log_body(filters, fill="x", pady=(0, 8))
-            pack_log_body(table_frame, fill="both", expand=True)
-            refresh_log()
-            return
-        range_badge.pack_forget()
-        range_status.set("")
-        filters.pack_forget()
-        table_frame.pack_forget()
-        pack_log_body(diagnosis_history_frame, fill="both", expand=True)
-        refresh_diagnosis_history_list()
-
-    def sync_day_values() -> None:
-        try:
-            year = int(year_value.get())
-            month = int(month_value.get())
-            max_day = calendar.monthrange(year, month)[1]
-        except ValueError:
-            max_day = 31
-        values = [f"{day:02d}" for day in range(1, max_day + 1)]
-        day_select.configure(values=values)
-        if day_value.get() not in values:
-            day_value.set(values[-1])
-
-    def refresh_log_from_filter_change(event: object = None) -> None:
-        log_filter_state["userTouched"] = True
-        sync_day_values()
-        refresh_log()
-
-    def select_signal(signal: dict[str, Any]) -> None:
-        set_date_filter(str(signal["date"]))
-        hour_value.set(f"{int(signal['hour']):02d}:00")
-        log_filter_state["userTouched"] = True
-        log_mode.set("raw")
-        show_log_tab()
-
-    def refresh_home_detection(detection: dict[str, Any] | None) -> None:
-        home_detection_value["signal"] = detection
-        if detection is None:
-            home_detection_title.set("최근 감지 신호 없음")
-            home_detection_detail.set("최근 로그에서 AS 접수가 필요한 신호는 아직 없습니다.")
-            return
-        home_detection_title.set(sanitize_display_text(detection.get("title"), 72))
-        detail = str(detection.get("detail") or event_panel_signal_summary(detection))
-        home_detection_detail.set(sanitize_display_text(detail, 120))
-
-    def refresh_home_diagnosis_summary() -> None:
-        if preview_running["active"]:
-            return
-        records = read_diagnosis_history(config, limit=1)
-        if not records:
-            home_ai_summary.set("최근 진단 결과 없음\nPC 진단받기 후 기록 탭에 저장됩니다.")
-            return
-        home_ai_summary.set(compact_home_diagnosis_text(records[0]))
-
-    def support_detail_text() -> str:
-        return symptom_detail.get("1.0", "end").strip()
-
-    def set_support_detail(text: str) -> None:
-        symptom_detail.delete("1.0", "end")
-        symptom_detail.insert("1.0", text)
-
-    def reset_support_form() -> None:
-        nonlocal support_signal_value
-        support_signal_value = None
-        symptom_title.set("")
-        symptom_type.set("REMOTE_DRIVER_OS")
-        symptom_time.set("")
-        symptom_detail.delete("1.0", "end")
-        support_mode.set(support_mode_label_for_service("DIAGNOSIS_ONLY"))
-        rag_preview_status.set("AI 추천 확인을 누르면 PCAgent가 선택 구간 로그를 분석해 지원 방식을 제안합니다.")
-        incident_window_value.set("문제 발생 전후 로그 범위는 증상 유형과 발생 시각 기준으로 계산합니다.")
-
-    def fill_support_from_signal(signal: dict[str, Any] | None) -> None:
-        nonlocal support_signal_value
-        support_signal_value = signal
-        if signal is None:
-            now = datetime.now(KST)
-            symptom_time.set(now.strftime("%Y-%m-%d %H:%M:%S"))
-            incident_window_value.set("전송 로그 범위는 증상 유형과 발생 시각 기준으로 계산됩니다.")
-            return
-        code = str(signal.get("code") or "REMOTE_DRIVER_OS")
-        detected_at = event_panel_detected_at(signal)
-        window = default_incident_window(code, detected_at=detected_at, trigger_type="USER_REQUEST")
-        symptom_type.set(code if code in REMOTE_SYMPTOM_TYPES or code in VISIT_SYMPTOM_TYPES else "REMOTE_DRIVER_OS")
-        symptom_time.set(detected_at.strftime("%Y-%m-%d %H:%M:%S"))
-        symptom_title.set(event_panel_signal_summary(signal))
-        if not support_detail_text():
-            set_support_detail(
-                "PCAgent가 확인이 필요한 이벤트를 감지했습니다.\n"
-                f"- {event_panel_signal_summary(signal)}\n"
-                "로그 전송 후 담당자가 내용을 검토합니다."
-            )
-        incident_window_value.set(
-            f"전송 로그 범위: {window.started_at.strftime('%Y-%m-%d %H:%M:%S')} ~ "
-            f"{window.ended_at.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-
-    def submit_support_request(status_target: Any = None) -> None:
-        def set_status(text: str) -> None:
-            support_status.set(text)
-            if status_target is not None:
-                status_target.set(text)
-
-        try:
-            current_config = reload_viewer_config()
-            current_path = path
-            detected_at = parse_datetime(symptom_time.get(), "symptomTime") if symptom_time.get().strip() else datetime.now(KST)
-            selected_type = symptom_type.get() or "REMOTE_DRIVER_OS"
-            window = default_incident_window(selected_type, detected_at=detected_at, trigger_type="USER_REQUEST")
-            gzip_path = current_config.log_dir.parent / "uploads" / f"{window.incident_id}.jsonl.gz"
-            gzip_window(current_path, gzip_path, window)
-            symptom_parts = [
-                symptom_title.get().strip() or "PCAgent AS 접수",
-                support_mode.get(),
-                support_detail_text(),
-            ]
-            result = upload_gzip(
-                current_config,
-                gzip_path,
-                f"agent-support-{uuid.uuid4()}",
-                " / ".join(part for part in symptom_parts if part),
-                window,
-            )
-            ticket_id = str(result["ticketId"])
-            reset_support_form()
-            set_status(f"AS 접수 신청이 완료되었습니다. 관리자 AS 티켓 목록에서 확인할 수 있습니다. 티켓 {ticket_id}")
-            refresh_status()
-            refresh_log()
-        except Exception as exception:
-            set_status(event_panel_failure_message(exception))
-
-    def preview_support_recommendation(
-        status_target: Any = None,
-        save_history: bool = False,
-        compact_target: bool = False,
-    ) -> None:
-        def set_preview_text(text: str, target_text: str | None = None) -> None:
-            rag_preview_status.set(text)
-            if status_target is not None:
-                status_target.set(target_text or text)
-
-        if preview_running["active"]:
-            return
-        preview_running["active"] = True
-        set_preview_text(
-            "선택 구간 로그를 준비하고 있습니다.",
-            "진단 로그를 준비하고 있습니다." if compact_target else None,
-        )
-        support_status.set("")
-        symptom_time_text = symptom_time.get()
-        selected_type = symptom_type.get() or "REMOTE_DRIVER_OS"
-        try:
-            current_config = reload_viewer_config()
-            current_path = path
-        except Exception as exception:
-            message = as_rag_preview_failure_message(exception)
-            set_preview_text(message, compact_as_rag_preview_failure_message(exception) if compact_target else None)
-            preview_running["active"] = False
-            return
-
-        def finish() -> None:
-            preview_running["active"] = False
-
-        def apply_result(window: IncidentWindow, result: dict[str, Any]) -> None:
-            support_mode.set(support_mode_label_for_service(result.get("recommendedService")))
-            incident_window_value.set(
-                f"문제 발생 전후 로그: {window.started_at.strftime('%Y-%m-%d %H:%M:%S')} ~ "
-                f"{window.ended_at.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            full_text = format_as_rag_preview(result)
-            target_text: str | None = None
-            if save_history:
-                record = diagnosis_history_record(result, window)
-                append_diagnosis_history(current_config, record)
-                refresh_diagnosis_history_list()
-                home_diagnosis_ready["ready"] = True
-                home_support_status.set("진단 결과를 기록 탭에 저장했습니다.")
-                target_text = compact_home_diagnosis_text(record)
-            set_preview_text(full_text, target_text if compact_target else None)
-            finish()
-
-        def apply_error(exception: Exception) -> None:
-            message = as_rag_preview_failure_message(exception)
-            set_preview_text(message, compact_as_rag_preview_failure_message(exception) if compact_target else None)
-            finish()
-
-        def run_preview() -> None:
+        def worker() -> None:
             try:
-                detected_at = parse_datetime(symptom_time_text, "symptomTime") if symptom_time_text.strip() else datetime.now(KST)
-                window = default_incident_window(selected_type, detected_at=detected_at, trigger_type="USER_REQUEST")
-                gzip_path = current_config.log_dir.parent / "previews" / f"{window.incident_id}.jsonl.gz"
-                gzip_window(current_path, gzip_path, window)
-                root.after(0, lambda: set_preview_text("서버에서 AI 추천을 확인하고 있습니다."))
-                result = preview_as_rag(
-                    current_config,
-                    gzip_path,
-                    f"agent-rag-preview-{uuid.uuid4()}",
-                    window,
+                current_config = load_config(config_path)
+                client = DiagnosisAsRequestClient(
+                    current_config.api_base_url,
+                    current_config.agent_token,
+                    web_base_url=current_config.web_base_url,
+                    device_id=current_config.device_id,
                 )
-                root.after(0, lambda: apply_result(window, result))
+                response = client.create_request(payload)
+
+                def apply() -> None:
+                    session = ui.get("diagnosisSession")
+                    result = ui.get("diagnosisResult")
+                    if (
+                        not isinstance(session, DiagnosisSession)
+                        or not isinstance(result, DiagnosisResult)
+                        or session.request.diagnosis_id != payload.diagnosis_id
+                        or result.result_id != payload.result_id
+                    ):
+                        return
+                    ui["busy"] = False
+                    ui["asState"] = "asCompleted"
+                    ui["asRequest"] = response
+                    ui["asRequestPayload"] = payload
+                    ui["ticketUrl"] = response.web_url
+                    ui["status"] = ""
+                    render()
+
+                schedule_ui(apply)
             except Exception as exception:
-                root.after(0, lambda current=exception: apply_error(current))
+                def fail(current: Exception = exception) -> None:
+                    session = ui.get("diagnosisSession")
+                    result = ui.get("diagnosisResult")
+                    if (
+                        not isinstance(session, DiagnosisSession)
+                        or not isinstance(result, DiagnosisResult)
+                        or session.request.diagnosis_id != payload.diagnosis_id
+                        or result.result_id != payload.result_id
+                    ):
+                        return
+                    ui["busy"] = False
+                    ui["asState"] = "asFailed"
+                    ui["status"] = str(current) or "AS 요청 저장에 실패했습니다. 다시 시도해 주세요."
+                    render()
+                schedule_ui(fail)
 
-        threading.Thread(target=run_preview, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-    update_running = {"active": False}
-
-    def check_for_agent_update() -> None:
-        if update_running["active"]:
-            return
-        update_running["active"] = True
-        update_status.set("업데이트 확인 중...")
+    def schedule_ui(action: Callable[[], None]) -> None:
         try:
-            current_config = reload_viewer_config()
+            if root.winfo_exists():
+                root.after(0, action)
+        except tk.TclError:
+            return
+
+    def go_home() -> bool:
+        if ui["busy"]:
+            return False
+        if not callable(finish_diagnosis_session):
+            ui["status"] = "진단 세션을 종료할 수 없습니다."
+            render()
+            return False
+        try:
+            finished = bool(finish_diagnosis_session())
         except Exception as exception:
-            update_status.set(event_panel_failure_message(exception))
-            update_running["active"] = False
+            ui["status"] = str(exception) or "진단 세션 종료에 실패했습니다."
+            render()
+            return False
+        if not finished:
+            ui["status"] = "진단 세션 종료에 실패했습니다."
+            render()
+            return False
+        apply_diagnosis_session(None)
+        return True
+
+    def connect_as() -> None:
+        if ui["busy"]:
             return
-
-        def finish(result: dict[str, Any]) -> None:
-            status = str(result.get("status") or "")
-            latest = sanitize_display_text(result.get("latestVersion"), 40)
-            if status == "UP_TO_DATE":
-                update_status.set(f"최신 버전입니다. ({latest})")
-                update_running["active"] = False
-                return
-            if status == "DEV_MODE":
-                update_status.set(f"최신 {latest} 확인됨. 개발 실행은 exe 재빌드가 필요합니다.")
-                update_running["active"] = False
-                return
-            if status == "READY":
-                script_path = Path(str(result["scriptPath"]))
-                update_status.set(f"최신 {latest} 적용 중입니다. PCAgent를 다시 시작합니다.")
-                try:
-                    launch_update_apply_script(script_path)
-                except Exception as exception:
-                    update_status.set(event_panel_failure_message(exception))
-                    update_running["active"] = False
-                    return
-                root.after(700, lambda: os._exit(0))
-                return
-            update_status.set("업데이트 상태를 확인할 수 없습니다.")
-            update_running["active"] = False
-
-        def fail(exception: Exception) -> None:
-            update_status.set(event_panel_failure_message(exception))
-            update_running["active"] = False
-
-        def run_update_check() -> None:
-            try:
-                result = prepare_agent_update(current_config)
-                root.after(0, lambda: finish(result))
-            except Exception as exception:
-                root.after(0, lambda current=exception: fail(current))
-
-        threading.Thread(target=run_update_check, daemon=True).start()
-
-    def prepare_home_support_context() -> None:
-        signal = home_detection_value.get("signal")
-        fill_support_from_signal(signal if isinstance(signal, dict) else None)
-        if signal is None:
-            symptom_title.set("PC 상태 진단")
-            set_support_detail("PCAgent가 최근 30분 로그를 기준으로 상태를 진단합니다.")
-
-    def run_home_diagnosis() -> None:
-        prepare_home_support_context()
-        home_support_status.set("")
-        preview_support_recommendation(home_ai_summary, save_history=True, compact_target=True)
-
-    def submit_home_support_request() -> None:
-        if not home_consent.get():
-            home_support_status.set("최근 30분 진단 로그 전송에 동의하면 AS 접수를 신청할 수 있습니다.")
+        session = ui.get("diagnosisSession")
+        result = ui.get("diagnosisResult")
+        if not isinstance(session, DiagnosisSession) or not isinstance(result, DiagnosisResult):
+            ui["asState"] = "asFailed"
+            ui["status"] = "완료된 진단 세션과 결과가 필요합니다."
+            render()
             return
-        if not home_diagnosis_ready["ready"]:
-            home_support_status.set("AS 접수 전 PC 진단받기를 먼저 진행해 주세요.")
-            return
-        prepare_home_support_context()
-        submit_support_request(home_support_status)
-
-    def summary_section_height(row_count: int) -> int:
-        if row_count <= 0:
-            return 150
-        visible_rows = max(3, min(STATUS_LOG_SUMMARY_LIMIT, row_count))
-        return 72 + visible_rows * 28
-
-    def refresh_log_summary() -> None:
-        rows = read_status_log_summary_rows(path, STATUS_LOG_SUMMARY_LIMIT)
-        summary_table.delete(*summary_table.get_children())
-        summary_section.configure(height=summary_section_height(len(rows)))
-        if not rows:
-            summary_table.pack_forget()
-            if not summary_empty.winfo_ismapped():
-                summary_empty.pack(fill="x", expand=False)
-            return
-        summary_empty.pack_forget()
-        if not summary_table.winfo_ismapped():
-            summary_table.pack(fill="both", expand=True)
-        summary_table.configure(height=max(3, min(STATUS_LOG_SUMMARY_LIMIT, len(rows))))
-        for index, row in enumerate(rows):
-            summary_table.insert(
-                "",
-                "end",
-                values=display_log_summary_values(row),
-                tags=("odd" if index % 2 else "even",),
-            )
-
-    def refresh_status() -> None:
-        reload_viewer_config()
-        model = status_home_model(config, path)
-        cards_model = {
-            "pc": model["pcStatusCard"],
-            "upload": model["uploadCard"],
-            "startup": model["startupCard"],
-            "version": model["versionCard"],
-        }
-        pc_status.set(str(cards_model["pc"]["value"]))
-        pc_detail.set(str(cards_model["pc"]["detail"]))
-        upload_status.set(str(cards_model["upload"]["value"]))
-        upload_detail.set(str(cards_model["upload"]["detail"]))
-        startup_status.set(str(cards_model["startup"]["value"]))
-        startup_detail.set(str(cards_model["startup"]["detail"]))
-        version_status.set(str(cards_model["version"]["value"]))
-        version_detail.set(str(cards_model["version"]["detail"]))
-        for key, card in cards_model.items():
-            tone = str(card.get("tone", "muted"))
-            if key in card_title_labels:
-                title_color = card_tone_color(tone) if key == "pc" else colors["text"]
-                card_title_labels[key].configure(foreground=title_color)
-            if key in card_value_labels:
-                card_value_labels[key].configure(foreground=card_tone_color(tone))
-            if key in card_icons:
-                icon_kind = "startup" if key == "startup" else key
-                draw_card_icon(card_icons[key], icon_kind, tone)
-        refresh_home_diagnosis_summary()
-        refresh_home_detection(model["homeDetection"])
-        refresh_log_summary()
-
-    def refresh_log() -> None:
-        reload_viewer_config()
-        if not log_filter_state["userTouched"]:
-            current_date, current_hour = default_log_filter_values()
-            set_date_filter(current_date)
-            hour_value.set(f"{current_hour:02d}:00")
+        current_config = load_config(config_path)
         try:
-            selected_hour = int(hour_value.get().split(":", 1)[0])
-        except ValueError:
-            selected_hour = datetime.now(KST).hour
-        selected_date = selected_date_text()
-        rows = read_log_rows_for_filter(
-            path,
-            selected_date,
-            selected_hour,
-            log_filter_state["userTouched"],
-            LOG_TABLE_LIMIT,
-        )
-        tree.delete(*tree.get_children())
-        for index, row in enumerate(rows):
-            tree.insert("", "end", values=display_log_table_values(row), tags=("odd" if index % 2 else "even",))
-        if rows:
-            log_empty_label.place_forget()
-        else:
-            log_empty_label.place(relx=0.5, rely=0.52, anchor="center")
-            log_empty_label.lift()
-        range_label = (
-            f"{selected_date} {selected_hour:02d}:00"
-            if log_filter_state["userTouched"]
-            else f"{selected_date} 최신"
-        )
-        range_status.set(f"범위 {range_label} | 표시 {len(rows)}개")
-
-    def refresh_diagnosis_detail() -> None:
-        reload_viewer_config()
-        model = diagnosis_detail_model(config, path)
-        tone = str(model["tone"])
-        badge_bg = {
-            "ok": "#eef8f5",
-            "warning": "#fff7e6",
-            "danger": "#fdeaea",
-            "muted": "#edf3f4",
-        }.get(tone, "#edf3f4")
-        diagnosis_summary_status.set(str(model["status"]))
-        diagnosis_status_badge.configure(foreground=card_tone_color(tone), background=badge_bg)
-        diagnosis_summary_time.set(f"마지막 진단 시간: {model['lastDiagnosticTime']}")
-        diagnosis_summary_text.set(str(model["summary"]))
-        diagnosis_empty_text.set("" if model["hasResult"] else str(model["emptyMessage"]))
-
-        for widgets, metric in zip(diagnosis_metric_widgets, model["metrics"], strict=False):
-            metric_tone = str(metric["tone"])
-            widgets["status"].configure(
-                text=f"상태: {metric['status']}",
-                foreground=card_tone_color(metric_tone),
+            payload = build_diagnosis_as_request(
+                session,
+                result,
+                consent_accepted=True,
+                expected_device_id=current_config.device_id,
             )
-            widgets["current"].configure(text=f"{metric['currentLabel']}: {metric['currentValue']}")
-            widgets["threshold"].configure(text=f"기준: {metric['threshold']}")
-            widgets["description"].configure(text=str(metric["description"]))
+        except Exception as exception:
+            ui["asState"] = "asFailed"
+            ui["status"] = str(exception)
+            render()
+            return
+        panel = tk.Toplevel(root)
+        panel.title("진단 정보 전송 동의")
+        panel.geometry("700x620")
+        panel.resizable(False, False)
+        panel.configure(background="#ffffff")
+        apply_agent_window_icon(panel)
+        tk.Label(
+            panel,
+            text="진단 정보 전송 동의",
+            font=font(22, "semibold"),
+            background="#ffffff",
+            foreground=colors["text"],
+            anchor="w",
+        ).pack(fill="x", padx=32, pady=(28, 8))
+        tk.Label(
+            panel,
+            text="AS 접수를 위해 아래 진단 정보를 전송합니다.",
+            font=font(12),
+            background="#ffffff",
+            foreground=colors["muted"],
+            anchor="w",
+        ).pack(fill="x", padx=32, pady=(0, 16))
+        evidence = [
+            f"{item['component'].upper()} {item['metricType']}: {item['value']}{item.get('unit') or ''}"
+            for item in payload.evidence_summary
+        ]
+        problem_device = actual_device_problem_evidence(result)
+        display_driver = matching_display_driver_evidence(result, problem_device)
+        device_value = problem_device.value if problem_device is not None and isinstance(problem_device.value, dict) else {}
+        driver_value = display_driver.value if display_driver is not None and isinstance(display_driver.value, dict) else {}
+        measured_components = ", ".join(dict.fromkeys(
+            item["component"].upper() for item in payload.evidence_summary
+        )) or "측정된 구성요소 없음"
+        summary = "\n".join((
+            "전송 정보",
+            f"• diagnosisId: {result.diagnosis_id}",
+            f"• 사용자 증상: {session.request.symptom or '전달된 증상 없음'}",
+            f"• 진단 분류: {result.diagnosis_type or '분류 없음'}",
+            f"• 결과: {result.title}",
+            f"• 요약: {result.summary}",
+            f"• 해결 유형: {result.resolution_type}",
+            f"• 로컬 자동 복구: {'가능' if result.can_auto_recover else '불가'}",
+            f"• 장치: {device_value.get('deviceName') or '확인되지 않음'}",
+            f"• problem code: {device_value.get('problemCode') if device_value.get('problemCode') is not None else '확인되지 않음'}",
+            f"• 드라이버: {driver_value.get('provider') or '확인되지 않음'} / {driver_value.get('version') or '-'} / {driver_value.get('date') or '-'}",
+            "• 핵심 측정 근거:",
+            *(f"  - {item}" for item in evidence),
+            "• 요청 유형: 기존 일반 AS 티켓 (PHYSICAL_INSPECTION)",
+            f"• 진단 시각: {result.evaluated_at}",
+            f"• PC 주요 구성 정보(실제 측정 구성): {measured_components}",
+            f"• 진단 모드: {session.request.mode}",
+            "",
+            "전송하지 않는 정보",
+            "• 개인 파일 내용 · 문서 내용 · 브라우저 기록",
+            "• 진단과 무관한 전체 프로세스 목록 · 불필요한 개인정보",
+        ))
+        summary_box = tk.Text(
+            panel,
+            height=17,
+            font=font(11),
+            foreground=colors["text"],
+            background="#fafafa",
+            relief="solid",
+            borderwidth=1,
+            wrap="word",
+            padx=16,
+            pady=14,
+        )
+        summary_box.insert("1.0", summary)
+        summary_box.configure(state="disabled")
+        summary_box.pack(fill="both", expand=True, padx=32)
+        consent = tk.BooleanVar(panel, value=False)
+        consent_button = tk.Button(
+            panel,
+            text="동의 후 AS 접수",
+            state="disabled",
+            font=font(12, "semibold"),
+            background="#111111",
+            foreground="#ffffff",
+            disabledforeground="#999999",
+            relief="flat",
+            padx=24,
+            pady=9,
+        )
 
-        diagnosis_event_tree.delete(*diagnosis_event_tree.get_children())
-        events = list(model["events"])
-        if events:
-            diagnosis_event_empty.pack_forget()
-            if not diagnosis_event_tree.winfo_ismapped():
-                diagnosis_event_tree.pack(fill="both", expand=True)
-            for index, event in enumerate(events):
-                diagnosis_event_tree.insert(
-                    "",
-                    "end",
-                    values=(event["time"], event["type"], event["content"], event["status"]),
-                    tags=("odd" if index % 2 else "even",),
-                )
+        def approve() -> None:
+            if not consent.get():
+                return
+            panel.destroy()
+            submit_as_request(payload)
+
+        consent_button.configure(command=approve)
+
+        def update_consent() -> None:
+            consent_button.configure(state="normal" if consent.get() else "disabled")
+
+        tk.Checkbutton(
+            panel,
+            text="위 진단 정보 전송에 동의합니다.",
+            variable=consent,
+            command=update_consent,
+            font=font(11),
+            background="#ffffff",
+            foreground=colors["text"],
+            activebackground="#ffffff",
+        ).pack(anchor="w", padx=32, pady=(14, 10))
+        action_row = tk.Frame(panel, background="#ffffff")
+        action_row.pack(fill="x", padx=32, pady=(0, 24))
+        tk.Button(
+            action_row,
+            text="취소",
+            command=panel.destroy,
+            font=font(12, "semibold"),
+            background="#ffffff",
+            foreground=colors["text"],
+            relief="solid",
+            borderwidth=1,
+            padx=28,
+            pady=9,
+        ).pack(side="left")
+        consent_button.pack(in_=action_row, side="right")
+        panel.transient(root)
+        panel.grab_set()
+
+    def open_created_ticket() -> None:
+        url = ui.get("ticketUrl")
+        if not isinstance(url, str) or not url:
+            ui["status"] = "웹 상세 주소를 확인할 수 없습니다."
+            render()
+            return
+        try:
+            opened = webbrowser.open(url)
+        except (OSError, webbrowser.Error):
+            opened = False
+        if not opened:
+            ui["status"] = "웹 요청 상세 페이지를 열지 못했습니다."
+            render()
+            return
+        go_home()
+
+    def start_drag(event: tk.Event) -> None:
+        drag_origin["x"] = event.x_root - root.winfo_x()
+        drag_origin["y"] = event.y_root - root.winfo_y()
+
+    def drag_window(event: tk.Event) -> None:
+        root.geometry(f"+{event.x_root - drag_origin['x']}+{event.y_root - drag_origin['y']}")
+
+    def focus_window() -> None:
+        try:
+            root.deiconify()
+            root.state("normal")
+            root.lift()
+            root.attributes("-topmost", True)
+            root.after(800, lambda: root.attributes("-topmost", False))
+            root.focus_force()
+        except tk.TclError:
+            return
+
+    def close_window() -> None:
+        if background_mode:
+            root.withdraw()
         else:
-            diagnosis_event_tree.pack_forget()
-            if not diagnosis_event_empty.winfo_ismapped():
-                diagnosis_event_empty.pack(fill="both", expand=True, pady=(24, 0))
+            root.destroy()
 
-        ai = model["aiAnalysis"]
-        diagnosis_ai_summary.set(str(ai["summary"]))
-        diagnosis_ai_cause.set(", ".join(ai["suspectedCauses"]) if ai["suspectedCauses"] else "-")
-        diagnosis_ai_action.set(", ".join(ai["recommendedActions"]) if ai["recommendedActions"] else "-")
-        diagnosis_ai_admin.set(str(ai["adminReview"]))
+    root.protocol("WM_DELETE_WINDOW", close_window)
 
-    def show_status_tab() -> None:
-        selected_nav.set("상태")
-        render_nav()
-        log_view.pack_forget()
-        support_view.pack_forget()
-        status_view.pack(fill="both", expand=True)
-        range_badge.pack_forget()
-        range_status.set("")
-        refresh_status()
+    def apply_diagnosis_session(session: DiagnosisSession | None) -> None:
+        previous = ui.get("diagnosisSession")
+        previous_id = previous.request.diagnosis_id if isinstance(previous, DiagnosisSession) else None
+        next_id = session.request.diagnosis_id if isinstance(session, DiagnosisSession) else None
+        if previous_id != next_id:
+            ui["busy"] = False
+            ui["diagnosisStarted"] = False
+            ui["resultRequested"] = False
+            ui["diagnosisSnapshot"] = None
+            ui["diagnosisResult"] = None
+            ui["diagnosisReady"] = False
+            ui["diagnosis"] = None
+            ui["window"] = None
+            ui["asState"] = "diagnosisResult"
+            ui["asRequest"] = None
+            ui["asRequestPayload"] = None
+            ui["ticketUrl"] = None
+            ui["status"] = ""
+        ui["diagnosisSession"] = session
+        ui["requestLocked"] = isinstance(session, DiagnosisSession)
+        if isinstance(session, DiagnosisSession):
+            ui["demo"] = session.request.mode == "DEMO"
+            metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+            diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
+            result = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
+            ui["diagnosisSnapshot"] = diagnosis
+            ui["diagnosisResult"] = result
+            ui["diagnosisStarted"] = bool(ui["diagnosisStarted"]) or session.agent_state in {
+                "RUNNING", "COMPLETED", "FAILED"
+            }
+            ui["state"] = diagnosis_session_ui_state(
+                session,
+                metrics,
+                diagnosis,
+                result,
+                diagnosis_started=bool(ui["diagnosisStarted"]),
+                result_requested=bool(ui["resultRequested"]),
+            )
+        else:
+            ui["demo"] = False
+            ui["state"] = "SYMPTOM_CONFIRM"
+        render()
 
-    def show_log_tab() -> None:
-        selected_nav.set("기록")
-        render_nav()
-        status_view.pack_forget()
-        support_view.pack_forget()
-        log_view.pack(fill="both", expand=True)
-        if log_mode.get() == "raw" and should_initialize_log_filter(log_filter_state["logTabOpened"], log_filter_state["userTouched"]):
-            current_date, current_hour = default_log_filter_values()
-            set_date_filter(current_date)
-            hour_value.set(f"{current_hour:02d}:00")
-        log_filter_state["logTabOpened"] = True
-        set_log_mode(log_mode.get())
-        if log_mode.get() == "raw":
-            tree.focus_set()
+    def request_focus() -> None:
+        root.after(0, focus_window)
 
-    def show_support_tab(signal: dict[str, Any] | None = None) -> None:
-        selected_nav.set("AI 진단")
-        render_nav()
-        status_view.pack_forget()
-        log_view.pack_forget()
-        support_view.pack(fill="both", expand=True)
-        range_badge.pack_forget()
-        range_status.set("")
-        refresh_diagnosis_chat_context()
+    def request_apply_session(session: DiagnosisSession | None) -> None:
+        root.after(0, lambda: apply_diagnosis_session(session))
 
-    def set_current_hour() -> None:
-        current_date, current_hour = default_log_filter_values()
-        set_date_filter(current_date)
-        hour_value.set(f"{current_hour:02d}:00")
-        log_filter_state["userTouched"] = False
-        log_filter_state["logTabOpened"] = False
-        refresh_log()
+    def request_metrics_refresh() -> None:
+        root.after(0, render)
 
-    sync_day_values()
-    year_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-    month_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-    day_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
-    hour_select.bind("<<ComboboxSelected>>", refresh_log_from_filter_change)
+    def request_initial_metrics_complete() -> None:
+        root.after(0, render)
 
-    buttons = tk.Frame(log_view, background=colors["app_bg"], pady=8)
-    buttons.pack(fill="x")
-    rounded_button(buttons, "로그 폴더", lambda: open_log_folder(config_path), "secondary", width=104, height=32).pack(
-        side="left",
-    )
-    rounded_button(
-        buttons,
-        "AS 페이지",
-        lambda: open_support_page(config_path),
-        "secondary",
-        width=104,
-        height=32,
-    ).pack(side="left", padx=(8, 0))
+    def request_destroy() -> None:
+        root.after(0, root.destroy)
 
-    rounded_button(
-        support_actions,
-        "AI 추천 확인",
-        preview_support_recommendation,
-        "secondary",
-        width=132,
-        height=34,
-    ).pack(side="left")
-    rounded_button(
-        support_actions,
-        "AS 접수 신청",
-        submit_support_request,
-        "primary",
-        width=132,
-        height=34,
-    ).pack(side="right")
+    canvas.bind("<ButtonPress-1>", lambda event: start_drag(event) if event.y <= 68 else None)
+    canvas.bind("<B1-Motion>", lambda event: drag_window(event) if event.y <= 68 else None)
 
-    if support_signal:
-        show_support_tab(support_signal)
-    elif focus_signal:
-        select_signal(focus_signal)
-    else:
-        show_status_tab()
+    def refresh_symptom_metrics() -> None:
+        if root.winfo_exists() and ui["state"] == "SYMPTOM_CONFIRM":
+            render()
+        if root.winfo_exists():
+            root.after(5000, refresh_symptom_metrics)
 
-    live_refresh_job: str | None = None
-
-    def schedule_live_refresh() -> None:
-        nonlocal live_refresh_job
-        refresh_status()
-        refresh_log_summary()
-        refresh_log()
-        live_refresh_job = root.after(5000, schedule_live_refresh)
-
-    def stop_live_refresh() -> None:
-        nonlocal live_refresh_job
-        if live_refresh_job is not None:
-            root.after_cancel(live_refresh_job)
-            live_refresh_job = None
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", stop_live_refresh)
-
-    schedule_live_refresh()
+    render()
+    if callable(on_window_ready):
+        on_window_ready(
+            request_focus,
+            request_apply_session,
+            request_metrics_refresh,
+            request_initial_metrics_complete,
+            request_destroy,
+        )
+    root.after(5000, refresh_symptom_metrics)
     try:
         root.mainloop()
     finally:
+        if callable(on_window_closed):
+            on_window_closed()
         viewer_lock.release()
 
 
@@ -6454,6 +6676,100 @@ def upload_event_panel_request(
     )
     ticket_id = str(result["ticketId"])
     return ticket_id, support_url(config.api_base_url, ticket_id, config.web_base_url)
+
+
+class SmoothedProgress:
+    """진단 진행률 링의 표시용 스무딩.
+
+    실제 진행률은 태스크가 끝날 때만 계단식으로 뛰므로 그대로 그리면 링이
+    15%→100%처럼 점프한다. 표시값은 실제값을 초당 FAST_RATE로 부드럽게 뒤쫓고,
+    실제값이 정체된 동안에도 CREEP_RATE로 조금씩 전진해 링이 항상 움직인다.
+    단 실제값+HEADROOM과 CEILING(96%)을 넘지 않아 거짓 완료를 만들지 않으며,
+    표시값은 단조 증가한다. 실제 100% 도달 시 100까지 마무리 스윕한다.
+    """
+
+    FAST_RATE = 45.0
+    CREEP_RATE = 1.5
+    HEADROOM = 12.0
+    CEILING = 96.0
+
+    def __init__(self) -> None:
+        self._display = 0.0
+        self._last_seconds: float | None = None
+
+    def update(self, actual: int, now_seconds: float) -> int:
+        target = float(max(0, min(100, actual)))
+        if self._last_seconds is None:
+            # 진행 중 화면에 뒤늦게 합류한 경우 현재 값에서 시작한다(0부터 훑지 않음).
+            self._last_seconds = now_seconds
+            self._display = target if target >= 100.0 else min(target, self.CEILING)
+            return int(self._display)
+        elapsed = max(0.0, now_seconds - self._last_seconds)
+        self._last_seconds = now_seconds
+        if target >= 100.0:
+            self._display = min(100.0, self._display + self.FAST_RATE * elapsed)
+        elif self._display < target:
+            self._display = min(target, self._display + self.FAST_RATE * elapsed)
+        else:
+            stall_cap = min(target + self.HEADROOM, self.CEILING)
+            if self._display < stall_cap:
+                self._display = min(stall_cap, self._display + self.CREEP_RATE * elapsed)
+        return int(self._display)
+
+
+def status_pulse_frame(base_text: str, step: int) -> str:
+    """로딩 애니메이션의 step번째 프레임 문자열. 점 0~3개가 순환한다."""
+    return f"{base_text}{'.' * (step % 4)}"
+
+
+class StatusPulse:
+    """서버 응답을 기다리는 동안 상태 문구에 점(...)을 순환시키는 로딩 애니메이션.
+
+    tkinter에는 내장 스피너가 없고 이 앱의 대기 표시는 전부 문자열 기반이라,
+    위젯 after() 타이머로 프레임을 갱신한다. start/stop은 반드시 메인 스레드에서
+    호출한다(워커 스레드에서는 after(0, ...)로 마샬링). 위젯이 파괴되면 조용히 멈춘다.
+    """
+
+    def __init__(self, widget: Any, status_target: Any, interval_ms: int = 400) -> None:
+        self._widget = widget
+        # tk.StringVar처럼 .set()이 있으면 그것을, 아니면 호출 가능한 setter를 그대로 쓴다.
+        self._set = status_target.set if hasattr(status_target, "set") else status_target
+        self._interval_ms = interval_ms
+        self._job: Any = None
+        self._step = 0
+        self._base_text = ""
+
+    @property
+    def active(self) -> bool:
+        return self._job is not None
+
+    def start(self, base_text: str) -> None:
+        self.stop()
+        self._base_text = base_text
+        self._step = 0
+        self._tick()
+
+    def stop(self, final_text: str | None = None) -> None:
+        if self._job is not None:
+            try:
+                self._widget.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        if final_text is not None:
+            self._set(final_text)
+
+    def _tick(self) -> None:
+        try:
+            if not int(self._widget.winfo_exists()):
+                self._job = None
+                return
+            self._set(status_pulse_frame(self._base_text, self._step))
+            self._step += 1
+            self._job = self._widget.after(self._interval_ms, self._tick)
+        except Exception:
+            # 위젯 파괴 후 늦게 도착한 tick — 애니메이션만 조용히 종료한다.
+            self._job = None
 
 
 def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> None:
@@ -6628,18 +6944,38 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
         wraplength=318,
     ).pack(fill="x", pady=(8, 8))
 
+    upload_pulse = StatusPulse(panel, status_text)
+
     def request_review() -> None:
+        # gzip 압축 + 20초 타임아웃 업로드가 메인 스레드를 얼리지 않도록 워커에서 수행한다.
+        # tk 위젯/변수는 메인 스레드 전용 — 모드는 미리 읽고, 결과는 after(0)로 되돌린다.
+        selected_mode = request_mode.get()
         send_button.configure(state="disabled")
-        status_text.set("AS 접수를 준비하고 있습니다.")
-        panel.update_idletasks()
-        try:
-            ticket_id, url = upload_event_panel_request(config, source, signals, request_mode.get())
-        except Exception as exception:
+        upload_pulse.start("AS 접수를 진행하고 있습니다")
+
+        def apply_success(ticket_id: str, url: str) -> None:
+            upload_pulse.stop(f"AS 접수가 완료되었습니다. 티켓 {ticket_id}")
+            webbrowser.open(url)
+
+        def apply_failure(exception: Exception) -> None:
+            upload_pulse.stop(event_panel_failure_message(exception))
             send_button.configure(state="normal")
-            status_text.set(event_panel_failure_message(exception))
-            return
-        status_text.set(f"AS 접수가 완료되었습니다. 티켓 {ticket_id}")
-        webbrowser.open(url)
+
+        def schedule_on_panel(callback: Any) -> None:
+            try:
+                panel.after(0, callback)
+            except Exception:
+                pass  # 업로드 중 패널이 닫힘 — 표시할 곳이 없다.
+
+        def run_upload() -> None:
+            try:
+                ticket_id, url = upload_event_panel_request(config, source, signals, selected_mode)
+            except Exception as exception:
+                schedule_on_panel(lambda current=exception: apply_failure(current))
+                return
+            schedule_on_panel(lambda: apply_success(ticket_id, url))
+
+        threading.Thread(target=run_upload, daemon=True).start()
 
     def open_detail() -> None:
         primary = model["primarySignal"]
@@ -7127,7 +7463,10 @@ def run_background(
     instance_lock = acquire_named_instance_lock(BACKGROUND_INSTANCE_MUTEX_NAME)
     if instance_lock is None:
         if open_viewer_when_running:
-            show_log_viewer(ensure_default_config(config_path or default_background_config_path()))
+            ViewerRequestSignal(
+                app_data_dir() / "show-viewer-request.json",
+                restrict_file_to_current_user,
+            ).signal()
         return 0
     try:
         path = ensure_default_config(config_path or default_background_config_path())
@@ -7146,14 +7485,241 @@ def run_background(
         write_pid()
         runtime = AgentRuntime()
 
+        connection_state = {"value": "DISCONNECTED"}
+        diagnosis_store = DiagnosisSessionStore(app_data_dir() / "diagnosis-request-state.json")
+        metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
+        diagnosis_log_store = DiagnosisLogStore(app_data_dir() / "diagnosis-progress-state.json")
+        diagnosis_result_store = DiagnosisResultStore(app_data_dir() / "diagnosis-result-state.json")
+        move_terminal_session_to_idle(diagnosis_store, diagnosis_log_store.snapshot)
+        diagnosis_rule_engine = DiagnosisRuleEngine()
+        diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}
+        diagnosis_client_holder: dict[str, AgentDiagnosisWebSocketClient] = {}
+        forwarded_event_ids: set[str] = set()
+        viewer_controller = BackgroundViewerController(
+            path,
+            lambda: active_viewer_session(diagnosis_store.session, diagnosis_log_store.snapshot),
+            lambda: connection_state["value"],
+            show_log_viewer,
+            metrics_snapshot_provider=lambda: metrics_store.snapshot,
+            diagnosis_snapshot_provider=lambda: diagnosis_log_store.snapshot,
+            diagnosis_result_provider=lambda: diagnosis_result_store.result,
+            start_initial_metrics=lambda session, mode: begin_initial_metrics(session, mode),
+            start_diagnosis=lambda session, mode: begin_diagnosis(session, mode),
+            cancel_diagnosis=lambda: diagnosis_orchestrator_holder["value"].cancel()
+            if "value" in diagnosis_orchestrator_holder else False,
+            retry_diagnosis=lambda: diagnosis_orchestrator_holder["value"].retry()
+            if "value" in diagnosis_orchestrator_holder else False,
+            finish_diagnosis_session=lambda: finish_current_diagnosis_session(),
+        )
+
+        def on_connection_state_changed(state: str) -> None:
+            connection_state["value"] = state
+
+        def on_metrics_updated(metrics: MetricsSnapshot) -> None:
+            viewer_controller.refresh_metrics()
+
+        def sync_diagnosis_events(snapshot: DiagnosisRunSnapshot) -> None:
+            client = diagnosis_client_holder.get("value")
+            if client is None:
+                return
+            for event in snapshot.events:
+                if event.event_id in forwarded_event_ids:
+                    continue
+                detail = event.to_dict()
+                detail.update({
+                    "sessionState": snapshot.state,
+                    "progress": snapshot.progress,
+                    "mode": snapshot.mode,
+                })
+                if client.send_diagnosis_status(detail):
+                    forwarded_event_ids.add(event.event_id)
+
+        def on_diagnosis_updated(snapshot: DiagnosisRunSnapshot) -> None:
+            sync_diagnosis_events(snapshot)
+            viewer_controller.refresh_metrics()
+
+        def sync_diagnosis_result() -> None:
+            client = diagnosis_client_holder.get("value")
+            result = diagnosis_result_store.result
+            if client is not None and isinstance(result, DiagnosisResult):
+                detail = result.to_dict()
+                detail["mode"] = diagnosis_log_store.snapshot.mode
+                client.send_diagnosis_result(detail)
+
+        def on_diagnosis_complete(snapshot: DiagnosisRunSnapshot) -> None:
+            initial_metrics_coordinator.stop()
+            if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
+                try:
+                    result = diagnosis_rule_engine.evaluate(metrics_store.snapshot, snapshot)
+                    diagnosis_result_store.save(result)
+                    sync_diagnosis_result()
+                    diagnosis_store.update_state("COMPLETED")
+                except (OSError, TypeError, ValueError):
+                    diagnosis_store.update_state("FAILED")
+            elif snapshot.state in {"FAILED", "TIMED_OUT", "CANCELLED"}:
+                diagnosis_store.update_state("FAILED")
+            viewer_controller.refresh_metrics()
+
+        windows_graphics_provider = WindowsGraphicsDiagnosticsProvider(
+            PowerShellJsonRunner(hidden_kwargs_provider=hidden_subprocess_kwargs),
+        )
+        diagnosis_orchestrator = DiagnosisOrchestrator(
+            lambda: metrics_store.snapshot,
+            diagnosis_log_store,
+            settings=DiagnosisSettings(
+                task_weights=GRAPHICS_DIAGNOSIS_TASK_WEIGHTS,
+                task_timeout_seconds=35.0,
+                session_timeout_seconds=90.0,
+                max_retries=1,
+            ),
+            task_handlers=graphics_diagnosis_task_handlers(
+                lambda: diagnosis_store.session,
+                lambda: metrics_store.snapshot,
+                lambda: diagnosis_log_store.snapshot,
+                windows_graphics_provider.collect,
+            ),
+            task_definitions=GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
+            task_labels=GRAPHICS_DIAGNOSIS_TASK_LABELS,
+            on_update=on_diagnosis_updated,
+            on_complete=on_diagnosis_complete,
+        )
+        diagnosis_orchestrator_holder["value"] = diagnosis_orchestrator
+
+        def on_initial_metrics_complete(metrics: MetricsSnapshot) -> None:
+            viewer_controller.complete_initial_metrics()
+
+        initial_metrics_coordinator = InitialMetricsCoordinator(
+            metrics_store,
+            live_provider_factory=lambda: HardwareSensorProvider(HardwareMetricCollector()),
+            demo_provider_factory=InitialDemoSensorProvider,
+            on_update=on_metrics_updated,
+            on_complete=on_initial_metrics_complete,
+        )
+
+        def finish_current_diagnosis_session() -> bool:
+            initial_metrics_coordinator.stop()
+            reset_diagnosis_session_state(
+                diagnosis_store,
+                metrics_store,
+                diagnosis_log_store,
+                diagnosis_result_store,
+            )
+            forwarded_event_ids.clear()
+            client = diagnosis_client_holder.get("value")
+            if client is not None:
+                client.mark_idle()
+            return True
+
+        def begin_initial_metrics(
+            session: DiagnosisSession | None,
+            mode: str,
+        ) -> DiagnosisSession | None:
+            return start_initial_metrics_session(
+                session,
+                mode,
+                current_config.device_id if current_config else None,
+                diagnosis_store,
+                metrics_store,
+                diagnosis_result_store,
+                diagnosis_orchestrator,
+                initial_metrics_coordinator,
+            )
+
+        def begin_diagnosis(
+            session: DiagnosisSession | None,
+            mode: str,
+        ) -> DiagnosisSession | None:
+            return start_diagnosis_once(
+                session,
+                diagnosis_store,
+                metrics_store,
+                diagnosis_orchestrator,
+                diagnosis_result_store,
+            )
+
+        def on_diagnosis_request(session: DiagnosisSession) -> None:
+            viewer_controller.show(session)
+            begin_initial_metrics(session, session.request.mode)
+
+        try:
+            current_config = load_config(path)
+        except ConfigError:
+            current_config = None
+        diagnosis_processor = DiagnosisRequestProcessor(
+            diagnosis_store,
+            device_id=current_config.device_id if current_config else None,
+            on_request=on_diagnosis_request,
+        )
+        existing_session = diagnosis_store.session
+        existing_metrics = metrics_store.snapshot
+        if isinstance(existing_session, DiagnosisSession) and existing_session.agent_state == "RUNNING":
+            if (
+                existing_metrics.diagnosis_id == existing_session.request.diagnosis_id
+                and existing_metrics.initial_complete
+            ):
+                existing_diagnosis = diagnosis_log_store.snapshot
+                if existing_diagnosis.diagnosis_id == existing_session.request.diagnosis_id and existing_diagnosis.state in FINAL_SESSION_STATES:
+                    on_diagnosis_complete(existing_diagnosis)
+                else:
+                    diagnosis_orchestrator.prepare(
+                        existing_session.request.diagnosis_id,
+                        existing_session.request.mode,
+                        existing_session.request.requested_checks,
+                    )
+                    diagnosis_orchestrator.start(
+                        existing_session.request.diagnosis_id,
+                        existing_session.request.mode,
+                        existing_session.request.requested_checks,
+                    )
+        elif (
+            isinstance(existing_session, DiagnosisSession)
+            and existing_session.agent_state == "REQUEST_RECEIVED"
+            and (
+                existing_metrics.diagnosis_id != existing_session.request.diagnosis_id
+                or not existing_metrics.initial_complete
+            )
+        ):
+            begin_initial_metrics(existing_session, existing_session.request.mode)
+        diagnosis_client = None
+        if current_config and current_config.agent_token:
+            def sync_diagnosis_state() -> None:
+                sync_diagnosis_events(diagnosis_log_store.snapshot)
+                sync_diagnosis_result()
+
+            diagnosis_client = AgentDiagnosisWebSocketClient(
+                current_config.api_base_url,
+                current_config.agent_token,
+                diagnosis_processor,
+                on_state_changed=on_connection_state_changed,
+                on_ready=sync_diagnosis_state,
+            )
+            diagnosis_client_holder["value"] = diagnosis_client
+            diagnosis_client.start()
+        else:
+            on_connection_state_changed("FAILED")
+
         import threading
 
         worker = threading.Thread(target=collect_background_loop, args=(path, runtime, interval_seconds), daemon=True)
         worker.start()
+        viewer_signal = ViewerRequestSignal(
+            app_data_dir() / "show-viewer-request.json",
+            restrict_file_to_current_user,
+        )
+        viewer_signal_worker = threading.Thread(
+            target=viewer_signal.monitor,
+            args=(runtime, viewer_controller),
+            daemon=True,
+        )
+        viewer_signal_worker.start()
 
         if with_tray and pystray is not None:
             def stop(icon: object, item: object = None) -> None:
                 runtime.stop()
+                initial_metrics_coordinator.stop()
+                if diagnosis_client is not None:
+                    diagnosis_client.stop()
+                viewer_controller.shutdown()
                 remove_pid()
                 icon.stop()
 
@@ -7162,10 +7728,10 @@ def run_background(
                 create_tray_image(),
                 DISPLAY_APP_NAME,
                 menu=pystray.Menu(
-                    pystray.MenuItem("Open log viewer", lambda icon, item: show_log_viewer(path), default=True),
-                    pystray.MenuItem("Open log folder", lambda icon, item: open_log_folder(path)),
-                    pystray.MenuItem("Open AS page", lambda icon, item: open_support_page(path)),
-                    pystray.MenuItem("Stop", stop),
+                    pystray.MenuItem("PC Agent 열기", lambda icon, item: viewer_controller.show(), default=True),
+                    pystray.MenuItem("로그 폴더 열기", lambda icon, item: open_log_folder(path)),
+                    pystray.MenuItem("AS 페이지 열기", lambda icon, item: open_support_page(path)),
+                    pystray.MenuItem("Agent 종료", stop),
                 ),
             )
             icon.run()
@@ -7177,6 +7743,10 @@ def run_background(
                 runtime.stop()
 
         runtime.stop()
+        initial_metrics_coordinator.stop()
+        if diagnosis_client is not None:
+            diagnosis_client.stop()
+        viewer_controller.shutdown()
         remove_pid()
         return 0
     finally:
