@@ -142,6 +142,9 @@ public class BuildChatIntentRouter {
             if (hasBuildUseCaseSignal(normalized) && BuildChatService.parseBudgetWon(message) == null) {
                 clarificationReasons.add("USAGE_ONLY");
             }
+            if (hasRecipientContextSignal(normalized)) {
+                clarificationReasons.add("RECIPIENT_CONTEXT");
+            }
             return decision(BuildChatIntent.ASK_CLARIFICATION, "LOW", "NONE", category, partQuery, "FAST_CLARIFICATION", "NONE", null,
                     clarificationReasons);
         }
@@ -561,6 +564,24 @@ public class BuildChatIntentRouter {
                 "ai", "cuda", "로컬ai", "학습", "저소음", "조용", "컴팩트", "사무", "문서작업", "엑셀",
                 "방송", "스트리밍", "송출", "스트리머", "유튜브", "포토샵", "디자인", "3d",
                 "풀스펙", "최고사양", "하이엔드", "최상급", "끝판왕", "최강", "서버급", "괴물");
+    }
+
+    static boolean hasBuildUseCase(String message) {
+        return hasBuildUseCaseSignal(normalize(message));
+    }
+
+    static boolean hasOpenBudget(String message) {
+        return hasOpenBudgetSignal(normalize(message));
+    }
+
+    // 대상 맥락이 명시된 저정보 요청만 짧은 LLM 문장 다듬기 대상으로 표시한다. 이 목록은
+    // 추천 용도를 추론하기 위한 규칙이 아니라, 원문에 이미 있는 사람/상황을 자연스럽게 되받기 위한 게이트다.
+    private static boolean hasRecipientContextSignal(String normalized) {
+        return containsAny(normalized,
+                "아들", "딸", "자녀", "아이", "조카", "동생", "우리형", "친형", "형에게", "누나", "오빠", "언니", "친구",
+                "부모님", "아버지", "어머니", "엄마", "아빠", "할머니", "할아버지", "배우자", "아내", "남편", "가족",
+                "학생", "초등학교", "중학교", "고등학교", "대학생", "학년", "초1", "초2", "초3", "초4", "초5", "초6",
+                "중1", "중2", "중3", "고1", "고2", "고3", "입학", "졸업", "선물");
     }
 
     // 구매 의향은 있지만 예산/용도가 없는 모호한 요청 — 차단이 아니라 되묻기로 대화를 잇는다

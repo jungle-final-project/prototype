@@ -109,16 +109,10 @@ public class BuildChatService {
             "GENERAL"
     );
     private static final String SCORE_EXPLANATION_PROFILE = "BUILD_CHAT_54_MINI_FAST";
+    private static final String CONTEXTUAL_CLARIFICATION_PROFILE = "BUILD_CHAT_54_MINI_FAST";
     // dead-end 방지용 기능 안내 칩 — 우아한 거절과 종단 칩 플로어가 공유한다
     private static final List<String> FEATURE_GUIDE_QUICK_REPLIES =
             List.of("200만원 게이밍 PC 추천해줘", "지금 견적 나머지 채워줘", "CPU를 9700X로 바꾸면?");
-    // 무예산 용도-only 되묻기 턴에 붙이는 예산대 방향 칩 — "N만원대" 문구는 다음 턴 parseBudgetWon으로
-    // 예산이 잡혀 클릭 한 번으로 추천이 이어진다("200만원대"→200만원).
-    private static final List<String> USAGE_ONLY_BUDGET_DIRECTION_CHIPS = List.of(
-            "100만원대로 추천해줘",
-            "200만원대로 추천해줘",
-            "300만원대로 추천해줘",
-            "예산 무관 고성능으로 추천해줘");
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
     private final AiChatEngine aiChatEngine;
@@ -251,13 +245,27 @@ public class BuildChatService {
         String rawMessage = requireText(rawBody.get("message"), "message는 필수입니다.");
         // 직전 되묻기(clarification)에 대한 후속 답변이면 원 요청과 합성해 한 문장처럼 라우팅한다.
         // 서버는 상태를 저장하지 않고 프론트가 originalMessage를 에코하는 무상태 왕복이다.
-        // 해결되지 않은 되묻기는 한 번만 허용하되, 성공한 후보/미리보기 턴은 합성 문맥을 다시 내려
-        // 3~5턴의 비교·재추천 요청에서도 대상 카테고리가 유지되게 한다.
+        // 예산·용도 슬롯은 합성 문맥에서 매 턴 다시 계산해 이미 받은 답을 잃지 않는다. 성공한
+        // 후보/미리보기 턴도 합성 문맥을 다시 내려 3~5턴 비교·재추천에서 대상 카테고리를 유지한다.
         String clarificationOriginal = text(objectMap(rawBody.get("clarificationContext")).get("originalMessage"));
         boolean clarificationFollowUp = clarificationOriginal != null && !clarificationOriginal.isBlank();
+        BuildChatIntentDecision standaloneIntentDecision = null;
+        BuildChatIntentDecision previousIntentDecision = null;
+        if (clarificationFollowUp) {
+            Map<String, Object> standaloneBody = new LinkedHashMap<>(rawBody);
+            standaloneBody.remove("clarificationContext");
+            standaloneIntentDecision = intentRouter.decide(standaloneBody, rawMessage);
+
+            Map<String, Object> previousBody = new LinkedHashMap<>(standaloneBody);
+            previousBody.put("message", clarificationOriginal);
+            previousIntentDecision = intentRouter.decide(previousBody, clarificationOriginal);
+        }
+        boolean selfContainedClarificationReply = clarificationFollowUp
+                && isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision);
+        boolean mergedClarificationReply = clarificationFollowUp && !selfContainedClarificationReply;
         Map<String, Object> body;
         String message;
-        if (clarificationFollowUp && isSelfContainedClarificationReply(rawMessage)) {
+        if (selfContainedClarificationReply) {
             message = rawMessage;
             Map<String, Object> standalone = new LinkedHashMap<>(rawBody);
             standalone.remove("clarificationContext");
@@ -275,6 +283,12 @@ public class BuildChatService {
         Long userId = user == null ? null : user.internalId();
         BudgetIntent rawBudgetIntent = budgetIntent(message);
         BuildChatIntentDecision intentDecision = intentRouter.decide(body, message);
+        String recommendationConversationTransition = buildRecommendationConversationTransition(
+                message,
+                mergedClarificationReply,
+                intentDecision,
+                rawBudgetIntent
+        );
         log.debug(
                 "Build Chat intent decision: intent={}, confidence={}, sideEffectRisk={}, preferredPath={}, cachePolicy={}, ambiguityReasons={}",
                 intentDecision.intent(),
@@ -358,8 +372,28 @@ public class BuildChatService {
             logBuildChatPath("FAST_CASE_SCORE_IMPROVEMENT", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
+        Optional<Map<String, Object>> progressiveClarification = progressiveLowInformationClarificationResponse(
+                message,
+                rawMessage,
+                clarificationOriginal,
+                mergedClarificationReply,
+                intentDecision
+        );
+        if (progressiveClarification.isPresent()) {
+            Map<String, Object> response = progressiveClarification.get();
+            logBuildChatPath("FAST_PROGRESSIVE_CLARIFICATION", startedNanos, userId, requestedAiProfile, false,
+                    BuildChatGuardStats.empty());
+            return response;
+        }
         if (intentDecision.intent() == BuildChatIntent.ASK_CLARIFICATION) {
-            Map<String, Object> response = clarificationResponse(message, rawMessage, intentDecision.ambiguityReasons(), clarificationFollowUp);
+            Map<String, Object> response = clarificationResponse(
+                    body,
+                    message,
+                    rawMessage,
+                    intentDecision.ambiguityReasons(),
+                    clarificationFollowUp,
+                    userId
+            );
             logBuildChatPath("FAST_CLARIFICATION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
@@ -378,7 +412,7 @@ public class BuildChatService {
             Map<String, Object> response = cachedResponse.get();
             logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs);
-            return response;
+            return withConversationTransition(response, recommendationConversationTransition);
         }
         Optional<Map<String, Object>> fastPartRecommendation = deterministicPartRecommendationResponse(body, message, user);
         if (fastPartRecommendation.isPresent()) {
@@ -413,7 +447,7 @@ public class BuildChatService {
                 buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
                 logBuildChatPath("FAST_TIER_SNAPSHOT", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty(),
                         "redisMs=" + redisMs + " tierMs=" + tierMs + " tierBudgetWon=" + snapshot.tierBudgetWon());
-                return response;
+                return withConversationTransition(response, recommendationConversationTransition);
             }
         }
         stageStartNanos = System.nanoTime();
@@ -426,7 +460,7 @@ public class BuildChatService {
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
             logBuildChatPath("FAST_DRAFT_COMPLETION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
                     "redisMs=" + redisMs + " completionMs=" + completionMs);
-            return response;
+            return withConversationTransition(response, recommendationConversationTransition);
         }
         stageStartNanos = System.nanoTime();
         Optional<Map<String, Object>> deterministicResponse = recommendFlow
@@ -441,7 +475,7 @@ public class BuildChatService {
             }
             logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs);
-            return response;
+            return withConversationTransition(response, recommendationConversationTransition);
         }
         stageStartNanos = System.nanoTime();
         var semanticCachedResponse = semanticCacheAllowed
@@ -452,7 +486,7 @@ public class BuildChatService {
             Map<String, Object> response = semanticCachedResponse.get();
             logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
-            return response;
+            return withConversationTransition(response, recommendationConversationTransition);
         }
         // 다중부품 감액 요청(드래프트+예산목표+단일부품 미지목+총액>목표)은 LLM을 거치지 않고 감액
         // 우선순위 안내와 카테고리 교체 칩으로 결정적으로 응답한다(draftEdit 단일 카테고리 계약은 유지).
@@ -629,7 +663,7 @@ public class BuildChatService {
         }
         // 무예산 용도-only 되묻기에는 예산대 방향 칩을 붙여 클릭 한 번으로 다음 턴이 예산으로 진행되게 한다.
         if (usageOnlyFollowUp && stringList(response.get("quickReplies")).isEmpty()) {
-            response.put("quickReplies", USAGE_ONLY_BUDGET_DIRECTION_CHIPS);
+            response.put("quickReplies", usageBudgetDirectionChips(message, clarificationMinimumTotal(message)));
         }
         alignBuildCountMessage(response);
         ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
@@ -644,7 +678,7 @@ public class BuildChatService {
         }
         logBuildChatPath("LLM_FULL", startedNanos, userId, requestedAiProfile, false, guardStats,
                 "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs + " engineMs=" + engineMs);
-        return response;
+        return withConversationTransition(response, recommendationConversationTransition);
     }
 
     private Map<String, Object> buildScoreExplanationResponse(
@@ -1951,10 +1985,18 @@ public class BuildChatService {
 
     // 모호 요청 되묻기: 견적을 같이 던지지 않고 질문 + 선택지 칩만 준다. 칩 문구는 그 자체로
     // 완전한 프롬프트(용도+예산)라서 클릭 즉시 프리웜 티어 스냅샷에 적중해 즉답이 된다.
-    private Map<String, Object> clarificationResponse(String message, String rawFollowUp, List<String> reasons, boolean followUp) {
+    private Map<String, Object> clarificationResponse(
+            Map<String, Object> body,
+            String message,
+            String rawFollowUp,
+            List<String> reasons,
+            boolean followUp,
+            Long userId
+    ) {
         if (followUp) {
-            // 이미 한 번 되물었는데도 예산·용도를 못 읽었다 — 임의 예산(300만) 3안을 가정하지 않고,
-            // 사용자의 말을 인용해 무엇을 못 읽었는지 솔직하게 밝히고 한 번 더 정확히 묻는다.
+            // 누적 문맥에서도 예산·용도 슬롯이 하나도 확인되지 않은 경우다. 임의 예산을 가정하지
+            // 않고 사용자의 말을 인용해 입력 형식을 안내한다. 일부 슬롯이 확인된 후속 턴은 위의
+            // progressiveLowInformationClarificationResponse가 먼저 처리한다.
             String quoted = rawFollowUp == null || rawFollowUp.isBlank() ? "" : "말씀하신 \"" + rawFollowUp.trim() + "\"에서 ";
             Map<String, Object> retry = fastResponse(
                     "GENERAL",
@@ -1962,7 +2004,7 @@ public class BuildChatService {
                             + "용도(게임/사무/영상편집)를 한 번만 더 알려주시면 바로 추천해드릴게요.",
                     List.of("LOW_INFORMATION")
             );
-            retry.put("quickReplies", List.of("사무용 100만원", "게이밍 200만원", "게이밍 300만원", "영상편집 400만원"));
+            retry.put("quickReplies", initialBuildDirectionChips(clarificationMinimumTotal(message)));
             retry.put("clarification", MockData.map(
                     "missingSlots", List.of("budget", "useCase"),
                     "originalMessage", message
@@ -1971,23 +2013,344 @@ public class BuildChatService {
         }
         boolean resolutionHint = reasons != null && reasons.contains("RESOLUTION_CONTEXT");
         boolean usageOnly = reasons != null && reasons.contains("USAGE_ONLY");
+        boolean recipientContext = reasons != null && reasons.contains("RECIPIENT_CONTEXT");
+        String acknowledgement = recipientContext
+                ? contextualAcknowledgement(body, message, userId)
+                : usageOnly
+                ? usageAcknowledgement(message)
+                : null;
+        int minimum = clarificationMinimumTotal(message);
+        String minimumNotice = minimum > 0
+                ? clarificationMinimumNotice(message, usageOnly, minimum)
+                : "";
         String question = usageOnly
-                ? "요청하신 용도는 확인했어요. 생각하신 예산대를 골라주시면 그 범위에 맞춰 추천해드릴게요."
+                ? "생각하신 예산대를 골라주시면 그 범위에 맞춰 추천해드릴게요."
                 : resolutionHint
                 ? "어떤 해상도 기준으로 맞출까요? 해상도에 따라 필요한 그래픽카드 급이 크게 달라져요. 예산까지 알려주시면 바로 추천해드릴게요."
+                : recipientContext
+                ? "견적을 맞추려면 예산과 주로 사용할 용도가 필요합니다. 생각하신 예산과 할 일(게임, 문서 작업, 영상 편집 등)을 알려주세요."
                 : "용도와 예산을 알려주시면 정확하게 맞춰드릴 수 있어요. 아래에서 골라도 되고, 직접 입력해도 돼요.";
         List<String> quickReplies = usageOnly
-                ? USAGE_ONLY_BUDGET_DIRECTION_CHIPS
+                ? usageBudgetDirectionChips(message, minimum)
                 : resolutionHint
                 ? List.of("FHD 게이밍 150만원", "QHD 게이밍 250만원", "4K 게이밍 400만원")
-                : List.of("사무용 100만원", "게이밍 200만원", "게이밍 300만원", "영상편집 400만원");
-        Map<String, Object> response = fastResponse("GENERAL", question, List.of("LOW_INFORMATION"));
+                : initialBuildDirectionChips(minimum);
+        String responseMessage = String.join(" ", java.util.stream.Stream.of(acknowledgement, minimumNotice, question)
+                .filter(value -> value != null && !value.isBlank())
+                .toList());
+        Map<String, Object> response = fastResponse("GENERAL", responseMessage, List.of("LOW_INFORMATION"));
         response.put("quickReplies", quickReplies);
         response.put("clarification", MockData.map(
                 "missingSlots", usageOnly ? List.of("budget") : List.of("budget", "useCase"),
                 "originalMessage", message
         ));
         return response;
+    }
+
+    private Optional<Map<String, Object>> progressiveLowInformationClarificationResponse(
+            String message,
+            String rawFollowUp,
+            String clarificationOriginal,
+            boolean mergedClarificationReply,
+            BuildChatIntentDecision currentDecision
+    ) {
+        if (!mergedClarificationReply || clarificationOriginal == null) {
+            return Optional.empty();
+        }
+        BuildChatIntentDecision originalDecision = intentRouter.decide(
+                Map.of("message", clarificationOriginal),
+                clarificationOriginal
+        );
+        if (originalDecision.intent() != BuildChatIntent.ASK_CLARIFICATION
+                || !originalDecision.ambiguityReasons().contains("LOW_INFORMATION")) {
+            return Optional.empty();
+        }
+        if (currentDecision.intent() != BuildChatIntent.ASK_CLARIFICATION
+                && currentDecision.intent() != BuildChatIntent.BUILD_RECOMMEND) {
+            return Optional.empty();
+        }
+        // 예산 무관/끝판왕처럼 서버가 즉시 추천할 수 있다고 판정한 후속 답변은 가로채지 않는다.
+        if (BuildChatIntentRouter.hasOpenBudget(message)) {
+            return Optional.empty();
+        }
+
+        boolean budgetResolved = budgetIntent(message).hasBudget();
+        boolean useCaseResolved = BuildChatIntentRouter.hasBuildUseCase(message);
+
+        if (useCaseResolved && !budgetResolved) {
+            int minimum = clarificationMinimumTotal(message);
+            String minimumNotice = minimum > 0 ? clarificationMinimumNotice(message, true, minimum) : "";
+            String responseMessage = String.join(" ", java.util.stream.Stream.of(
+                            progressiveUsageAcknowledgement(clarificationOriginal, message),
+                            minimumNotice,
+                            "그럼 이제 생각하신 예산대만 알려주세요. 그 범위에서 어울리는 조합을 바로 찾아볼게요."
+                    )
+                    .filter(value -> value != null && !value.isBlank())
+                    .toList());
+            Map<String, Object> response = fastResponse("GENERAL", responseMessage, List.of("LOW_INFORMATION"));
+            response.put("quickReplies", usageBudgetDirectionChips(message, minimum));
+            response.put("clarification", MockData.map(
+                    "missingSlots", List.of("budget"),
+                    "originalMessage", message
+            ));
+            return Optional.of(response);
+        }
+
+        if (budgetResolved && !useCaseResolved) {
+            int budget = budgetIntent(message).budget();
+            String budgetLabel = formatBudgetLabel(budget);
+            String recipient = recipientSubjectPhrase(clarificationOriginal);
+            String useCaseQuestion = recipient == null
+                    ? "이제 이 PC를 주로 어떤 용도로 사용할지 알려주시면 그에 맞는 구성으로 이어서 추천해드릴게요."
+                    : recipient + " 이 PC로 주로 무엇을 하실지 알려주시면 그에 맞는 구성으로 이어서 추천해드릴게요.";
+            Map<String, Object> response = fastResponse(
+                    "GENERAL",
+                    "좋아요. 예산은 " + budgetLabel + "으로 잡을게요. " + useCaseQuestion,
+                    List.of("LOW_INFORMATION")
+            );
+            response.put("quickReplies", List.of(
+                    budgetLabel + " 사무용 PC 추천해줘",
+                    budgetLabel + " 게이밍 PC 추천해줘",
+                    budgetLabel + " 영상편집 PC 추천해줘",
+                    budgetLabel + " 개발용 PC 추천해줘"
+            ));
+            response.put("clarification", MockData.map(
+                    "missingSlots", List.of("useCase"),
+                    "originalMessage", message
+            ));
+            return Optional.of(response);
+        }
+
+        return Optional.empty();
+    }
+
+    private static String progressiveUsageAcknowledgement(String clarificationOriginal, String combinedMessage) {
+        String recipient = recipientSubjectPhrase(clarificationOriginal);
+        String usage = usageLabel(inferUsageTags(combinedMessage));
+        if (recipient != null) {
+            return "좋아요. " + recipient + " 사용하실 " + usage + " PC로 맞추면 되겠네요.";
+        }
+        return "좋아요. 앞서 말씀하신 PC는 " + usage + " 용도로 맞추면 되겠네요.";
+    }
+
+    private static List<String> usageBudgetDirectionChips(String message, int minimumTotal) {
+        int[] budgets = friendlyBudgetAmounts(minimumTotal);
+        String usage = usageQuickReplyLabel(message);
+        String suffix = usage + " PC 추천해줘";
+        return List.of(
+                formatBudgetLabel(budgets[0]) + " " + suffix,
+                formatBudgetLabel(budgets[1]) + " " + suffix,
+                formatBudgetLabel(budgets[2]) + " " + suffix,
+                "예산 무관 고성능 " + suffix
+        );
+    }
+
+    private List<String> initialBuildDirectionChips(int basicMinimumTotal) {
+        int[] officeBudgets = friendlyBudgetAmounts(basicMinimumTotal);
+        int gpuMinimum = feasibilityService.usageMinimumTotal(List.of("GAMING"));
+        int[] gamingBudgets = friendlyBudgetAmounts(gpuMinimum > 0 ? gpuMinimum : basicMinimumTotal);
+        return List.of(
+                formatBudgetLabel(officeBudgets[0]) + " 사무용 PC 추천해줘",
+                formatBudgetLabel(gamingBudgets[0]) + " 게이밍 PC 추천해줘",
+                formatBudgetLabel(gamingBudgets[1]) + " 게이밍 PC 추천해줘",
+                formatBudgetLabel(gamingBudgets[2]) + " 영상편집 PC 추천해줘"
+        );
+    }
+
+    private static int[] friendlyBudgetAmounts(int minimumTotal) {
+        long firstBudget = minimumTotal > 0
+                ? ((long) minimumTotal + 499_999L) / 500_000L * 500_000L
+                : 1_000_000L;
+        firstBudget = Math.max(1_000_000L, firstBudget);
+        long step = firstBudget == 1_000_000L || firstBudget >= 2_000_000L
+                ? 1_000_000L
+                : 500_000L;
+        return new int[]{
+                clampWon(firstBudget),
+                clampWon(firstBudget + step),
+                clampWon(firstBudget + step * 2L)
+        };
+    }
+
+    private static String usageQuickReplyLabel(String message) {
+        List<String> tags = inferUsageTags(message);
+        if (!tags.isEmpty()) {
+            return usageLabel(tags);
+        }
+        String normalized = normalizeCommand(message);
+        if (containsAnyNormalized(normalized, "사무", "문서작업", "엑셀")) {
+            return "사무용";
+        }
+        if (containsAnyNormalized(normalized, "방송", "스트리밍", "송출", "유튜브")) {
+            return "방송용";
+        }
+        if (containsAnyNormalized(normalized, "포토샵", "디자인")) {
+            return "디자인용";
+        }
+        if (containsAnyNormalized(normalized, "저소음", "조용")) {
+            return "저소음";
+        }
+        if (containsAnyNormalized(normalized, "컴팩트", "작은")) {
+            return "컴팩트";
+        }
+        return "맞춤형";
+    }
+
+    private static String buildRecommendationConversationTransition(
+            String message,
+            boolean mergedClarificationReply,
+            BuildChatIntentDecision decision,
+            BudgetIntent budgetIntent
+    ) {
+        if (!mergedClarificationReply
+                || decision.intent() != BuildChatIntent.BUILD_RECOMMEND
+                || !BuildChatIntentRouter.hasBuildUseCase(message)
+                || (!budgetIntent.hasBudget() && !BuildChatIntentRouter.hasOpenBudget(message))) {
+            return null;
+        }
+        String recipient = recipientSubjectPhrase(message);
+        String usage = usageLabel(inferUsageTags(message));
+        String budgetPhrase = BuildChatIntentRouter.hasOpenBudget(message)
+                ? "예산 제한 없이"
+                : switch (budgetIntent.mode()) {
+                    case "MAX" -> formatBudgetLabel(budgetIntent.budget()) + " 이내로";
+                    case "MIN" -> formatBudgetLabel(budgetIntent.budget()) + " 이상으로";
+                    default -> formatBudgetLabel(budgetIntent.budget()) + " 예산으로";
+                };
+        String buildSubject = recipient == null
+                ? usage + " PC를"
+                : recipient + " 사용하실 " + usage + " PC를";
+        return "좋아요. " + buildSubject + " " + budgetPhrase + " 맞춰볼게요.";
+    }
+
+    private static Map<String, Object> withConversationTransition(
+            Map<String, Object> response,
+            String transition
+    ) {
+        if (transition == null || transition.isBlank() || objectMaps(response.get("builds")).isEmpty()) {
+            return response;
+        }
+        Map<String, Object> conversational = new LinkedHashMap<>(response);
+        String currentMessage = text(response.get("message"));
+        conversational.put("message", currentMessage == null || currentMessage.isBlank()
+                ? transition
+                : transition + " " + currentMessage);
+        return conversational;
+    }
+
+    private static String recipientSubjectPhrase(String message) {
+        String compact = normalizeCommand(message);
+        String relation = null;
+        if (compact.contains("부모님")) {
+            relation = "부모님이";
+        } else if (compact.contains("아들")) {
+            relation = "아드님이";
+        } else if (compact.contains("딸")) {
+            relation = "따님이";
+        } else if (containsAnyNormalized(compact, "자녀", "아이")) {
+            relation = "자녀분이";
+        } else if (containsAnyNormalized(compact, "아버지", "아빠")) {
+            relation = "아버님이";
+        } else if (containsAnyNormalized(compact, "어머니", "엄마")) {
+            relation = "어머님이";
+        } else if (compact.contains("조카")) {
+            relation = "조카분이";
+        } else if (compact.contains("동생")) {
+            relation = "동생분이";
+        } else if (compact.contains("친구")) {
+            relation = "친구분이";
+        } else if (containsAnyNormalized(compact, "배우자", "아내", "남편")) {
+            relation = "배우자분이";
+        } else if (compact.contains("할머니")) {
+            relation = "할머님이";
+        } else if (compact.contains("할아버지")) {
+            relation = "할아버님이";
+        }
+        String grade = schoolGradeLabel(compact);
+        if (relation != null) {
+            return grade == null ? relation : grade + " " + relation;
+        }
+        return grade == null ? null : grade + " 학생이";
+    }
+
+    private static String schoolGradeLabel(String compact) {
+        for (String[] school : List.of(
+                new String[]{"초등학교", "초", "[1-6]"},
+                new String[]{"중학교", "중", "[1-3]"},
+                new String[]{"고등학교", "고", "[1-3]"}
+        )) {
+            Matcher full = Pattern.compile(school[0] + "(" + school[2] + ")(?:학년)?").matcher(compact);
+            if (full.find()) {
+                return school[0] + " " + full.group(1) + "학년";
+            }
+            Matcher shortened = Pattern.compile(school[1] + "(" + school[2] + ")(?:학년)?").matcher(compact);
+            if (shortened.find()) {
+                return school[0] + " " + shortened.group(1) + "학년";
+            }
+        }
+        return null;
+    }
+
+    private String contextualAcknowledgement(
+            Map<String, Object> body,
+            String message,
+            Long userId
+    ) {
+        String fallback = fallbackContextAcknowledgement(message);
+        try {
+            Optional<String> generated = aiChatEngine.acknowledgeLowInformationContext(new AiChatEngineRequest(
+                    message,
+                    chatSurface(body),
+                    null,
+                    text(body.get("buildId")),
+                    text(body.get("draftId")),
+                    Map.of("responsePolicy", "Acknowledge only the explicit recipient or situation. Do not infer use or budget."),
+                    userId
+            ), CONTEXTUAL_CLARIFICATION_PROFILE);
+            return safeContextAcknowledgement(generated == null ? null : generated.orElse(null), fallback);
+        } catch (RuntimeException error) {
+            log.warn("Build Chat contextual clarification LLM unavailable; returning deterministic acknowledgement", error);
+            return fallback;
+        }
+    }
+
+    private int clarificationMinimumTotal(String message) {
+        List<String> usageTags = inferUsageTags(message);
+        int minimum = feasibilityService.usageMinimumTotal(usageTags);
+        return minimum > 0 ? minimum : minimumBuildTotal();
+    }
+
+    private static String clarificationMinimumNotice(String message, boolean usageOnly, int minimum) {
+        int roundedUp = ((minimum + 9_999) / 10_000) * 10_000;
+        String subject = usageOnly ? usageLabel(inferUsageTags(message)) + " PC" : "기본 PC";
+        return "현재 내부 자산 기준 " + subject + " 구성은 최소 약 "
+                + formatBudgetLabel(roundedUp) + "부터 가능합니다.";
+    }
+
+    private static String usageAcknowledgement(String message) {
+        List<String> usageTags = inferUsageTags(message);
+        return usageTags.isEmpty() ? "요청하신 용도는 확인했어요." : usageLabel(usageTags) + " PC를 찾고 계시는군요.";
+    }
+
+    private static String safeContextAcknowledgement(String generated, String fallback) {
+        String value = generated == null ? null : generated.trim().replaceAll("\\s+", " ");
+        if (value == null || value.isBlank() || value.length() > 100 || value.contains("?")
+                || value.contains("예산") || value.matches(".*[0-9][0-9,]*\\s*(?:만)?원.*")) {
+            return fallback;
+        }
+        return value;
+    }
+
+    private static String fallbackContextAcknowledgement(String message) {
+        String source = message == null ? "" : message.trim().replaceAll("\\s+", " ");
+        String context = source.replaceFirst(
+                "(?i)\\s*(?:PC|피시|컴퓨터|본체|조립컴)(?:를|을|가|이)?\\s*(?:하나\\s*)?(?:맞출|맞추려|사려|살|추천|장만|구매).*$",
+                ""
+        ).trim();
+        if (context.isBlank() || context.length() > 40) {
+            return "말씀하신 대상과 상황에 맞는 PC를 찾고 계시는군요.";
+        }
+        return "말씀하신 \"" + context + "\" 상황에 맞는 PC를 찾고 계시는군요.";
     }
 
     private Map<String, Object> fastResponse(String answerType, String message, List<String> warnings) {
@@ -3468,7 +3831,7 @@ public class BuildChatService {
         if (containsAnyNormalized(normalized, "영상", "편집", "프리미어", "렌더", "블렌더", "3d")) {
             tags.add("VIDEO_EDIT");
         }
-        if (containsAnyNormalized(normalized, "게임", "게이밍", "배그", "발로란트", "오버워치", "로스트아크", "롤", "디아블로", "fps")) {
+        if (containsAnyNormalized(normalized, "게임", "게이밍", "qhd", "fhd", "4k", "배그", "발로란트", "오버워치", "로스트아크", "롤", "디아블로", "fps")) {
             tags.add("GAMING");
         }
         if (containsAnyNormalized(normalized, "개발", "코딩", "도커", "docker", "ide")) {
@@ -4051,15 +4414,41 @@ public class BuildChatService {
         return Optional.of(response);
     }
 
-    private static boolean isSelfContainedClarificationReply(String message) {
-        if (detectPartCategory(message) == null) {
+    private static boolean isSelfContainedClarificationReply(
+            String message,
+            BuildChatIntentDecision standaloneDecision,
+            BuildChatIntentDecision previousDecision
+    ) {
+        String normalized = normalizeCommand(message);
+        if (detectPartCategory(message) != null
+                && containsAnyNormalized(
+                        normalized,
+                        "추천", "바꿔", "교체", "담아", "넣어", "추가",
+                        "비교", "성능", "fps", "상세", "보여", "열어")) {
+            return true;
+        }
+        if (standaloneDecision == null) {
             return false;
         }
-        String normalized = normalizeCommand(message);
-        return containsAnyNormalized(
-                normalized,
-                "추천", "바꿔", "교체", "담아", "넣어", "추가",
-                "비교", "성능", "fps", "상세", "보여", "열어");
+
+        BuildChatIntent standaloneIntent = standaloneDecision.intent();
+        BuildChatIntent previousIntent = previousDecision == null ? null : previousDecision.intent();
+        return switch (standaloneIntent) {
+            // 새 증상·점수·위치 질문은 그 자체로 대상이 완결된다. 이전 상담/추천 문장을 합치면
+            // 라우터 우선순위 때문에 다른 기능이 가로채므로 새 의도로 시작한다.
+            case SUPPORT_GUIDANCE, EXPLAIN_BUILD_SCORE, LOCATE_BOARD_PART -> true;
+            // "CPU를 9700X로 바꾸면?"처럼 원문에 대상이 명시된 비교는 독립 요청이다. 반면 변경
+            // 미리보기 직후의 "바꾸면 얼마나 달라져?"는 이전 후보가 대상이므로 문맥을 합친다.
+            case SIMULATE_REPLACEMENT -> detectPartCategory(message) != null
+                    || PartRouteResolver.inferCategory(message) != null;
+            // 저정보 견적 대화(대상/용도 → 예산)의 마지막 답은 기존 문맥을 보존해야 한다.
+            // 그 외 상담·시뮬레이션 뒤의 완전한 견적 요청은 독립 요청으로 처리한다.
+            case BUILD_RECOMMEND -> previousIntent != BuildChatIntent.ASK_CLARIFICATION;
+            // 새 저정보 질문도 이전 저정보 견적의 슬롯 답변일 때만 합성한다.
+            case ASK_CLARIFICATION -> previousIntent != BuildChatIntent.ASK_CLARIFICATION;
+            // "그중 드라이버 가능성은?"처럼 단독으로 분류하기 어려운 후속 설명은 기존 문맥을 쓴다.
+            case UNSUPPORTED -> false;
+        };
     }
 
     // 그래프(드래프트) 기반 견적 완성: 담긴 부품은 고정하고 빈 카테고리만 채운다. LLM 미경유.

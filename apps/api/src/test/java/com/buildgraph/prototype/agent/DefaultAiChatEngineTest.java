@@ -841,6 +841,44 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void lowInformationAcknowledgementUsesCompactMiniSchemaWithoutRag() {
+        when(openAiResponsesClient.isConfigured()).thenReturn(true);
+        when(openAiResponsesClient.createStructuredJsonResult(
+                anyString(),
+                anyString(),
+                eq("buildgraph_low_information_acknowledgement"),
+                any(),
+                eq("gpt-5.4-mini"),
+                eq("low"),
+                eq(96)
+        )).thenReturn(new LlmResponseResult(
+                "{\"acknowledgement\":\"중학교 3학년 아드님이 사용할 PC를 찾고 계시는군요.\"}",
+                LlmProvider.OPENAI,
+                "gpt-5.4-mini",
+                "low",
+                520,
+                24,
+                8,
+                32,
+                12
+        ));
+
+        String acknowledgement = engine.acknowledgeLowInformationContext(new AiChatEngineRequest(
+                "중3 아들 피시 맞출건데 추천해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ), "BUILD_CHAT_54_MINI_FAST").orElseThrow();
+
+        assertThat(acknowledgement).isEqualTo("중학교 3학년 아드님이 사용할 PC를 찾고 계시는군요.");
+        verify(agentRagRetrievalService, never()).retrieveEvidenceSet(any(), any(), anyString(), anyInt());
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void boardFocusStructuredOutputSchemaUsesOnlySupportedArrayKeywords() throws Exception {
         Method schemaMethod = DefaultAiChatEngine.class.getDeclaredMethod("boardFocusIntentSchema");

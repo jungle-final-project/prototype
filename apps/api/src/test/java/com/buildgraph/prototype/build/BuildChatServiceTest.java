@@ -173,6 +173,101 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void supportContextDoesNotCaptureAStandaloneBudgetRecommendation() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.of(Map.of(
+                "answerType", "BUDGET",
+                "message", "300만원 예산 추천 조합입니다.",
+                "builds", List.of(Map.of("id", "build-300")),
+                "warnings", List.of()
+        )));
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                mock(AiChatEngine.class),
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "300만원 견적 추천해줘",
+                "clarificationContext", Map.of("originalMessage", "게임하다 화면이 자꾸 멈춰")
+        ));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("supportGuidance")).isNull();
+        assertThat(response.get("builds")).asList().hasSize(1);
+        verify(cacheService).lookup(argThat(body ->
+                        "300만원 견적 추천해줘".equals(body.get("message"))
+                                && !body.containsKey("clarificationContext")),
+                any(),
+                any());
+    }
+
+    @Test
+    void simulationContextDoesNotCaptureANewSupportSymptom() {
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                mock(AiChatEngine.class),
+                BuildChatCacheService.disabled()
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "게임하다 화면이 자꾸 멈춰",
+                "clarificationContext", Map.of("originalMessage", "CPU를 9700X로 바꾸면 성능 어때?")
+        ));
+
+        assertThat(response.get("supportGuidance")).isNotNull();
+        assertThat(response.get("simulation")).isNull();
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("originalMessage", "게임하다 화면이 자꾸 멈춰");
+    }
+
+    @Test
+    void recommendationContextDoesNotCaptureANewSupportSymptom() {
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                mock(AiChatEngine.class),
+                BuildChatCacheService.disabled()
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "게임하다 화면이 자꾸 멈춰",
+                "clarificationContext", Map.of("originalMessage", "300만원 견적 추천해줘")
+        ));
+
+        assertThat(response.get("supportGuidance")).isNotNull();
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("originalMessage", "게임하다 화면이 자꾸 멈춰");
+    }
+
+    @Test
+    void supportContextDoesNotCaptureAnExplicitReplacementSimulation() {
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                mock(AiChatEngine.class),
+                BuildChatCacheService.disabled()
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "CPU를 9700X로 바꾸면 성능이 어떻게 돼?",
+                "clarificationContext", Map.of("originalMessage", "게임하다 화면이 자꾸 멈춰")
+        ));
+
+        assertThat(response.get("supportGuidance")).isNull();
+        assertThat(response.get("warnings")).asList().contains("SIMULATION_TARGET_NOT_FOUND");
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("originalMessage", "CPU를 9700X로 바꾸면 성능이 어떻게 돼?");
+    }
+
+    @Test
     void shoppingSymptomGuidanceOffersBoundedPossibilitiesForEachSupportedCategory() {
         BuildChatService service = new BuildChatService(
                 mock(JdbcTemplate.class),
@@ -1833,12 +1928,255 @@ class BuildChatServiceTest {
         assertThat(response.get("builds")).asList().isEmpty();
         assertThat(response.get("warnings")).asList().contains("LOW_INFORMATION");
         // 되묻기에는 그대로 보낼 수 있는 완전한 프롬프트 칩과, 다음 턴에 에코할 원 요청이 담긴다.
-        assertThat(response.get("quickReplies")).asList().contains("게이밍 200만원");
+        assertThat(response.get("quickReplies")).asList().contains("200만원 게이밍 PC 추천해줘");
         @SuppressWarnings("unchecked")
         Map<String, Object> clarification = (Map<String, Object>) response.get("clarification");
         assertThat(clarification).containsEntry("originalMessage", "아무거나 사줘");
         assertThat(response).doesNotContainKeys("actions", "partRecommendation", "simulation");
         verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void buildChatAcknowledgesRecipientContextAndAddsServerMinimumBeforeAskingMissingInputs() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        stubMinimumPartPrices(jdbcTemplate, 200_000);
+        when(aiChatEngine.acknowledgeLowInformationContext(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST")))
+                .thenReturn(Optional.of("중학교 3학년 아드님이 사용할 PC를 찾고 계시는군요."));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(
+                Map.of("message", "중3 아들 피시 맞출건데 추천해줘"),
+                "BUILD_CHAT_54_MINI_FAST"
+        );
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("message")).asString()
+                .contains("중학교 3학년 아드님")
+                .contains("최소 약 140만원")
+                .contains("예산과 주로 사용할 용도")
+                .doesNotContain("게임용으로 이해");
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("warnings")).asList().contains("LOW_INFORMATION");
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("missingSlots", List.of("budget", "useCase"))
+                .containsEntry("originalMessage", "중3 아들 피시 맞출건데 추천해줘");
+        assertThat(response.get("quickReplies")).asList().containsExactly(
+                "150만원 사무용 PC 추천해줘",
+                "200만원 게이밍 PC 추천해줘",
+                "300만원 게이밍 PC 추천해줘",
+                "400만원 영상편집 PC 추천해줘"
+        );
+        verify(aiChatEngine).acknowledgeLowInformationContext(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST"));
+        verifyNoInteractions(cacheService);
+    }
+
+    @Test
+    void buildChatKeepsContextualClarificationAvailableWhenAcknowledgementLlmFails() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        stubMinimumPartPrices(jdbcTemplate, 100_000);
+        when(aiChatEngine.acknowledgeLowInformationContext(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenThrow(new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED, "OPENAI_API_KEY가 필요합니다."));
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                mock(BuildChatCacheService.class)
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "중3 아들 피시 맞출건데 추천해줘"));
+
+        assertThat(response.get("message")).asString()
+                .contains("중3 아들")
+                .contains("최소 약 70만원")
+                .contains("예산과 주로 사용할 용도");
+        assertThat(response.get("warnings")).asList().contains("LOW_INFORMATION");
+        assertThat(response.get("builds")).asList().isEmpty();
+    }
+
+    @Test
+    void buildChatDoesNotAskForUseCaseAgainWhenRecipientAndUseCaseAreBothExplicit() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        stubMinimumPartPrices(jdbcTemplate, 100_000);
+        when(aiChatEngine.acknowledgeLowInformationContext(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST")))
+                .thenReturn(Optional.of("중학교 3학년 아드님이 롤을 즐길 PC를 찾고 계시는군요."));
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                mock(BuildChatCacheService.class)
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "중3 아들이 롤 할 피시 추천해줘"));
+
+        assertThat(response.get("message")).asString()
+                .contains("롤을 즐길 PC")
+                .contains("게이밍 PC 구성은 최소 약 80만원")
+                .contains("예산대")
+                .doesNotContain("주로 사용할 용도가 필요");
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("missingSlots", List.of("budget"));
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactlyElementsOf(List.of(
+                        "100만원 게이밍 PC 추천해줘",
+                        "200만원 게이밍 PC 추천해줘",
+                        "300만원 게이밍 PC 추천해줘",
+                        "예산 무관 고성능 게이밍 PC 추천해줘"
+                ));
+    }
+
+    @Test
+    void buildChatCarriesRecipientConversationForwardWhenUseCaseIsProvidedFirst() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        stubMinimumPartPrices(jdbcTemplate, 100_000);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "게임용으로 쓸듯",
+                "clarificationContext", Map.of(
+                        "originalMessage", "중3 아들 피시 맞춰줄건데 피시 추천해줘"
+                )
+        ));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("message")).asString()
+                .startsWith("좋아요. 중학교 3학년 아드님이 사용하실 게이밍 PC로 맞추면 되겠네요.")
+                .contains("게이밍 PC")
+                .contains("최소 약 80만원")
+                .contains("예산대만")
+                .doesNotContain("정확히 읽지 못했어요")
+                .doesNotContain("용도를 알려");
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("quickReplies")).asList().containsExactly(
+                "100만원 게이밍 PC 추천해줘",
+                "200만원 게이밍 PC 추천해줘",
+                "300만원 게이밍 PC 추천해줘",
+                "예산 무관 고성능 게이밍 PC 추천해줘"
+        );
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("missingSlots", List.of("budget"))
+                .containsEntry(
+                        "originalMessage",
+                        "중3 아들 피시 맞춰줄건데 피시 추천해줘 게임용으로 쓸듯"
+                );
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void buildChatKeepsAnAlreadyKnownUseCaseWhenTheNextReplyAddsNoSlot() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        stubMinimumPartPrices(jdbcTemplate, 100_000);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                mock(AiChatEngine.class),
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "아직 잘 모르겠어",
+                "clarificationContext", Map.of("originalMessage", "게임용 PC 필요해")
+        ));
+
+        assertThat(response.get("message")).asString()
+                .contains("게이밍 PC")
+                .contains("예산대만")
+                .doesNotContain("예산과 용도");
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("missingSlots", List.of("budget"));
+        verifyNoInteractions(cacheService);
+    }
+
+    @Test
+    void buildChatCarriesRecipientConversationForwardWhenBudgetIsProvidedFirst() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "200만원 정도",
+                "clarificationContext", Map.of(
+                        "originalMessage", "중3 아들 피시 맞춰줄건데 피시 추천해줘"
+                )
+        ));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("message")).asString()
+                .contains("예산은 200만원으로 잡을게요")
+                .contains("중학교 3학년 아드님이 이 PC로 주로 무엇을 하실지")
+                .doesNotContain("정확히 읽지 못했어요")
+                .doesNotContain("예산을 알려");
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("quickReplies")).asList()
+                .contains("200만원 게이밍 PC 추천해줘");
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("missingSlots", List.of("useCase"))
+                .containsEntry(
+                        "originalMessage",
+                        "중3 아들 피시 맞춰줄건데 피시 추천해줘 200만원 정도"
+                );
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void buildChatContinuesToRecommendationAfterProgressiveSlotsAreComplete() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.of(Map.of(
+                "answerType", "BUDGET",
+                "message", "추천 조합을 준비했습니다.",
+                "builds", List.of(Map.of("id", "build-1")),
+                "warnings", List.of()
+        )));
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "200만원 정도",
+                "clarificationContext", Map.of(
+                        "originalMessage", "중3 아들 피시 맞춰줄건데 피시 추천해줘 게임용으로 쓸듯"
+                )
+        ));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("builds")).asList().hasSize(1);
+        assertThat(response.get("message")).asString()
+                .startsWith("좋아요. 중학교 3학년 아드님이 사용하실 게이밍 PC를 200만원 예산으로 맞춰볼게요.")
+                .contains("추천 조합을 준비했습니다.");
+        verify(cacheService).lookup(argThat(body ->
+                        "중3 아들 피시 맞춰줄건데 피시 추천해줘 게임용으로 쓸듯 200만원 정도"
+                                .equals(body.get("message"))),
+                any(),
+                any());
+        verifyNoInteractions(aiChatEngine);
     }
 
     @Test
@@ -1989,7 +2327,7 @@ class BuildChatServiceTest {
                 .contains("\"알아서 해줘\"")
                 .contains("정확히 읽지 못했어요");
         assertThat(response.get("builds")).asList().isEmpty();
-        assertThat(response.get("quickReplies")).asList().contains("게이밍 200만원");
+        assertThat(response.get("quickReplies")).asList().contains("200만원 게이밍 PC 추천해줘");
         @SuppressWarnings("unchecked")
         Map<String, Object> clarification = (Map<String, Object>) response.get("clarification");
         assertThat((String) clarification.get("originalMessage")).contains("컴퓨터 하나 맞춰줘");
@@ -2780,10 +3118,10 @@ class BuildChatServiceTest {
         // 예산대 방향 칩 4개가 붙는다("N만원대" 문구는 다음 턴 parseBudgetWon으로 예산이 잡힌다).
         assertThat(response.get("quickReplies")).asList()
                 .containsExactly(
-                        "100만원대로 추천해줘",
-                        "200만원대로 추천해줘",
-                        "300만원대로 추천해줘",
-                        "예산 무관 고성능으로 추천해줘");
+                        "100만원 게이밍 PC 추천해줘",
+                        "200만원 게이밍 PC 추천해줘",
+                        "300만원 게이밍 PC 추천해줘",
+                        "예산 무관 고성능 게이밍 PC 추천해줘");
         assertThat(response.get("clarification")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
                 .containsEntry("missingSlots", List.of("budget"))
                 .containsEntry("originalMessage", "게임용 컴퓨터 추천해줘");
@@ -3498,5 +3836,22 @@ class BuildChatServiceTest {
                 "benchmark_score", benchmarkScore,
                 "benchmark_summary", name + " benchmark"
         );
+    }
+
+    private static void stubMinimumPartPrices(JdbcTemplate jdbcTemplate, int unitPrice) {
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenAnswer(invocation -> {
+            Object parameter = invocation.getArgument(1);
+            String category = parameter instanceof Object[] params
+                    ? String.valueOf(params[0])
+                    : String.valueOf(parameter);
+            return List.of(Map.of(
+                    "id", "minimum-" + category.toLowerCase(java.util.Locale.ROOT),
+                    "name", category + " minimum part",
+                    "price", unitPrice,
+                    "capacity_gb", "RAM".equals(category) ? 16 : 0,
+                    "vram_gb", "GPU".equals(category) ? 8 : 0,
+                    "wattage_w", "PSU".equals(category) ? 600 : 0
+            ));
+        });
     }
 }
