@@ -113,6 +113,9 @@ export function CompositeScoreGauge({
     ? `${roundedDelta > 0 ? '+' : ''}${roundedDelta}점`
     : null;
   const isCompact = size === 'compact';
+  const arcPath = isCompact
+    ? 'M 8 112 A 102 86 0 0 1 212 112'
+    : 'M 24 112 A 86 86 0 0 1 196 112';
 
   useEffect(() => {
     const previousTarget = targetRef.current;
@@ -178,11 +181,12 @@ export function CompositeScoreGauge({
         <svg
           className={`w-full overflow-visible ${styles.svg}`}
           viewBox={isCompact ? '0 12 220 108' : '0 0 220 132'}
+          preserveAspectRatio={isCompact ? 'none' : 'xMidYMid meet'}
           role="img"
           aria-hidden="true"
         >
           <path
-            d="M 24 112 A 86 86 0 0 1 196 112"
+            d={arcPath}
             fill="none"
             className="stroke-slate-200"
             strokeWidth={styles.strokeWidth}
@@ -190,7 +194,7 @@ export function CompositeScoreGauge({
             pathLength={100}
           />
           <path
-            d="M 24 112 A 86 86 0 0 1 196 112"
+            d={arcPath}
             fill="none"
             className={fillClass}
             strokeWidth={styles.strokeWidth}
