@@ -3680,7 +3680,7 @@ test('persists an assembly request, selects an offer, and pays points after Toss
   await expect(page.getByText('박준호 기사')).toBeVisible();
   await expect(page.getByText('김도윤 기사')).toBeVisible();
   await expect(page.getByText('최민석 기사')).toBeVisible();
-  await expect(page.getByText('BuildGraph 기사 2/2')).toBeVisible();
+  await expect(page.getByText('Dazzajo 기사 2/2')).toBeVisible();
   await expect(page.getByText('외부 파트너 1/3')).toBeVisible();
 
   const balancedOffer = page.locator('article').filter({ hasText: '박준호 기사' });
