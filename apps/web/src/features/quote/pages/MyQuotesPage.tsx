@@ -694,7 +694,7 @@ function QuoteSummaryCard({ label, column }: { label: 'A' | 'B'; column: Compari
           <div className="mt-2 grid grid-cols-2 divide-x divide-slate-200">
             <div className="pr-3">
               <div className="text-[10px] font-bold text-slate-400">총 견적 금액</div>
-              <div className="mt-1 text-lg font-black tracking-tight text-commerce-ink">{column.build.totalPrice.toLocaleString('ko-KR')}원</div>
+              <div className="mt-1 text-lg font-black tracking-tight text-red-600">{column.build.totalPrice.toLocaleString('ko-KR')}원</div>
             </div>
             <div className="pl-3">
               <div className="text-[10px] font-bold text-slate-400">종합 점수</div>
@@ -710,9 +710,9 @@ function QuoteSummaryCard({ label, column }: { label: 'A' | 'B'; column: Compari
 function ScoreValue({ column }: { column: ComparisonColumn }) {
   if (column.isLoading) return <div className="mt-1 h-6 w-20 animate-pulse rounded bg-slate-200" />;
   if (column.isError) return <div className="mt-1 text-xs font-black text-slate-500">조회 실패</div>;
-  if (!column.compositeScore) return <div className="mt-1 text-xs font-black text-slate-400">자료 없음</div>;
+  if (!column.compositeScore) return <div className="mt-1 text-xs font-black text-slate-500">자료 없음</div>;
   return (
-    <div className="mt-1 text-lg font-black tracking-tight text-commerce-ink">
+    <div className="mt-1 text-lg font-black tracking-tight text-red-600">
       {column.compositeScore.score.toLocaleString('ko-KR')}점
       <span className="ml-1 text-[10px] font-bold text-slate-400">/ {column.compositeScore.maxScore.toLocaleString('ko-KR')}</span>
     </div>
@@ -734,7 +734,7 @@ function ComparisonDeltaCard({ columnA, columnB }: { columnA: ComparisonColumn; 
 }
 
 function ComparisonResultLine({ label, testId, outcome }: { label: string; testId: string; outcome: ComparisonOutcome }) {
-  const emphasisClass = outcome.tone === 'positive' ? 'text-emerald-700' : outcome.tone === 'muted' ? 'text-slate-400' : 'text-slate-600';
+  const emphasisClass = outcome.tone === 'positive' ? 'text-red-600' : outcome.tone === 'muted' ? 'text-slate-500' : 'text-slate-600';
   return (
     <div className="grid grid-cols-[56px_minmax(0,1fr)] items-baseline gap-2 text-sm">
       <span className="text-[10px] font-black text-slate-400">{label}</span>
@@ -794,7 +794,7 @@ function PartSummary({ items, meta, side }: { items: BuildItem[]; meta: string[]
     ? 'col-start-1 text-right md:col-start-1'
     : 'col-start-3 text-left md:col-start-5';
   if (items.length === 0) {
-    return <div className={`${positionClass} row-start-1 text-xs font-black text-slate-300`}>미포함</div>;
+    return <div className={`${positionClass} row-start-1 text-xs font-black text-slate-500`}>미포함</div>;
   }
   const [primary, ...rest] = items;
   const totalPrice = items.reduce((sum, item) => sum + (item.price ?? 0), 0);
@@ -810,9 +810,9 @@ function PartSummary({ items, meta, side }: { items: BuildItem[]; meta: string[]
 }
 
 function MetricBar({ category, metric, side, hasPart, samePart }: { category: string; metric: CompareMetric | null; side: 'A' | 'B'; hasPart: boolean; samePart: boolean }) {
-  if (!hasPart) return <div className="text-center text-[10px] font-bold text-slate-300">미포함</div>;
+  if (!hasPart) return <div className="text-center text-[10px] font-bold text-slate-500">미포함</div>;
   if (!metric) return null;
-  if (samePart) return <div data-testid={`quote-compare-bar-${category}-${side}`} className="text-center text-[10px] font-black text-slate-400">동일</div>;
+  if (samePart) return <div data-testid={`quote-compare-bar-${category}-${side}`} className="text-center text-[10px] font-black text-slate-500">동일</div>;
   const value = side === 'A' ? metric.valueA : metric.valueB;
   const max = Math.max(metric.valueA, metric.valueB);
   const index = Math.round((value / max) * 100);
@@ -823,14 +823,14 @@ function MetricBar({ category, metric, side, hasPart, samePart }: { category: st
         <span className="text-[9px] font-bold text-slate-400">{metric.label}</span>
       </div>
       <div className={`flex h-2 overflow-hidden rounded-full bg-slate-100 ${side === 'A' ? 'justify-end' : 'justify-start'}`}>
-        <div className="h-full rounded-full bg-brand-blue transition-[width] duration-500" style={{ width: `${index}%` }} />
+        <div className="h-full rounded-full bg-slate-600 transition-[width] duration-500" style={{ width: `${index}%` }} />
       </div>
     </div>
   );
 }
 
 function SpecificationMetric({ category, values, side, hasPart }: { category: string; values: string[]; side: 'A' | 'B'; hasPart: boolean }) {
-  if (!hasPart) return <div className="text-center text-[10px] font-bold text-slate-300">미포함</div>;
+  if (!hasPart) return <div className="text-center text-[10px] font-bold text-slate-500">미포함</div>;
   if (values.length === 0) return null;
   return (
     <div data-testid={`quote-compare-spec-${category}-${side}`} className={`line-clamp-2 text-[10px] font-bold leading-4 text-slate-500 ${side === 'A' ? 'text-right' : 'text-left'}`} title={values.slice(0, 3).join(' · ')}>
@@ -1068,9 +1068,9 @@ function specificationDescription(category: string, itemA: BuildItem, itemB: Bui
 }
 
 function comparisonDescriptionClass(description: string) {
-  if (description.includes('미포함') || description.includes('비교 가능한')) return 'text-slate-400';
+  if (description.includes('미포함') || description.includes('비교 가능한')) return 'text-slate-500';
   if (description.includes('동일') || description.includes('유사') || description.includes('규격')) return 'text-slate-500';
-  return 'text-emerald-700';
+  return 'text-orange-600';
 }
 
 function isSpecificationCategory(category: string) {

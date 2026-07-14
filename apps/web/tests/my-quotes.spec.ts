@@ -340,7 +340,7 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(motherboardRow.getByTestId('quote-compare-bar-MOTHERBOARD-A')).toHaveCount(0);
   await expect(perfMatrix.getByTestId('quote-compare-row-COOLER')).toContainText('B 미포함');
   await expect(perfMatrix.getByTestId('quote-compare-description-CPU')).toHaveClass(/text-slate-500/);
-  await expect(perfMatrix.getByTestId('quote-compare-description-GPU')).toHaveClass(/text-emerald-700/);
+  await expect(perfMatrix.getByTestId('quote-compare-description-GPU')).toHaveClass(/text-orange-600/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   // 2개 선택 중에는 세 번째 견적 선택을 막는다.
   await expect(perfMatrix.getByTestId('compare-toggle-build-office')).toBeDisabled();
