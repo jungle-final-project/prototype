@@ -1,5 +1,8 @@
 import { API_BASE_URL, ApiError, api, getToken } from '../../lib/api';
 
+// PC Agent AS 흐름(브랜치)에서 asTicketId 미지정 시 쓰는 데모 기본 티켓 — main 정리에서 빠졌지만 이 흐름이 필요로 한다.
+export const AS_CHAT_DEFAULT_TICKET_ID = '00000000-0000-4000-8000-000000006001';
+
 export type AsChatTicket = {
   id: string;
   status: string;
