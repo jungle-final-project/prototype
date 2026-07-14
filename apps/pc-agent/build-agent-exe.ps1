@@ -71,6 +71,21 @@ function Build-AgentExecutable {
   Invoke-Checked $Python -m PyInstaller @Args
 }
 
+function Resolve-Path-ForTcl {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Root
+  )
+  $PathRoot = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $Path).Path)
+  $RootRoot = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $Root).Path)
+  if ($PathRoot -ne $RootRoot) {
+    # 다른 드라이브라 상대 경로가 성립하지 않는다. Resolve-Path -Relative는 이때
+    # ".\C:\..." 같은 경로를 만들어 Tcl 초기화를 깨뜨리므로 절대 경로를 그대로 쓴다.
+    return (Resolve-Path -LiteralPath $Path).Path
+  }
+  return Resolve-Path -Relative -LiteralPath $Path
+}
+
 function Get-AgentVersion {
   $Content = Get-Content -LiteralPath $Script -Raw
   $Match = [regex]::Match($Content, 'DEFAULT_AGENT_VERSION\s*=\s*"([^"]+)"')
@@ -145,8 +160,10 @@ try {
   Set-Location -LiteralPath $RepoRoot
   # Tcl fails to normalize the absolute bundled-runtime path in some Windows
   # environments. Keep these paths relative while PyInstaller probes Tcl/Tk.
-  $env:TCL_LIBRARY = Resolve-Path -Relative -LiteralPath $TclPath
-  $env:TK_LIBRARY = Resolve-Path -Relative -LiteralPath $TkPath
+  # 저장소와 Python이 서로 다른 드라이브에 있으면 상대 경로를 만들 수 없다.
+  # 그때 Resolve-Path -Relative는 ".\C:\..." 같은 깨진 경로를 돌려주므로 절대 경로를 쓴다.
+  $env:TCL_LIBRARY = Resolve-Path-ForTcl -Path $TclPath -Root $RepoRoot
+  $env:TK_LIBRARY = Resolve-Path-ForTcl -Path $TkPath -Root $RepoRoot
   Invoke-Checked -Command $Python -CommandArgs @(
     "-c",
     "import tkinter; print(tkinter.Tcl())"

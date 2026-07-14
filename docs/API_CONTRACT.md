@@ -702,6 +702,8 @@ PC Agent 등록/인증 규칙:
 - Agent는 `deviceId` 일치, 만료, 로컬 영속 중복 목록, 현재 진단 상태를 검증해 `ACCEPTED`, `DUPLICATE`, `EXPIRED`, `DEVICE_MISMATCH`, `AUTH_FAILED`, `BUSY`, `REJECTED` 중 하나로 응답한다. MVP는 새 요청을 큐에 쌓지 않는다.
 - `/ws/pc-agent/diagnosis` session map과 전송 중 응답 대기는 API JVM 메모리 기반이다. Agent는 WebSocket protocol ping/pong과 제한된 backoff로 재연결하며, Agent 로컬의 처리 완료 ID 목록이 재전달 중복 실행을 막는다.
 - 진단 결과는 Agent가 로컬에 먼저 영속한 뒤 `DIAGNOSIS_RESULT`로 전송한다. API는 인증된 WebSocket 장치와 `diagnosisId`를 기준으로 마지막 결과를 보관하고 같은 `resultId` 재전송을 중복 저장하지 않는다. 서버 ACK 실패나 연결 해제는 로컬 판정 내용을 바꾸지 않으며 재연결 후 다시 전송한다.
+- WebSocket 텍스트 프레임 상한은 512KB다(컨테이너 기본 8KB를 상향). Agent는 결과 프레임에 담는 Windows 이벤트 로그 근거를 카테고리별 상한까지만 싣고, 서버가 `DIAGNOSIS_STATUS_ACK`/`DIAGNOSIS_RESULT_ACK`한 프레임은 재전송 목록에서 제거한다. 전송에 반복 실패하는 프레임은 폐기해 재접속 루프를 만들지 않는다.
+- `/api/agent/as-requests`는 진단 결과의 `resolutionType`을 제한하지 않는다. 이상 근거가 없는 정상(`NONE`)·근거 부족(`UNKNOWN`) 결과로도 사용자가 AS를 접수할 수 있으며, 접수 유형(`requestType`)만 `PHYSICAL_INSPECTION`으로 고정한다. 저장된 진단 결과의 `evidence`가 비어 있으면 여전히 `409 AS_NOT_ELIGIBLE`이다. 티켓 `riskLevel`은 결과 `severity`를 따라 `CRITICAL → HIGH`, `NORMAL`/`INDETERMINATE → LOW`, 그 외 `MEDIUM`으로 매긴다.
 - `/api/agent/diagnosis-chat`의 LLM 호출은 AS Chat의 `as_chat_sessions`/`as_chat_messages` 저장 흐름과 분리한다. OpenAI key가 없거나 upstream/schema 오류가 나면 기존 rule fallback 응답을 반환하며, 이 경우에도 AS 티켓/로그 업로드/채팅 세션 row를 만들지 않는다. PC Agent는 raw JSONL 로그가 아니라 `diagnosis_chat_context()`의 요약 필드와 최근 대화만 보낸다.
 
 `PATCH /api/admin/as-tickets/{id}` 허용 상태 전이:

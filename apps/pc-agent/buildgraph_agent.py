@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -65,6 +65,7 @@ from diagnosis_result import (
     DiagnosisRuleEngine,
     actual_device_problem_evidence,
     can_offer_as,
+    compact_result_evidence,
     format_diagnosis_result_detail,
     matching_display_driver_evidence,
 )
@@ -162,7 +163,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.14"
+DEFAULT_AGENT_VERSION = "0.1.15"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -6156,11 +6157,16 @@ def show_log_viewer(
         if isinstance(response, DiagnosisAsResponse) and isinstance(payload, DiagnosisAsRequest):
             stored_request_type = response.request_type or payload.request_type
             request_type = "기존 일반 AS 티켓 (PHYSICAL_INSPECTION)" if stored_request_type == "PHYSICAL_INSPECTION" else stored_request_type
+            diagnosed_result = ui.get("diagnosisResult")
+            diagnosis_problem = payload.diagnosis_title or "진단 결과 확인"
+            technician_note = "원격 기사 점검 필요"
+            if isinstance(diagnosed_result, DiagnosisResult) and not diagnosed_result.remote_as_recommended:
+                technician_note = "사용자 요청 접수"
             detail_rows = (
                 ("요청 번호", response.request_number),
                 ("요청 유형", request_type),
-                ("진단 문제", "그래픽 장치 구성 이상"),
-                ("기사 점검", "원격 기사 점검 필요"),
+                ("진단 문제", diagnosis_problem),
+                ("기사 점검", technician_note),
                 ("진단 요약", response.diagnosis_summary or payload.diagnosis_summary),
             )
             row_y = (400, 428, 456, 484, 512)
@@ -6443,6 +6449,16 @@ def show_log_viewer(
             ui["status"] = "완료된 진단 세션과 결과가 필요합니다."
             render()
             return
+        # 뷰어가 들고 있는 세션은 진단 시작 시점(RUNNING) 스냅샷이라 완료 후에도 갱신되지 않는다.
+        # 진단이 실제로 끝났으면 완료 상태로 맞춰준다 — 그러지 않으면 AS 접수가 항상 거절된다.
+        snapshot = ui.get("diagnosisSnapshot")
+        if (
+            session.agent_state != "COMPLETED"
+            and isinstance(snapshot, DiagnosisRunSnapshot)
+            and snapshot.diagnosis_id == result.diagnosis_id
+            and snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+        ):
+            session = dataclass_replace(session, agent_state="COMPLETED")
         current_config = load_config(config_path)
         try:
             payload = build_diagnosis_as_request(
@@ -7622,7 +7638,9 @@ def run_background(
             initial_metrics_coordinator.stop()
             if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
                 try:
-                    result = diagnosis_rule_engine.evaluate(metrics_store.snapshot, snapshot)
+                    result = compact_result_evidence(
+                        diagnosis_rule_engine.evaluate(metrics_store.snapshot, snapshot)
+                    )
                     diagnosis_result_store.save(result)
                     sync_diagnosis_result()
                     diagnosis_store.update_state("COMPLETED")
@@ -7679,6 +7697,9 @@ def run_background(
             forwarded_event_ids.clear()
             client = diagnosis_client_holder.get("value")
             if client is not None:
+                # 전송 버퍼도 함께 비운다. 남겨두면 재접속할 때마다 지난 진단 프레임을
+                # 다시 보내고, 서버가 그 프레임을 거절하면 무한 재접속 루프가 된다.
+                client.reset_sync_state()
                 client.mark_idle()
             return True
 
