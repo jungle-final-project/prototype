@@ -2,10 +2,11 @@ import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from '../../components/ui';
-import { API_BASE_URL, ApiError, getCachedAuthUser } from '../../lib/api';
+import { ApiError, getCachedAuthUser } from '../../lib/api';
 import { formatSeoulTime } from '../../lib/dateTime';
-import { AS_CHAT_DEFAULT_TICKET_ID, getAsChat, sendAsChat, streamAsChat } from './asChatApi';
+import { getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
+import { downloadAgentPackage } from './agentDownload';
 import { prepareSupportLogFile } from './logFileProcessing';
 import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
@@ -20,18 +21,6 @@ type BlockingSupportChat = {
   asTicketId: string;
   supportChatRoomId?: string | null;
 };
-type ZipEntryInput = {
-  name: string;
-  data: Uint8Array<ArrayBuffer>;
-};
-type AgentDownloadManifest = {
-  version: string;
-  downloadUrl: string;
-  sha256?: string;
-};
-
-const crc32Table = createCrc32Table();
-
 const remoteSymptomTypes = new Set([
   'REMOTE_AGENT',
   'REMOTE_DRIVER_OS',
@@ -65,8 +54,8 @@ const symptomTypeOptions = [
 
 export function AsChatPage() {
   const [searchParams] = useSearchParams();
-  const initialTicketId = searchParams.get('asTicketId')?.trim() || AS_CHAT_DEFAULT_TICKET_ID;
-  const [ticketId, setTicketId] = useState(initialTicketId);
+  const requestedTicketId = searchParams.get('asTicketId')?.trim() ?? '';
+  const [ticketId, setTicketId] = useState(requestedTicketId);
   const [message, setMessage] = useState('게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요.');
   const [latestResponse, setLatestResponse] = useState<AsChatResponse | null>(null);
   const [error, setError] = useState('');
@@ -74,11 +63,25 @@ export function AsChatPage() {
   const [progressSteps, setProgressSteps] = useState<string[]>([]);
 
   // 티켓 번호를 타이핑하는 글자마다 조회가 나가지 않도록, 입력이 멈춘 뒤(300ms) 확정값으로만 조회한다.
-  const [committedTicketId, setCommittedTicketId] = useState(initialTicketId);
+  const [committedTicketId, setCommittedTicketId] = useState(requestedTicketId);
   useEffect(() => {
     const timer = setTimeout(() => setCommittedTicketId(ticketId.trim()), 300);
     return () => clearTimeout(timer);
   }, [ticketId]);
+
+  const currentSupportQuery = useQuery({
+    queryKey: ['support-chat-current', 'as-ai-entry'],
+    queryFn: () => getCurrentSupportChat(),
+    enabled: requestedTicketId.length === 0
+  });
+
+  useEffect(() => {
+    const currentTicketId = currentSupportQuery.data?.contact?.asTicketId?.trim();
+    if (!ticketId.trim() && currentTicketId) {
+      setTicketId(currentTicketId);
+      setCommittedTicketId(currentTicketId);
+    }
+  }, [currentSupportQuery.data?.contact?.asTicketId, ticketId]);
 
   const chatQuery = useQuery({
     queryKey: ['as-chat', committedTicketId],
@@ -135,12 +138,17 @@ export function AsChatPage() {
 
   const chat = latestResponse?.asTicketId === ticketId ? latestResponse : chatQuery.data;
   const isBusy = sendMutation.isPending;
-  const canSend = Boolean(message.trim()) && !isBusy;
+  const hasTicket = Boolean(ticketId.trim());
+  const canSend = Boolean(ticketId.trim() && message.trim()) && !isBusy;
 
   function submitTicket(event: FormEvent) {
     event.preventDefault();
     setLatestResponse(null);
     setError('');
+    if (!ticketId.trim()) {
+      setError('먼저 AS 접수를 생성하거나 티켓 번호를 입력해 주세요.');
+      return;
+    }
     void chatQuery.refetch();
   }
 
@@ -153,28 +161,41 @@ export function AsChatPage() {
 
   return (
     <Screen>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
+        <div className="min-w-0 max-w-full">
         <Panel title="AS AI 챗봇" subtitle="AS 접수 후 티켓 증상과 검증 근거를 사용해 1차 상담 답변을 생성합니다.">
-          <form onSubmit={submitTicket} className="mb-4 flex gap-3">
+          <form onSubmit={submitTicket} className="mb-4 flex min-w-0 flex-col gap-3 sm:flex-row">
             <input
-              className="h-11 flex-1 rounded border border-slate-300 px-3 text-sm"
+              className="h-11 min-w-0 w-full flex-1 rounded border border-slate-300 px-3 text-sm"
               value={ticketId}
               onChange={(event) => setTicketId(event.target.value)}
               aria-label="AS 티켓 번호"
             />
-            <button className="rounded border border-slate-300 px-4 py-2 text-sm font-bold">티켓 불러오기</button>
+            <button className="w-full rounded border border-slate-300 px-4 py-2 text-sm font-bold sm:w-auto">티켓 불러오기</button>
           </form>
 
+          {currentSupportQuery.isLoading ? <StateMessage type="info" title="최근 AS 접수 확인 중" body="현재 사용자에게 연결된 AS 티켓을 확인하고 있습니다." /> : null}
+          {currentSupportQuery.isError ? <StateMessage type="warn" title="최근 AS 접수 확인 실패" body="티켓 번호를 직접 입력하거나 AS 접수 화면에서 새 접수를 만들어 주세요." /> : null}
           {chatQuery.isLoading ? <StateMessage type="info" title="챗봇 세션 조회 중" body="AS 티켓과 기존 대화 이력을 불러오고 있습니다." /> : null}
           {chatQuery.isError ? <StateMessage type="warn" title="챗봇 세션 조회 실패" body="대화 이력을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." /> : null}
           {error ? <div className="mb-4"><StateMessage type="warn" title="AS AI 확인 필요" body={error} /></div> : null}
 
           <div className="h-[560px] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4">
-            {chat?.messages.length ? (
+            {!hasTicket && !currentSupportQuery.isLoading ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4 px-4 text-center">
+                <StateMessage type="info" title="연결된 AS 접수가 없습니다" body="AS 접수를 먼저 생성하면 해당 티켓의 증상과 진단 근거로 AI 상담을 이어갈 수 있습니다." />
+                <Link
+                  to={currentSupportQuery.data?.supportNewPath ?? '/support/new'}
+                  className="rounded bg-brand-blue px-4 py-2 text-sm font-black text-white"
+                >
+                  AS 접수 시작하기
+                </Link>
+              </div>
+            ) : chat?.messages.length ? (
               <div className="space-y-3">
                 {chat.messages.map((item) => (
                   <div key={item.id} className={`flex ${item.role === 'USER' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[72%] rounded px-4 py-3 text-sm leading-6 shadow-sm ${item.role === 'USER' ? 'bg-brand-blue text-white' : 'border border-slate-200 bg-white text-slate-800'}`}>
+                    <div className={`max-w-[88%] break-words rounded px-4 py-3 text-sm leading-6 shadow-sm sm:max-w-[72%] ${item.role === 'USER' ? 'bg-brand-blue text-white' : 'border border-slate-200 bg-white text-slate-800'}`}>
                       <div className="mb-1 text-[11px] font-bold opacity-75">{item.role === 'USER' ? '사용자' : 'AI 상담'}</div>
                       <p className="whitespace-pre-wrap">{item.content}</p>
                     </div>
@@ -200,23 +221,24 @@ export function AsChatPage() {
             ) : null}
           </div>
 
-          <form onSubmit={submitMessage} className="mt-4 flex gap-3">
+          <form onSubmit={submitMessage} className="mt-4 flex min-w-0 flex-col gap-3 sm:flex-row">
             <textarea
-              className="h-24 flex-1 rounded border border-slate-300 p-3 text-sm"
+              className="h-24 min-w-0 w-full flex-1 rounded border border-slate-300 p-3 text-sm"
               placeholder="예: 게임 20분 뒤 프레임이 급락하고 GPU 온도가 95도까지 올라가요."
               value={message}
               onChange={(event) => setMessage(event.target.value)}
             />
-            <button disabled={!canSend} className="w-32 rounded bg-brand-blue text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+            <button disabled={!canSend} className="h-11 w-full rounded bg-brand-blue text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400 sm:h-auto sm:w-32">
               {isBusy ? '전송 중' : '전송'}
             </button>
           </form>
         </Panel>
+        </div>
 
-        <div className="space-y-5">
+        <div className="min-w-0 max-w-full space-y-5">
           <Panel title="티켓 / 모델">
             <div className="space-y-3 text-sm">
-              <InfoRow label="AS 티켓" value={chat?.asTicketId ?? ticketId} />
+              <InfoRow label="AS 티켓" value={(chat?.asTicketId ?? ticketId) || '-'} />
               <InfoRow label="모델" value={chat?.model ?? '-'} />
               <InfoRow label="Agent 세션" value={chat?.agentSessionId ?? '-'} />
               <InfoRow label="상태" value={chat?.ticket.status ?? '-'} />
@@ -873,7 +895,8 @@ export function SupportTicketPage() {
   const [feedbackError, setFeedbackError] = useState('');
   const { data: ticket, isError, isLoading } = useQuery({
     queryKey: ['support-ticket', ticketId],
-    queryFn: () => getSupportTicket(ticketId)
+    queryFn: () => getSupportTicket(ticketId),
+    refetchInterval: 5_000
   });
   const remoteRequestMutation = useMutation({
     mutationFn: async () => {
@@ -1239,209 +1262,6 @@ function toSupportRequestKind(value?: string | null): SupportRequestKind {
     return value;
   }
   return 'DIAGNOSIS_ONLY';
-}
-
-async function downloadAgentPackage(activationToken: string, symptom: string, symptomType: string) {
-  const manifest = await fetchAgentDownloadManifest();
-  const exe = await fetchAgentExecutable(manifest);
-  const config = {
-    apiBaseUrl: resolveAgentApiBaseUrl(),
-    webBaseUrl: window.location.origin,
-    activationToken,
-    symptom,
-    symptomType,
-    environment: import.meta.env.MODE ?? 'local'
-  };
-  const encoder = new TextEncoder();
-  const zip = createZipBlob([
-    { name: 'PCAgent.exe', data: exe },
-    { name: 'pcagent-activation.json', data: encoder.encode(`${JSON.stringify(config, null, 2)}\n`) },
-    { name: 'README.txt', data: encoder.encode(createAgentPackageReadme()) }
-  ]);
-  const url = URL.createObjectURL(zip);
-  downloadUrl(url, 'PCAgent.zip');
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-async function fetchAgentDownloadManifest(): Promise<AgentDownloadManifest> {
-  const response = await fetch('/downloads/pc-agent/latest.json', { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error('Agent manifest download failed.');
-  }
-  const body: unknown = await response.json();
-  if (!isAgentDownloadManifest(body)) {
-    throw new Error('Agent manifest is invalid.');
-  }
-  return body;
-}
-
-function isAgentDownloadManifest(value: unknown): value is AgentDownloadManifest {
-  if (typeof value !== 'object' || value == null) {
-    return false;
-  }
-  const manifest = value as Partial<AgentDownloadManifest>;
-  return typeof manifest.version === 'string'
-    && typeof manifest.downloadUrl === 'string'
-    && (manifest.sha256 == null || typeof manifest.sha256 === 'string');
-}
-
-async function fetchAgentExecutable(manifest: AgentDownloadManifest): Promise<Uint8Array<ArrayBuffer>> {
-  const manifestUrl = new URL('/downloads/pc-agent/latest.json', window.location.origin);
-  const executableUrl = new URL(manifest.downloadUrl, manifestUrl);
-  executableUrl.searchParams.set('v', manifest.version);
-  const response = await fetch(executableUrl, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error('Agent exe download failed.');
-  }
-  const exe = new Uint8Array(await response.arrayBuffer());
-  if (manifest.sha256 && globalThis.crypto?.subtle) {
-    const actualHash = await sha256Hex(exe);
-    if (actualHash !== manifest.sha256.toLowerCase()) {
-      throw new Error('Agent exe checksum mismatch.');
-    }
-  }
-  return exe;
-}
-
-async function sha256Hex(data: Uint8Array<ArrayBuffer>) {
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function createAgentPackageReadme() {
-  return [
-    'PCAgent',
-    '',
-    '1. Extract this zip file first.',
-    '2. Keep PCAgent.exe and pcagent-activation.json in the same folder.',
-    '3. Double-click PCAgent.exe.',
-    '',
-    'pcagent-activation.json is a one-time registration file.',
-    'PCAgent deletes it automatically after registration succeeds.',
-    ''
-  ].join('\n');
-}
-
-function createZipBlob(entries: ZipEntryInput[]) {
-  const encoder = new TextEncoder();
-  const localParts: Uint8Array<ArrayBuffer>[] = [];
-  const centralParts: Uint8Array<ArrayBuffer>[] = [];
-  let offset = 0;
-  const { dosTime, dosDate } = toDosDateTime(new Date());
-
-  entries.forEach((entry) => {
-    const nameBytes = encoder.encode(entry.name.replace(/\\/g, '/'));
-    const crc = crc32(entry.data);
-
-    const localHeader = new Uint8Array(30 + nameBytes.length);
-    const localView = new DataView(localHeader.buffer);
-    localView.setUint32(0, 0x04034b50, true);
-    localView.setUint16(4, 20, true);
-    localView.setUint16(6, 0, true);
-    localView.setUint16(8, 0, true);
-    localView.setUint16(10, dosTime, true);
-    localView.setUint16(12, dosDate, true);
-    localView.setUint32(14, crc, true);
-    localView.setUint32(18, entry.data.length, true);
-    localView.setUint32(22, entry.data.length, true);
-    localView.setUint16(26, nameBytes.length, true);
-    localView.setUint16(28, 0, true);
-    localHeader.set(nameBytes, 30);
-
-    const centralHeader = new Uint8Array(46 + nameBytes.length);
-    const centralView = new DataView(centralHeader.buffer);
-    centralView.setUint32(0, 0x02014b50, true);
-    centralView.setUint16(4, 20, true);
-    centralView.setUint16(6, 20, true);
-    centralView.setUint16(8, 0, true);
-    centralView.setUint16(10, 0, true);
-    centralView.setUint16(12, dosTime, true);
-    centralView.setUint16(14, dosDate, true);
-    centralView.setUint32(16, crc, true);
-    centralView.setUint32(20, entry.data.length, true);
-    centralView.setUint32(24, entry.data.length, true);
-    centralView.setUint16(28, nameBytes.length, true);
-    centralView.setUint16(30, 0, true);
-    centralView.setUint16(32, 0, true);
-    centralView.setUint16(34, 0, true);
-    centralView.setUint16(36, 0, true);
-    centralView.setUint32(38, 0, true);
-    centralView.setUint32(42, offset, true);
-    centralHeader.set(nameBytes, 46);
-
-    localParts.push(localHeader, entry.data);
-    centralParts.push(centralHeader);
-    offset += localHeader.length + entry.data.length;
-  });
-
-  const centralOffset = offset;
-  const centralSize = centralParts.reduce((size, part) => size + part.length, 0);
-  const endRecord = new Uint8Array(22);
-  const endView = new DataView(endRecord.buffer);
-  endView.setUint32(0, 0x06054b50, true);
-  endView.setUint16(4, 0, true);
-  endView.setUint16(6, 0, true);
-  endView.setUint16(8, entries.length, true);
-  endView.setUint16(10, entries.length, true);
-  endView.setUint32(12, centralSize, true);
-  endView.setUint32(16, centralOffset, true);
-  endView.setUint16(20, 0, true);
-
-  return new Blob([...localParts, ...centralParts, endRecord], { type: 'application/zip' });
-}
-
-function createCrc32Table() {
-  const table = new Uint32Array(256);
-  for (let index = 0; index < table.length; index += 1) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit += 1) {
-      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    }
-    table[index] = value >>> 0;
-  }
-  return table;
-}
-
-function crc32(data: Uint8Array) {
-  let crc = 0xffffffff;
-  data.forEach((byte) => {
-    crc = crc32Table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  });
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function toDosDateTime(date: Date) {
-  const year = Math.max(1980, date.getFullYear());
-  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
-  const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
-  return { dosTime, dosDate };
-}
-
-function resolveAgentApiBaseUrl() {
-  const configured = API_BASE_URL.trim().replace(/\/$/, '');
-  if (/^https?:\/\//.test(configured)) {
-    return configured;
-  }
-  if (configured.startsWith('/')) {
-    return `${window.location.origin}${configured}`;
-  }
-  if (isLocalDevWebOrigin()) {
-    return `${window.location.protocol}//${window.location.hostname}:8080`;
-  }
-  return window.location.origin;
-}
-
-function isLocalDevWebOrigin() {
-  return ['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port === '5173';
-}
-
-function downloadUrl(url: string, filename: string) {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
 }
 
 function visitSlotLabel(value?: string | null) {
