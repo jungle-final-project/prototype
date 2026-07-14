@@ -163,7 +163,7 @@ AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.15"
+DEFAULT_AGENT_VERSION = "0.1.16"
 DEFAULT_POLICY_VERSION = "policy-v1"
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
@@ -3592,15 +3592,41 @@ def pid_file() -> Path:
     return app_data_dir() / "agent.pid"
 
 
+def running_agent_file() -> Path:
+    return app_data_dir() / "agent-running.json"
+
+
 def write_pid() -> None:
     path = pid_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(os.getpid()), encoding="utf-8")
+    # 실행 중인 Agent의 버전을 남긴다. 나중에 실행된 프로세스가 단일 인스턴스 락에 막힐 때,
+    # 자기가 새 버전인데 구버전이 계속 돌고 있는 상황을 사용자에게 알릴 수 있어야 한다.
+    try:
+        running_agent_file().write_text(
+            json.dumps({"pid": os.getpid(), "agentVersion": DEFAULT_AGENT_VERSION}),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def running_agent_version() -> str | None:
+    try:
+        payload = json.loads(running_agent_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    version = payload.get("agentVersion") if isinstance(payload, dict) else None
+    return version if isinstance(version, str) and version.strip() else None
 
 
 def remove_pid() -> None:
     try:
         pid_file().unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        running_agent_file().unlink(missing_ok=True)
     except Exception:
         return
 
@@ -7547,6 +7573,16 @@ def run_background(
 ) -> int:
     instance_lock = acquire_named_instance_lock(BACKGROUND_INSTANCE_MUTEX_NAME)
     if instance_lock is None:
+        # 이미 실행 중인 Agent가 있으면 이 프로세스는 조용히 물러난다. 다만 새 버전을 받아 실행한
+        # 경우에는 구버전이 계속 돌게 되므로, 사용자가 그 사실을 모른 채 넘어가지 않도록 알린다.
+        running_version = running_agent_version()
+        if running_version and running_version != DEFAULT_AGENT_VERSION:
+            show_agent_error_dialog(
+                "PCAgent가 이미 실행 중입니다",
+                f"실행 중인 PCAgent {running_version}이(가) 있어 새 버전 {DEFAULT_AGENT_VERSION}이(가) "
+                "적용되지 않았습니다.\n\n"
+                "작업 표시줄 트레이의 PCAgent를 종료한 뒤 새 앱을 다시 실행해 주세요.",
+            )
         if open_viewer_when_running:
             ViewerRequestSignal(
                 app_data_dir() / "show-viewer-request.json",
