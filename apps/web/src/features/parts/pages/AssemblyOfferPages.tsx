@@ -135,6 +135,7 @@ export function CheckoutOffersPage() {
                 {selectedOffer ? (
                   <div className="space-y-3">
                     <div><div className="text-xs font-bold text-slate-500">선택 기사</div><div className="mt-1 text-lg font-black text-commerce-ink">{selectedOffer.technicianName}</div></div>
+                    <SummaryRow label="배송비" value={formatDeliveryFee(selectedOffer.deliveryFee)} />
                     <SummaryRow label="최종 제안가" value={`${selectedOffer.finalPrice.toLocaleString()}원`} strong />
                   </div>
                 ) : <EmptySelection />}
@@ -293,7 +294,7 @@ function AssemblyOfferCard({ offer, serviceType, selected, selectable, onSelect 
         </div>
         <button type="button" onClick={onSelect} disabled={!selectable} aria-pressed={selected} className={`min-h-10 shrink-0 rounded-md px-4 text-sm font-black ${selected ? 'bg-brand-blue text-white' : 'border border-commerce-line bg-white text-commerce-ink hover:border-brand-blue disabled:cursor-not-allowed disabled:text-slate-400'}`}>{selected ? '선택됨' : '이 기사 선택'}</button>
       </div>
-      <div className="mt-5 grid gap-3 border-t border-commerce-line pt-4 sm:grid-cols-2 lg:grid-cols-5"><OfferMetric label="부품 확인가" value={serviceType === 'FULL_SERVICE' ? `${offer.confirmedPartsPrice.toLocaleString()}원` : '사용자 준비'} /><OfferMetric label="조립비" value={`${offer.assemblyFee.toLocaleString()}원`} /><OfferMetric label="배송비" value={offer.deliveryFee === 0 ? '무료' : `${offer.deliveryFee.toLocaleString()}원`} /><OfferMetric label="완료 예상" value={`${offer.leadTimeDays}일`} /><OfferMetric label="최종 제안가" value={`${offer.finalPrice.toLocaleString()}원`} accent /></div>
+      <div className="mt-5 grid gap-3 border-t border-commerce-line pt-4 sm:grid-cols-2 lg:grid-cols-5"><OfferMetric label="부품 확인가" value={serviceType === 'FULL_SERVICE' ? `${offer.confirmedPartsPrice.toLocaleString()}원` : '사용자 준비'} /><OfferMetric label="조립비" value={`${offer.assemblyFee.toLocaleString()}원`} /><OfferMetric label="배송비" value={formatDeliveryFee(offer.deliveryFee)} /><OfferMetric label="완료 예상" value={`${offer.leadTimeDays}일`} /><OfferMetric label="최종 제안가" value={`${offer.finalPrice.toLocaleString()}원`} accent /></div>
       <div className="mt-3 flex items-center gap-2 text-xs font-bold text-emerald-700"><BadgeCheck size={14} /> {offer.stockStatus}</div>
     </article>
   );
@@ -316,7 +317,33 @@ function RequestProgress({ request, offer }: { request: AssemblyRequest; offer: 
 function AssemblyHistoryCard({ request }: { request: AssemblyRequestSummary }) {
   const hasAvailableOffer = request.status === 'OFFERED' && (request.availableOfferCount ?? 1) > 0;
   const destination = hasAvailableOffer ? `/checkout/offers/${request.id}` : `/my/assembly-requests/${request.id}`;
-  return <Link to={destination} className="grid gap-4 rounded-lg border border-commerce-line bg-white p-5 shadow-sm transition hover:border-brand-blue md:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-commerce-ink">{request.requestNo}</h2><StatusBadge status={request.status} />{request.paymentStatus ? <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600">결제 {request.paymentStatus}</span> : null}</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span>{request.region}</span><span>{request.preferredDate}</span><span>{request.technicianName ?? '기사 배정 전'}</span><span>부품 {request.itemCount}개</span></div>{hasAvailableOffer ? <span className="mt-3 inline-flex min-h-9 items-center rounded-md bg-blue-50 px-3 text-xs font-black text-brand-blue">{request.availableOfferCount == null ? '기사 제안 비교·선택' : `기사 제안 ${request.availableOfferCount}건 비교·선택`}</span> : null}</div><div className="text-left md:text-right"><div className="text-xs font-bold text-slate-500">{request.finalPrice ? '최종 제안가' : '견적 예상가'}</div><div className="mt-1 text-lg font-black text-commerce-sale">{(request.finalPrice ?? request.estimatedPartsPrice).toLocaleString()}원</div></div></Link>;
+
+  return (
+    <Link to={destination} className="grid gap-4 rounded-lg border border-commerce-line bg-white p-5 shadow-sm transition hover:border-brand-blue md:grid-cols-[minmax(0,1fr)_auto]">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="font-black text-commerce-ink">{request.requestNo}</h2>
+          <StatusBadge status={request.status} />
+          {request.paymentStatus ? <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-commerce-ink">결제 {request.paymentStatus}</span> : null}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500">
+          <span>{request.region}</span>
+          <span>{request.preferredDate}</span>
+          <span>{request.technicianName ?? '기사 배정 전'}</span>
+          <span>부품 {request.itemCount}개</span>
+        </div>
+        {hasAvailableOffer ? (
+          <span className="mt-3 inline-flex min-h-9 items-center rounded-md bg-blue-50 px-3 text-xs font-black text-brand-blue">
+            {request.availableOfferCount == null ? '기사 제안 비교·선택' : `기사 제안 ${request.availableOfferCount}건 비교·선택`}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-left md:text-right">
+        <div className="text-xs font-bold text-slate-500">{request.finalPrice ? '최종 제안가' : '견적 예상가'}</div>
+        <div className="mt-1 text-lg font-black text-commerce-sale">{(request.finalPrice ?? request.estimatedPartsPrice).toLocaleString()}원</div>
+      </div>
+    </Link>
+  );
 }
 
 function selectedOfferOf(request: AssemblyRequest) { return request.offers.find((offer) => offer.id === request.selectedOfferId || offer.status === 'SELECTED') ?? null; }
@@ -330,6 +357,20 @@ function RequestIdentity({ request }: { request: AssemblyRequest }) { return <di
 function Metric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) { return <div><div className="text-xs font-bold text-slate-500">{label}</div><div className={`mt-1 font-black ${accent ? 'text-commerce-sale' : 'text-commerce-ink'}`}>{value}</div></div>; }
 function OfferMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) { return <div><div className="text-[11px] font-bold text-slate-500">{label}</div><div className={`mt-1 text-sm font-black ${accent ? 'text-commerce-sale' : 'text-commerce-ink'}`}>{value}</div></div>; }
 function SummaryRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) { return <div className="flex items-center justify-between gap-4 text-sm"><span className="font-bold text-slate-500">{label}</span><span className={strong ? 'text-lg font-black text-commerce-sale' : 'font-black text-commerce-ink'}>{value}</span></div>; }
-function TimelineStep({ icon, label, done = false, active = false }: { icon: React.ReactNode; label: string; done?: boolean; active?: boolean }) { const style = done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : active ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-200 bg-slate-50 text-slate-700'; return <div className={`flex min-h-20 items-center gap-3 rounded-md border p-3 ${style}`}><span>{icon}</span><span className="text-sm font-black">{label}</span></div>; }
+function formatDeliveryFee(deliveryFee: number) { return deliveryFee === 0 ? '무료' : `${deliveryFee.toLocaleString()}원`; }
+function TimelineStep({ icon, label, done = false, active = false }: { icon: React.ReactNode; label: string; done?: boolean; active?: boolean }) {
+  const style = done
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : active
+      ? 'border-blue-200 bg-blue-50 text-blue-800'
+      : 'border-slate-200 bg-slate-50 text-commerce-ink';
+
+  return (
+    <div className={`flex min-h-20 items-center gap-3 rounded-md border p-3 ${style}`}>
+      <span>{icon}</span>
+      <span className="text-sm font-black">{label}</span>
+    </div>
+  );
+}
 function InfoLine({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) { return <div className="flex items-center gap-3 border-b border-commerce-line py-3"><span className="text-brand-blue">{icon}</span><div><div className="text-[11px] font-bold text-slate-500">{label}</div><div className="mt-0.5 text-sm font-black text-commerce-ink">{value}</div></div></div>; }
 function MutationError({ error }: { error: unknown }) { return <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">{error instanceof Error ? error.message : '요청을 처리하지 못했습니다.'}</div>; }

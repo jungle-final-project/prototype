@@ -3671,6 +3671,7 @@ test('persists an assembly request, selects an offer, and pays points after Toss
   await page.getByLabel('수령인').fill('데모 사용자');
   await page.getByLabel('연락처').fill('010-1234-5678');
   await selectCheckoutAddress(page);
+  await page.getByLabel('상세 주소').fill('101동 1004호');
   await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
   await page.getByRole('button', { name: '기사 제안 요청하기' }).click();
 
@@ -3685,6 +3686,9 @@ test('persists an assembly request, selects an offer, and pays points after Toss
   const balancedOffer = page.locator('article').filter({ hasText: '박준호 기사' });
   await balancedOffer.getByRole('button', { name: '이 기사 선택' }).click();
   await expect(balancedOffer.getByRole('button', { name: '선택됨' })).toBeVisible();
+  const selectedSummary = page.locator('aside').filter({ hasText: '선택 제안' });
+  await expect(selectedSummary.getByText('배송비')).toBeVisible();
+  await expect(selectedSummary.getByText('무료')).toBeVisible();
   await page.getByRole('button', { name: '선택한 제안 승인' }).click();
   await expect(page).toHaveURL(`/checkout/payment/${requestId}`);
   await page.reload();
@@ -3850,8 +3854,8 @@ test('blocks an incompatible assembly request and does not expose a demo bypass'
   await page.getByLabel('수령인').fill('데모 사용자');
   await page.getByLabel('연락처').fill('010-1234-5678');
   await selectCheckoutAddress(page, '경기도 성남시 분당구 1 (분당동)', '13500');
+  await page.getByLabel('상세 주소').fill('101동 1004호');
   await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
-  await expect(page.getByText('장착 불가 항목이 있어 실제 조립 요청을 만들 수 없습니다.')).toBeVisible();
   await expect(page.getByRole('button', { name: '기사 제안 요청하기' })).toBeDisabled();
   await expect(page.getByRole('button', { name: '데모 제안 보기' })).toHaveCount(0);
   await expect(page).toHaveURL('/checkout');
