@@ -1,9 +1,10 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, Check, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ClipboardList, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
+import { listAssemblyRequests } from '../../parts/assemblyApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
 import type { BuildCompositeScore, PartCategory } from '../aiSelection';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
@@ -35,6 +36,14 @@ export function MyQuotesPage() {
 
   const buildsQuery = useQuery({ queryKey: ['build-history'], queryFn: getBuildHistory });
   const alertsQuery = useQuery({ queryKey: ['price-alerts'], queryFn: getPriceAlerts });
+  const assemblyRequestsQuery = useQuery({
+    queryKey: ['assembly-requests'],
+    queryFn: () => listAssemblyRequests(),
+    refetchInterval: (query) => {
+      const items = (query.state.data as Awaited<ReturnType<typeof listAssemblyRequests>> | undefined)?.items ?? [];
+      return items.some((item) => item.status === 'REQUESTED' || item.status === 'OFFERED') ? 5000 : 30_000;
+    }
+  });
   const builds = useMemo(
     () => uniqueBuildsByPartCombination(buildsQuery.data?.items ?? []),
     [buildsQuery.data?.items]
@@ -51,7 +60,11 @@ export function MyQuotesPage() {
   const selectedSavedPart = savedPartOptions.find((option) => option.partId === selectedSavedPartId);
   const selectedPartIdForSubmit = selectedSavedPartId;
   const targetPriceNumber = Number(targetPrice.replace(/,/g, ''));
+  const achievedAlertCount = alerts.filter((alert) => isPriceTargetAchieved(alert)).length;
   const nearestAlert = useMemo(() => findNearestAlert(alerts), [alerts]);
+  const offeredAssemblyRequest = assemblyRequestsQuery.data?.items.find(
+    (request) => request.status === 'OFFERED' && (request.availableOfferCount ?? 1) > 0
+  );
   const graphBuildItems = useMemo(() => graphBuild ? quoteDraftItemsForBuild(graphBuild) : [], [graphBuild]);
   const graphQuery = useQuery({
     queryKey: ['build-graph', 'saved-build', graphBuild?.id, graphBuildSignature(graphBuildItems), graphBuild?.totalPrice],
@@ -150,7 +163,23 @@ export function MyQuotesPage() {
             title="저장 견적"
             subtitle="상세 확인, 부품 변경, 목표가 알림 등록까지 바로 이어집니다."
             className="order-2"
-            action={<Link to="/requirements/new" className="rounded-md bg-brand-blue px-3 py-2 text-xs font-black text-white hover:bg-blue-700">AI 견적 시작</Link>}
+            action={(
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  to={offeredAssemblyRequest ? `/checkout/offers/${offeredAssemblyRequest.id}` : '/my/assembly-requests'}
+                  data-testid="my-assembly-requests-link"
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-commerce-line bg-white px-3 text-xs font-black text-commerce-ink hover:border-brand-blue hover:text-brand-blue"
+                >
+                  <ClipboardList size={14} />
+                  {offeredAssemblyRequest
+                    ? offeredAssemblyRequest.availableOfferCount == null
+                      ? '도착한 기사 제안 확인'
+                      : `도착한 기사 제안 ${offeredAssemblyRequest.availableOfferCount}건 확인`
+                    : '조립 요청 진행'}
+                </Link>
+                <Link to="/requirements/new" className="rounded-md bg-brand-blue px-3 py-2 text-xs font-black text-white hover:bg-blue-700">AI 견적 시작</Link>
+              </div>
+            )}
           >
             {buildsQuery.isLoading ? (
               <SavedBuildSkeleton />
@@ -167,10 +196,12 @@ export function MyQuotesPage() {
                     onAlertSelect={selectBuildPartForAlert}
                     onCheckout={openCheckoutForBuild}
                     onEditParts={openSelfQuoteForBuild}
+                    onDuplicate={openSelfQuoteForBuild}
                     onOpenGraph={setGraphBuild}
                     onRename={(name) => renameBuildMutation.mutate({ buildId: build.id, name })}
                     onDelete={() => { if (!deleteBuildMutation.isPending) deleteBuildMutation.mutate(build.id); }}
                     isRenaming={renameBuildMutation.isPending && renameBuildMutation.variables?.buildId === build.id}
+                    isDuplicating={isApplyingBuild(applyBuildMutation.variables, build, 'self-quote', applyBuildMutation.isPending)}
                     isDeleting={deleteBuildMutation.isPending && deleteBuildMutation.variables === build.id}
                   />
                 ))}
@@ -261,7 +292,12 @@ export function MyQuotesPage() {
             </Panel>
           </div>
 
-          <Panel title="목표가 알림" subtitle="현재가가 목표가에 얼마나 가까운지 차액과 진행률로 확인합니다." className="order-3">
+          <Panel
+            title="목표가 알림"
+            subtitle="현재가가 목표가에 얼마나 가까운지 차액과 진행률로 확인합니다."
+            className="order-3"
+            action={<span data-testid="my-quotes-achieved-count" className="text-xs font-black text-emerald-600">목표 달성 {achievedAlertCount}개</span>}
+          >
             {alertsQuery.isLoading ? (
               <AlertSkeleton />
             ) : alertsQuery.isError ? (
@@ -312,10 +348,12 @@ function SavedBuildCard({
   onAlertSelect,
   onCheckout,
   onEditParts,
+  onDuplicate,
   onOpenGraph,
   onRename,
   onDelete,
   isRenaming,
+  isDuplicating,
   isDeleting
 }: {
   build: BuildSummary;
@@ -324,10 +362,12 @@ function SavedBuildCard({
   onAlertSelect: (build: BuildSummary) => void;
   onCheckout: (build: BuildSummary) => void;
   onEditParts: (build: BuildSummary) => void;
+  onDuplicate: (build: BuildSummary) => void;
   onOpenGraph: (build: BuildSummary) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
   isRenaming: boolean;
+  isDuplicating: boolean;
   isDeleting: boolean;
 }) {
   const mainItems = (build.items ?? []).slice(0, 4);
@@ -449,8 +489,16 @@ function SavedBuildCard({
         >
           <Target size={14} /> 목표가 등록
         </button>
-        {/* 동일 부품 조합은 중복 저장하지 않으므로 관리 액션은 삭제만 제공한다. */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid={`duplicate-${build.id}`}
+            disabled={!hasCheckoutItems || isDuplicating}
+            onClick={() => onDuplicate(build)}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink disabled:cursor-wait disabled:text-slate-400"
+          >
+            <Copy size={14} /> {isDuplicating ? '편집 준비 중' : '복제 후 편집'}
+          </button>
           {confirmingDelete ? (
             <div className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1">
               <span className="text-[11px] font-black text-red-700">삭제할까요?</span>

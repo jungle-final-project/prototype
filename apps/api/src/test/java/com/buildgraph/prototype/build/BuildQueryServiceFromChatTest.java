@@ -126,6 +126,54 @@ class BuildQueryServiceFromChatTest {
     }
 
     @Test
+    void saveFromChatAllowsAPartChangedCombination() {
+        when(jdbcTemplate.queryForList(contains("FROM parts"), eq("00000000-0000-4000-8000-000000000101")))
+                .thenReturn(List.of(part(101L, "00000000-0000-4000-8000-000000000101", "CPU", "Ryzen 7", 500000)));
+        when(jdbcTemplate.queryForList(contains("FROM parts"), eq("00000000-0000-4000-8000-000000000201")))
+                .thenReturn(List.of(part(201L, "00000000-0000-4000-8000-000000000201", "GPU", "RTX 5070", 900000)));
+        when(jdbcTemplate.queryForList(contains("SELECT b.id AS build_id"), eq(USER.internalId())))
+                .thenReturn(List.of(
+                        Map.of("build_id", 77L, "part_id", "00000000-0000-4000-8000-000000000101"),
+                        Map.of("build_id", 77L, "part_id", "00000000-0000-4000-8000-000000000299")
+                ));
+        when(toolCheckService.checkBuild(anyList(), eq(2_220_000))).thenReturn(List.of(Map.of(
+                "tool", "price",
+                "status", "PASS",
+                "confidence", "HIGH",
+                "summary", "표시 가격 기준 예산 안에 들어옵니다."
+        )));
+        when(jdbcTemplate.queryForObject(
+                contains("INSERT INTO requirements"),
+                eq(Long.class),
+                eq(USER.internalId()),
+                eq("200만원 PC 추천"),
+                eq(2_000_000),
+                eq(""),
+                any()
+        )).thenReturn(9002L);
+        when(jdbcTemplate.queryForObject(
+                contains("INSERT INTO builds"),
+                eq(String.class),
+                eq(9002L),
+                eq("200만원 균형형"),
+                eq(2_220_000),
+                eq("HIGH"),
+                any()
+        )).thenReturn("00000000-0000-4000-8000-000000009002");
+
+        Map<String, Object> result = service.saveFromChat(request(), USER);
+
+        assertThat(result).containsEntry("id", "00000000-0000-4000-8000-000000009002");
+        verify(jdbcTemplate).update(
+                contains("INSERT INTO build_items"),
+                eq(201L),
+                eq("GPU"),
+                eq(1_800_000),
+                eq("00000000-0000-4000-8000-000000009002")
+        );
+    }
+
+    @Test
     void saveFromChatRejectsAnAlreadySavedPartCombination() {
         when(jdbcTemplate.queryForList(contains("FROM parts"), eq("00000000-0000-4000-8000-000000000101")))
                 .thenReturn(List.of(part(101L, "00000000-0000-4000-8000-000000000101", "CPU", "Ryzen 7", 500000)));

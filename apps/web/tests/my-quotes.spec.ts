@@ -417,6 +417,30 @@ test('applies the selected saved quote before opening self quote for part change
   await expect(page).toHaveURL('/self-quote');
 });
 
+test('opens a duplicate in self quote without saving a new build', async ({ page }) => {
+  const { applyBuildRequests } = await openMyQuotesAsUser(page);
+  const saveRequests: string[] = [];
+  await page.route('**/api/builds/from-chat', async (route) => {
+    saveRequests.push(route.request().postData() ?? '');
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'unexpected-build' }) });
+  });
+
+  const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
+  await firstBuild.getByTestId('duplicate-build-qhd-balanced').click();
+
+  await expect.poll(() => applyBuildRequests.length).toBe(1);
+  expect(applyBuildRequests[0]).toEqual(expect.objectContaining({
+    buildId: 'build-qhd-balanced',
+    conflictPolicy: 'REPLACE',
+    items: expect.arrayContaining([
+      { partId: 'part-cpu-9700x', category: 'CPU', quantity: 1 },
+      { partId: 'part-gpu-5070', category: 'GPU', quantity: 1 }
+    ])
+  }));
+  expect(saveRequests).toHaveLength(0);
+  await expect(page).toHaveURL('/self-quote');
+});
+
 test('does not expose manual part id entry for target price alerts', async ({ page }) => {
   await openMyQuotesAsUser(page);
 
@@ -457,7 +481,7 @@ test('opens a read-only dependency graph popup for each saved quote', async ({ p
   await expect(dialog).toHaveCount(0);
 });
 
-test('renames and soft-deletes a saved quote without offering duplicate', async ({ page }) => {
+test('renames and soft-deletes a saved quote while offering duplicate editing', async ({ page }) => {
   const patchRequests: Array<{ id: string; name: string }> = [];
   const deleteRequests: string[] = [];
   let builds = savedBuilds.map((build) => ({ ...build }));
@@ -504,7 +528,7 @@ test('renames and soft-deletes a saved quote without offering duplicate', async 
   await expect.poll(() => patchRequests.some((request) => request.name === '내 메인 견적')).toBe(true);
   await expect(firstCard.getByRole('heading', { name: '내 메인 견적' })).toBeVisible();
 
-  await expect(firstCard.getByRole('button', { name: '복제' })).toHaveCount(0);
+  await expect(firstCard.getByRole('button', { name: '복제 후 편집' })).toBeVisible();
 
   // 삭제(인라인 확인) → 카드가 사라진다
   const workstationCard = page.getByTestId('saved-build-card-build-workstation');

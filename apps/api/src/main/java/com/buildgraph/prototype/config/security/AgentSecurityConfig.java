@@ -21,7 +21,8 @@ public class AgentSecurityConfig {
             "/api/agent/log-uploads",
             "/api/agent/log-uploads/as-rag-preview",
             "/api/agent/diagnosis-chat",
-            "/api/agent/as-drafts"
+            "/api/agent/as-drafts",
+            "/api/agent/as-requests"
     };
 
     @Bean

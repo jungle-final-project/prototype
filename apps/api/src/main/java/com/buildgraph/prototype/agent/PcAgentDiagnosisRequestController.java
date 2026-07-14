@@ -1,0 +1,35 @@
+package com.buildgraph.prototype.agent;
+
+import com.buildgraph.prototype.user.CurrentUserService;
+import java.util.Map;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/users/me/agent-diagnosis-requests")
+public class PcAgentDiagnosisRequestController {
+    private final CurrentUserService currentUserService;
+    private final PcAgentDiagnosisRequestService service;
+
+    public PcAgentDiagnosisRequestController(
+            CurrentUserService currentUserService,
+            PcAgentDiagnosisRequestService service
+    ) {
+        this.currentUserService = currentUserService;
+        this.service = service;
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> create(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody PcAgentDiagnosisRequestService.CreateRequest body
+    ) {
+        return service.create(currentUserService.requireUser(authorization), body);
+    }
+}

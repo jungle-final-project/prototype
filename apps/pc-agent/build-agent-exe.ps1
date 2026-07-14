@@ -123,8 +123,53 @@ function Sync-WebDownload {
   Write-Host "version $Version sha256 $Hash"
 }
 
-Build-AgentExecutable -Name "agent" -Windowed
-Build-AgentExecutable -Name "agent-cli"
+$PythonBase = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
+if ($LASTEXITCODE -ne 0 -or !$PythonBase) {
+  throw "failed to resolve the Python base prefix"
+}
+$TclVersion = (& $Python -c "import _tkinter; print(_tkinter.TCL_VERSION)").Trim()
+$TkVersion = (& $Python -c "import _tkinter; print(_tkinter.TK_VERSION)").Trim()
+if ($LASTEXITCODE -ne 0 -or !$TclVersion -or !$TkVersion) {
+  throw "failed to resolve the Tcl/Tk runtime versions"
+}
+$TclPath = Join-Path $PythonBase "tcl\tcl$TclVersion"
+$TkPath = Join-Path $PythonBase "tcl\tk$TkVersion"
+if (!(Test-Path -LiteralPath $TclPath) -or !(Test-Path -LiteralPath $TkPath)) {
+  throw "Tcl/Tk runtime files were not found under $PythonBase"
+}
+
+$PreviousLocation = Get-Location
+$PreviousTclLibrary = [Environment]::GetEnvironmentVariable("TCL_LIBRARY", "Process")
+$PreviousTkLibrary = [Environment]::GetEnvironmentVariable("TK_LIBRARY", "Process")
+try {
+  Set-Location -LiteralPath $RepoRoot
+  # Tcl fails to normalize the absolute bundled-runtime path in some Windows
+  # environments. Keep these paths relative while PyInstaller probes Tcl/Tk.
+  $env:TCL_LIBRARY = Resolve-Path -Relative -LiteralPath $TclPath
+  $env:TK_LIBRARY = Resolve-Path -Relative -LiteralPath $TkPath
+  Invoke-Checked -Command $Python -CommandArgs @(
+    "-c",
+    "import tkinter; print(tkinter.Tcl())"
+  )
+
+  Build-AgentExecutable -Name "agent" -Windowed
+  Build-AgentExecutable -Name "agent-cli"
+}
+finally {
+  Set-Location -LiteralPath $PreviousLocation
+  if ($null -eq $PreviousTclLibrary) {
+    Remove-Item Env:TCL_LIBRARY -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TCL_LIBRARY = $PreviousTclLibrary
+  }
+  if ($null -eq $PreviousTkLibrary) {
+    Remove-Item Env:TK_LIBRARY -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TK_LIBRARY = $PreviousTkLibrary
+  }
+}
 
 $Exe = Join-Path $Dist "agent.exe"
 if (!(Test-Path $Exe)) {

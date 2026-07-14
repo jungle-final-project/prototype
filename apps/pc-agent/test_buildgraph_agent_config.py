@@ -48,7 +48,11 @@ class AgentConfigTest(unittest.TestCase):
         return data
 
     def test_loads_valid_config(self) -> None:
-        path = self.write_config(self.valid_config(agentToken="agent-token"))
+        path = self.write_config(self.valid_config(
+            agentToken="agent-token",
+            symptom="게임 중 프레임이 끊깁니다.",
+            symptomType="REMOTE_DRIVER_OS",
+        ))
 
         config = load_config(path)
 
@@ -59,6 +63,8 @@ class AgentConfigTest(unittest.TestCase):
         self.assertEqual(config.agent_version, "0.1.0")
         self.assertEqual(config.policy_version, "policy-v1")
         self.assertEqual(config.agent_token, "agent-token")
+        self.assertEqual(config.symptom, "게임 중 프레임이 끊깁니다.")
+        self.assertEqual(config.symptom_type, "REMOTE_DRIVER_OS")
 
     def test_loads_utf8_bom_config(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -179,6 +185,8 @@ class AgentConfigTest(unittest.TestCase):
                     "webBaseUrl": "http://localhost:5173",
                     "activationToken": "download-token",
                     "environment": "local",
+                    "symptom": "게임 중 그래픽 프레임이 끊깁니다.",
+                    "symptomType": "REMOTE_DRIVER_OS",
                 }
             ),
             encoding="utf-8",
@@ -191,6 +199,8 @@ class AgentConfigTest(unittest.TestCase):
         self.assertEqual(saved["activationToken"], "download-token")
         self.assertEqual(saved["deviceFingerprintHash"], "local-fingerprint")
         self.assertIsNone(saved["agentToken"])
+        self.assertEqual(saved["symptom"], "게임 중 그래픽 프레임이 끊깁니다.")
+        self.assertEqual(saved["symptomType"], "REMOTE_DRIVER_OS")
 
     def test_import_activation_config_reads_token_from_executable_name(self) -> None:
         path = self.write_config(self.valid_config(activationToken="old-token", agentToken="old-agent-token"))

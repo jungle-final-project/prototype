@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, CircleX, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CircleX, HelpCircle, Sparkles, X } from 'lucide-react';
 import {
   PART_CATEGORY_LABELS,
   type BuildGraphFocus,
@@ -26,6 +26,7 @@ import {
   type SlotEdgeConfig
 } from './slotBoardConfig';
 import { FusedPlateArt } from './FusedPlateArt';
+import { HelpTip } from './HelpTip';
 import { withObjectParticle } from './koreanParticle';
 
 // 3뷰: 배치판(fused, 기본) / 실장도(motherboard, 구 평면도 복원) / 3D 등각(isometric).
@@ -60,6 +61,8 @@ type SlotBoardProps = {
   isQuantityPending: boolean;
   graph?: BuildGraphResolveResponse;
   connectorAnchors?: ConnectorAnchors;
+  bodyOverlay?: ReactNode;
+  onBodyOverlayDismiss?: () => void;
 };
 
 export function SlotBoard({
@@ -77,7 +80,9 @@ export function SlotBoard({
   isRemovePending,
   isQuantityPending,
   graph,
-  connectorAnchors
+  connectorAnchors,
+  bodyOverlay,
+  onBodyOverlayDismiss
 }: SlotBoardProps) {
   const statusByCategory = partStatusByCategory(graph);
   const boardProblems = slotBoardProblems(graph);
@@ -174,16 +179,16 @@ export function SlotBoard({
       className="panel slot-board-panel isolate relative flex h-full min-h-0 w-full min-w-0 max-w-[calc(100vw-2rem)] flex-col overflow-hidden bg-white lg:max-w-full"
     >
       {/* 보드 헤더: 제목 + 호환 상태 범례(초록/노랑/빨강/회색) */}
-      <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-2.5">
+      <div className="border-b border-commerce-line bg-gradient-to-b from-white to-slate-50 px-4 py-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 text-xs font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
+            <span className="shrink-0 text-base font-black text-slate-700">구성 관계도 — 부품 간 호환 상태</span>
             {nextCategory && !hasAiFocus ? (
               <button
                 type="button"
                 data-testid="quote-next-guide"
                 onClick={() => onSlotSelect(nextCategory)}
-                className="min-w-0 truncate rounded-md border border-blue-100 bg-blue-50/70 px-2 py-1 text-[10px] font-black text-brand-blue transition hover:border-brand-blue/30 hover:bg-blue-50"
+                className="min-w-0 truncate rounded-md border border-blue-100 bg-blue-50/70 px-2 py-1 text-xs font-black text-brand-blue transition hover:border-brand-blue/30 hover:bg-blue-50"
               >
                 다음: {slotOrderNumber(nextCategory)}. {withObjectParticle(PART_CATEGORY_LABELS[nextCategory])} 선택해 주세요
               </button>
@@ -192,7 +197,7 @@ export function SlotBoard({
           {hasAiFocus ? (
             <span
               data-testid="slot-board-ai-focus-status"
-              className="ml-auto inline-flex min-w-0 items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue"
+              className="ml-auto inline-flex min-w-0 items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-black text-brand-blue"
             >
               <span className="truncate">{aiFocusLabel} 위치 강조 중</span>
               <button
@@ -227,102 +232,143 @@ export function SlotBoard({
           onExplain={(problem) => explainIssue(undefined, problem.tool)}
         />
       ) : null}
-      {isIsometric ? (
-        <IsometricSlotBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onClearSelection={onClearSelection}
-          onClearAiFocus={onClearAiFocus}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          overlaysVisible={overlaysVisible}
-          connectorAnchors={connectorAnchors}
-          onExplainIssue={explainIssue}
-        />
-      ) : isMotherboard ? (
-        <MotherboardSlotBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onClearAiFocus={onClearAiFocus}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          isClosing={isMotherboardClosing}
-        />
-      ) : isRelationMapVisible ? (
-        <RelationMapBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onRemoveItem={onRemoveItem}
-          isRemovePending={isRemovePending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          problems={boardProblems}
-          onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
-        />
-      ) : (
-        <FusedSlotBoardBody
-          items={items}
-          selectedCategory={selectedCategory}
-          aiFocusCategories={aiFocusCategories}
-          nextCategory={nextCategory}
-          onSlotSelect={onSlotSelect}
-          onClearAiFocus={onClearAiFocus}
-          onRemoveItem={onRemoveItem}
-          onUpdateQuantity={onUpdateQuantity}
-          isRemovePending={isRemovePending}
-          isQuantityPending={isQuantityPending}
-          graph={graph}
-          statusByCategory={statusByCategory}
-          flashingCategories={flashingCategories}
-          problems={showFusedProblemOverlay ? boardProblems : []}
-          onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
-        />
-      )}
+      <div data-testid="slot-board-body-stage" className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {isIsometric ? (
+          <IsometricSlotBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onClearSelection={onClearSelection}
+            onClearAiFocus={onClearAiFocus}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            overlaysVisible={overlaysVisible}
+            connectorAnchors={connectorAnchors}
+            onExplainIssue={explainIssue}
+          />
+        ) : isMotherboard ? (
+          <MotherboardSlotBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onClearAiFocus={onClearAiFocus}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            isClosing={isMotherboardClosing}
+          />
+        ) : isRelationMapVisible ? (
+          <RelationMapBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onRemoveItem={onRemoveItem}
+            isRemovePending={isRemovePending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            problems={boardProblems}
+            onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
+          />
+        ) : (
+          <FusedSlotBoardBody
+            items={items}
+            selectedCategory={selectedCategory}
+            aiFocusCategories={aiFocusCategories}
+            nextCategory={nextCategory}
+            onSlotSelect={onSlotSelect}
+            onClearAiFocus={onClearAiFocus}
+            onRemoveItem={onRemoveItem}
+            onUpdateQuantity={onUpdateQuantity}
+            isRemovePending={isRemovePending}
+            isQuantityPending={isQuantityPending}
+            graph={graph}
+            statusByCategory={statusByCategory}
+            flashingCategories={flashingCategories}
+            problems={showFusedProblemOverlay ? boardProblems : []}
+            onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
+          />
+        )}
+        {bodyOverlay ? (
+          <>
+            <button
+              type="button"
+              data-testid="slot-candidate-overlay-dismiss"
+              aria-label="상품 후보 목록 닫기"
+              onClick={onBodyOverlayDismiss}
+              className="absolute inset-0 z-40 hidden cursor-default bg-transparent lg:block"
+            />
+            <div
+              data-testid="slot-candidate-overlay-layer"
+              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))]"
+            >
+              <div className="pointer-events-auto h-full w-full">{bodyOverlay}</div>
+            </div>
+          </>
+        ) : null}
+      </div>
       {!isIsometric ? (
-        <button
-          type="button"
-          aria-pressed={isMotherboard}
-          onClick={toggleMotherboard}
-          disabled={isMotherboardClosing}
-          className={`absolute bottom-4 right-4 z-30 hidden rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 lg:block ${
-            isMotherboard
-              ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
-              : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
-          }`}
-        >
-          {isMotherboard ? '실장도 접기' : '실장도 보기'}
-        </button>
+        <div className="absolute bottom-4 right-4 z-[60] hidden lg:block">
+          <button
+            type="button"
+            aria-pressed={isMotherboard}
+            onClick={toggleMotherboard}
+            disabled={isMotherboardClosing}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 ${
+              isMotherboard
+                ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+            }`}
+          >
+            {isMotherboard ? '실장도 접기' : '실장도 보기'}
+            <HelpTip
+              text="부품이 메인보드 어디에 장착되는지 실제 배치 모습으로 보여줍니다. CPU·램·그래픽카드가 꽂히는 자리를 확인할 수 있습니다."
+              placement="top"
+              align="right"
+            >
+              <span className="grid place-items-center opacity-60 transition group-hover:opacity-100">
+                <HelpCircle size={13} aria-hidden="true" />
+              </span>
+            </HelpTip>
+          </button>
+        </div>
       ) : null}
       {!isIsometric ? (
-        <button
-          type="button"
-          data-testid="relation-map-open"
-          aria-pressed={isRelationMapVisible}
-          onClick={toggleRelationMap}
-          className={`absolute bottom-4 left-4 z-30 hidden rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 lg:block ${
-            isRelationMapVisible
-              ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
-              : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
-          }`}
-        >
-          {isRelationMapVisible ? '기본 관계도 보기' : '영향 지도 보기'}
-        </button>
+        <div className="absolute bottom-4 left-4 z-30 hidden lg:block">
+          <button
+            type="button"
+            data-testid="relation-map-open"
+            aria-pressed={isRelationMapVisible}
+            onClick={toggleRelationMap}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-2 ${
+              isRelationMapVisible
+                ? 'border-brand-blue bg-brand-blue text-white hover:bg-blue-700'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-brand-blue hover:text-brand-blue'
+            }`}
+          >
+            {isRelationMapVisible ? '기본 관계도 보기' : '영향 지도 보기'}
+            <HelpTip
+              text="선택한 부품이 다른 부품들과 어떻게 연결되는지 한눈에 보여주는 지도입니다. 선 색으로 호환 가능(초록)·간섭 주의(노랑)·장착 불가(빨강)를 확인할 수 있습니다."
+              placement="top"
+              align="left"
+            >
+              <span className="grid place-items-center opacity-60 transition group-hover:opacity-100">
+                <HelpCircle size={13} aria-hidden="true" />
+              </span>
+            </HelpTip>
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -356,7 +402,7 @@ function SlotBoardModeSegments({
             role="radio"
             aria-checked={active}
             onClick={() => onChange?.(option.mode)}
-            className={`rounded-full px-2 py-0.5 text-[10px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
+            className={`rounded-full px-2.5 py-1 text-xs font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
               active ? 'bg-brand-blue text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
             }`}
           >
@@ -1728,8 +1774,6 @@ function IsometricSlotCard({
             <ProblemStatusBadge slot={slot} detail={problemDetail} tone="FAIL" onProblemOpen={onProblemOpen} />
           ) : slotStatus === 'WARN' ? (
             <ProblemStatusBadge slot={slot} detail={problemDetail} tone="WARN" onProblemOpen={onProblemOpen} />
-          ) : filled ? (
-            <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[9px] font-black text-emerald-700">호환 가능</span>
           ) : isNext ? (
             <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[9px] font-black text-brand-blue">다음 선택</span>
           ) : null}
@@ -2478,8 +2522,6 @@ function MotherboardSlot({
             <span className="rounded border border-red-200 bg-red-50 px-1 py-0.5 text-[9px] font-black text-red-700">장착 불가</span>
           ) : slotStatus === 'WARN' ? (
             <span className="rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-black text-amber-700">간섭 주의</span>
-          ) : filled ? (
-            <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[9px] font-black text-emerald-700">호환 가능</span>
           ) : isNext ? (
             <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[9px] font-black text-brand-blue">다음 선택</span>
           ) : null}

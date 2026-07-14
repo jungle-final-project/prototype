@@ -27,16 +27,16 @@ import { AiBuildAssistant } from '../../quote/components/AiBuildAssistant';
 import { buildSaveErrorMessage, resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
-import { DraftQuantityStepper } from '../components/slot-board/DraftQuantityStepper';
 import { SlotBoard, type SlotBoardVisualMode } from '../components/slot-board/SlotBoard';
+import { SlotCandidatePanel } from '../components/slot-board/SlotCandidatePanel';
 import { QuoteCheckoutActions, SlotStatusBar } from '../components/slot-board/SlotStatusBar';
-import { RECOMMENDED_SLOT_ORDER, SLOT_CONFIGS, SLOT_COUNT, isMultiItemCategory, isSlotCategory } from '../components/slot-board/slotBoardConfig';
+import { RECOMMENDED_SLOT_ORDER, SLOT_CONFIGS, SLOT_COUNT, isSlotCategory } from '../components/slot-board/slotBoardConfig';
+import { handlePartImageError, partImageUrl } from '../partDisplay';
 import {
   applyAiBuildToQuoteDraft,
   deleteQuoteDraftItem,
   getBuildGraphLayoutDefault,
   getCurrentQuoteDraft,
-  listParts,
   patchQuoteDraftItem,
   putQuoteDraftItem
 } from '../partsApi';
@@ -75,7 +75,6 @@ function SelfQuoteSlotBoardPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [applyingBuildId, setApplyingBuildId] = useState<string | null>(null);
   const [compareApplyError, setCompareApplyError] = useState<string | null>(null);
-  const [boardSelectionRequest, setBoardSelectionRequest] = useState(0);
   const [aiFocusCategories, setAiFocusCategories] = useState<PartCategory[]>([]);
   // 성능 패널 교체 비교(기존 조합 vs 변경 조합) — 변경 후보 1개를 페이지가 소유하고 패널에 내려준다.
   const [perfComparison, setPerfComparison] = useState<PerfCompareTarget | null>(null);
@@ -93,7 +92,6 @@ function SelfQuoteSlotBoardPage() {
     void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
     // 담기(ADD) 평가는 현재 구성에 직접 의존하므로 드래프트가 바뀌면 후보 목록도 재평가한다.
     void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
-    void queryClient.invalidateQueries({ queryKey: ['parts', 'checklist-accordion-candidates'] });
   };
   const addMutation = useMutation({
     mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => putQuoteDraftItem(partId, quantity),
@@ -215,9 +213,21 @@ function SelfQuoteSlotBoardPage() {
     }
   };
 
+  const closePanel = useCallback(() => {
+    setSearchParams((current) => {
+      const nextParams = new URLSearchParams(current);
+      nextParams.delete('category');
+      return nextParams;
+    });
+  }, [setSearchParams]);
+
   const selectSlot = (category: PartCategory) => {
     if (!hasToken) {
       navigate(loginHref);
+      return;
+    }
+    if (selectedCategory === category) {
+      closePanel();
       return;
     }
     setSearchParams((current) => {
@@ -229,7 +239,6 @@ function SelfQuoteSlotBoardPage() {
 
   const selectBoardSlot = (category: PartCategory) => {
     setAiFocusCategories([]);
-    setBoardSelectionRequest((request) => request + 1);
     selectSlot(category);
   };
 
@@ -241,20 +250,13 @@ function SelfQuoteSlotBoardPage() {
     setAiFocusCategories([]);
   }, []);
 
-  const closePanel = useCallback(() => {
-    setSearchParams((current) => {
-      const nextParams = new URLSearchParams(current);
-      nextParams.delete('category');
-      return nextParams;
-    });
-  }, [setSearchParams]);
-
-  const addPart = (part: PartRow) => {
+  const addPart = async (part: PartRow) => {
     if (!hasToken) {
       navigate(loginHref);
-      return;
+      throw new Error('로그인이 필요합니다.');
     }
-    addMutation.mutate({ partId: part.id, quantity: 1 });
+    await addMutation.mutateAsync({ partId: part.id, quantity: 1 });
+    closePanel();
   };
 
   const removeItem = (partId: string) => {
@@ -292,6 +294,9 @@ function SelfQuoteSlotBoardPage() {
   );
 
   const filledCount = SLOT_CONFIGS.filter((slot) => draftItems.some((item) => item.category === slot.category)).length;
+  const selectedSlot = selectedCategory
+    ? SLOT_CONFIGS.find((slot) => slot.category === selectedCategory) ?? null
+    : null;
   // 순차 가이드: 권장 순서에서 아직 비어 있는 첫 카테고리를 "다음 선택"으로 안내한다(강제 아님).
   const nextCategory = RECOMMENDED_SLOT_ORDER.find((category) => !draftItems.some((item) => item.category === category)) ?? null;
   const warnCount = graphQuery.data
@@ -398,13 +403,9 @@ function SelfQuoteSlotBoardPage() {
             draftItems={draftItems}
             selectedCategory={selectedCategory}
             nextCategory={nextCategory}
-            boardSelectionRequest={boardSelectionRequest}
             onSelect={selectSlot}
             onClearSelection={closePanel}
-            onAddPart={addPart}
             onRemoveItem={removeItem}
-            onUpdateQuantity={updateQuantity}
-            isMutating={isMutating}
             isRemovePending={deleteMutation.isPending}
             statusByCategory={statusByCategory}
           />
@@ -425,6 +426,19 @@ function SelfQuoteSlotBoardPage() {
               isQuantityPending={updateQuantityMutation.isPending}
               graph={graphQuery.data}
               connectorAnchors={anchorQuery.data?.anchors}
+              bodyOverlay={selectedSlot ? (
+                <SlotCandidatePanel
+                  slot={selectedSlot}
+                  draftItems={draftItems.filter((item) => item.category === selectedSlot.category)}
+                  onClose={closePanel}
+                  onAddPart={addPart}
+                  onRemoveItem={removeItem}
+                  onUpdateQuantity={updateQuantity}
+                  isMutating={isMutating}
+                  placement="board-overlay"
+                />
+              ) : null}
+              onBodyOverlayDismiss={closePanel}
             />
           </div>
           <div className="min-h-0 min-w-0 max-w-full lg:col-start-3 lg:row-span-3 lg:row-start-1 lg:h-full">
@@ -532,62 +546,28 @@ function QuoteChecklist({
   draftItems,
   selectedCategory,
   nextCategory,
-  boardSelectionRequest,
   onSelect,
   onClearSelection,
-  onAddPart,
   onRemoveItem,
-  onUpdateQuantity,
-  isMutating,
   isRemovePending,
   statusByCategory
 }: {
   draftItems: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
   nextCategory: PartCategory | null;
-  boardSelectionRequest: number;
   onSelect: (category: PartCategory) => void;
   onClearSelection: () => void;
-  onAddPart: (part: PartRow) => void;
   onRemoveItem: (partId: string) => void;
-  onUpdateQuantity: (partId: string, quantity: number) => void;
-  isMutating: boolean;
   isRemovePending: boolean;
   statusByCategory: Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>;
 }) {
-  const [expandedCategory, setExpandedCategory] = useState<PartCategory | null>(() => selectedCategory ?? nextCategory ?? 'CPU');
   const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
-  const activeCategory = expandedCategory ?? selectedCategory ?? nextCategory ?? 'CPU';
-  const selectedPartIds = useMemo(() => new Set(draftItems.map((item) => item.partId)), [draftItems]);
-  const activeIsMulti = isMultiItemCategory(activeCategory);
-  const candidateQuery = useQuery({
-    queryKey: ['parts', 'checklist-accordion-candidates', activeCategory, activeIsMulti ? 'ADD' : 'REPLACE'],
-    queryFn: () => listParts({
-      category: activeCategory,
-      page: 0,
-      size: 100,
-      sort: 'compatibility',
-      compatibilitySource: 'QUOTE_DRAFT_CURRENT',
-      compatibilityMode: activeIsMulti ? 'ADD' : undefined
-    }),
-    enabled: Boolean(activeCategory),
-    placeholderData: keepPreviousData,
-    staleTime: 30_000
-  });
-
-  useEffect(() => {
-    if (selectedCategory) {
-      setExpandedCategory(selectedCategory);
-    }
-  }, [selectedCategory, boardSelectionRequest]);
 
   const toggleCategory = (category: PartCategory) => {
-    if (expandedCategory === category) {
-      setExpandedCategory(null);
+    if (selectedCategory === category) {
       onClearSelection();
       return;
     }
-    setExpandedCategory(category);
     onSelect(category);
   };
 
@@ -597,10 +577,6 @@ function QuoteChecklist({
     }
     event.preventDefault();
     toggleCategory(category);
-  };
-
-  const choosePart = (part: PartRow) => {
-    onAddPart(part);
   };
 
   const removeCategoryItems = (items: QuoteDraftItem[]) => {
@@ -648,8 +624,8 @@ function QuoteChecklist({
               <div
                 role="button"
                 tabIndex={0}
-                aria-label={`${label} 후보 목록 ${expandedCategory === category ? '닫기' : '열기'}`}
-                aria-expanded={expandedCategory === category}
+                aria-label={`${label} 후보 목록 ${isSelected ? '닫기' : '열기'}`}
+                aria-expanded={isSelected}
                 data-testid={`checklist-${category}`}
                 data-filled={filled ? 'true' : 'false'}
                 data-next={isNext ? 'true' : 'false'}
@@ -662,7 +638,7 @@ function QuoteChecklist({
                       ? 'checklist-warning-fill-pulse'
                       : ''
                 } ${
-                  isSelected || expandedCategory === category
+                  isSelected
                     ? hasFail
                       ? 'border-red-300 bg-red-50/60 ring-2 ring-red-100'
                       : hasWarn
@@ -707,87 +683,28 @@ function QuoteChecklist({
                   )}
                 </div>
                 {filled ? (
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate text-[11px] text-slate-500">
-                      {items[0].name}
-                      {items.length > 1 ? ` 외 ${items.length - 1}개` : ''}
+                  <div className="mt-1.5 flex min-w-0 items-center gap-2">
+                    <img
+                      data-testid={`checklist-part-image-${category}`}
+                      src={partImageUrl(items[0])}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      onError={(event) => handlePartImageError(event, category)}
+                      className="h-10 w-10 shrink-0 rounded-md border border-commerce-line bg-white object-contain p-0.5"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-bold text-slate-600">
+                        {items[0].name}
+                        {items.length > 1 ? ` 외 ${items.length - 1}개` : ''}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] font-black text-commerce-ink">{lineTotal.toLocaleString()}원</span>
                     </span>
-                    <span className="shrink-0 text-[11px] font-black text-commerce-ink">{lineTotal.toLocaleString()}원</span>
                   </div>
                 ) : (
                   <div className="mt-1 text-[11px] text-slate-400">+ 부품 선택</div>
                 )}
               </div>
-              {expandedCategory === category ? (
-                <div
-                  data-testid={`checklist-candidates-${category}`}
-                  className="mt-1.5 rounded-md border border-blue-100 bg-blue-50/30 p-1.5"
-                >
-                  {isMultiItemCategory(category) && items.length > 0 ? (
-                    <div data-testid={`checklist-selected-items-${category}`} className="mb-1.5 space-y-1">
-                      {items.map((item) => (
-                        <div
-                          key={item.partId}
-                          className="flex items-center justify-between gap-2 rounded border border-commerce-line bg-white px-2 py-1.5"
-                        >
-                          <span className="min-w-0 truncate text-[11px] font-black text-commerce-ink">{item.name}</span>
-                          <DraftQuantityStepper item={item} disabled={isMutating} onChange={onUpdateQuantity} />
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {candidateQuery.isLoading ? (
-                    <div className="rounded bg-white px-2 py-3 text-center text-[11px] font-bold text-slate-400">후보를 불러오는 중</div>
-                  ) : candidateQuery.isError ? (
-                    <div className="rounded bg-white px-2 py-3 text-center text-[11px] font-bold text-red-500">후보를 불러오지 못했습니다</div>
-                  ) : (
-                    <div className="max-h-[330px] space-y-1 overflow-y-auto pr-1">
-                      {(candidateQuery.data?.items ?? []).map((part) => {
-                        const isAlreadySelected = selectedPartIds.has(part.id);
-                        const status = part.compatibility?.status;
-                        const isFail = status === 'FAIL';
-                        return (
-                          <button
-                            key={part.id}
-                            type="button"
-                            disabled={isMutating || isAlreadySelected}
-                            onClick={() => choosePart(part)}
-                            className={`w-full rounded border bg-white px-2 py-2 text-left text-[11px] transition ${
-                              isFail
-                                ? 'border-red-100 bg-red-50/40 hover:border-red-300'
-                                : isAlreadySelected
-                                  ? 'border-emerald-200 bg-emerald-50'
-                                  : 'border-commerce-line hover:border-brand-blue hover:bg-white'
-                            } disabled:cursor-not-allowed`}
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <span className="line-clamp-2 min-w-0 font-black text-commerce-ink">{part.name}</span>
-                              <span className="shrink-0 font-black text-commerce-ink">{part.price.toLocaleString()}원</span>
-                            </div>
-                            <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
-                              <span className="truncate text-slate-500">{part.manufacturer ?? '제조사 미상'}</span>
-                              <span className={`shrink-0 font-black ${
-                                status === 'PASS'
-                                  ? 'text-emerald-700'
-                                  : status === 'WARN'
-                                    ? 'text-amber-600'
-                                    : status === 'FAIL'
-                                      ? 'text-red-600'
-                                      : 'text-slate-400'
-                              }`}>
-                                {isAlreadySelected ? '선택됨' : status ?? '확인 전'}
-                              </span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                      {candidateQuery.data?.items.length === 0 ? (
-                        <div className="rounded bg-white px-2 py-3 text-center text-[11px] font-bold text-slate-400">표시할 후보가 없습니다</div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              ) : null}
             </li>
           );
         })}

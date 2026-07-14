@@ -28,5 +28,28 @@ public interface AiChatEngine {
         return Optional.empty();
     }
 
+    /**
+     * 서버가 검증한 부품 후보와 변경 사실을 대화형 안내 문장으로만 다듬는다.
+     * 구현체는 후보, 가격, 호환성 판단을 추가하거나 변경하지 않는다.
+     */
+    default Optional<String> explainVerifiedChangeAdvice(
+            AiChatEngineRequest request,
+            String requestedAiProfile
+    ) {
+        return Optional.empty();
+    }
+
+    /**
+     * AS 상담 카드의 채팅 문구·요약·원인 후보를 증상 원문 기반으로 생성한다.
+     * empty를 돌려주면 호출측이 카테고리별 정적 프로필로 폴백한다(데모 안전).
+     */
+    default Optional<SupportGuidanceDraft> draftSupportGuidance(
+            String symptom,
+            String symptomCategory,
+            String requestedAiProfile
+    ) {
+        return Optional.empty();
+    }
+
     QuoteRequirementAnalysisResult analyzeQuoteRequirement(QuoteRequirementAnalysisRequest request);
 }
