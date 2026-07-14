@@ -21,6 +21,7 @@ import com.buildgraph.prototype.agent.AiChatAction;
 import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.agent.AiChatEngineRequest;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
+import com.buildgraph.prototype.agent.SupportGuidanceDraft;
 import com.buildgraph.prototype.agent.AiChatIntent;
 import com.buildgraph.prototype.agent.PartReplacementRanker;
 import com.buildgraph.prototype.agent.PartRouteResolver;
@@ -108,7 +109,7 @@ class BuildChatServiceTest {
     }
 
     @Test
-    void shoppingSymptomFastPathReturnsPreDiagnosisGuidanceWithoutCallingDiagnosisOrLlm() {
+    void shoppingSymptomGuidanceFallsBackToStaticProfileWhenLlmUnavailable() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
@@ -146,7 +147,57 @@ class BuildChatServiceTest {
                                     .containsEntry("type", "OPEN_SUPPORT_NEW")
                                     .containsEntry("route", "/support/new"));
                 });
-        verifyNoInteractions(aiChatEngine, jdbcTemplate, toolCheckService);
+        // 가이던스 문구용 LLM 초안 시도만 허용하고, 진단/DB 경로는 여전히 타지 않는다.
+        org.mockito.Mockito.verify(aiChatEngine).draftSupportGuidance(any(), any(), any());
+        org.mockito.Mockito.verifyNoMoreInteractions(aiChatEngine);
+        verifyNoInteractions(jdbcTemplate, toolCheckService);
+    }
+
+    @Test
+    void shoppingSymptomGuidanceUsesLlmDraftWhenAvailable() {
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        when(aiChatEngine.draftSupportGuidance(any(), any(), any())).thenReturn(Optional.of(new SupportGuidanceDraft(
+                "화면이 검게 변했다가 돌아오는 증상으로 이해했습니다. PC Agent를 실행하면 증상 직후 로그로 가능성을 좁힐 수 있습니다.",
+                "그래픽 드라이버 응답 중단 등이 원인 후보로 예상됩니다.",
+                List.of("그래픽 드라이버 응답 중단", "모니터 신호 케이블 손실", "GPU 전원 공급 불안정")
+        )));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                BuildChatCacheService.disabled()
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "게임하다 화면이 자꾸 멈춰"));
+
+        // 채팅 문구·요약·원인 후보는 LLM 초안을 쓰고, 구조 필드(제목 등)는 정적 프로필을 유지한다.
+        assertThat(response.get("message")).asString().contains("화면이 검게 변했다가 돌아오는 증상");
+        assertThat(response.get("supportGuidance"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("summary", "그래픽 드라이버 응답 중단 등이 원인 후보로 예상됩니다.")
+                .containsEntry("title", "게임·화면 멈춤 증상")
+                .satisfies(guidance -> assertThat(guidance.get("possibleCauses")).asList()
+                        .containsExactly("그래픽 드라이버 응답 중단", "모니터 신호 케이블 손실", "GPU 전원 공급 불안정"));
+    }
+
+    @Test
+    void shoppingSymptomGuidanceFallsBackToStaticProfileWhenLlmThrows() {
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        when(aiChatEngine.draftSupportGuidance(any(), any(), any())).thenThrow(new RuntimeException("llm down"));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                BuildChatCacheService.disabled()
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "게임하다 화면이 자꾸 멈춰"));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("supportGuidance"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .satisfies(guidance -> assertThat(guidance.get("possibleCauses")).asList()
+                        .contains("그래픽 드라이버 충돌"));
     }
 
     @Test

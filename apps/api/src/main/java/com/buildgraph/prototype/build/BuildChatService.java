@@ -2,6 +2,7 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.agent.AiChatEngineRequest;
+import com.buildgraph.prototype.agent.SupportGuidanceDraft;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
 import com.buildgraph.prototype.agent.AiChatIntent;
 import com.buildgraph.prototype.agent.AiChatAction;
@@ -2402,9 +2403,24 @@ public class BuildChatService {
                 ? requestedCategory
                 : inferSupportSymptomCategory(message);
         SupportGuidanceProfile profile = supportGuidanceProfile(symptomCategory);
+        // 증상 원문 기반 LLM 생성 시도 — 실패·미설정 시 카테고리별 정적 문구로 폴백해 데모 안전을 지킨다.
+        String guidanceMessage = profile.message();
+        String guidanceSummary = profile.summary();
+        List<String> guidanceCauses = profile.possibleCauses();
+        try {
+            Optional<SupportGuidanceDraft> draft =
+                    aiChatEngine.draftSupportGuidance(message, symptomCategory, CONTEXTUAL_CLARIFICATION_PROFILE);
+            if (draft.isPresent()) {
+                guidanceMessage = draft.get().message();
+                guidanceSummary = draft.get().summary();
+                guidanceCauses = draft.get().possibleCauses();
+            }
+        } catch (Exception exception) {
+            log.warn("supportGuidance LLM draft failed, falling back to static profile: {}", exception.getMessage());
+        }
         Map<String, Object> response = fastResponse(
                 "GENERAL",
-                profile.message(),
+                guidanceMessage,
                 List.of()
         );
         response.put("simulation", null);
@@ -2413,8 +2429,8 @@ public class BuildChatService {
                 "scope", "PRE_DIAGNOSIS",
                 "symptomCategory", symptomCategory,
                 "title", profile.title(),
-                "summary", profile.summary(),
-                "possibleCauses", profile.possibleCauses(),
+                "summary", guidanceSummary,
+                "possibleCauses", guidanceCauses,
                 "beforeDiagnosisChecks", profile.beforeDiagnosisChecks(),
                 "agentRecommendation", profile.agentRecommendation(),
                 "actions", List.of(

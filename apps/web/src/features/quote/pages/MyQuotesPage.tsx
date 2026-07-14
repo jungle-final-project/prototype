@@ -40,7 +40,11 @@ export function MyQuotesPage() {
   const assemblyRequestsQuery = useQuery({
     queryKey: ['assembly-requests'],
     queryFn: () => listAssemblyRequests(),
-    refetchInterval: 5000
+    // 진행 중(입찰 대기·제안 수신) 요청이 있을 때만 5초, 아니면 30초 — 다탭 요청 폭주 방지.
+    refetchInterval: (query) => {
+      const items = (query.state.data as Awaited<ReturnType<typeof listAssemblyRequests>> | undefined)?.items ?? [];
+      return items.some((item) => item.status === 'REQUESTED' || item.status === 'OFFERED') ? 5000 : 30_000;
+    }
   });
 
   const builds = buildsQuery.data?.items ?? [];
