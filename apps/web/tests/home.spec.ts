@@ -1046,7 +1046,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   expect(buildChatRequests[0].message).toBe('200만원 PC 추천');
   expect(buildChatRequests[0].currentQuoteDraft).toBeUndefined();
   await expect(chatbotPanel).toContainText('AI 견적 어시스턴트');
-  await expect(chatbotPanel).toContainText('가격 통과');
+  await expect(chatbotPanel).toContainText('이 조합으로 셀프 견적 보기');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 실속형');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 균형형');
   await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
@@ -2521,6 +2521,13 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
     await expect(cards).not.toHaveCount(3, { timeout: 150 });
     // 잠시 뒤 3장이 모두 노출된다.
     await expect(cards).toHaveCount(3);
+
+    // AI 견적 카드는 특이사항·가격·담기 버튼만 노출한다 — 툴 통과 상태·부품명은 제거됨.
+    const firstCard = cards.first();
+    await expect(firstCard).toContainText('이 조합으로 셀프 견적 보기');
+    await expect(firstCard).toContainText('조합입니다'); // 특이사항(summary)
+    await expect(firstCard).not.toContainText('통과'); // 툴 검증 칩 제거
+    await expect(firstCard).not.toContainText('서버 추천'); // 부품명 목록 제거
   });
 
   test('모션 최소화 설정에서는 카드가 한 번에 노출된다', async ({ page }) => {

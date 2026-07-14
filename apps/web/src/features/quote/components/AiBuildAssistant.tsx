@@ -30,7 +30,6 @@ import {
   type AiQuickReplyCommand,
   type AiRecommendedBuild,
   type AiSupportGuidance,
-  type AiToolResult,
   type BuildGraphFocus,
   type PartCategory
 } from '../aiSelection';
@@ -1040,7 +1039,7 @@ function useSequentialReveal(sentences: string[], extraCount: number, active: bo
     for (let index = 1; index < total; index += 1) {
       const delay = index < sentences.length
         ? Math.min(240 + sentences[index].length * 16, 720) // 문장: 읽는 속도처럼
-        : 650; // 카드: 펼쳐지는 애니메이션(600ms)이 충분히 보이도록 넉넉한 간격
+        : 850; // 카드: 내부 섹션이 차근차근 채워지는 걸 보여주도록 넉넉한 간격
       elapsed += delay;
       const nextCount = index + 1;
       timers.push(window.setTimeout(() => {
@@ -1530,16 +1529,13 @@ function CompactBuildCard({
   const isApplyingThis = applyingBuildId === build.id;
   const isApplyDisabled = Boolean(applyingBuildId);
 
-  // 카드 내부를 헤더 → 제목·가격 → 검증칩 → 부품목록 → 버튼 순서로 하나씩 채운다(강조).
+  // 카드 내부를 헤더 → 제목·특이사항·가격 → 담기 버튼 순서로 하나씩 채운다(강조).
   const animateSections = reveal && !prefersReducedMotion();
-  const hasTools = Boolean(build.toolResults?.length);
   let sectionIndex = 0;
   const headerIdx = sectionIndex++;
   const titleIdx = sectionIndex++;
-  const toolsIdx = hasTools ? sectionIndex++ : -1;
-  const partsIdx = sectionIndex++;
   const buttonIdx = sectionIndex++;
-  const visibleSections = useStepReveal(sectionIndex, animateSections, 120);
+  const visibleSections = useStepReveal(sectionIndex, animateSections, 280);
   const sectionStyle = (idx: number): CSSProperties | undefined => (animateSections
     ? {
       opacity: idx < visibleSections ? 1 : 0,
@@ -1570,27 +1566,6 @@ function CompactBuildCard({
           </div>
         </div>
       </div>
-      {build.toolResults?.length ? (
-        <div style={sectionStyle(toolsIdx)} className={`${isLarge ? 'mt-4 gap-2' : 'mt-3 gap-1.5'} flex flex-wrap`} aria-label="검증 결과">
-          {build.toolResults.map((result) => (
-            <span
-              key={`${result.tool}-${result.status}`}
-              title={result.summary}
-              className={`${isLarge ? 'px-3 py-1.5 text-[15px]' : 'px-2 py-1 text-[11px]'} rounded-full border font-black ${toolStatusChipClass(result.status)}`}
-            >
-              {toolDisplayLabel(result.tool)} {toolStatusLabel(result.status)}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div style={sectionStyle(partsIdx)} className={`${isLarge ? 'mt-4 gap-2 text-base' : 'mt-3 gap-1.5 text-xs'} grid`}>
-        {primaryItems.map((item) => (
-          <div key={item.partId} className={`${isLarge ? 'grid-cols-[78px_minmax(0,1fr)] gap-3 rounded-xl px-4 py-2.5' : 'grid-cols-[56px_minmax(0,1fr)] gap-2 rounded-lg px-2.5 py-1.5'} grid bg-slate-50`}>
-            <span className="font-black text-brand-blue">{PART_CATEGORY_LABELS[item.category]}</span>
-            <span className="truncate font-semibold text-slate-700">{item.name}</span>
-          </div>
-        ))}
-      </div>
       <button
         type="button"
         onClick={() => onSelectBuild(build)}
@@ -1603,29 +1578,6 @@ function CompactBuildCard({
       </button>
     </article>
   );
-}
-
-function toolDisplayLabel(tool: AiToolResult['tool']) {
-  const labels: Record<string, string> = {
-    compatibility: '호환성',
-    power: '전력',
-    size: '규격',
-    performance: '성능',
-    price: '가격'
-  };
-  return labels[tool] ?? tool;
-}
-
-function toolStatusLabel(status: AiToolResult['status']) {
-  if (status === 'PASS') return '통과';
-  if (status === 'WARN') return '주의';
-  return '불가';
-}
-
-function toolStatusChipClass(status: AiToolResult['status']) {
-  if (status === 'PASS') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (status === 'WARN') return 'border-amber-200 bg-amber-50 text-amber-700';
-  return 'border-red-200 bg-red-50 text-red-700';
 }
 
 function formatPlainNumber(value?: number | null) {
