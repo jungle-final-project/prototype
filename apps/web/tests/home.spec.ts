@@ -2476,4 +2476,35 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
     const animationName = await dot.evaluate((element) => window.getComputedStyle(element).animationName);
     expect(animationName).toBe('none');
   });
+
+  test('다중 문장 답변은 문장 단위로 순차 노출된다', async ({ page }) => {
+    const first = '첫 번째 문장입니다.';
+    const last = '마지막 세 번째 문장으로 끝납니다.';
+    await mockBuildChat(page, { delayMs: 300, message: `${first} 두 번째 문장이 이어집니다. ${last}` });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    // 첫 문장은 곧바로 보이지만 마지막 문장은 아직 노출되지 않는다(한 번에 팍 뜨지 않음).
+    await expect(panel).toContainText(first);
+    await expect(panel).not.toContainText(last, { timeout: 150 });
+
+    // 잠시 뒤 세 문장이 모두 노출된다.
+    await expect(panel).toContainText(last);
+    await expect(panel.getByTestId('ai-message-sentence')).toHaveCount(3);
+  });
+
+  test('모션 최소화 설정에서는 답변이 문장 분할 없이 한 번에 노출된다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const last = '마지막 세 번째 문장으로 끝납니다.';
+    await mockBuildChat(page, { delayMs: 300, message: `첫 번째 문장입니다. 두 번째 문장이 이어집니다. ${last}` });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    await expect(panel).toContainText(last); // 전체가 즉시 노출
+    await expect(panel.getByTestId('ai-message-sentence')).toHaveCount(0); // 문장 span 없이 통짜 렌더
+  });
 });

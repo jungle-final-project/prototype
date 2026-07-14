@@ -1,4 +1,4 @@
-import { type FormEvent, memo, useCallback, useEffect, useRef, useState } from 'react';
+import { type FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Download, LifeBuoy, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -112,6 +112,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [pendingVisible, setPendingVisible] = useState(false);
   const activeRequestRef = useRef<string | null>(null);
   const pendingTimerRef = useRef<number | null>(null);
+  // 방금 도착한 assistant 답변만 문장 단위로 순차 노출한다. 세션 복원/과거 메시지는 애니메이션하지 않는다.
+  const [revealMessageId, setRevealMessageId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [failedBuild, setFailedBuild] = useState<AiRecommendedBuild | null>(null);
@@ -457,6 +459,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       };
       setSession(nextSession);
       saveAssistantSession(nextSession, ownerKey);
+      setRevealMessageId(assistantMessage.id);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         saveAssistantSession(baseSession, ownerKey);
@@ -702,6 +705,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
                         runningQuickReplyCommandId={runningQuickReplyCommandId}
                         applyingBuildId={applyingBuildId}
                         size="large"
+                        reveal={message.id === revealMessageId}
                       />
                     ))}
                     {pending && pendingVisible ? (
@@ -822,6 +826,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
               onQuickReply={handleQuickReply}
               runningQuickReplyCommandId={runningQuickReplyCommandId}
               applyingBuildId={applyingBuildId}
+              reveal={message.id === revealMessageId}
             />
           ))}
           {pending && pendingVisible ? (
@@ -939,13 +944,85 @@ function toolFromPrompt(prompt: string): BuildGraphFocus['tool'] {
   return undefined;
 }
 
+// 답변 텍스트를 문장 단위로 자른다. 문장부호 뒤 공백 또는 줄바꿈에서만 끊어 "3.5" 같은 소수점은 보존한다.
+function splitIntoSentences(text: string): string[] {
+  return text
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?<=[.!?…。])\s+/))
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+// 새로 추가된 문장 하나를 자연스럽게 페이드 인한다. 커스텀 keyframe 없이 opacity 트랜지션만 쓴다(index.css 무수정).
+function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: boolean }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => setShown(true));
+    return () => window.cancelAnimationFrame(id);
+  }, []);
+  return (
+    <span
+      data-testid="ai-message-sentence"
+      className={`transition-opacity duration-300 ${shown ? 'opacity-100' : 'opacity-0'}`}
+    >
+      {leadingSpace ? ' ' : ''}{text}
+    </span>
+  );
+}
+
+// 방금 도착한 답변이면 문장을 순차로 노출하고, 그 외(과거 메시지·모션 최소화)에는 전체를 한 번에 렌더한다.
+function RevealText({ text, animate, className }: { text: string; animate: boolean; className?: string }) {
+  const sentences = useMemo(() => splitIntoSentences(text), [text]);
+  const prefersReduced = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const shouldAnimate = animate && !prefersReduced && sentences.length > 1;
+  const [visibleCount, setVisibleCount] = useState(shouldAnimate ? 1 : sentences.length);
+
+  useEffect(() => {
+    if (!shouldAnimate) {
+      setVisibleCount(sentences.length);
+      return;
+    }
+    setVisibleCount(1);
+    let cancelled = false;
+    const timers: number[] = [];
+    let elapsed = 0;
+    for (let index = 1; index < sentences.length; index += 1) {
+      // 다음 문장 길이에 비례한 짧은 간격(최대 720ms)으로 읽는 속도처럼 이어 붙인다.
+      elapsed += Math.min(240 + sentences[index].length * 16, 720);
+      const nextCount = index + 1;
+      timers.push(window.setTimeout(() => {
+        if (!cancelled) setVisibleCount(nextCount);
+      }, elapsed));
+    }
+    return () => {
+      cancelled = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, shouldAnimate]);
+
+  if (!shouldAnimate) {
+    return <p data-testid="ai-message-text" className={className}>{text}</p>;
+  }
+  return (
+    <p data-testid="ai-message-text" className={className} aria-live="polite">
+      {sentences.slice(0, visibleCount).map((sentence, index) => (
+        <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} />
+      ))}
+    </p>
+  );
+}
+
 const ChatMessage = memo(function ChatMessage({
   message,
   onSelectBuild,
   onQuickReply,
   runningQuickReplyCommandId,
   applyingBuildId,
-  size = 'default'
+  size = 'default',
+  reveal = false
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
@@ -953,6 +1030,7 @@ const ChatMessage = memo(function ChatMessage({
   runningQuickReplyCommandId: string | null;
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
+  reveal?: boolean;
 }) {
   const isUser = message.role === 'user';
   const isLarge = size === 'large';
@@ -969,7 +1047,11 @@ const ChatMessage = memo(function ChatMessage({
               {message.supportGuidance ? 'PC 상태 안내' : message.buildAssessment ? '견적 점수 설명' : message.simulation ? '성능 시뮬레이션' : 'AI 견적 어시스턴트'}
             </div>
           ) : null}
-          <p className="break-keep">{message.text}</p>
+          {isUser ? (
+            <p className="break-keep">{message.text}</p>
+          ) : (
+            <RevealText text={message.text} animate={reveal} className="break-keep" />
+          )}
           {!isUser && message.quickReplies?.length ? (
             <div data-testid="ai-quick-replies" className={`${isLarge ? 'mt-3 gap-3' : 'mt-2 gap-2'} flex flex-wrap`}>
               {message.quickReplies.map((reply) => {
@@ -1024,6 +1106,7 @@ const ChatMessage = memo(function ChatMessage({
   && prev.runningQuickReplyCommandId === next.runningQuickReplyCommandId
   && prev.applyingBuildId === next.applyingBuildId
   && prev.size === next.size
+  && prev.reveal === next.reveal
 ));
 
 function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSupportGuidance; size?: AiChatMessageSize }) {
