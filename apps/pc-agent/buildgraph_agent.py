@@ -285,6 +285,59 @@ def diagnosis_session_ui_state(
     return "SYMPTOM_CONFIRM"
 
 
+ACTIVE_VIEWER_AGENT_STATES = {"REQUEST_RECEIVED", "RUNNING"}
+ACTIVE_VIEWER_DIAGNOSIS_STATES = {"COLLECTING", "DIAGNOSING", "EVALUATING"}
+TERMINAL_VIEWER_AGENT_STATES = {"COMPLETED", "FAILED"}
+TERMINAL_VIEWER_DIAGNOSIS_STATES = {
+    "COMPLETED",
+    "PARTIALLY_COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "TIMED_OUT",
+}
+
+
+def active_viewer_session(
+    session: DiagnosisSession | None,
+    diagnosis: DiagnosisRunSnapshot | None,
+) -> DiagnosisSession | None:
+    if not isinstance(session, DiagnosisSession):
+        return None
+    diagnosis_matches = (
+        isinstance(diagnosis, DiagnosisRunSnapshot)
+        and diagnosis.diagnosis_id == session.request.diagnosis_id
+    )
+    if session.agent_state in TERMINAL_VIEWER_AGENT_STATES or (
+        diagnosis_matches and diagnosis.state in TERMINAL_VIEWER_DIAGNOSIS_STATES
+    ):
+        return None
+    if session.agent_state in ACTIVE_VIEWER_AGENT_STATES or (
+        diagnosis_matches and diagnosis.state in ACTIVE_VIEWER_DIAGNOSIS_STATES
+    ):
+        return session
+    return None
+
+
+def move_terminal_session_to_idle(
+    diagnosis_store: DiagnosisSessionStore,
+    diagnosis: DiagnosisRunSnapshot | None,
+) -> bool:
+    session = diagnosis_store.session
+    if not isinstance(session, DiagnosisSession):
+        return False
+    diagnosis_matches = (
+        isinstance(diagnosis, DiagnosisRunSnapshot)
+        and diagnosis.diagnosis_id == session.request.diagnosis_id
+    )
+    terminal = session.agent_state in TERMINAL_VIEWER_AGENT_STATES or (
+        diagnosis_matches and diagnosis.state in TERMINAL_VIEWER_DIAGNOSIS_STATES
+    )
+    if not terminal:
+        return False
+    diagnosis_store.update_state("IDLE")
+    return True
+
+
 def diagnosis_result_available(
     session: DiagnosisSession | None,
     diagnosis: DiagnosisRunSnapshot | None,
@@ -3822,6 +3875,8 @@ def reading_text(reading: SensorReading, unit: str = "") -> str:
         return "권한 필요"
     if reading.availability == SENSOR_PENDING:
         return "수집 중"
+    if reading.availability == SENSOR_UNSUPPORTED:
+        return "센서 미지원"
     if reading.availability != SENSOR_COLLECTED:
         return "측정 불가"
     if isinstance(reading.value, str):
@@ -5098,10 +5153,17 @@ def show_log_viewer(
     capture_state = capture_state_override
     if capture_state not in {"SYMPTOM_CONFIRM", "DIAGNOSING", "DIAGNOSIS_RESULT"}:
         capture_state = "SYMPTOM_CONFIRM"
-    diagnosis_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
-    initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
-    diagnosis_snapshot = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
-    result_snapshot = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
+    stored_session = diagnosis_session_provider() if callable(diagnosis_session_provider) else None
+    stored_diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
+    diagnosis_session = active_viewer_session(stored_session, stored_diagnosis)
+    if isinstance(diagnosis_session, DiagnosisSession):
+        initial_metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
+        diagnosis_snapshot = stored_diagnosis
+        result_snapshot = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
+    else:
+        initial_metrics = None
+        diagnosis_snapshot = None
+        result_snapshot = None
     diagnosis_started = (
         isinstance(diagnosis_session, DiagnosisSession)
         and diagnosis_session.agent_state in {"RUNNING", "COMPLETED", "FAILED"}
@@ -6057,6 +6119,9 @@ def show_log_viewer(
                 diagnosis_started=bool(ui["diagnosisStarted"]),
                 result_requested=bool(ui["resultRequested"]),
             )
+        else:
+            ui["demo"] = False
+            ui["state"] = "SYMPTOM_CONFIRM"
         render()
 
     def request_focus() -> None:
@@ -6839,13 +6904,14 @@ def run_background(
         metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
         diagnosis_log_store = DiagnosisLogStore(app_data_dir() / "diagnosis-progress-state.json")
         diagnosis_result_store = DiagnosisResultStore(app_data_dir() / "diagnosis-result-state.json")
+        move_terminal_session_to_idle(diagnosis_store, diagnosis_log_store.snapshot)
         diagnosis_rule_engine = DiagnosisRuleEngine()
         diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}
         diagnosis_client_holder: dict[str, AgentDiagnosisWebSocketClient] = {}
         forwarded_event_ids: set[str] = set()
         viewer_controller = BackgroundViewerController(
             path,
-            lambda: diagnosis_store.session,
+            lambda: active_viewer_session(diagnosis_store.session, diagnosis_log_store.snapshot),
             lambda: connection_state["value"],
             show_log_viewer,
             metrics_snapshot_provider=lambda: metrics_store.snapshot,
@@ -6894,6 +6960,7 @@ def run_background(
                 client.send_diagnosis_result(detail)
 
         def on_diagnosis_complete(snapshot: DiagnosisRunSnapshot) -> None:
+            initial_metrics_coordinator.stop()
             if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
                 try:
                     result = diagnosis_rule_engine.evaluate(metrics_store.snapshot, snapshot)
@@ -7030,6 +7097,7 @@ def run_background(
         if with_tray and pystray is not None:
             def stop(icon: object, item: object = None) -> None:
                 runtime.stop()
+                initial_metrics_coordinator.stop()
                 if diagnosis_client is not None:
                     diagnosis_client.stop()
                 viewer_controller.shutdown()
@@ -7056,6 +7124,7 @@ def run_background(
                 runtime.stop()
 
         runtime.stop()
+        initial_metrics_coordinator.stop()
         if diagnosis_client is not None:
             diagnosis_client.stop()
         viewer_controller.shutdown()

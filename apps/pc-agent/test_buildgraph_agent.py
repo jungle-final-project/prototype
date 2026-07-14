@@ -852,6 +852,71 @@ class AgentGoal1112Test(unittest.TestCase):
                     ),
                 )
 
+    def test_terminal_session_is_moved_to_idle_without_restoring_completed_ui(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-restored-terminal",
+            device_id="device-1",
+            symptom="",
+            requested_checks=("cpu", "gpu", "memory", "disk"),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+            source="STANDALONE",
+        )
+        cases = (
+            ("COMPLETED", "COMPLETED"),
+            ("RUNNING", "PARTIALLY_COMPLETED"),
+        )
+        for agent_state, diagnosis_state in cases:
+            with self.subTest(agent_state=agent_state, diagnosis_state=diagnosis_state):
+                with tempfile.TemporaryDirectory() as directory:
+                    session_path = Path(directory) / "diagnosis-request-state.json"
+                    progress_path = Path(directory) / "diagnosis-progress-state.json"
+                    diagnosis_store = agent.DiagnosisSessionStore(session_path)
+                    diagnosis_store.accept(DiagnosisSession(request, agent_state))
+                    diagnosis_log_store = agent.DiagnosisLogStore(progress_path)
+                    diagnosis_snapshot = agent.DiagnosisRunSnapshot(
+                        diagnosis_id=request.diagnosis_id,
+                        mode="LIVE",
+                        state=diagnosis_state,
+                        progress=100,
+                        transition_allowed=True,
+                    )
+                    diagnosis_log_store.replace(diagnosis_snapshot)
+                    preserved_progress = progress_path.read_text(encoding="utf-8")
+
+                    self.assertTrue(agent.move_terminal_session_to_idle(diagnosis_store, diagnosis_snapshot))
+                    idle_session = diagnosis_store.session
+
+                    self.assertEqual("IDLE", idle_session.agent_state)
+                    self.assertEqual(request.diagnosis_id, idle_session.request.diagnosis_id)
+                    self.assertIsNone(agent.active_viewer_session(idle_session, diagnosis_snapshot))
+                    self.assertEqual(
+                        "SYMPTOM_CONFIRM",
+                        agent.diagnosis_session_ui_state(None, None),
+                    )
+                    self.assertEqual(preserved_progress, progress_path.read_text(encoding="utf-8"))
+
+        sampled_at = "2026-07-13T00:00:00+00:00"
+        metrics = agent.MetricsSnapshot(
+            "diagnosis-cpu-display",
+            "LIVE",
+            True,
+            (
+                agent.MetricReading(
+                    "cpu", "usage", 42.0, "%", "AVAILABLE", "NORMAL", "psutil", sampled_at,
+                ),
+                agent.MetricReading(
+                    "cpu", "temperature", None, "°C", "UNSUPPORTED", "UNAVAILABLE",
+                    "psutil-temperature", sampled_at, "SENSOR_UNSUPPORTED", "CPU temperature sensor unavailable",
+                ),
+            ),
+        )
+        screen = agent.build_symptom_screen_state(agent.metrics_snapshot_screen_input(metrics, ""))
+        cpu_card = screen.widgets[0]
+        self.assertEqual("사용률 42%", cpu_card.primary)
+        self.assertEqual(("온도 센서 미지원",), cpu_card.details)
+
     def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
         class Collector:
             def collect(self, ts: datetime, index: int) -> dict:

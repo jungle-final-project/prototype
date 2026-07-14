@@ -4,7 +4,6 @@ import copy
 import json
 import queue
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +27,7 @@ ERROR = "ERROR"
 COMPONENTS = ("cpu", "gpu", "ram", "disk")
 TERMINAL_AVAILABILITIES = {AVAILABLE, UNSUPPORTED, PERMISSION_REQUIRED, FAILED}
 MAX_STORED_READINGS = 512
+MAX_HISTORY_SAMPLES = 30
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,8 @@ class MetricsSnapshot:
             and isinstance(reading.value, (int, float))
             and not isinstance(reading.value, bool)
         ]
-        return tuple(values[-limit:])
+        bounded_limit = min(max(0, limit), MAX_HISTORY_SAMPLES)
+        return tuple(values[-bounded_limit:]) if bounded_limit else ()
 
     def terminal_components(self) -> set[str]:
         terminal: set[str] = set()
@@ -432,19 +433,32 @@ class InitialMetricsCoordinator:
         self._lock = threading.Lock()
         self._active_diagnosis_id: str | None = None
         self._thread: threading.Thread | None = None
+        self._stop_event: threading.Event | None = None
+        self._initial_complete_event = threading.Event()
 
     def start(self, diagnosis_id: str, mode: str) -> bool:
         normalized_mode = mode.upper()
         if normalized_mode not in {"LIVE", "DEMO"}:
             raise ValueError("mode must be LIVE or DEMO")
         with self._lock:
+            active_thread = self._thread
+            active_diagnosis_id = self._active_diagnosis_id
+        if active_thread is not None and active_thread.is_alive():
+            if active_diagnosis_id == diagnosis_id:
+                return False
+            if not self.stop():
+                return False
+        with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return False
+            stop_event = threading.Event()
             self._active_diagnosis_id = diagnosis_id
+            self._stop_event = stop_event
+            self._initial_complete_event.clear()
             self.store.begin(diagnosis_id, normalized_mode)
             self._thread = threading.Thread(
                 target=self._run,
-                args=(diagnosis_id, normalized_mode),
+                args=(diagnosis_id, normalized_mode, stop_event),
                 name="pc-agent-initial-metrics",
                 daemon=True,
             )
@@ -452,13 +466,40 @@ class InitialMetricsCoordinator:
             return True
 
     def wait(self, timeout: float | None = None) -> bool:
-        thread = self._thread
-        if thread is None:
+        with self._lock:
+            thread = self._thread
+        if thread is None and not self._initial_complete_event.is_set():
             return True
-        thread.join(timeout)
+        return self._initial_complete_event.wait(timeout)
+
+    def is_running(self, diagnosis_id: str | None = None) -> bool:
+        with self._lock:
+            thread = self._thread
+            active_diagnosis_id = self._active_diagnosis_id
+        return bool(
+            thread is not None
+            and thread.is_alive()
+            and (diagnosis_id is None or diagnosis_id == active_diagnosis_id)
+        )
+
+    def stop(self, timeout: float | None = None) -> bool:
+        with self._lock:
+            thread = self._thread
+            stop_event = self._stop_event
+        if stop_event is not None:
+            stop_event.set()
+        if thread is None or thread is threading.current_thread():
+            return True
+        wait_timeout = timeout
+        if wait_timeout is None:
+            wait_timeout = max(
+                1.0,
+                self.settings.sample_timeout_seconds + self.settings.sample_interval_seconds + 0.5,
+            )
+        thread.join(wait_timeout)
         return not thread.is_alive()
 
-    def _run(self, diagnosis_id: str, mode: str) -> None:
+    def _run(self, diagnosis_id: str, mode: str, stop_event: threading.Event) -> None:
         try:
             try:
                 provider = self.demo_provider_factory() if mode == "DEMO" else self.live_provider_factory()
@@ -478,7 +519,9 @@ class InitialMetricsCoordinator:
                     "SENSOR_FAILED",
                 )
                 return
-            for sample_index in range(self.settings.sample_count):
+            sample_index = 0
+            initial_complete = False
+            while not stop_event.is_set():
                 sample, error = self._collect_with_timeout(provider, sample_index)
                 if error is None and sample is not None:
                     readings = self.normalizer.normalize(sample)
@@ -498,19 +541,25 @@ class InitialMetricsCoordinator:
                 if not self.store.append(diagnosis_id, readings):
                     return
                 self.on_update(self.store.snapshot)
-                if error is not None:
-                    break
-                if sample_index + 1 < self.settings.sample_count:
-                    time.sleep(self.settings.sample_interval_seconds)
-            snapshot = self.store.snapshot
-            if snapshot.terminal_components() == set(COMPONENTS) and self.store.complete(diagnosis_id):
-                completed = self.store.snapshot
-                self.on_update(completed)
-                self.on_complete(completed)
+                sample_index += 1
+                snapshot = self.store.snapshot
+                initial_ready = (
+                    sample_index >= self.settings.sample_count or error is not None
+                ) and snapshot.terminal_components() == set(COMPONENTS)
+                if not initial_complete and initial_ready and self.store.complete(diagnosis_id):
+                    initial_complete = True
+                    completed = self.store.snapshot
+                    self._initial_complete_event.set()
+                    self.on_update(completed)
+                    self.on_complete(completed)
+                if stop_event.wait(max(0.01, self.settings.sample_interval_seconds)):
+                    return
         finally:
             with self._lock:
-                if self._active_diagnosis_id == diagnosis_id:
+                if self._active_diagnosis_id == diagnosis_id and self._stop_event is stop_event:
                     self._active_diagnosis_id = None
+                    self._stop_event = None
+                    self._thread = None
 
     def _finish_with_unavailable(
         self,
@@ -530,6 +579,7 @@ class InitialMetricsCoordinator:
         self.on_update(self.store.snapshot)
         if self.store.complete(diagnosis_id):
             completed = self.store.snapshot
+            self._initial_complete_event.set()
             self.on_update(completed)
             self.on_complete(completed)
 

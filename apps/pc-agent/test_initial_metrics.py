@@ -182,13 +182,14 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
             store,
             live_provider_factory=lambda: live,
             demo_provider_factory=lambda: demo_factory_calls.append(True) or DemoSensorProvider(),
-            settings=InitialCollectionSettings(3, 0.0, 0.5),
+            settings=InitialCollectionSettings(3, 0.05, 0.5),
             on_update=updates.append,
             on_complete=completed.append,
         )
 
         self.assertTrue(coordinator.start("diagnosis-live", "LIVE"))
         self.assertTrue(coordinator.wait(2.0))
+        self.assertTrue(coordinator.stop(1.0))
 
         snapshot = store.snapshot
         self.assertEqual([], demo_factory_calls)
@@ -209,11 +210,12 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
             store,
             live_provider_factory=lambda: live_factory_calls.append(True) or StaticProvider(),
             demo_provider_factory=DemoSensorProvider,
-            settings=InitialCollectionSettings(2, 0.0, 0.5),
+            settings=InitialCollectionSettings(2, 0.05, 0.5),
         )
 
         self.assertTrue(coordinator.start("diagnosis-demo", "DEMO"))
         self.assertTrue(coordinator.wait(2.0))
+        self.assertTrue(coordinator.stop(1.0))
 
         self.assertEqual([], live_factory_calls)
         self.assertEqual("DEMO", store.snapshot.mode)
@@ -245,10 +247,11 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
                     store,
                     live_provider_factory=lambda current=provider: current,
                     demo_provider_factory=DemoSensorProvider,
-                    settings=InitialCollectionSettings(1, 0.0, 0.01),
+                    settings=InitialCollectionSettings(1, 0.05, 0.01),
                 )
                 self.assertTrue(coordinator.start(f"diagnosis-{index}", "LIVE"))
                 self.assertTrue(coordinator.wait(1.0))
+                self.assertTrue(coordinator.stop(1.0))
                 snapshot = store.snapshot
                 self.assertTrue(snapshot.initial_complete)
                 self.assertEqual({"cpu", "gpu", "ram", "disk"}, snapshot.terminal_components())
@@ -264,10 +267,11 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
                 store,
                 live_provider_factory=lambda: provider,
                 demo_provider_factory=DemoSensorProvider,
-                settings=InitialCollectionSettings(1, 0.0, 0.5),
+                settings=InitialCollectionSettings(1, 0.05, 0.5),
             )
             coordinator.start("diagnosis-persisted", "LIVE")
             self.assertTrue(coordinator.wait(1.0))
+            self.assertTrue(coordinator.stop(1.0))
 
             restored = MetricsStore(path).snapshot
 
@@ -287,6 +291,53 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         history = store.snapshot.history("cpu", "usage", limit=100)
         self.assertEqual(30, len(history))
         self.assertEqual(tuple(float(index) for index in range(10, 40)), history)
+
+    def test_collection_continues_after_initial_completion_until_stopped(self) -> None:
+        class ContinuousProvider:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def collect_sample(self, sample_index: int) -> ProviderSample:
+                self.calls += 1
+                sampled_at = datetime.now(timezone.utc).isoformat()
+                return ProviderSample(complete_payload(float(sample_index)), sampled_at, "hardware")
+
+        store = MetricsStore()
+        provider = ContinuousProvider()
+        updates = []
+        completed = []
+        coordinator = InitialMetricsCoordinator(
+            store,
+            live_provider_factory=lambda: provider,
+            demo_provider_factory=DemoSensorProvider,
+            settings=InitialCollectionSettings(3, 0.01, 0.5),
+            on_update=updates.append,
+            on_complete=completed.append,
+        )
+
+        self.assertTrue(coordinator.start("diagnosis-continuous", "LIVE"))
+        self.assertTrue(coordinator.wait(1.0))
+        self.assertTrue(coordinator.is_running("diagnosis-continuous"))
+        self.assertFalse(coordinator.start("diagnosis-continuous", "LIVE"))
+        deadline = time.monotonic() + 1.0
+        while provider.calls < 5 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertGreaterEqual(provider.calls, 5)
+        self.assertTrue(coordinator.stop(1.0))
+
+        snapshot = store.snapshot
+        cpu_readings = [
+            reading
+            for reading in snapshot.readings
+            if reading.component == "cpu" and reading.metric_type == "usage"
+        ]
+        self.assertGreaterEqual(len(cpu_readings), 5)
+        self.assertEqual(len(cpu_readings), len({reading.sampled_at for reading in cpu_readings}))
+        self.assertGreaterEqual(len(snapshot.history("cpu", "usage")), 5)
+        self.assertLessEqual(len(snapshot.history("cpu", "usage", limit=100)), 30)
+        self.assertEqual(1, len(completed))
+        self.assertFalse(coordinator.is_running())
+        self.assertGreaterEqual(len(updates), 6)
 
 
 if __name__ == "__main__":

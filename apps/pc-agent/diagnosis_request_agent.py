@@ -536,8 +536,14 @@ class BackgroundViewerController:
                     self._thread = threading.Thread(target=self._run, name="pc-agent-viewer", daemon=True)
                     self._thread.start()
                 return
-        if session is not None and request_apply_session is not None:
-            request_apply_session(session)
+        restored_session = session if session is not None else self.diagnosis_session_provider()
+        if not (
+            isinstance(restored_session, DiagnosisSession)
+            and restored_session.agent_state in ACTIVE_DIAGNOSIS_STATES
+        ):
+            restored_session = None
+        if request_apply_session is not None:
+            request_apply_session(restored_session)
         request_focus()
 
     def shutdown(self) -> None:
