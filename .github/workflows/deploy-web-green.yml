@@ -1,0 +1,146 @@
+name: Deploy Green Web
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/deploy-web-green.yml"
+  workflow_dispatch:
+    inputs:
+      git_sha:
+        description: "40-character Git SHA to build and deploy; defaults to the selected branch SHA"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-green-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: test-build-deploy-green-web
+    if: github.event_name == 'workflow_dispatch' || vars.GREEN_CD_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Resolve deployment target
+        id: target
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.git_sha }}
+          DEFAULT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          target_sha="${REQUESTED_SHA:-$DEFAULT_SHA}"
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::git_sha must be a 40-character lowercase Git SHA"
+            exit 1
+          }
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify target belongs to main
+        env:
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run web tests
+        working-directory: apps/web
+        run: npm run test -- --workers=1
+
+      - name: Build web for same-origin API
+        working-directory: apps/web
+        env:
+          VITE_API_BASE_URL: ""
+        run: npm run build
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Validate Green deployment variables
+        shell: bash
+        env:
+          GREEN_S3_BUCKET: ${{ vars.GREEN_S3_BUCKET }}
+          GREEN_CF_DISTRIBUTION_ID: ${{ vars.GREEN_CF_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          : "${GREEN_S3_BUCKET:?GREEN_S3_BUCKET repository variable is required}"
+          : "${GREEN_CF_DISTRIBUTION_ID:?GREEN_CF_DISTRIBUTION_ID repository variable is required}"
+
+      - name: Upload immutable hash assets
+        shell: bash
+        env:
+          GREEN_S3_BUCKET: ${{ vars.GREEN_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          aws s3 sync apps/web/dist/assets "s3://${GREEN_S3_BUCKET}/assets" --delete --only-show-errors --cache-control "public,max-age=31536000,immutable"
+
+      - name: Upload root and public assets
+        shell: bash
+        env:
+          GREEN_S3_BUCKET: ${{ vars.GREEN_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          aws s3 sync apps/web/dist "s3://${GREEN_S3_BUCKET}" --delete --only-show-errors --exclude "assets/*" --exclude "index.html" --exclude "downloads/pc-agent/latest.json" --exclude ".DS_Store" --exclude "*/.DS_Store" --cache-control "public,max-age=3600"
+
+      - name: Upload no-cache entrypoints
+        shell: bash
+        env:
+          GREEN_S3_BUCKET: ${{ vars.GREEN_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          test -f apps/web/dist/index.html
+          test -f apps/web/dist/downloads/pc-agent/latest.json
+          aws s3 cp apps/web/dist/index.html "s3://${GREEN_S3_BUCKET}/index.html" --only-show-errors --content-type "text/html" --cache-control "no-cache,max-age=0,must-revalidate"
+          aws s3 cp apps/web/dist/downloads/pc-agent/latest.json "s3://${GREEN_S3_BUCKET}/downloads/pc-agent/latest.json" --only-show-errors --content-type "application/json" --cache-control "no-cache,max-age=0,must-revalidate"
+
+      - name: Invalidate Green CloudFront entrypoints
+        shell: bash
+        env:
+          GREEN_CF_DISTRIBUTION_ID: ${{ vars.GREEN_CF_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation --distribution-id "$GREEN_CF_DISTRIBUTION_ID" --paths "/" "/index.html" "/downloads/pc-agent/latest.json"
+
+      - name: Record deployment
+        if: success()
+        run: |
+          {
+            echo "### Green Web deployment succeeded"
+            echo
+            echo "- Commit: \`${{ steps.target.outputs.sha }}\`"
+            echo "- Bucket: \`${{ vars.GREEN_S3_BUCKET }}\`"
+            echo "- CloudFront: \`${{ vars.GREEN_CF_DISTRIBUTION_ID }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

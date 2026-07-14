@@ -1035,39 +1035,104 @@ Blue에서 `docker compose config` 원문, `.env.prod`, container environment를
 
 ## 28. Phase 6 완료 조건
 
-- [ ] Phase 3 RDS가 Available
-- [ ] Phase 4 Redis가 Available
-- [ ] Phase 5 RabbitMQ가 Running
-- [ ] Secret `buildgraph/demo-green/api-env` 생성
+2026-07-14 대화 기록 기준으로 **30개 확인, 3개 보류**다. 따라서 Phase 6은 아직 형식상 완료 처리하지 않는다.
+
+- [x] Phase 3 RDS가 Available
+- [x] Phase 4 Redis가 Available
+- [x] Phase 5 RabbitMQ가 Running
+- [x] Secret `buildgraph/demo-green/api-env` 생성
 - [ ] Secret value에 placeholder가 없음
-- [ ] Green IAM Role `buildgraph-demo-api-green-role` 생성
-- [ ] Role에 `AmazonSSMManagedInstanceCore` 연결
-- [ ] Role에 `CloudWatchAgentServerPolicy` 연결
+- [x] Green IAM Role `buildgraph-demo-api-green-role` 생성
+- [x] Role에 `AmazonSSMManagedInstanceCore` 연결
+- [x] Role에 `CloudWatchAgentServerPolicy` 연결
 - [ ] Role에 `AmazonEC2ContainerRegistryReadOnly` 연결
-- [ ] Secret ARN 한 개만 읽는 inline policy 연결
-- [ ] Green EC2 `buildgraph-demo-api-green-ec2` 생성
-- [ ] Green이 Public 2b `10.0.16.0/20`, `ap-northeast-2b`에 배치
-- [ ] Green에 공유 SG `sg-099aac782b77a854e`만 연결
+- [x] Secret ARN 한 개만 읽는 inline policy 연결
+- [x] Green EC2 `buildgraph-demo-api-green-ec2` 생성
+- [x] Green이 Public 2b `10.0.16.0/20`, `ap-northeast-2b`에 배치
+- [x] Green에 공유 SG `sg-099aac782b77a854e`만 연결
 - [ ] Green에 key pair 없음
-- [ ] Green에 신규 Elastic IP 연결
-- [ ] SSM Session Manager 접속 성공
-- [ ] Docker Engine과 Compose plugin 설치
-- [ ] CloudWatch Agent 설치·실행
-- [ ] Phase 6 저장소 구현 테스트 PASS
-- [ ] 배포 Git SHA 고정
-- [ ] `.env.prod` 권한 `600 ubuntu:ubuntu`
-- [ ] Compose config SHA가 빈 입력 SHA가 아님
-- [ ] Green Compose service가 `nginx`, `api`, `xgb-reranker`만 존재
-- [ ] API `8080` host 공개 없음
-- [ ] host `5432`, `6379`, `5671` 공개 없음
-- [ ] Nginx `nginx -t` PASS
-- [ ] Green `/healthz`와 `/api/health` PASS
-- [ ] RDS·Redis·RabbitMQ ManagedInfrastructureSmokeTest PASS
-- [ ] RabbitMQ 재연결 test PASS
-- [ ] CloudWatch log group과 stream 확인
-- [ ] Queue alarm의 미확정 임계값은 `PENDING`으로 기록
-- [ ] Blue EC2·Compose·Public IP 무변경
-- [ ] 기존 CloudFront Origin 무변경
+- [x] Green에 신규 Elastic IP 연결
+- [x] SSM Session Manager 접속 성공
+- [x] Docker Engine과 Compose plugin 설치
+- [x] CloudWatch Agent 설치·실행
+- [x] Phase 6 저장소 구현 테스트 PASS
+- [x] 배포 Git SHA 고정
+- [x] `.env.prod` 권한 `600 ubuntu:ubuntu`
+- [x] Compose config SHA가 빈 입력 SHA가 아님
+- [x] Green Compose service가 `nginx`, `api`, `xgb-reranker`만 존재
+- [x] API `8080` host 공개 없음
+- [x] host `5432`, `6379`, `5671` 공개 없음
+- [x] Nginx `nginx -t` PASS
+- [x] Green `/healthz`와 `/api/health` PASS
+- [x] RDS·Redis·RabbitMQ ManagedInfrastructureSmokeTest PASS
+- [x] RabbitMQ 재연결 test PASS
+- [x] CloudWatch log group과 stream 확인
+- [x] Queue alarm의 미확정 임계값은 `PENDING`으로 기록
+- [x] Blue EC2·Compose·Public IP 무변경
+- [x] 기존 CloudFront Origin 무변경
+
+### 28.1 2026-07-14 대화 기록 기준 판정
+
+체크된 항목은 실제 콘솔 화면이나 실행 로그로 확인된 항목이다. 체크되지 않은 항목은 실패가 아니라 **확인 증거가 아직 없는 보류 항목**이다.
+
+| 판정 | 근거 |
+| --- | --- |
+| RDS·Redis·RabbitMQ 정상 | `ManagedInfrastructureSmokeTest`가 `BUILD SUCCESSFUL`로 끝났고 RAG vector backfill·검색, Redis cache hit, RabbitMQ Agent publish·consume가 성공했다. |
+| Green runtime 정상 | `nginx`, `api`, `xgb-reranker` 세 서비스만 실행되며 외부에는 `80`만 공개됐다. `8080`, `8091`, `5432`, `6379`, `5671`은 host에 공개되지 않았다. |
+| Green health 정상 | `http://43.203.33.190/healthz`와 `/api/health`가 `200`을 반환했다. 외부 `:8080` 요청은 timeout으로 실패했다. |
+| SSM·CloudWatch 정상 | Green이 SSM Online으로 표시됐고 `/buildgraph/demo/api-green/docker`의 `i-033105106a7970ac1` stream에서 API·Nginx 로그가 확인됐다. |
+| 기능 스모크 정상 | RAG vector 검색, Agent `SUCCEEDED`, RabbitMQ worker 처리, OpenAI 호출, Redis Build Chat cache hit가 확인됐다. |
+| 배포 SHA 고정 | Green이 `45a4b1e78cdf44cca1c13cfb55636a15ecdf438b`를 detached HEAD로 checkout했다. |
+| Green 재확인 정상 | 내부·외부 health가 모두 `UP`, 정의·실행 service가 세 개로 일치하고 host의 `8080`, `8091`, `5432`, `6379`, `5671`이 모두 비공개다. |
+| 파일·Compose 확인 | `.env.prod`가 `600 ubuntu:ubuntu`이고 Compose config SHA가 `d9296779e0966af32c8783c600197c4c3cf6f75b07ab668ac3eaf0f49a3a1b78`로 빈 입력 SHA가 아니다. |
+| Secret inline policy 정상 | `DescribeSecret`·`GetSecretValue`만 허용하며 Resource가 `buildgraph/demo-green/api-env`의 실제 ARN 한 개로 제한됐다. |
+| Primary CloudFront 무변경 | `/assets/*`와 `Default (*)`가 모두 기존 Blue DNS `ec2-15-164-235-183.ap-northeast-2.compute.amazonaws.com` Origin을 사용한다. |
+| Nginx 설정 정상 | `nginx -t`가 `syntax is ok`, `test is successful`, exit code `0`으로 끝났다. |
+| Blue 상태 정상 | 기존 Blue Compose가 계속 실행 중이고 Public IP가 `15.164.235.183`으로 유지됨을 사용자가 최종 확인했다. |
+| Queue alarm 보류 | 임계값과 평가 시간이 확정되지 않아 의도적으로 `PENDING`이다. |
+| IAM managed policy 일부 보류 | inline policy는 확인됐지만 `AmazonEC2ContainerRegistryReadOnly`의 최종 Attached 화면은 아직 확인되지 않았다. |
+| key pair 보류 | 최초 계획은 key pair 없음이지만 이후 SSH 22와 key pair 사용 의사가 언급됐다. EC2의 실제 Key pair name을 다시 확인해야 한다. |
+
+### 28.2 Phase 7 진입 전 남은 확인
+
+1. IAM Role의 Permissions 탭에서 다음 두 항목을 확인한다.
+   - `AmazonEC2ContainerRegistryReadOnly`가 Attached 상태다.
+   - inline policy의 `secretsmanager:GetSecretValue` Resource가 `buildgraph/demo-green/api-env`의 ARN 한 개뿐이다.
+2. EC2 상세의 `Key pair name`을 확인한다. 값이 있으면 이 체크리스트의 요구사항과 다르므로 `없음`으로 거짓 체크하지 말고 실제 운영 결정을 기록한다.
+3. Green에서 Secret 값을 출력하지 않고 다음을 실행한다.
+
+```bash
+cd /opt/buildgraph/prototype
+stat -c '%a %U:%G %n' .env.prod
+set -o pipefail
+docker compose -p buildgraph-green -f compose.api.prod.yaml --env-file .env.prod config | sha256sum
+docker compose -p buildgraph-green -f compose.api.prod.yaml --env-file .env.prod exec nginx nginx -t
+```
+
+통과 기준:
+
+- 첫 줄이 `600 ubuntu:ubuntu .env.prod`다.
+- SHA-256이 64자리이고 빈 입력 SHA `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`가 아니다.
+- Nginx 결과에 `syntax is ok`와 `test is successful`이 모두 있다.
+
+4. placeholder는 값 자체를 출력하지 않고 key 이름만 검사한다.
+
+```bash
+awk -F= '
+  $2 ~ /replace-with|placeholder|<[^>]+>|실제 비밀번호|실제 AUTH token/ { print $1 }
+' .env.prod
+```
+
+아무 key도 출력되지 않아야 한다. 빈 값이 허용된 OAuth·Agent demo 설정은 placeholder가 아니다.
+
+5. Blue에서 조회 명령만 실행하고 기존 서비스가 계속 실행 중인지 확인한다.
+
+```bash
+docker compose -f compose.prod.yaml --env-file .env.prod ps
+```
+
+6. Blue Public IP가 `15.164.235.183`인지 확인한다.
+7. CloudFront Primary Distribution의 현재 Origin과 behavior를 스크린샷으로 기록한다. 아직 Green EIP·Green Public DNS·새 S3가 Primary에 연결돼 있으면 안 된다.
 
 위 조건을 만족하면 Phase 6을 완료하고 Phase 7의 Private S3와 CloudFront Staging 검증으로 넘어간다.
 
@@ -1128,7 +1193,7 @@ docker compose -p buildgraph-green -f compose.api.prod.yaml --env-file .env.prod
 | Elastic IP Allocation ID | `<eipalloc-...>` |
 | Green Public DNS | `<ec2-...compute.amazonaws.com>` |
 | 배포 Git SHA | `<40자리 SHA>` |
-| Compose config SHA-256 | `<64자리 SHA-256>` |
+| Compose config SHA-256 | `d9296779e0966af32c8783c600197c4c3cf6f75b07ab668ac3eaf0f49a3a1b78` |
 | RDS endpoint | `buildgraph-demo-postgres-green.cdcw2ykmk609.ap-northeast-2.rds.amazonaws.com` |
 | Redis primary endpoint | `<hostname only>` |
 | RabbitMQ address | `<hostname>:5671` |
@@ -1136,12 +1201,12 @@ docker compose -p buildgraph-green -f compose.api.prod.yaml --env-file .env.prod
 | Repository validator | `PASS / FAIL` |
 | API tests | `PASS / FAIL` |
 | Managed infrastructure tests | `PASS / FAIL` |
-| Nginx test | `PASS / FAIL` |
-| Green health | `PASS / FAIL` |
+| Nginx test | `PASS` |
+| Green health | `PASS` |
 | CloudWatch Docker logs | `PASS / FAIL` |
 | RabbitMQ MessageCount alarm | `PENDING — threshold/time 미확정` |
-| Blue 상태 | `UNCHANGED / 문제 있음` |
-| CloudFront Origin | `BLUE 유지 / 문제 있음` |
+| Blue 상태 | `UNCHANGED` |
+| CloudFront Origin | `BLUE 유지` |
 
 ## 31. 자주 발생하는 문제
 

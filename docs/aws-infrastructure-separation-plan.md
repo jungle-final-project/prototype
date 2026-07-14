@@ -330,6 +330,8 @@ Green 배포 검증 순서:
 
 ## Phase 7. S3와 CloudFront Staging으로 사전 검증
 
+콘솔 실행 절차: [aws-infrastructure-phase7-console-guide.md](aws-infrastructure-phase7-console-guide.md)
+
 ### S3
 
 - React 빌드 결과 `apps/web/dist` 업로드
