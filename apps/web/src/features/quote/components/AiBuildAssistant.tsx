@@ -1,4 +1,4 @@
-import { type FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Download, LifeBuoy, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -970,30 +970,49 @@ function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: bo
   );
 }
 
-// 방금 도착한 답변이면 문장을 순차로 노출하고, 그 외(과거 메시지·모션 최소화)에는 전체를 한 번에 렌더한다.
-function RevealText({ text, animate, className }: { text: string; animate: boolean; className?: string }) {
-  const sentences = useMemo(() => splitIntoSentences(text), [text]);
-  const prefersReduced = typeof window !== 'undefined'
+// 새로 등장하는 카드(견적/시뮬/평가 등)를 아래에서 살짝 올라오며 페이드 인한다.
+function FadeInBlock({ children }: { children: ReactNode }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => setShown(true));
+    return () => window.cancelAnimationFrame(id);
+  }, []);
+  return (
+    <div className={`transition duration-300 ${shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'}`}>
+      {children}
+    </div>
+  );
+}
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const shouldAnimate = animate && !prefersReduced && sentences.length > 1;
-  const [visibleCount, setVisibleCount] = useState(shouldAnimate ? 1 : sentences.length);
+}
+
+// 방금 도착한 답변을 문장 → 카드 순서로 한 스텝씩 노출한다. 문장은 길이에 비례한 간격, 카드는 고정 간격.
+// active가 아니면(과거 메시지·모션 최소화·스텝 1개) 전체를 즉시 노출한다.
+function useSequentialReveal(sentences: string[], extraCount: number, active: boolean): number {
+  const total = sentences.length + extraCount;
+  const [count, setCount] = useState(active ? 1 : total);
 
   useEffect(() => {
-    if (!shouldAnimate) {
-      setVisibleCount(sentences.length);
+    if (!active) {
+      setCount(total);
       return;
     }
-    setVisibleCount(1);
+    setCount(1);
     let cancelled = false;
     const timers: number[] = [];
     let elapsed = 0;
-    for (let index = 1; index < sentences.length; index += 1) {
-      // 다음 문장 길이에 비례한 짧은 간격(최대 720ms)으로 읽는 속도처럼 이어 붙인다.
-      elapsed += Math.min(240 + sentences[index].length * 16, 720);
+    for (let index = 1; index < total; index += 1) {
+      const delay = index < sentences.length
+        ? Math.min(240 + sentences[index].length * 16, 720) // 문장: 읽는 속도처럼
+        : 260; // 카드: 짧고 일정한 간격
+      elapsed += delay;
       const nextCount = index + 1;
       timers.push(window.setTimeout(() => {
-        if (!cancelled) setVisibleCount(nextCount);
+        if (!cancelled) setCount(nextCount);
       }, elapsed));
     }
     return () => {
@@ -1001,18 +1020,9 @@ function RevealText({ text, animate, className }: { text: string; animate: boole
       timers.forEach((timer) => window.clearTimeout(timer));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, shouldAnimate]);
+  }, [active, total]);
 
-  if (!shouldAnimate) {
-    return <p data-testid="ai-message-text" className={className}>{text}</p>;
-  }
-  return (
-    <p data-testid="ai-message-text" className={className} aria-live="polite">
-      {sentences.slice(0, visibleCount).map((sentence, index) => (
-        <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} />
-      ))}
-    </p>
-  );
+  return active ? count : total;
 }
 
 const ChatMessage = memo(function ChatMessage({
@@ -1035,6 +1045,27 @@ const ChatMessage = memo(function ChatMessage({
   const isUser = message.role === 'user';
   const isLarge = size === 'large';
 
+  // 리빌 타임라인: 문장들 → 카드(가이드/시뮬/평가/견적) 순서로 한 스텝씩 노출한다.
+  const sentences = useMemo(() => (isUser ? [] : splitIntoSentences(message.text)), [isUser, message.text]);
+  const extraCount = isUser
+    ? 0
+    : (message.supportGuidance ? 1 : 0)
+      + (message.simulation ? 1 : 0)
+      + (message.buildAssessment ? 1 : 0)
+      + (message.builds?.length ?? 0);
+  const animate = reveal && !isUser && !prefersReducedMotion() && sentences.length + extraCount > 1;
+  const revealedCount = useSequentialReveal(sentences, extraCount, animate);
+  const sentencesShown = animate ? Math.min(revealedCount, sentences.length) : sentences.length;
+  const extrasShown = animate ? Math.max(0, revealedCount - sentences.length) : extraCount;
+  const textDone = !animate || sentencesShown >= sentences.length;
+  // 카드들을 DOM 순서대로 순회하며 현재 노출 스텝까지만 보이게 한다.
+  let extraCursor = 0;
+  const revealNextExtra = () => {
+    const visible = !animate || extrasShown > extraCursor;
+    extraCursor += 1;
+    return visible;
+  };
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-full ${isUser ? 'w-fit max-w-[86%]' : 'w-full'}`}>
@@ -1050,9 +1081,15 @@ const ChatMessage = memo(function ChatMessage({
           {isUser ? (
             <p className="break-keep">{message.text}</p>
           ) : (
-            <RevealText text={message.text} animate={reveal} className="break-keep" />
+            <p data-testid="ai-message-text" className="break-keep" aria-live={animate ? 'polite' : undefined}>
+              {animate
+                ? sentences.slice(0, sentencesShown).map((sentence, index) => (
+                  <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} />
+                ))
+                : message.text}
+            </p>
           )}
-          {!isUser && message.quickReplies?.length ? (
+          {!isUser && message.quickReplies?.length && textDone ? (
             <div data-testid="ai-quick-replies" className={`${isLarge ? 'mt-3 gap-3' : 'mt-2 gap-2'} flex flex-wrap`}>
               {message.quickReplies.map((reply) => {
                 const command = message.quickReplyCommands?.find((item) => item.label === reply);
@@ -1074,23 +1111,32 @@ const ChatMessage = memo(function ChatMessage({
           ) : null}
         </div>
 
-        {message.supportGuidance ? (
-          <SupportGuidanceCard guidance={message.supportGuidance} size={size} />
+        {message.supportGuidance && revealNextExtra() ? (
+          animate
+            ? <FadeInBlock><SupportGuidanceCard guidance={message.supportGuidance} size={size} /></FadeInBlock>
+            : <SupportGuidanceCard guidance={message.supportGuidance} size={size} />
         ) : null}
 
-        {message.simulation ? (
-          <SimulationResultCard simulation={message.simulation} size={size} />
+        {message.simulation && revealNextExtra() ? (
+          animate
+            ? <FadeInBlock><SimulationResultCard simulation={message.simulation} size={size} /></FadeInBlock>
+            : <SimulationResultCard simulation={message.simulation} size={size} />
         ) : null}
 
-        {message.buildAssessment ? (
-          <BuildAssessmentCard assessment={message.buildAssessment} size={size} />
+        {message.buildAssessment && revealNextExtra() ? (
+          animate
+            ? <FadeInBlock><BuildAssessmentCard assessment={message.buildAssessment} size={size} /></FadeInBlock>
+            : <BuildAssessmentCard assessment={message.buildAssessment} size={size} />
         ) : null}
 
-        {message.builds ? (
+        {message.builds?.length ? (
           <div className={`${isLarge ? 'mt-4 gap-3' : 'mt-2 gap-2'} grid`}>
-            {message.builds.map((build) => (
-              <CompactBuildCard key={`${message.id}-${build.id}`} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />
-            ))}
+            {message.builds.map((build) => {
+              if (!revealNextExtra()) return null;
+              const key = `${message.id}-${build.id}`;
+              const card = <CompactBuildCard build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />;
+              return animate ? <FadeInBlock key={key}>{card}</FadeInBlock> : <CompactBuildCard key={key} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />;
+            })}
           </div>
         ) : null}
       </div>
@@ -1450,7 +1496,7 @@ function CompactBuildCard({
   const isApplyDisabled = Boolean(applyingBuildId);
 
   return (
-    <article className={`${isLarge ? 'rounded-[22px] p-5' : 'rounded-2xl p-3'} border border-slate-200 bg-white shadow-sm`}>
+    <article data-testid="ai-build-card" className={`${isLarge ? 'rounded-[22px] p-5' : 'rounded-2xl p-3'} border border-slate-200 bg-white shadow-sm`}>
       <div className={`${isLarge ? 'gap-3' : 'gap-2'} flex flex-wrap items-center`}>
         <span className={`${isLarge ? 'px-3 py-1.5 text-[15px]' : 'px-2.5 py-1 text-[11px]'} rounded-full bg-brand-blue font-black text-white`}>{build.label}</span>
         {build.appliedPartCategories.map((category) => (

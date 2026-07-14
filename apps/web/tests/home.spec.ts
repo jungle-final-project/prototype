@@ -2339,8 +2339,8 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
   const SEND_BUTTON = '질문 보내기';
 
   // 지연·상태코드를 제어할 수 있는 build-chat mock. LIFO 라우팅이라 다른 mock 뒤에 등록하면 우선한다.
-  async function mockBuildChat(page: Page, options: { delayMs?: number; status?: number; message?: string } = {}) {
-    const { delayMs = 0, status = 200, message = '200만원 예산 기준으로 조합을 계산했습니다.' } = options;
+  async function mockBuildChat(page: Page, options: { delayMs?: number; status?: number; message?: string; builds?: ReturnType<typeof budgetBuilds> } = {}) {
+    const { delayMs = 0, status = 200, message = '200만원 예산 기준으로 조합을 계산했습니다.', builds = [] } = options;
     const state = { calls: 0 };
     await page.route('**/api/ai/build-chat', async (route) => {
       state.calls += 1;
@@ -2354,7 +2354,7 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ answerType: 'BUDGET', message, builds: [], warnings: [] })
+        body: JSON.stringify({ answerType: 'BUDGET', message, builds, warnings: [] })
       });
     });
     return state;
@@ -2506,5 +2506,33 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
 
     await expect(panel).toContainText(last); // 전체가 즉시 노출
     await expect(panel.getByTestId('ai-message-sentence')).toHaveCount(0); // 문장 span 없이 통짜 렌더
+  });
+
+  test('카드형(견적) 답변은 카드가 하나씩 순차로 노출된다', async ({ page }) => {
+    await mockBuildChat(page, { delayMs: 300, message: '요청하신 예산으로 세 조합을 계산했어요.', builds: budgetBuilds(2_000_000) });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    const cards = panel.getByTestId('ai-build-card');
+    // 첫 카드가 뜬 직후엔 3장이 한꺼번에 뜨지 않는다(확 나오지 않고 순차).
+    await expect(cards.first()).toBeVisible();
+    await expect(cards).not.toHaveCount(3, { timeout: 150 });
+    // 잠시 뒤 3장이 모두 노출된다.
+    await expect(cards).toHaveCount(3);
+  });
+
+  test('모션 최소화 설정에서는 카드가 한 번에 노출된다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await mockBuildChat(page, { delayMs: 300, message: '요청하신 예산으로 세 조합을 계산했어요.', builds: budgetBuilds(2_000_000) });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    // 첫 카드가 보이는 순간 이미 3장이 모두 있어야 한다(순차 노출 없음).
+    await expect(panel.getByTestId('ai-build-card').first()).toBeVisible();
+    await expect(panel.getByTestId('ai-build-card')).toHaveCount(3);
   });
 });
