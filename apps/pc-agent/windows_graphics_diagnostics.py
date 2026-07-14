@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from buildgraph_agent import hidden_subprocess_kwargs
 from diagnosis_result import DiagnosisEvidence
 from initial_metrics import AVAILABLE, FAILED, PERMISSION_REQUIRED, UNSUPPORTED
 
@@ -46,9 +45,11 @@ class PowerShellJsonRunner:
         self,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         is_windows: bool | None = None,
+        hidden_kwargs_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.runner = runner
         self.is_windows = os.name == "nt" if is_windows is None else is_windows
+        self.hidden_kwargs_provider = hidden_kwargs_provider or _default_hidden_subprocess_kwargs
 
     def query(
         self,
@@ -62,7 +63,7 @@ class PowerShellJsonRunner:
             "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n"
             + script
         )
-        kwargs = hidden_subprocess_kwargs() if self.runner is subprocess.run else {}
+        kwargs = self.hidden_kwargs_provider() if self.runner is subprocess.run else {}
         try:
             result = self.runner(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
@@ -548,6 +549,13 @@ def _availability_for_query(status: str) -> str:
     if status == QUERY_FAILED:
         return FAILED
     return AVAILABLE
+
+
+def _default_hidden_subprocess_kwargs() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flag} if flag else {}
 
 
 def _wrap_query(body: str) -> str:

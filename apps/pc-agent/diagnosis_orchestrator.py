@@ -83,6 +83,39 @@ class DiagnosisSettings:
 
 DEFAULT_DIAGNOSIS_SETTINGS = DiagnosisSettings()
 
+GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS = (
+    ("current_system_status", "system", False),
+    ("windows_display_devices", "gpu", False),
+    ("windows_display_drivers", "gpu", False),
+    ("windows_graphics_events", "gpu", False),
+    ("windows_whea_events", "hardware", False),
+    ("symptom_correlation", "system", False),
+    ("evidence_finalize", "system", True),
+    ("final_classification", "system", True),
+)
+
+GRAPHICS_DIAGNOSIS_TASK_LABELS = {
+    "current_system_status": "현재 시스템 상태 확인",
+    "windows_display_devices": "그래픽 장치 PnP 상태 확인",
+    "windows_display_drivers": "그래픽 드라이버 정보 확인",
+    "windows_graphics_events": "최근 그래픽 응답 중단·복구 기록 확인",
+    "windows_whea_events": "최근 WHEA 하드웨어 오류 확인",
+    "symptom_correlation": "증상과 오류 시각·구성요소 비교",
+    "evidence_finalize": "진단 증거 종합",
+    "final_classification": "최종 문제 분류",
+}
+
+GRAPHICS_DIAGNOSIS_TASK_WEIGHTS = {
+    "current_system_status": 15,
+    "windows_display_devices": 20,
+    "windows_display_drivers": 10,
+    "windows_graphics_events": 10,
+    "windows_whea_events": 10,
+    "symptom_correlation": 10,
+    "evidence_finalize": 10,
+    "final_classification": 15,
+}
+
 
 @dataclass(frozen=True)
 class DiagnosisTask:
@@ -260,9 +293,9 @@ class DiagnosisLogStore:
         with self._lock:
             return self._snapshot
 
-    def replace(self, snapshot: DiagnosisRunSnapshot) -> DiagnosisRunSnapshot:
+    def replace(self, snapshot: DiagnosisRunSnapshot, reset: bool = False) -> DiagnosisRunSnapshot:
         with self._lock:
-            if snapshot.diagnosis_id and snapshot.diagnosis_id == self._snapshot.diagnosis_id:
+            if not reset and snapshot.diagnosis_id and snapshot.diagnosis_id == self._snapshot.diagnosis_id:
                 seen = {event.event_id for event in self._snapshot.events}
                 merged_events = list(self._snapshot.events)
                 merged_events.extend(event for event in snapshot.events if event.event_id not in seen)
@@ -321,6 +354,7 @@ class DiagnosisOrchestrator:
         "disk_health": "디스크 상태 검사",
         "thermal_clock": "열 제한·클럭 저하 검사",
         "evidence_finalize": "최종 판정 증거 정리",
+        **GRAPHICS_DIAGNOSIS_TASK_LABELS,
     }
 
     def __init__(
@@ -330,6 +364,8 @@ class DiagnosisOrchestrator:
         settings: DiagnosisSettings = DEFAULT_DIAGNOSIS_SETTINGS,
         progress_calculator: ProgressCalculator | None = None,
         task_handlers: Mapping[str, TaskHandler] | None = None,
+        task_definitions: tuple[tuple[str, str, bool], ...] | None = None,
+        task_labels: Mapping[str, str] | None = None,
         on_update: Callable[[DiagnosisRunSnapshot], None] | None = None,
         on_complete: Callable[[DiagnosisRunSnapshot], None] | None = None,
         now: Callable[[], datetime] | None = None,
@@ -340,6 +376,8 @@ class DiagnosisOrchestrator:
         self.settings = settings
         self.progress_calculator = progress_calculator or ProgressCalculator()
         self.task_handlers = dict(task_handlers or {})
+        self.task_definitions = tuple(task_definitions or self.TASK_DEFINITIONS)
+        self.task_labels = {**self.TASK_LABELS, **dict(task_labels or {})}
         self.on_update = on_update or (lambda snapshot: None)
         self.on_complete = on_complete or (lambda snapshot: None)
         self.now = now or (lambda: datetime.now(timezone.utc))
@@ -348,17 +386,23 @@ class DiagnosisOrchestrator:
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
 
-    def prepare(self, diagnosis_id: str, mode: str, requested_checks: tuple[str, ...] = ()) -> bool:
+    def prepare(
+        self,
+        diagnosis_id: str,
+        mode: str,
+        requested_checks: tuple[str, ...] = (),
+        reset: bool = False,
+    ) -> bool:
         normalized_mode = mode.upper()
         if normalized_mode not in {"LIVE", "DEMO"}:
             raise ValueError("mode must be LIVE or DEMO")
         with self._lock:
             existing = self.store.snapshot
-            if existing.diagnosis_id == diagnosis_id:
+            if existing.diagnosis_id == diagnosis_id and not reset:
                 return False
             tasks = tuple(
                 DiagnosisTask(task_id, component, self.settings.task_weights[task_id], required)
-                for task_id, component, required in self.TASK_DEFINITIONS
+                for task_id, component, required in self.task_definitions
             )
             snapshot = DiagnosisRunSnapshot(
                 diagnosis_id=diagnosis_id,
@@ -367,7 +411,7 @@ class DiagnosisOrchestrator:
                 state="COLLECTING",
                 tasks=tasks,
             )
-            self._publish(snapshot)
+            self._publish(snapshot, reset=reset)
             return True
 
     def start(self, diagnosis_id: str, mode: str, requested_checks: tuple[str, ...] = ()) -> bool:
@@ -394,7 +438,7 @@ class DiagnosisOrchestrator:
             else:
                 tasks = tuple(
                     DiagnosisTask(task_id, component, self.settings.task_weights[task_id], required)
-                    for task_id, component, required in self.TASK_DEFINITIONS
+                    for task_id, component, required in self.task_definitions
                 )
                 snapshot = DiagnosisRunSnapshot(
                     diagnosis_id=diagnosis_id,
@@ -499,7 +543,7 @@ class DiagnosisOrchestrator:
                 snapshot = self._append_event(
                     snapshot,
                     "TASK_STARTED",
-                    f"{self.TASK_LABELS[started_task.task_id]}을 시작했습니다.",
+                    f"{self.task_labels[started_task.task_id]}을 시작했습니다.",
                     task=started_task,
                 )
                 self._publish(snapshot)
@@ -763,8 +807,8 @@ class DiagnosisOrchestrator:
         self._publish(snapshot)
         self.on_complete(snapshot)
 
-    def _publish(self, snapshot: DiagnosisRunSnapshot) -> DiagnosisRunSnapshot:
-        stored = self.store.replace(snapshot)
+    def _publish(self, snapshot: DiagnosisRunSnapshot, reset: bool = False) -> DiagnosisRunSnapshot:
+        stored = self.store.replace(snapshot, reset=reset)
         self.on_update(stored)
         return stored
 
@@ -798,7 +842,7 @@ class DiagnosisOrchestrator:
         return replace(snapshot, events=snapshot.events + (event,))
 
     def _task_completion_event(self, task: DiagnosisTask) -> tuple[str, str]:
-        label = self.TASK_LABELS[task.task_id]
+        label = self.task_labels[task.task_id]
         if task.status == "COMPLETED":
             return "TASK_COMPLETED", f"{label}을 완료했습니다."
         if task.status == "UNSUPPORTED":
@@ -815,6 +859,9 @@ class DiagnosisOrchestrator:
 
 def diagnosis_component_state(snapshot: DiagnosisRunSnapshot, component: str) -> str:
     tasks = snapshot.component_tasks(component)
+    if not tasks and component in {"cpu", "ram", "disk"}:
+        system_task = snapshot.task("current_system_status")
+        tasks = (system_task,) if system_task is not None else ()
     if not tasks:
         return "대기"
     statuses = {task.status for task in tasks}

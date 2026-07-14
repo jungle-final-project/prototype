@@ -154,6 +154,8 @@ class DiagnosisResult:
     can_auto_recover: bool
     unsupported_checks: tuple[str, ...]
     evaluated_at: str
+    diagnosis_type: str | None = None
+    remote_as_recommended: bool = False
 
     @property
     def result_id(self) -> str:
@@ -161,7 +163,7 @@ class DiagnosisResult:
         return hashlib.sha256(encoded).hexdigest()
 
     def _payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "diagnosisId": self.diagnosis_id,
             "severity": self.severity,
             "title": self.title,
@@ -175,6 +177,10 @@ class DiagnosisResult:
             "unsupportedChecks": list(self.unsupported_checks),
             "evaluatedAt": self.evaluated_at,
         }
+        if self.diagnosis_type:
+            payload["diagnosisType"] = self.diagnosis_type
+            payload["remoteAsRecommended"] = self.remote_as_recommended
+        return payload
 
     def to_dict(self) -> dict[str, Any]:
         return {"resultId": self.result_id, **self._payload()}
@@ -194,6 +200,8 @@ class DiagnosisResult:
             can_auto_recover=bool(payload.get("canAutoRecover")),
             unsupported_checks=tuple(str(item) for item in payload.get("unsupportedChecks", ())),
             evaluated_at=str(payload.get("evaluatedAt") or ""),
+            diagnosis_type=str(payload["diagnosisType"]) if payload.get("diagnosisType") else None,
+            remote_as_recommended=bool(payload.get("remoteAsRecommended")),
         )
 
 
@@ -259,6 +267,11 @@ class DiagnosisRuleEngine:
         "disk.activity": "디스크 활성 시간",
         "disk.usage": "디스크 사용률",
         "disk.smart": "디스크 SMART",
+        "gpu.display_device_status": "Windows Display 장치 상태",
+        "gpu.display_driver": "Windows Display 드라이버",
+        "system.symptom_correlation": "웹 전달 증상",
+        "system.observation_window": "실제 관찰 샘플",
+        "system.diagnosis_type": "진단 분류",
     }
 
     def __init__(self, policy: DiagnosisRulePolicy = DEFAULT_DIAGNOSIS_RULE_POLICY) -> None:
@@ -270,6 +283,9 @@ class DiagnosisRuleEngine:
             raise ValueError("metrics and diagnosis must refer to the same diagnosisId")
         if diagnosis.state not in {"COMPLETED", "PARTIALLY_COMPLETED"} or not diagnosis.transition_allowed:
             raise ValueError("diagnosis must contain valid completed evidence")
+
+        if diagnosis.task("final_classification") is not None:
+            return self._evaluate_graphics_configuration(diagnosis)
 
         evidence = self._collect_evidence(diagnosis)
         latest = self._latest_evidence(evidence)
@@ -371,6 +387,115 @@ class DiagnosisRuleEngine:
             resolution_type, resolution_type == "SOFTWARE_RECOVERY", tuple(unsupported_checks), evaluated_at,
         )
 
+    def _evaluate_graphics_configuration(self, diagnosis: DiagnosisRunSnapshot) -> DiagnosisResult:
+        diagnosis_id = str(diagnosis.diagnosis_id or "")
+        evidence = self._collect_evidence(diagnosis)
+        unsupported_checks = self._unsupported_checks(evidence, diagnosis)
+        evaluated_at = max(
+            (item.occurred_at or item.sampled_at for item in evidence if item.occurred_at or item.sampled_at),
+            default=diagnosis.completed_at or "",
+        )
+        symptom_evidence = next(
+            (
+                item
+                for item in evidence
+                if item.metric_type == "symptom_correlation"
+                and item.status == "MATCHED"
+                and isinstance(item.value, dict)
+                and bool(item.value.get("supported"))
+            ),
+            None,
+        )
+        problem_device = next(
+            (
+                item
+                for item in evidence
+                if item.category == "DEVICE"
+                and item.metric_type == "display_device_status"
+                and isinstance(item.code, int)
+                and item.code != 0
+                and isinstance(item.value, dict)
+                and item.value.get("deviceName")
+                and item.value.get("instanceId")
+                and item.value.get("problemCode") == item.code
+                and item.value.get("problemCodeQueryStatus") == "OK"
+            ),
+            None,
+        )
+
+        if symptom_evidence is not None and problem_device is not None:
+            device_name = str(problem_device.value["deviceName"])
+            problem_code = int(problem_device.value["problemCode"])
+            if problem_code == 22:
+                result_title = "그래픽 장치 비활성 상태가 확인되었습니다"
+                finding_title = "그래픽 장치 비활성 상태"
+                state_description = "Windows에서 장치가 비활성 상태입니다."
+            elif problem_code == 43:
+                result_title = "그래픽 장치 오류 상태가 확인되었습니다"
+                finding_title = "그래픽 장치 중지 상태"
+                state_description = "장치가 문제를 보고하여 Windows가 장치를 중지한 상태입니다."
+            else:
+                result_title = "그래픽 장치 오류가 확인되었습니다"
+                finding_title = "그래픽 장치 오류 상태"
+                state_description = f"Windows가 장치 문제(problem code {problem_code})를 보고했습니다."
+            finding = self._finding(
+                "DEVICE_DRIVER_CONFIGURATION_ISSUE",
+                "WARNING",
+                finding_title,
+                f"{device_name} 장치에서 Windows problem code {problem_code}가 확인되었습니다. "
+                f"{state_description} 이 evidence만으로 물리 고장이나 검은 화면의 직접 원인을 확정하지 않습니다.",
+                (problem_device.key, symptom_evidence.key),
+                (),
+                ("장치 상태와 드라이버를 원격으로 점검",),
+                "PHYSICAL_INSPECTION",
+            )
+            return DiagnosisResult(
+                diagnosis_id=diagnosis_id,
+                severity="WARNING",
+                title=result_title,
+                summary=(
+                    f"{device_name} 그래픽 장치에서 problem code {problem_code}가 확인되었습니다. "
+                    f"{state_description} Agent는 장치나 드라이버를 자동 조작하지 않으며 원격 AS 기사 점검이 필요합니다. "
+                    "검은 화면 또는 화면 복구 증상의 직접 원인이나 물리 고장으로 확정하지 않습니다."
+                ),
+                evidence=evidence,
+                findings=(finding,),
+                suspected_causes=(),
+                recommended_actions=(
+                    "Agent가 장치를 자동 비활성화·활성화하거나 드라이버를 변경하지 않음",
+                    "원격 AS 기사 점검 권장",
+                    "진단 상세에서 실제 장치 근거 확인",
+                ),
+                resolution_type="PHYSICAL_INSPECTION",
+                can_auto_recover=False,
+                unsupported_checks=tuple(unsupported_checks),
+                evaluated_at=evaluated_at,
+                diagnosis_type="DEVICE_DRIVER_CONFIGURATION_ISSUE",
+                remote_as_recommended=True,
+            )
+
+        return DiagnosisResult(
+            diagnosis_id=diagnosis_id,
+            severity="INDETERMINATE",
+            title="그래픽 장치 구성 이상을 확정할 근거가 부족합니다",
+            summary=(
+                "검은 화면 또는 화면 복구 증상은 전달됐지만 명확한 실제 장치 problem code를 확인하지 못했거나 장치 조회가 실패했습니다."
+            ),
+            evidence=evidence,
+            findings=(),
+            suspected_causes=(),
+            recommended_actions=(
+                "지원되는 권한으로 그래픽 장치 상태 다시 확인",
+                "진단 상세에서 미지원·조회 실패 항목 확인",
+            ),
+            resolution_type="UNKNOWN",
+            can_auto_recover=False,
+            unsupported_checks=tuple(unsupported_checks),
+            evaluated_at=evaluated_at,
+            diagnosis_type="INSUFFICIENT_EVIDENCE",
+            remote_as_recommended=False,
+        )
+
     @staticmethod
     def _finding(
         code: str,
@@ -387,13 +512,24 @@ class DiagnosisRuleEngine:
     @staticmethod
     def _collect_evidence(diagnosis: DiagnosisRunSnapshot) -> tuple[DiagnosisEvidence, ...]:
         collected: list[DiagnosisEvidence] = []
-        seen: set[tuple[str, str, str, str]] = set()
+        seen: set[tuple[str, str, str, str, str]] = set()
         for task in diagnosis.tasks:
             for payload in task.evidence:
                 if not isinstance(payload, dict) or not payload.get("component") or not payload.get("metricType"):
                     continue
                 evidence = DiagnosisEvidence.from_dict({"taskId": task.task_id, **payload})
-                identity = (evidence.task_id, evidence.component, evidence.metric_type, evidence.sampled_at)
+                instance_id = (
+                    str(evidence.value.get("instanceId") or "")
+                    if isinstance(evidence.value, dict)
+                    else ""
+                )
+                identity = (
+                    evidence.task_id,
+                    evidence.component,
+                    evidence.metric_type,
+                    evidence.sampled_at,
+                    instance_id,
+                )
                 if identity in seen:
                     continue
                 seen.add(identity)
@@ -543,6 +679,7 @@ def can_offer_as(result: DiagnosisResult | None, diagnosis: DiagnosisRunSnapshot
         and isinstance(diagnosis, DiagnosisRunSnapshot)
         and result.diagnosis_id == diagnosis.diagnosis_id
         and result.resolution_type == "PHYSICAL_INSPECTION"
+        and result.diagnosis_type != "DEVICE_DRIVER_CONFIGURATION_ISSUE"
         and bool(result.evidence)
         and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
         and diagnosis.transition_allowed

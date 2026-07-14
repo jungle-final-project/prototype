@@ -47,9 +47,15 @@ from diagnosis_as_request import (
 )
 from diagnosis_orchestrator import (
     FINAL_SESSION_STATES,
+    GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
+    GRAPHICS_DIAGNOSIS_TASK_LABELS,
+    GRAPHICS_DIAGNOSIS_TASK_WEIGHTS,
     DiagnosisLogStore,
     DiagnosisOrchestrator,
     DiagnosisRunSnapshot,
+    DiagnosisSettings,
+    DiagnosisTask,
+    TaskOutcome,
     diagnosis_component_state,
     diagnosis_current_task_label,
 )
@@ -79,6 +85,13 @@ from initial_metrics import (
     MetricsNormalizer,
     MetricsSnapshot,
     MetricsStore,
+)
+from windows_graphics_diagnostics import (
+    NO_RESULTS as WINDOWS_NO_RESULTS,
+    OK as WINDOWS_QUERY_OK,
+    PowerShellJsonRunner,
+    WindowsGraphicsDiagnosticsProvider,
+    WindowsGraphicsDiagnosticsSnapshot,
 )
 
 try:
@@ -359,6 +372,7 @@ def start_diagnosis_once(
     diagnosis_store: DiagnosisSessionStore,
     metrics_store: MetricsStore,
     diagnosis_orchestrator: DiagnosisOrchestrator,
+    diagnosis_result_store: DiagnosisResultStore | None = None,
 ) -> DiagnosisSession | None:
     current_session = diagnosis_store.session
     if (
@@ -371,10 +385,13 @@ def start_diagnosis_once(
     metrics = metrics_store.snapshot
     if metrics.diagnosis_id != current_session.request.diagnosis_id or not metrics.initial_complete:
         return None
+    if isinstance(diagnosis_result_store, DiagnosisResultStore):
+        diagnosis_result_store.clear()
     diagnosis_orchestrator.prepare(
         current_session.request.diagnosis_id,
         current_session.request.mode,
         current_session.request.requested_checks,
+        reset=True,
     )
     diagnosis_store.update_state("RUNNING")
     if not diagnosis_orchestrator.start(
@@ -439,6 +456,352 @@ def start_initial_metrics_session(
         current_session.request.mode,
     )
     return current_session if started else None
+
+
+SUPPORTED_GRAPHICS_SYMPTOM_FRAGMENTS = (
+    "검은 화면",
+    "화면이 꺼졌다가 복구",
+    "화면이 나오지 않",
+    "그래픽 출력 중단",
+    "화면 복구",
+)
+
+
+def is_supported_graphics_symptom(symptom: str) -> bool:
+    normalized = " ".join(symptom.strip().split())
+    return bool(normalized) and any(fragment in normalized for fragment in SUPPORTED_GRAPHICS_SYMPTOM_FRAGMENTS)
+
+
+def graphics_diagnosis_task_handlers(
+    session_provider: Callable[[], DiagnosisSession | None],
+    metrics_snapshot_provider: Callable[[], MetricsSnapshot],
+    diagnosis_snapshot_provider: Callable[[], DiagnosisRunSnapshot],
+    windows_snapshot_provider: Callable[[], WindowsGraphicsDiagnosticsSnapshot],
+    observation_timeout_seconds: float = 8.0,
+    monotonic: Callable[[], float] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> dict[str, Callable[[DiagnosisTask, MetricsSnapshot, tuple[DiagnosisTask, ...]], TaskOutcome]]:
+    clock = monotonic or time.monotonic
+    sleep = sleeper or time.sleep
+    windows_cache: dict[str, Any] = {
+        "key": None,
+        "attempted": False,
+        "snapshot": None,
+        "error": None,
+    }
+
+    def current_run_key() -> tuple[str | None, int]:
+        snapshot = diagnosis_snapshot_provider()
+        return snapshot.diagnosis_id, snapshot.retry_count
+
+    def windows_snapshot() -> WindowsGraphicsDiagnosticsSnapshot:
+        key = current_run_key()
+        if windows_cache["key"] != key:
+            windows_cache.update({"key": key, "attempted": False, "snapshot": None, "error": None})
+        if not windows_cache["attempted"]:
+            windows_cache["attempted"] = True
+            try:
+                windows_cache["snapshot"] = windows_snapshot_provider()
+            except Exception as exception:
+                windows_cache["error"] = exception
+        error = windows_cache["error"]
+        if isinstance(error, Exception):
+            raise error
+        snapshot = windows_cache["snapshot"]
+        if not isinstance(snapshot, WindowsGraphicsDiagnosticsSnapshot):
+            raise RuntimeError("Windows graphics diagnostics returned no snapshot")
+        return snapshot
+
+    def query_outcome(
+        query: Any,
+        evidence: tuple[dict[str, Any], ...],
+        no_results_completed: bool,
+    ) -> TaskOutcome:
+        if query.status == WINDOWS_QUERY_OK:
+            return TaskOutcome("COMPLETED", evidence)
+        if query.status == WINDOWS_NO_RESULTS:
+            status = "COMPLETED" if no_results_completed else "UNSUPPORTED"
+            return TaskOutcome(
+                status,
+                evidence,
+                None if no_results_completed else "NO_RESULTS",
+                None if no_results_completed else "조회된 Windows 장치 정보가 없습니다.",
+            )
+        if query.status == UNSUPPORTED:
+            return TaskOutcome("UNSUPPORTED", evidence, "UNSUPPORTED", query.error or "지원되지 않는 Windows 조회입니다.")
+        return TaskOutcome("FAILED", evidence, query.status, query.error or "Windows 진단 정보 조회에 실패했습니다.")
+
+    def evidence_for(snapshot: WindowsGraphicsDiagnosticsSnapshot, *task_ids: str) -> tuple[dict[str, Any], ...]:
+        allowed = set(task_ids)
+        return tuple(item.to_dict() for item in snapshot.to_evidence() if item.task_id in allowed)
+
+    def current_system_status(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        run = diagnosis_snapshot_provider()
+        started_at = _parse_iso_datetime(run.started_at)
+        deadline = clock() + max(0.0, observation_timeout_seconds)
+        current = metrics
+        sample_timestamps: tuple[str, ...] = ()
+        while True:
+            current = metrics_snapshot_provider()
+            timestamps = {
+                reading.sampled_at
+                for reading in current.readings
+                if reading.component in {"cpu", "gpu", "ram", "disk"}
+                and reading.source != "demo-scenario"
+                and (
+                    started_at is None
+                    or (
+                        (sampled_at := _parse_iso_datetime(reading.sampled_at)) is not None
+                        and sampled_at > started_at
+                    )
+                )
+            }
+            sample_timestamps = tuple(sorted(timestamps))
+            if len(sample_timestamps) >= 3 or clock() >= deadline:
+                break
+            sleep(min(0.05, max(0.0, deadline - clock())))
+
+        selected_timestamps = set(sample_timestamps[:3])
+        evidence: list[dict[str, Any]] = []
+        metric_preferences = {
+            "cpu": ("usage",),
+            "gpu": ("usage",),
+            "ram": ("usage",),
+            "disk": ("activity", "usage"),
+        }
+        for sampled_at in sorted(selected_timestamps):
+            for component, metric_types in metric_preferences.items():
+                reading = next(
+                    (
+                        item
+                        for metric_type in metric_types
+                        for item in current.readings
+                        if item.sampled_at == sampled_at
+                        and item.component == component
+                        and item.metric_type == metric_type
+                        and item.availability == AVAILABLE
+                    ),
+                    None,
+                )
+                if reading is None:
+                    continue
+                payload = reading.to_dict()
+                payload.update({
+                    "category": "PERFORMANCE",
+                    "code": f"{component.upper()}_{reading.metric_type.upper()}",
+                    "occurredAt": reading.sampled_at,
+                    "description": "MetricsStore actual sensor sample",
+                })
+                evidence.append(payload)
+
+        observed_at = sample_timestamps[min(2, len(sample_timestamps) - 1)] if sample_timestamps else (run.started_at or "")
+        evidence.append({
+            "component": "system",
+            "metricType": "observation_window",
+            "value": {
+                "sampleCount": min(3, len(sample_timestamps)),
+                "sampleTimestamps": list(sample_timestamps[:3]),
+                "timeoutSeconds": max(0.0, observation_timeout_seconds),
+            },
+            "unit": "count",
+            "availability": AVAILABLE,
+            "status": "OBSERVED" if len(sample_timestamps) >= 3 else "OBSERVATION_WINDOW_COMPLETED",
+            "source": "MetricsStore",
+            "sampledAt": observed_at,
+            "category": "PERFORMANCE",
+            "code": "ACTUAL_SAMPLE_TIMESTAMPS",
+            "occurredAt": observed_at,
+            "description": "Actual samples observed after diagnosis start",
+        })
+        return TaskOutcome("COMPLETED", tuple(evidence))
+
+    def display_devices(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        return query_outcome(
+            snapshot.device_query,
+            evidence_for(snapshot, "windows_display_devices"),
+            no_results_completed=False,
+        )
+
+    def display_drivers(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        return query_outcome(
+            snapshot.driver_query,
+            evidence_for(snapshot, "windows_display_drivers"),
+            no_results_completed=False,
+        )
+
+    def graphics_events(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        evidence = evidence_for(snapshot, "windows_graphics_events", "windows_kernel_power_events")
+        return query_outcome(snapshot.graphics_event_query, evidence, no_results_completed=True)
+
+    def whea_events(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        snapshot = windows_snapshot()
+        return query_outcome(
+            snapshot.whea_event_query,
+            evidence_for(snapshot, "windows_whea_events"),
+            no_results_completed=True,
+        )
+
+    def symptom_correlation(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        session = session_provider()
+        run = diagnosis_snapshot_provider()
+        if not isinstance(session, DiagnosisSession) or session.request.diagnosis_id != run.diagnosis_id:
+            return TaskOutcome("FAILED", error_code="SESSION_MISMATCH", failure_reason="현재 웹 진단 요청을 확인할 수 없습니다.")
+        snapshot = windows_snapshot()
+        supported = is_supported_graphics_symptom(session.request.symptom)
+        occurred_at = session.request.requested_at
+        value = {
+            "symptom": session.request.symptom,
+            "requestedAt": session.request.requested_at,
+            "supported": supported,
+            "deviceInstanceIds": [device.instance_id for device in snapshot.devices],
+            "graphicsEventOccurredAt": [event.occurred_at for event in snapshot.graphics_events],
+            "components": sorted({event.component for event in snapshot.graphics_events} | ({"gpu"} if snapshot.devices else set())),
+        }
+        evidence = ({
+            "component": "system",
+            "metricType": "symptom_correlation",
+            "value": value,
+            "unit": "",
+            "availability": AVAILABLE if supported else UNSUPPORTED,
+            "status": "MATCHED" if supported else "UNSUPPORTED_SYMPTOM",
+            "source": "DiagnosisSession",
+            "sampledAt": occurred_at,
+            "category": "SYSTEM",
+            "code": "SUPPORTED_GRAPHICS_SYMPTOM" if supported else "UNSUPPORTED_GRAPHICS_SYMPTOM",
+            "occurredAt": occurred_at,
+            "description": "Web symptom and Windows graphics evidence context",
+        },)
+        return TaskOutcome("COMPLETED" if supported else "UNSUPPORTED", evidence)
+
+    def evidence_finalize(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        run = diagnosis_snapshot_provider()
+        summary = [
+            {"taskId": item.task_id, "status": item.status, "evidenceCount": len(item.evidence)}
+            for item in tasks
+            if item.task_id not in {"evidence_finalize", "final_classification"}
+        ]
+        evidence = ({
+            "component": "system",
+            "metricType": "evidence_summary",
+            "value": summary,
+            "unit": "count",
+            "availability": AVAILABLE,
+            "status": "COMPLETED",
+            "source": "DiagnosisOrchestrator",
+            "sampledAt": run.started_at or "",
+            "category": "SYSTEM",
+            "code": "EVIDENCE_SUMMARY",
+            "occurredAt": run.started_at or "",
+            "description": "Terminal task evidence summary",
+        },)
+        return TaskOutcome("COMPLETED", evidence)
+
+    def final_classification(
+        task: DiagnosisTask,
+        metrics: MetricsSnapshot,
+        tasks: tuple[DiagnosisTask, ...],
+    ) -> TaskOutcome:
+        run = diagnosis_snapshot_provider()
+        symptom_matched = any(
+            item.get("metricType") == "symptom_correlation"
+            and item.get("status") == "MATCHED"
+            for diagnosis_task in tasks
+            for item in diagnosis_task.evidence
+        )
+        problem_devices = [
+            item
+            for diagnosis_task in tasks
+            for item in diagnosis_task.evidence
+            if item.get("metricType") == "display_device_status"
+            and isinstance(item.get("code"), int)
+            and item.get("code") != 0
+            and isinstance(item.get("value"), dict)
+            and item["value"].get("deviceName")
+            and item["value"].get("instanceId")
+            and item["value"].get("problemCode") == item.get("code")
+            and item["value"].get("problemCodeQueryStatus") == WINDOWS_QUERY_OK
+        ]
+        diagnosis_type = (
+            "DEVICE_DRIVER_CONFIGURATION_ISSUE"
+            if symptom_matched and problem_devices
+            else "INSUFFICIENT_EVIDENCE"
+        )
+        value: dict[str, Any] = {
+            "diagnosisType": diagnosis_type,
+            "symptomMatched": symptom_matched,
+            "problemDeviceCount": len(problem_devices),
+        }
+        if problem_devices:
+            value["device"] = problem_devices[0]["value"]
+        evidence = ({
+            "component": "system",
+            "metricType": "diagnosis_type",
+            "value": value,
+            "unit": "",
+            "availability": AVAILABLE,
+            "status": "CLASSIFIED" if diagnosis_type == "DEVICE_DRIVER_CONFIGURATION_ISSUE" else "INSUFFICIENT_EVIDENCE",
+            "source": "DiagnosisOrchestrator",
+            "sampledAt": run.started_at or "",
+            "category": "SYSTEM",
+            "code": diagnosis_type,
+            "occurredAt": run.started_at or "",
+            "description": "Evidence-backed graphics diagnosis classification",
+        },)
+        return TaskOutcome("COMPLETED", evidence)
+
+    return {
+        "current_system_status": current_system_status,
+        "windows_display_devices": display_devices,
+        "windows_display_drivers": display_drivers,
+        "windows_graphics_events": graphics_events,
+        "windows_whea_events": whea_events,
+        "symptom_correlation": symptom_correlation,
+        "evidence_finalize": evidence_finalize,
+        "final_classification": final_classification,
+    }
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def resolve_ui_font_family(root: Any | None = None) -> str:
@@ -5596,8 +5959,11 @@ def show_log_viewer(
             return
         text(145, 258, result.title, 22, colors["text"], "semibold", "nw", width=710)
         text(145, 307, result.summary, 14, "#5f6368", "regular", "nw", width=710)
-        line(145, 371, 855, 371)
-        text(145, 392, "핵심 결과", 16, colors["text"], "semibold")
+        recovery_label = "가능" if result.can_auto_recover else "불가"
+        remote_label = "필요" if result.remote_as_recommended else "자동 판정 없음"
+        text(145, 365, f"로컬 자동 복구: {recovery_label} · 원격 기사 점검: {remote_label}", 12, colors["muted"])
+        line(145, 385, 855, 385)
+        text(145, 404, "핵심 결과", 16, colors["text"], "semibold")
         visible_findings = [(finding.code, finding.title) for finding in result.findings[:3]]
         if not visible_findings:
             visible_findings = [
@@ -5613,30 +5979,30 @@ def show_log_viewer(
         for index, (finding_code, label) in enumerate(visible_findings):
             x1 = 145 + index * (chip_width + chip_gap)
             x2 = x1 + chip_width
-            y1 = 422
+            y1 = 434
             kind = "temp" if "TEMPERATURE" in finding_code else "fan" if "FAN" in finding_code else "warn"
-            round_rect(x1, y1, x2, 458, 18, chip_fill, "")
+            round_rect(x1, y1, x2, 470, 18, chip_fill, "")
             if kind == "temp":
-                canvas.create_oval(x1 + 17, 435, x1 + 25, 451, fill="#ffffff", outline=chip_color, width=2)
-                canvas.create_line(x1 + 21, 429, x1 + 21, 443, fill=chip_color, width=2)
+                canvas.create_oval(x1 + 17, 447, x1 + 25, 463, fill="#ffffff", outline=chip_color, width=2)
+                canvas.create_line(x1 + 21, 441, x1 + 21, 455, fill=chip_color, width=2)
             elif kind == "fan":
                 for angle in (0, 120, 240):
-                    canvas.create_arc(x1 + 14, 429, x1 + 33, 451, start=angle, extent=65, style="arc", outline=chip_color, width=2)
-                canvas.create_oval(x1 + 22, 438, x1 + 26, 442, fill=chip_color, outline="")
+                    canvas.create_arc(x1 + 14, 441, x1 + 33, 463, start=angle, extent=65, style="arc", outline=chip_color, width=2)
+                canvas.create_oval(x1 + 22, 450, x1 + 26, 454, fill=chip_color, outline="")
             else:
-                canvas.create_polygon(x1 + 22, 429, x1 + 13, 451, x1 + 31, 451, fill="#ffffff", outline=chip_color, width=2)
-                text(x1 + 22, 445, "!", 10, chip_color, "semibold", "center")
-            text(x1 + 42, 440, label, 12, colors["text"], "regular", "w", width=chip_width - 50)
-        line(145, 477, 855, 477)
-        text(145, 497, "권장 조치", 16, colors["text"], "semibold")
+                canvas.create_polygon(x1 + 22, 441, x1 + 13, 463, x1 + 31, 463, fill="#ffffff", outline=chip_color, width=2)
+                text(x1 + 22, 457, "!", 10, chip_color, "semibold", "center")
+            text(x1 + 42, 452, label, 12, colors["text"], "regular", "w", width=chip_width - 50)
+        line(145, 489, 855, 489)
+        text(145, 509, "권장 조치", 16, colors["text"], "semibold")
         action_slots = (162, 420, 690)
         for index, label in enumerate(result.recommended_actions[:3], start=1):
             x = action_slots[index - 1]
-            canvas.create_oval(x - 13, 523, x + 13, 549, fill="#fff0ef", outline="")
-            text(x, 536, str(index), 11, colors["red"], "semibold", "center")
-            text(x + 31, 536, label, 12, "#333333", "regular", "w", width=195)
+            canvas.create_oval(x - 13, 535, x + 13, 561, fill="#fff0ef", outline="")
+            text(x, 548, str(index), 11, colors["red"], "semibold", "center")
+            text(x + 31, 548, label, 12, "#333333", "regular", "w", width=195)
             if index < len(result.recommended_actions[:3]):
-                line(x + 213, 523, x + 213, 549)
+                line(x + 213, 535, x + 213, 561)
         if can_offer_as(result, diagnosis if isinstance(diagnosis, DiagnosisRunSnapshot) else None):
             button(270, 585, 485, 635, "진단 상세", show_diagnosis_detail, False, size=15)
             as_label = "AS 접수 다시 시도" if ui["asState"] == "asFailed" else "AS 연결하기"
@@ -6973,9 +7339,26 @@ def run_background(
                 diagnosis_store.update_state("FAILED")
             viewer_controller.refresh_metrics()
 
+        windows_graphics_provider = WindowsGraphicsDiagnosticsProvider(
+            PowerShellJsonRunner(hidden_kwargs_provider=hidden_subprocess_kwargs),
+        )
         diagnosis_orchestrator = DiagnosisOrchestrator(
             lambda: metrics_store.snapshot,
             diagnosis_log_store,
+            settings=DiagnosisSettings(
+                task_weights=GRAPHICS_DIAGNOSIS_TASK_WEIGHTS,
+                task_timeout_seconds=35.0,
+                session_timeout_seconds=90.0,
+                max_retries=1,
+            ),
+            task_handlers=graphics_diagnosis_task_handlers(
+                lambda: diagnosis_store.session,
+                lambda: metrics_store.snapshot,
+                lambda: diagnosis_log_store.snapshot,
+                windows_graphics_provider.collect,
+            ),
+            task_definitions=GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
+            task_labels=GRAPHICS_DIAGNOSIS_TASK_LABELS,
             on_update=on_diagnosis_updated,
             on_complete=on_diagnosis_complete,
         )
@@ -7016,6 +7399,7 @@ def run_background(
                 diagnosis_store,
                 metrics_store,
                 diagnosis_orchestrator,
+                diagnosis_result_store,
             )
 
         def on_diagnosis_request(session: DiagnosisSession) -> None:
