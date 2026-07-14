@@ -1165,9 +1165,10 @@ const ChatMessage = memo(function ChatMessage({
             {message.builds.map((build) => {
               if (!revealNextExtra()) return null;
               const key = `${message.id}-${build.id}`;
+              const distinction = deriveBuildDistinction(build, message.builds ?? []);
               return animate
-                ? <FadeInBlock key={key}><CompactBuildCard build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} reveal /></FadeInBlock>
-                : <CompactBuildCard key={key} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />;
+                ? <FadeInBlock key={key}><CompactBuildCard build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} reveal distinction={distinction} /></FadeInBlock>
+                : <CompactBuildCard key={key} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} distinction={distinction} />;
             })}
           </div>
         ) : null}
@@ -1492,18 +1493,73 @@ function MiniBar({ value, max, className, size = 'default' }: { value?: number |
 // 재마운트될 때 옛 비교가 다시 켜지지 않도록 빌드 단위로 1회만 발행한다.
 const perfCompareNotifiedBuildIds = new Set<string>();
 
+// 특이점에 노출할 핵심 부품 우선순위(성능 체감이 큰 순서).
+const DISTINCTION_CATEGORY_ORDER: PartCategory[] = ['GPU', 'CPU', 'RAM', 'STORAGE'];
+
+// 긴 정품명에서 사람이 알아보는 모델 토큰만 뽑는다(실패 시 앞부분만 축약).
+function conciseModelName(name: string, category: PartCategory): string {
+  if (category === 'GPU') {
+    const match = name.match(/\b(?:RTX|GTX|RX)\s?\d{3,4}\s?(?:Ti|SUPER|XT)?\b/i);
+    if (match) return match[0].replace(/\s+/g, ' ').toUpperCase().trim();
+  }
+  if (category === 'CPU') {
+    const match = name.match(/\b(?:Ryzen\s?\d\s?\d{3,4}\w*|i[3579][\s-]?\d{3,5}\w*|\d{4,5}(?:X3D|KS|KF|K|F|X)?)\b/i);
+    if (match) return match[0].trim();
+  }
+  if (category === 'RAM') {
+    const match = name.match(/\b\d{2,3}\s?GB\b/i);
+    if (match) return match[0].replace(/\s+/g, '').toUpperCase();
+  }
+  const cleaned = name.replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim();
+  return cleaned.length > 16 ? `${cleaned.slice(0, 16)}…` : cleaned;
+}
+
+// 같은 응답의 다른 추천들과 비교해 이 조합만의 특이점을 만든다: 다른 핵심 부품 + 가격 위치.
+// 백엔드 summary가 모든 카드에 동일한 보일러플레이트라, 프런트에서 실제 차이를 뽑아 대체한다.
+function deriveBuildDistinction(build: AiRecommendedBuild, builds: AiRecommendedBuild[]): string | null {
+  if (!builds || builds.length < 2) return null;
+  const others = builds.filter((candidate) => candidate.id !== build.id);
+  const prices = builds.map((candidate) => candidate.totalPrice);
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const priceHint = minPrice === maxPrice
+    ? ''
+    : build.totalPrice === minPrice
+      ? '최저가'
+      : build.totalPrice === maxPrice
+        ? '최고 사양'
+        : '';
+
+  const diffs: string[] = [];
+  for (const category of DISTINCTION_CATEGORY_ORDER) {
+    const mine = build.items.find((item) => item.category === category);
+    if (!mine) continue;
+    const differs = others.some((candidate) => {
+      const theirs = candidate.items.find((item) => item.category === category);
+      return theirs ? theirs.name !== mine.name : false;
+    });
+    if (differs) diffs.push(`${PART_CATEGORY_LABELS[category]} ${conciseModelName(mine.name, category)}`);
+    if (diffs.length >= 2) break;
+  }
+
+  const parts = priceHint ? [...diffs, priceHint] : diffs;
+  return parts.length ? parts.join(' · ') : null;
+}
+
 function CompactBuildCard({
   build,
   onSelectBuild,
   applyingBuildId,
   size = 'default',
-  reveal = false
+  reveal = false,
+  distinction
 }: {
   build: AiRecommendedBuild;
   onSelectBuild: (build: AiRecommendedBuild) => void;
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
   reveal?: boolean;
+  distinction?: string | null;
 }) {
   // 변경 미리보기 카드는 전체 견적이 아니라 바뀐 부품만 보여준다(전체 8부품 나열은 무엇이 바뀌는지 흐린다).
   // 적용은 여전히 build 전체(items 전량)로 하므로 나머지 부품이 삭제되지 않는다.
@@ -1557,7 +1613,7 @@ function CompactBuildCard({
       <div style={sectionStyle(titleIdx)} className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-col sm:flex-row sm:items-start sm:justify-between`}>
         <div className="min-w-0">
           <h3 className={`${isLarge ? 'text-[20px] leading-8' : 'text-sm leading-5'} font-black text-commerce-ink`}>{build.title}</h3>
-          <p className={`${isLarge ? 'mt-2 text-base leading-7' : 'mt-1 text-xs leading-5'} line-clamp-2 break-keep text-slate-500`}>{build.summary}</p>
+          <p className={`${isLarge ? 'mt-2 text-base leading-7' : 'mt-1 text-xs leading-5'} line-clamp-2 break-keep ${distinction ? 'font-bold text-slate-600' : 'text-slate-500'}`}>{distinction || build.summary}</p>
         </div>
         <div className="shrink-0 text-left sm:text-right">
           <div className={`${isLarge ? 'text-[22px] leading-8' : 'text-base'} font-black text-brand-blue`}>{build.totalPrice.toLocaleString()}원</div>

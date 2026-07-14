@@ -2522,12 +2522,13 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
     // 잠시 뒤 3장이 모두 노출된다.
     await expect(cards).toHaveCount(3);
 
-    // AI 견적 카드는 특이사항·가격·담기 버튼만 노출한다 — 툴 통과 상태·부품명은 제거됨.
+    // AI 견적 카드는 툴 통과 상태·부품 목록 없이, 담기 버튼과 조합별 특이점(가격 위치)을 보여준다.
     const firstCard = cards.first();
     await expect(firstCard).toContainText('이 조합으로 셀프 견적 보기');
-    await expect(firstCard).toContainText('조합입니다'); // 특이사항(summary)
     await expect(firstCard).not.toContainText('통과'); // 툴 검증 칩 제거
-    await expect(firstCard).not.toContainText('서버 추천'); // 부품명 목록 제거
+    // 조합마다 특이점이 달라야 한다: 최저가 카드와 최고 사양 카드가 서로 다른 문구를 갖는다.
+    await expect(cards.first()).toContainText('최저가');
+    await expect(cards.nth(2)).toContainText('최고 사양');
   });
 
   test('모션 최소화 설정에서는 카드가 한 번에 노출된다', async ({ page }) => {
