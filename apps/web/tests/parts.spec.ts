@@ -183,9 +183,14 @@ test('uses one horizontal action style for add, replace, and remove while markin
   await expect(tableActionButtons[0]).toHaveText('빼기');
   await expect(tableActionButtons[1]).toHaveText('교체');
   await expect(tableActionButtons[2]).toHaveText('담기');
-  for (const actionButton of tableActionButtons) {
+  await expect(tableActionButtons[0]).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(tableActionButtons[0]).toHaveCSS('color', 'rgb(17, 24, 39)');
+  await expect(tableActionButtons[0]).toHaveCSS('border-color', 'rgb(17, 24, 39)');
+  for (const actionButton of tableActionButtons.slice(1)) {
     await expect(actionButton).toHaveCSS('background-color', 'rgb(17, 24, 39)');
     await expect(actionButton).toHaveCSS('color', 'rgb(255, 255, 255)');
+  }
+  for (const actionButton of tableActionButtons) {
     await expect(actionButton).toHaveCSS('white-space', 'nowrap');
     await expect.poll(async () => (await actionButton.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(64);
   }
