@@ -879,6 +879,52 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void verifiedChangeAdviceUsesOnlyProvidedServerFactsWithoutRag() {
+        when(openAiResponsesClient.isConfigured()).thenReturn(true);
+        when(openAiResponsesClient.createStructuredJsonResult(
+                anyString(),
+                anyString(),
+                eq("buildgraph_verified_change_advice"),
+                any(),
+                eq("gpt-5.4-mini"),
+                eq("low"),
+                eq(180)
+        )).thenReturn(new LlmResponseResult(
+                "{\"assistantMessage\":\"현재 조건에는 1200W PSU A가 검증된 우선 후보입니다. 이 제품으로 교체안을 확인할까요?\"}",
+                LlmProvider.OPENAI,
+                "gpt-5.4-mini",
+                "low",
+                610,
+                34,
+                9,
+                43,
+                16
+        ));
+        Map<String, Object> facts = Map.of(
+                "category", "PSU",
+                "verifiedSummary", "검증된 파워 후보 TOP3입니다.",
+                "candidates", List.of("1200W PSU A", "1200W PSU B"),
+                "primaryCandidate", "1200W PSU A",
+                "actionKind", "REPLACE",
+                "closingQuestion", "1200W PSU A로 교체안을 확인할까요?"
+        );
+
+        String advice = engine.explainVerifiedChangeAdvice(new AiChatEngineRequest(
+                "지금까지 말한 조건에 맞는 파워 추천해줘",
+                "SELF_QUOTE",
+                "PSU",
+                null,
+                null,
+                Map.of("verifiedChangeAdvice", facts),
+                1L
+        ), "BUILD_CHAT_54_MINI_FAST").orElseThrow();
+
+        assertThat(advice).contains("1200W PSU A", "교체안을 확인할까요?");
+        verify(agentRagRetrievalService, never()).retrieveEvidenceSet(any(), any(), anyString(), anyInt());
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void boardFocusStructuredOutputSchemaUsesOnlySupportedArrayKeywords() throws Exception {
         Method schemaMethod = DefaultAiChatEngine.class.getDeclaredMethod("boardFocusIntentSchema");

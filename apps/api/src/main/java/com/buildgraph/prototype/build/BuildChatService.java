@@ -417,6 +417,7 @@ public class BuildChatService {
         Optional<Map<String, Object>> fastPartRecommendation = deterministicPartRecommendationResponse(body, message, user);
         if (fastPartRecommendation.isPresent()) {
             Map<String, Object> response = fastPartRecommendation.get();
+            applyConversationalPartAdvice(response, body, message, user, requestedAiProfile);
             attachFollowUpContext(response, message);
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
             logBuildChatPath("FAST_PART_RECOMMEND", startedNanos, userId, requestedAiProfile, false,
@@ -488,11 +489,12 @@ public class BuildChatService {
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return withConversationTransition(response, recommendationConversationTransition);
         }
-        // 다중부품 감액 요청(드래프트+예산목표+단일부품 미지목+총액>목표)은 LLM을 거치지 않고 감액
-        // 우선순위 안내와 카테고리 교체 칩으로 결정적으로 응답한다(draftEdit 단일 카테고리 계약은 유지).
+        // 다중부품 감액 요청은 현재 드래프트를 대체할 전체 변경안과 부품별 조정 칩을 함께 제공한다.
+        // 사용자가 적용 버튼을 누르기 전에는 quote draft를 변경하지 않는다.
         Optional<Map<String, Object>> multiPartReduction = multiPartReductionResponse(body, message, rawBudgetIntent);
         if (multiPartReduction.isPresent()) {
             Map<String, Object> response = multiPartReduction.get();
+            attachFollowUpContext(response, message);
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
             if (semanticCacheAllowed) {
                 semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
@@ -2599,13 +2601,15 @@ public class BuildChatService {
         return facts;
     }
 
-    // 다중부품 감액 요청("총액 줄여줘", "800만원 이하로 맞춰줘"): 드래프트 있음 + 예산 목표 +
-    // 특정 단일 부품 미지목 + 현재 총액 > 목표. draftEdit는 한 번에 한 카테고리만 다루므로, 감액
-    // 우선순위(라인총액 상위)를 텍스트로 안내하고 카테고리 교체 칩을 준다 — 재진입 시 detectPartCategory가
-    // 카테고리를 잡아 기존 단일 modify→미리보기 루프로 닫힌다. 방향은 어휘가 아니라 숫자로 판정한다.
+    // 전체 감액 요청("전부 100만원 안으로", "알아서 예산에 맞춰")은 현재 draft를 직접 수정하지 않고
+    // 완성 조합 미리보기 1개와 부품별 조정 칩을 함께 준다. 단일 카테고리를 지정한 요청은 기존
+    // 부품별 추천/교체 미리보기 경로가 담당한다.
     private Optional<Map<String, Object>> multiPartReductionResponse(
             Map<String, Object> body, String message, BudgetIntent rawBudgetIntent) {
-        if (rawBudgetIntent == null || !rawBudgetIntent.hasBudget() || detectPartCategory(message) != null) {
+        if (rawBudgetIntent == null
+                || !rawBudgetIntent.hasBudget()
+                || "MIN".equals(rawBudgetIntent.mode())
+                || detectPartCategory(message) != null) {
             return Optional.empty();
         }
         List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
@@ -2630,29 +2634,261 @@ public class BuildChatService {
         if (topSpenders.isEmpty()) {
             return Optional.empty();
         }
-        StringBuilder textBuilder = new StringBuilder()
-                .append("현재 견적은 ").append(formatBudgetLabel(draftTotal))
-                .append("이고 목표 ").append(formatBudgetLabel(target)).append("까지 약 ")
-                .append(formatBudgetLabel(draftTotal - target))
-                .append(" 감액이 필요합니다. 챗봇은 한 번에 한 부품씩 교체를 도와드려요. 가장 비싼 ");
-        for (int index = 0; index < topSpenders.size(); index += 1) {
-            Map<String, Object> item = topSpenders.get(index);
-            String category = text(item.get("category"));
-            if (index > 0) {
-                textBuilder.append(", ");
-            }
-            textBuilder.append(CATEGORY_LABELS.getOrDefault(category, category))
-                    .append("(").append(formatBudgetLabel(lineTotalWon(item))).append(")");
+        Optional<WholeDraftPlan> plan = wholeDraftPlan(rawBudgetIntent, draftItems);
+        if (plan.isEmpty()) {
+            return Optional.of(multiPartReductionGuidanceOnly(draftTotal, target, topSpenders));
         }
-        textBuilder.append("부터 줄이면 효과가 큽니다.");
-        Map<String, Object> response = fastResponse("GENERAL", textBuilder.toString(), List.of());
-        response.put("quickReplies", topSpenders.stream()
+        WholeDraftPlan selected = plan.get();
+        int proposedTotal = numberValue(selected.build().get("totalPrice"));
+        int shortfall = Math.max(0, proposedTotal - target);
+        String messageText = selected.targetReached()
+                ? "현재 견적 " + formatBudgetLabel(draftTotal) + "을 목표 " + formatBudgetLabel(target)
+                        + "에 맞추는 전체 변경안을 자동 검증했습니다. 변경 후 예상 총액은 "
+                        + formatBudgetLabel(proposedTotal)
+                        + "입니다. 아래 카드에서 전체안을 확인하거나, 부품별 선택지로 한 부품씩 조정할 수 있습니다."
+                : "요청한 " + formatBudgetLabel(target)
+                        + "으로는 현재 내부 자산에서 자동 검증을 통과한 완전한 PC 구성을 만들기 어렵습니다. "
+                        + "확인 가능한 최소 전체 변경안은 " + formatBudgetLabel(proposedTotal)
+                        + "이며 약 " + formatBudgetLabel(shortfall)
+                        + " 더 필요합니다. 목표 예산을 임의로 바꾸지 않았으며, 아래 카드와 부품별 선택지를 함께 확인해 주세요.";
+        List<String> responseWarnings = selected.targetReached()
+                ? List.of()
+                : List.of("BUDGET_BELOW_MINIMUM");
+        Map<String, Object> response = fastResponse("BUDGET", messageText, List.of(selected.build()), responseWarnings);
+        response.put("quickReplies", multiPartReductionQuickReplies(topSpenders));
+        return Optional.of(response);
+    }
+
+    private Optional<WholeDraftPlan> wholeDraftPlan(
+            BudgetIntent budgetIntent,
+            List<Map<String, Object>> draftItems
+    ) {
+        Optional<GreedyBuild> minimum = minimumFeasibleCompleteBuild();
+        if (minimum.isEmpty()) {
+            return Optional.empty();
+        }
+        GreedyBuild minimumBuild = minimum.get();
+        int minimumTotal = totalPrice(minimumBuild.parts(), 1);
+        int target = budgetIntent.budget();
+        boolean minimumFitsTarget = "MAX".equals(budgetIntent.mode())
+                ? minimumTotal <= target
+                : minimumTotal <= Math.ceil(target * TARGET_BUDGET_BAND_UPPER);
+
+        if (minimumFitsTarget) {
+            Optional<GreedyBuild> targetBuild = greedyTargetBuild(target, target, true);
+            if (targetBuild.isPresent()) {
+                Map<String, Object> mapped = budgetFallbackBuildMap(
+                        TIERS.get(1),
+                        targetBuild.get().parts(),
+                        budgetIntent,
+                        1,
+                        targetBuild.get().toolResults(),
+                        targetBuild.get().warnings(),
+                        List.of()
+                );
+                if (satisfiesBudgetMode(mapped, target, budgetIntent.mode())
+                        && completeBuildCategories(mapped)
+                        && wholePlanToolVerified(objectMaps(mapped.get("toolResults")))) {
+                    return Optional.of(new WholeDraftPlan(
+                            decorateWholeDraftPlan(mapped, draftItems, target, true),
+                            true
+                    ));
+                }
+            }
+        }
+
+        Map<String, Object> minimumMap = budgetFallbackBuildMap(
+                TIERS.get(0),
+                minimumBuild.parts(),
+                new BudgetIntent(minimumTotal, "MAX", false, false),
+                1,
+                minimumBuild.toolResults(),
+                minimumBuild.warnings(),
+                List.of()
+        );
+        boolean targetReached = ("MAX".equals(budgetIntent.mode()) && minimumTotal <= target)
+                || ("TARGET".equals(budgetIntent.mode()) && withinTargetBudgetBand(minimumTotal, target));
+        if (!targetReached) {
+            minimumMap.put("toolResults", budgetShortfallToolResults(
+                    objectMaps(minimumMap.get("toolResults")), target, minimumTotal));
+            List<String> warnings = new ArrayList<>(stringList(minimumMap.get("warnings")));
+            warnings.add("목표 예산보다 " + formatBudgetLabel(Math.max(0, minimumTotal - target))
+                    + " 높지만, 호환성과 장착 검증을 통과한 최소 확인 구성입니다.");
+            minimumMap.put("warnings", distinct(warnings));
+        }
+        return Optional.of(new WholeDraftPlan(
+                decorateWholeDraftPlan(minimumMap, draftItems, target, targetReached),
+                targetReached
+        ));
+    }
+
+    private Optional<GreedyBuild> minimumFeasibleCompleteBuild() {
+        LinkedHashMap<String, List<PartCandidate>> pools = new LinkedHashMap<>();
+        for (String category : fallbackCategories(true, true)) {
+            List<PartCandidate> candidates = pricePartCandidates(category, 8);
+            if (candidates.isEmpty()) {
+                return Optional.empty();
+            }
+            pools.put(category, candidates);
+        }
+
+        List<GreedyBuild> valid = new ArrayList<>();
+        List<PartCandidate> cpuSeeds = pools.getOrDefault("CPU", List.of());
+        for (PartCandidate cpuSeed : cpuSeeds) {
+            LinkedHashMap<String, PartCandidate> chosen = new LinkedHashMap<>();
+            chosen.put("CPU", cpuSeed);
+            boolean complete = true;
+            for (String category : GREEDY_PICK_ORDER) {
+                if ("CPU".equals(category)) {
+                    continue;
+                }
+                List<PartCandidate> compatible = compatibleCandidates(
+                        pools.getOrDefault(category, List.of()), category, chosen);
+                if (compatible.isEmpty()) {
+                    complete = false;
+                    break;
+                }
+                chosen.put(category, compatible.get(0));
+            }
+            if (!complete || !chosen.keySet().containsAll(COMPLETE_BUILD_CATEGORIES)) {
+                continue;
+            }
+            List<PartCandidate> parts = new ArrayList<>(chosen.values());
+            int total = totalPrice(parts, 1);
+            List<String> warnings = new ArrayList<>();
+            List<Map<String, Object>> toolResults = toolResults(parts, total, warnings);
+            if (!wholePlanToolVerified(toolResults)) {
+                continue;
+            }
+            warnings.addAll(toolWarnings(toolResults));
+            valid.add(new GreedyBuild(parts, toolResults, distinct(warnings)));
+        }
+        return valid.stream().min(Comparator.comparingInt(build -> totalPrice(build.parts(), 1)));
+    }
+
+    private Map<String, Object> decorateWholeDraftPlan(
+            Map<String, Object> source,
+            List<Map<String, Object>> draftItems,
+            int target,
+            boolean targetReached
+    ) {
+        Map<String, Object> build = new LinkedHashMap<>(source);
+        List<String> changedCategories = changedDraftCategories(draftItems, objectMaps(build.get("items")));
+        int total = numberValue(build.get("totalPrice"));
+        build.put("id", "ai-draft-rebuild-" + Math.abs(buildItemsKey(build).hashCode()) + "-" + target);
+        build.put("label", "전체 변경안");
+        build.put("title", targetReached ? "예산 맞춤 전체 변경안" : "최소 실행 가능 전체 변경안");
+        build.put("summary", targetReached
+                ? "현재 견적을 대체하는 완성 조합입니다. 카드 적용 전에는 실제 견적이 바뀌지 않습니다."
+                : "요청 예산으로는 완전한 구성이 어려워, 자동 검증을 통과한 최소 확인 조합을 제시합니다.");
+        List<String> badges = new ArrayList<>(stringList(build.get("badges")));
+        badges.add(0, "DRAFT_REBUILD_PREVIEW");
+        badges.add(changedCategories.size() + "개 카테고리 변경");
+        build.put("badges", distinct(badges));
+        build.put("budgetWon", target);
+        build.put("budgetLabel", "목표 " + formatBudgetLabel(target));
+        // 전체 조합 카드는 8개 부품을 모두 보여준다. 카테고리별 반영 배지를 8개 그리지 않도록 비워 둔다.
+        build.put("appliedPartCategories", List.of());
+        build.put("recommendedFor", List.of("전체 예산 조정", "자동 검증", targetReached ? "목표 예산" : "최소 가능 구성"));
+        build.put("totalPrice", total);
+        return build;
+    }
+
+    private static List<String> changedDraftCategories(
+            List<Map<String, Object>> currentItems,
+            List<Map<String, Object>> proposedItems
+    ) {
+        Map<String, List<String>> current = categoryItemSignatures(currentItems);
+        Map<String, List<String>> proposed = categoryItemSignatures(proposedItems);
+        return fallbackCategories(true, true).stream()
+                .filter(category -> !current.getOrDefault(category, List.of())
+                        .equals(proposed.getOrDefault(category, List.of())))
+                .toList();
+    }
+
+    private static Map<String, List<String>> categoryItemSignatures(List<Map<String, Object>> items) {
+        Map<String, List<String>> signatures = new LinkedHashMap<>();
+        for (Map<String, Object> item : items) {
+            String category = text(item.get("category"));
+            if (category == null) {
+                continue;
+            }
+            Integer quantity = firstNumber(item.get("quantity"));
+            String key = firstText(firstText(text(item.get("partId")), text(item.get("name"))), "unknown")
+                    + ":" + (quantity == null ? 1 : quantity);
+            signatures.computeIfAbsent(category, ignored -> new ArrayList<>()).add(key);
+        }
+        signatures.values().forEach(values -> values.sort(String::compareTo));
+        return signatures;
+    }
+
+    private static boolean completeBuildCategories(Map<String, Object> build) {
+        Set<String> categories = objectMaps(build.get("items")).stream()
+                .map(item -> text(item.get("category")))
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        return categories.containsAll(COMPLETE_BUILD_CATEGORIES);
+    }
+
+    private static boolean wholePlanToolVerified(List<Map<String, Object>> toolResults) {
+        if (hasBlockingToolFailure(toolResults)) {
+            return false;
+        }
+        Set<String> checkedTools = toolResults.stream()
+                .map(result -> text(result.get("tool")))
+                .filter(Objects::nonNull)
+                .map(value -> value.toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        return checkedTools.containsAll(HOME_REQUIRED_TOOLS);
+    }
+
+    private static List<Map<String, Object>> budgetShortfallToolResults(
+            List<Map<String, Object>> toolResults,
+            int target,
+            int actual
+    ) {
+        List<Map<String, Object>> adjusted = new ArrayList<>();
+        for (Map<String, Object> result : toolResults) {
+            if (!"price".equals(text(result.get("tool")))) {
+                adjusted.add(new LinkedHashMap<>(result));
+            }
+        }
+        adjusted.add(MockData.map(
+                "tool", "price",
+                "status", "WARN",
+                "confidence", "HIGH",
+                "summary", "목표 " + formatBudgetLabel(target) + "보다 "
+                        + formatBudgetLabel(Math.max(0, actual - target)) + " 높은 최소 확인 구성입니다."
+        ));
+        return adjusted;
+    }
+
+    private Map<String, Object> multiPartReductionGuidanceOnly(
+            int draftTotal,
+            int target,
+            List<Map<String, Object>> topSpenders
+    ) {
+        Map<String, Object> response = fastResponse(
+                "GENERAL",
+                "현재 견적은 " + formatBudgetLabel(draftTotal) + "이고 목표 " + formatBudgetLabel(target)
+                        + "까지 약 " + formatBudgetLabel(draftTotal - target)
+                        + " 감액이 필요합니다. 전체 변경안을 자동 검증하지 못해 부품별 조정 선택지를 제공합니다.",
+                List.of()
+        );
+        response.put("quickReplies", multiPartReductionQuickReplies(topSpenders));
+        return response;
+    }
+
+    private static List<String> multiPartReductionQuickReplies(List<Map<String, Object>> topSpenders) {
+        return topSpenders.stream()
                 .map(item -> {
                     String category = text(item.get("category"));
                     return CATEGORY_LABELS.getOrDefault(category, category) + " 더 저렴한 걸로 바꿔줘";
                 })
-                .toList());
-        return Optional.of(response);
+                .toList();
+    }
+
+    private record WholeDraftPlan(Map<String, Object> build, boolean targetReached) {
     }
 
     private static int lineTotalWon(Map<String, Object> item) {
@@ -3375,6 +3611,86 @@ public class BuildChatService {
             return Optional.empty();
         }
         return Optional.of(response);
+    }
+
+    private void applyConversationalPartAdvice(
+            Map<String, Object> response,
+            Map<String, Object> body,
+            String message,
+            CurrentUserService.CurrentUser user,
+            String requestedAiProfile
+    ) {
+        List<String> quickReplies = stringList(response.get("quickReplies"));
+        if (!shouldUseConversationalPartAdvice(body, message)
+                || quickReplies.isEmpty()
+                || stringList(response.get("warnings")).stream().anyMatch(value ->
+                        "PART_CONSTRAINT_NOT_FOUND".equals(value) || "PART_BUDGET_SHORTFALL".equals(value))) {
+            return;
+        }
+        String verifiedMessage = text(response.get("message"));
+        if (verifiedMessage == null || verifiedMessage.isBlank()) {
+            return;
+        }
+        String category = firstText(detectRecommendationTargetCategory(message), detectPartCategory(message));
+        List<String> candidates = quickReplies.stream()
+                .map(BuildChatService::partNameFromRecommendationReply)
+                .filter(Objects::nonNull)
+                .toList();
+        if (candidates.isEmpty()) {
+            return;
+        }
+        boolean additive = DIRECT_MULTI_ITEM_QUICK_REPLY_CATEGORIES.contains(category);
+        String closingQuestion = additive
+                ? candidates.get(0) + "을 견적에 추가할까요?"
+                : candidates.get(0) + "으로 교체안을 확인할까요?";
+        Map<String, Object> verifiedFacts = MockData.map(
+                "category", category,
+                "verifiedSummary", verifiedMessage,
+                "candidates", candidates,
+                "primaryCandidate", candidates.get(0),
+                "actionKind", additive ? "ADD" : "REPLACE",
+                "closingQuestion", closingQuestion
+        );
+        if (user != null && user.name() != null && !user.name().isBlank()) {
+            verifiedFacts.put("userName", user.name());
+        }
+        String fallback = verifiedMessage + " " + closingQuestion;
+        try {
+            Optional<String> advice = aiChatEngine.explainVerifiedChangeAdvice(new AiChatEngineRequest(
+                    message,
+                    chatSurface(body),
+                    category,
+                    text(body.get("buildId")),
+                    text(body.get("draftId")),
+                    Map.of("verifiedChangeAdvice", verifiedFacts),
+                    user == null ? null : user.internalId()
+            ), CONTEXTUAL_CLARIFICATION_PROFILE);
+            response.put("message", advice.filter(value -> !value.isBlank()).orElse(fallback));
+        } catch (RuntimeException error) {
+            log.warn("Verified part advice LLM failed; deterministic candidate facts are preserved", error);
+            response.put("message", fallback);
+        }
+    }
+
+    private static boolean shouldUseConversationalPartAdvice(Map<String, Object> body, String message) {
+        if (objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty()) {
+            return false;
+        }
+        String normalized = normalizeCommand(message);
+        return containsAnyNormalized(
+                normalized,
+                "말한조건", "말씀한조건", "지금까지", "대화한내용", "조건에맞", "조건기준",
+                "현재견적에맞", "지금견적에맞", "이견적에맞", "어울리는", "적합한",
+                "어떤제품", "어떤부품", "뭐가좋", "무엇이좋", "조언", "골라줘"
+        );
+    }
+
+    private static String partNameFromRecommendationReply(String reply) {
+        String value = firstText(reply, "").trim();
+        if (value.isBlank()) {
+            return null;
+        }
+        return value.replaceFirst("\\s*견적(?:에|으로)?\\s*담아\\s*줘\\s*$", "").trim();
     }
 
     private static boolean isWholeBuildRecommendationContext(String compact) {

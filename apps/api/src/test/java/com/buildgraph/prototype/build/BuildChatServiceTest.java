@@ -3145,41 +3145,114 @@ class BuildChatServiceTest {
     }
 
     @Test
-    void buildChatGuidesMultiPartReductionWhenDraftExceedsTargetWithoutSinglePartNamed() {
-        // 드래프트 있음 + 예산 목표 + 특정 단일 부품 미지목 + 총액 > 목표 → 감액 우선순위 안내 + 카테고리 교체 칩.
+    void buildChatOffersMinimumCompletePlanAndPartChoicesWhenWholeTargetIsImpossible() {
+        // 목표 예산이 내부 자산 최소 완성가보다 낮아도 dead-end로 끝내지 않고, 검증된 전체안과
+        // 부품별 조정 선택지를 함께 제공한다. 채팅 호출 자체는 draft를 변경하지 않는다.
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
-        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
-        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
-        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
 
         Map<String, Object> response = service.chat(Map.of(
-                "message", "현재 견적을 800만원 이하로 맞춰줘",
+                "message", "호환 안되는 거 전부 100만원 내에서 교체해줘",
                 "currentQuoteDraft", Map.of("items", List.of(
-                        Map.of("partId", "gpu-1", "category", "GPU", "name", "RTX 5090", "quantity", 1, "lineTotal", 4_000_000),
-                        Map.of("partId", "cpu-1", "category", "CPU", "name", "Ryzen 9", "quantity", 1, "lineTotal", 3_000_000),
-                        Map.of("partId", "ram-1", "category", "RAM", "name", "DDR5 64GB", "quantity", 1, "lineTotal", 2_000_000),
-                        Map.of("partId", "ssd-1", "category", "STORAGE", "name", "NVMe 2TB", "quantity", 1, "lineTotal", 1_500_000)
+                        Map.of("partId", "gpu-1", "category", "GPU", "name", "RTX 5090", "quantity", 1, "lineTotal", 1_200_000),
+                        Map.of("partId", "cpu-1", "category", "CPU", "name", "Ryzen 9", "quantity", 1, "lineTotal", 900_000),
+                        Map.of("partId", "ram-1", "category", "RAM", "name", "DDR5 64GB", "quantity", 1, "lineTotal", 600_000),
+                        Map.of("partId", "ssd-1", "category", "STORAGE", "name", "NVMe 2TB", "quantity", 1, "lineTotal", 500_000)
                 ))
         ));
 
-        assertThat(response).containsEntry("answerType", "GENERAL");
-        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("warnings")).asList().contains("BUDGET_BELOW_MINIMUM");
+        assertThat(response.get("builds")).asList().singleElement().satisfies(value -> {
+            Map<String, Object> build = (Map<String, Object>) value;
+            assertThat(build).containsEntry("label", "전체 변경안")
+                    .containsEntry("title", "최소 실행 가능 전체 변경안")
+                    .containsEntry("totalPrice", 1_450_000);
+            List<Map<String, Object>> items = (List<Map<String, Object>>) build.get("items");
+            assertThat(items).hasSize(8);
+            assertThat(items).extracting(item -> String.valueOf(item.get("category")))
+                    .containsExactlyInAnyOrder("CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER");
+            assertThat(build.get("toolResults")).asList().anySatisfy(result -> assertThat(result)
+                    .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                    .containsEntry("tool", "price")
+                    .containsEntry("status", "WARN"));
+        });
         String message = response.get("message").toString();
         assertThat(message)
-                .contains("1050만원")
-                .contains("800만원")
-                .contains("250만원")
-                .contains("한 번에 한 부품씩")
-                .contains("가장 비싼 GPU(400만원)");
-        // 라인총액 내림차순 상위 3개 카테고리 교체 칩 — 재진입 시 detectPartCategory가 잡아 단일 modify로 닫힌다.
+                .contains("100만원")
+                .contains("145만원")
+                .contains("45만원")
+                .contains("목표 예산을 임의로 바꾸지 않았으며");
         assertThat(response.get("quickReplies")).asList()
                 .containsExactly(
                         "GPU 더 저렴한 걸로 바꿔줘",
                         "CPU 더 저렴한 걸로 바꿔줘",
                         "RAM 더 저렴한 걸로 바꿔줘");
-        // LLM을 거치지 않고 결정적으로 응답한다.
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatOffersOneCompleteWholePlanInsideReachableTargetBand() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "전체를 200만원으로 알아서 맞춰줘",
+                "currentQuoteDraft", Map.of("items", List.of(
+                        Map.of("partId", "gpu-old", "category", "GPU", "name", "기존 GPU", "quantity", 1, "lineTotal", 1_400_000),
+                        Map.of("partId", "cpu-old", "category", "CPU", "name", "기존 CPU", "quantity", 1, "lineTotal", 900_000)
+                ))
+        ));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("builds")).asList().singleElement().satisfies(value -> {
+            Map<String, Object> build = (Map<String, Object>) value;
+            assertThat(build).containsEntry("label", "전체 변경안")
+                    .containsEntry("title", "예산 맞춤 전체 변경안");
+            assertThat((Integer) build.get("totalPrice")).isBetween(1_750_000, 2_250_000);
+            assertThat(build.get("items")).asList().hasSize(8);
+        });
+        assertThat(response.get("quickReplies")).asList()
+                .contains("GPU 더 저렴한 걸로 바꿔줘", "CPU 더 저렴한 걸로 바꿔줘");
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatDoesNotExposeWholePlanWithoutCompleteToolVerification() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(List.of(
+                Map.of("tool", "compatibility", "status", "PASS", "summary", "호환성 통과"),
+                Map.of("tool", "power", "status", "FAIL", "summary", "전력 검증 실패")
+        ));
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "전체를 100만원으로 알아서 맞춰줘",
+                "currentQuoteDraft", Map.of("items", List.of(
+                        Map.of("partId", "gpu-old", "category", "GPU", "name", "기존 GPU", "quantity", 1, "lineTotal", 1_400_000),
+                        Map.of("partId", "cpu-old", "category", "CPU", "name", "기존 CPU", "quantity", 1, "lineTotal", 900_000)
+                ))
+        ));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("builds")).asList().isEmpty();
+        assertThat(response.get("message").toString()).contains("전체 변경안을 자동 검증하지 못해");
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly("GPU 더 저렴한 걸로 바꿔줘", "CPU 더 저렴한 걸로 바꿔줘");
         verifyNoInteractions(aiChatEngine);
     }
 
@@ -3445,6 +3518,57 @@ class BuildChatServiceTest {
         assertThat(response.get("message")).asString().contains("파워 대표 후보 TOP3", "1200W PSU A");
         assertThat(response.get("quickReplies")).asList().hasSize(3);
         verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void conversationalPartAdviceUsesLlmOnlyToPhraseVerifiedCandidates() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        PartCompatibleCandidateService compatibilityService = mock(PartCompatibleCandidateService.class);
+        CurrentUserService.CurrentUser user = new CurrentUserService.CurrentUser(
+                42L, "user-id", "user@example.com", "민수", "USER", null);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> List.of(
+                Map.of("id", "psu-a", "name", "1200W PSU A", "price", 285_000,
+                        "capacity_gb", 0, "vram_gb", 0, "wattage_w", 1200),
+                Map.of("id", "psu-b", "name", "1200W PSU B", "price", 295_000,
+                        "capacity_gb", 0, "vram_gb", 0, "wattage_w", 1200),
+                Map.of("id", "psu-c", "name", "1000W PSU C", "price", 250_000,
+                        "capacity_gb", 0, "vram_gb", 0, "wattage_w", 1000)
+        )).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(compatibilityService.compatibleCandidateSelection(
+                eq(user), eq("PSU"), eq("REPLACE"), anyList(), anyInt()))
+                .thenReturn(new PartCompatibleCandidateService.CompatibleCandidateSelection(
+                        List.of("psu-a", "psu-b", "psu-c"), List.of(), List.of()));
+        when(aiChatEngine.explainVerifiedChangeAdvice(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST")))
+                .thenReturn(Optional.of(
+                        "지금까지 말씀하신 조건과 현재 견적을 기준으로 1200W PSU A가 검증된 우선 후보입니다. "
+                                + "이 제품으로 교체안을 확인할까요?"));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+        service.setPartCompatibleCandidateService(compatibilityService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "지금까지 말한 조건 기준으로 현재 견적에 맞는 고성능 파워 제품 추천해줘",
+                "currentQuoteDraft", Map.of("items", List.of(Map.of(
+                        "partId", "gpu-current", "category", "GPU", "name", "RTX 5090", "quantity", 1)))), user);
+
+        assertThat(response).containsEntry("answerType", "PART");
+        assertThat(response.get("message")).asString()
+                .contains("지금까지 말씀하신 조건", "1200W PSU A", "교체안을 확인할까요?");
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly(
+                        "1200W PSU A 견적에 담아줘",
+                        "1200W PSU B 견적에 담아줘",
+                        "1000W PSU C 견적에 담아줘");
+        verify(aiChatEngine).explainVerifiedChangeAdvice(argThat(request -> {
+            Map<String, Object> facts = (Map<String, Object>) request.context().get("verifiedChangeAdvice");
+            return "PSU".equals(facts.get("category"))
+                    && "1200W PSU A".equals(facts.get("primaryCandidate"))
+                    && "REPLACE".equals(facts.get("actionKind"));
+        }), eq("BUILD_CHAT_54_MINI_FAST"));
+        verify(aiChatEngine, never()).respondLlmRequired(any(AiChatEngineRequest.class), any());
     }
 
     @Test
@@ -3853,5 +3977,15 @@ class BuildChatServiceTest {
                     "wattage_w", "PSU".equals(category) ? 600 : 0
             ));
         });
+    }
+
+    private static List<Map<String, Object>> passingWholePlanToolResults() {
+        return List.of(
+                Map.of("tool", "compatibility", "status", "PASS", "summary", "호환성 통과"),
+                Map.of("tool", "power", "status", "PASS", "summary", "전력 통과"),
+                Map.of("tool", "size", "status", "PASS", "summary", "규격 통과"),
+                Map.of("tool", "performance", "status", "PASS", "summary", "성능 통과"),
+                Map.of("tool", "price", "status", "PASS", "summary", "가격 통과")
+        );
     }
 }
