@@ -10,7 +10,7 @@ class SupportChatMigrationContractTest {
     private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V96__support_chat_rooms_split.sql");
     private static final Path BACKFILL_MIGRATION = Path.of("src/main/resources/db/migration/V97__support_chat_rooms_backfill_repair.sql");
     private static final Path VISIT_RESERVATION_EXACT_TIME_MIGRATION = Path.of("src/main/resources/db/migration/V108__visit_support_reservations_exact_time.sql");
-    private static final Path DEMO_SEED_CLEANUP_MIGRATION = Path.of("src/main/resources/db/migration/V121__close_blocking_demo_support_seeds.sql");
+    private static final Path DEMO_SEED_CLEANUP_MIGRATION = Path.of("src/main/resources/db/migration/V118__close_blocking_demo_support_seeds.sql");
 
     @Test
     void migrationCreatesDedicatedSupportChatTables() throws Exception {
