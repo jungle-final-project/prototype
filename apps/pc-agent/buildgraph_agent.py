@@ -87,6 +87,7 @@ from initial_metrics import (
     MetricsNormalizer,
     MetricsSnapshot,
     MetricsStore,
+    history_check_colors,
 )
 from windows_graphics_diagnostics import (
     NO_RESULTS as WINDOWS_NO_RESULTS,
@@ -5745,9 +5746,19 @@ def show_log_viewer(
         line(570, 136, 710, 136, "#d9d9d9")
         draw_step(3, 740, PC_AGENT_DIAGNOSIS_STEPS[2], styles[2])
 
-    def draw_sparkline(x: int, y: int, values: Sequence[float], emphasis: bool = False) -> None:
+    def draw_sparkline(
+        x: int,
+        y: int,
+        values: Sequence[float],
+        emphasis: bool = False,
+        check_colors: Sequence[str | None] | None = None,
+    ) -> None:
+        # 막대는 표본이 올 때마다 기존처럼 쌓인다. 상태 확인 중에는 검사가 끝난 구간의
+        # 막대만 파랑(정상)/빨강(문제)으로 칠하고, 아직 검사 전인 최신 막대는 회색을 유지한다.
         for index, value in enumerate(values):
             shade = "#8e8e8e" if emphasis and 6 <= index <= 9 else "#e7e7e7"
+            if check_colors and index < len(check_colors) and check_colors[index]:
+                shade = "#e53935" if check_colors[index] == "error" else "#1e88e5"
             height = max(4, int(min(100.0, max(0.0, value)) * 0.38))
             canvas.create_rectangle(x + index * 10, y - height, x + index * 10 + 6, y, fill=shade, outline="")
 
@@ -5780,7 +5791,8 @@ def show_log_viewer(
             symptom = ""
         screen = build_symptom_screen_state(screen_input)
         display = symptom_display_state(source, symptom, metrics)
-        for x, card in zip((70, 287, 504, 721), screen.widgets, strict=False):
+        checking_active = isinstance(active_session, DiagnosisSession) and bool(metrics.readings)
+        for x, component, card in zip((70, 287, 504, 721), ("cpu", "gpu", "ram", "disk"), screen.widgets, strict=False):
             tone_color = colors[card.tone] if card.tone in {"warning", "danger"} else None
             outline = tone_color or "#d9d9d9"
             emphasis = bool(tone_color)
@@ -5790,7 +5802,14 @@ def show_log_viewer(
             for detail_index, detail in enumerate(card.details[:2]):
                 text(x + 18, 251 + detail_index * 18, detail, 10, colors["muted"])
             text(x + 18, 291, f"상태 {card.status}", 11, tone_color or colors["muted"], "semibold")
-            draw_sparkline(x + 18, 336, card.history, emphasis=emphasis)
+            check_colors: list[str | None] | None = None
+            if checking_active:
+                # 상태 확인 단계: 검사가 끝난 구간(막대 묶음)만 색으로 확정한다. 그래프 자체는 기존 그대로.
+                metric_type = "usage"
+                if component == "disk":
+                    metric_type = "activity" if metrics.history("disk", "activity") else "usage"
+                check_colors = history_check_colors(metrics.readings, component, metric_type, datetime.now(KST))
+            draw_sparkline(x + 18, 336, card.history, emphasis=emphasis, check_colors=check_colors)
 
         round_rect(70, 370, 930, 530, 12, "#ffffff", "#dddddd")
         canvas.create_oval(90, 393, 132, 435, fill="#f4f4f4", outline="")

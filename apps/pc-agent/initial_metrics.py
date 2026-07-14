@@ -29,6 +29,12 @@ TERMINAL_AVAILABILITIES = {AVAILABLE, UNSUPPORTED, PERMISSION_REQUIRED, FAILED}
 MAX_STORED_READINGS = 512
 MAX_HISTORY_SAMPLES = 30
 
+# 상태 확인 중 히스토리 막대 구간 검사: 막대 N개가 한 구간이며, 구간이 완성돼도
+# 곧바로 칠하지 않고 lag초 뒤에 확정한다 → 회색(미검사) 꼬리가 항상 남아
+# "쌓인 것을 뒤따라가며 검사한다"는 리듬이 생긴다.
+CHECKING_SEGMENT_BARS = 4
+CHECKING_LAG_SECONDS = 10.0
+
 
 @dataclass(frozen=True)
 class MetricPolicy:
@@ -615,3 +621,63 @@ class InitialMetricsCoordinator:
             return result_queue.get_nowait()
         except queue.Empty:
             return None, "sensor collection failed"
+
+
+def history_check_colors(
+    readings: "Sequence[MetricReading]",
+    component: str,
+    metric_type: str,
+    now: datetime,
+    limit: int = 16,
+    segment_bars: int = CHECKING_SEGMENT_BARS,
+    lag_seconds: float = CHECKING_LAG_SECONDS,
+) -> list[str | None]:
+    """상태 확인 중 히스토리 막대에 입힐 구간 검사 색을 계산한다.
+
+    막대는 기존처럼 표본이 올 때마다 하나씩 쌓인다(수집感은 기존 그대로).
+    막대 segment_bars개가 한 구간이며, 구간의 마지막 표본으로부터 lag_seconds가
+    지난 뒤에야 그 구간을 확정한다 — 검사가 수집을 지연을 두고 뒤따라가는 리듬.
+    확정 색: 구간 시간 범위에 해당 component 센서 ERROR가 있으면 'error', 없으면 'ok'.
+    미확정 막대는 None(기본 회색) = "수집됨, 검사 대기 중".
+    반환 리스트는 MetricsSnapshot.history(...limit)와 같은 필터·슬라이스로 정렬된다.
+    """
+    series: list[datetime] = []
+    error_times: list[datetime] = []
+    for reading in readings:
+        if reading.component != component:
+            continue
+        try:
+            sampled = datetime.fromisoformat(str(reading.sampled_at))
+        except (TypeError, ValueError):
+            continue
+        if reading.status == ERROR:
+            error_times.append(sampled)
+        if (
+            reading.metric_type == metric_type
+            and reading.availability == AVAILABLE
+            and isinstance(reading.value, (int, float))
+            and not isinstance(reading.value, bool)
+        ):
+            series.append(sampled)
+    if not series or segment_bars <= 0:
+        return []
+    if now.tzinfo is None and series[0].tzinfo is not None:
+        now = now.replace(tzinfo=series[0].tzinfo)
+
+    colors: list[str | None] = []
+    for index, _sampled in enumerate(series):
+        segment = index // segment_bars
+        last_index = segment * segment_bars + segment_bars - 1
+        if last_index >= len(series):
+            colors.append(None)  # 구간 미완성
+            continue
+        segment_start = series[segment * segment_bars]
+        segment_end = series[last_index]
+        if (now - segment_end).total_seconds() < lag_seconds:
+            colors.append(None)  # 완성됐지만 아직 검사 차례가 안 옴(지연 추적)
+            continue
+        has_error = any(segment_start <= moment <= segment_end for moment in error_times)
+        colors.append("error" if has_error else "ok")
+
+    bounded_limit = min(max(0, limit), MAX_HISTORY_SAMPLES)
+    return colors[-bounded_limit:] if bounded_limit else []

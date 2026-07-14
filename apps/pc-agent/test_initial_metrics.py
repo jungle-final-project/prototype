@@ -340,5 +340,83 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         self.assertGreaterEqual(len(updates), 6)
 
 
+class HistoryCheckColorsTest(unittest.TestCase):
+    BASE = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    def reading(
+        self,
+        offset_seconds: float,
+        component: str = "gpu",
+        metric_type: str = "usage",
+        status: str = "NORMAL",
+        value: float | None = 10.0,
+    ):
+        from initial_metrics import MetricReading
+
+        return MetricReading(
+            component=component,
+            metric_type=metric_type,
+            value=value,
+            unit="%",
+            availability="AVAILABLE",
+            status=status,
+            source="test",
+            sampled_at=datetime.fromtimestamp(self.BASE.timestamp() + offset_seconds, tz=timezone.utc).isoformat(),
+        )
+
+    def at(self, offset_seconds: float) -> datetime:
+        return datetime.fromtimestamp(self.BASE.timestamp() + offset_seconds, tz=timezone.utc)
+
+    def test_unchecked_tail_stays_gray_until_segment_completes(self) -> None:
+        from initial_metrics import history_check_colors
+
+        # 3개 = 아직 구간(4개) 미완성 → 시간이 아무리 지나도 전부 회색(None)
+        readings = tuple(self.reading(i * 5.0) for i in range(3))
+        self.assertEqual(history_check_colors(readings, "gpu", "usage", self.at(999)), [None, None, None])
+
+    def test_completed_segment_waits_for_lag_then_flips(self) -> None:
+        from initial_metrics import history_check_colors
+
+        readings = tuple(self.reading(i * 5.0) for i in range(5))
+        # 구간 완성(4번째 막대 = 15초) 직후: 지연(10초) 전이라 아직 회색 — 검사가 뒤따라오는 중
+        colors = history_check_colors(readings, "gpu", "usage", self.at(20.0), lag_seconds=10.0)
+        self.assertEqual(colors, [None] * 5)
+        # 완성 + 10초 경과(25초): 첫 구간 확정, 최신 막대는 계속 회색
+        colors = history_check_colors(readings, "gpu", "usage", self.at(25.0), lag_seconds=10.0)
+        self.assertEqual(colors, ["ok", "ok", "ok", "ok", None])
+
+    def test_segment_with_error_reading_turns_red(self) -> None:
+        from initial_metrics import history_check_colors
+
+        readings = (
+            self.reading(0),
+            self.reading(5.0),
+            # 같은 구간 시간대의 온도 ERROR — 카드 컴포넌트 전체 기준으로 빨강
+            self.reading(7.0, metric_type="temperature", status="ERROR", value=None),
+            self.reading(10.0),
+            self.reading(15.0),
+        )
+        colors = history_check_colors(readings, "gpu", "usage", self.at(999), lag_seconds=10.0)
+        self.assertEqual(colors, ["error", "error", "error", "error"])
+
+    def test_error_in_other_component_does_not_mark_this_card(self) -> None:
+        from initial_metrics import history_check_colors
+
+        readings = tuple(self.reading(i * 5.0) for i in range(4)) + (
+            self.reading(7.0, component="cpu", status="ERROR"),
+        )
+        colors = history_check_colors(readings, "gpu", "usage", self.at(999))
+        self.assertEqual(colors, ["ok", "ok", "ok", "ok"])
+
+    def test_limit_slice_aligns_with_history_bars(self) -> None:
+        from initial_metrics import history_check_colors
+
+        # 20개 표본, limit 16 → history()처럼 마지막 16개에 정렬 (시간 충분히 경과)
+        readings = tuple(self.reading(i * 5.0) for i in range(20))
+        colors = history_check_colors(readings, "gpu", "usage", self.at(999), limit=16)
+        self.assertEqual(len(colors), 16)
+        self.assertEqual(colors, ["ok"] * 16)  # 20개 = 5구간 전부 확정
+
+
 if __name__ == "__main__":
     unittest.main()
