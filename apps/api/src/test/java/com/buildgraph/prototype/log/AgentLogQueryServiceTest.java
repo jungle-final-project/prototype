@@ -41,6 +41,11 @@ class AgentLogQueryServiceTest {
                 {"timestamp":"2026-07-02T10:00:01Z","gpu":45}
                 """;
         MockMultipartFile file = file("agent-log.jsonl", "application/x-ndjson", content);
+        when(asLogRagAnalysisService.analyzeText(eq("agent-log.jsonl"), anyString(), eq(30)))
+                .thenReturn(Map.of(
+                        "summaryText", "Display driver reset signals were detected.",
+                        "supportDecision", "REMOTE_POSSIBLE"
+                ));
         when(jdbcTemplate.queryForMap(
                 anyString(),
                 eq(USER.internalId()),
@@ -48,14 +53,16 @@ class AgentLogQueryServiceTest {
                 eq("agent-log.jsonl"),
                 eq(file.getSize()),
                 eq("agent-log.jsonl"),
-                contains("2 lines")
+                eq("Display driver reset signals were detected."),
+                anyString()
         )).thenReturn(Map.of(
                 "id", "log-public-id",
                 "status", "UPLOADED",
                 "file_name", "agent-log.jsonl",
                 "file_size", file.getSize(),
                 "range_minutes", 30,
-                "summary", "Validated JSONL log upload (2 lines).",
+                "summary", "Display driver reset signals were detected.",
+                "as_rag_analysis", "{\"supportDecision\":\"REMOTE_POSSIBLE\"}",
                 "created_at", "2026-07-02T10:00:00Z",
                 "delete_after", "2026-08-01T10:00:00Z"
         ));
@@ -65,6 +72,40 @@ class AgentLogQueryServiceTest {
         assertThat(result).containsEntry("id", "log-public-id");
         assertThat(result).containsEntry("fileName", "agent-log.jsonl");
         assertThat(result).containsEntry("rangeMinutes", 30);
+        assertThat(result.get("asRagAnalysis"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("supportDecision", "REMOTE_POSSIBLE");
+        verify(asLogRagAnalysisService).analyzeText(eq("agent-log.jsonl"), contains("\"cpu\":30"), eq(30));
+    }
+
+    @Test
+    void uploadKeepsValidatedLogWhenRagAnalysisFails() {
+        MockMultipartFile file = file("agent-log.jsonl", "application/x-ndjson", "{\"kind\":\"EVENT_LOG\"}\n");
+        when(asLogRagAnalysisService.analyzeText(eq("agent-log.jsonl"), anyString(), eq(30)))
+                .thenThrow(new IllegalStateException("rag unavailable"));
+        when(jdbcTemplate.queryForMap(
+                anyString(),
+                eq(USER.internalId()),
+                eq(30),
+                eq("agent-log.jsonl"),
+                eq(file.getSize()),
+                eq("agent-log.jsonl"),
+                contains("1 lines"),
+                eq("{}")
+        )).thenReturn(Map.of(
+                "id", "log-public-id",
+                "status", "UPLOADED",
+                "file_name", "agent-log.jsonl",
+                "file_size", file.getSize(),
+                "range_minutes", 30,
+                "summary", "Validated JSONL log upload (1 lines).",
+                "created_at", "2026-07-02T10:00:00Z",
+                "delete_after", "2026-08-01T10:00:00Z"
+        ));
+
+        Map<String, Object> result = service.upload(file, 30, true, USER);
+
+        assertThat(result).containsEntry("id", "log-public-id");
     }
 
     @Test

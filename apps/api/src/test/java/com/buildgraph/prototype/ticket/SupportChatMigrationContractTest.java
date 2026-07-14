@@ -10,6 +10,7 @@ class SupportChatMigrationContractTest {
     private static final Path MIGRATION = Path.of("src/main/resources/db/migration/V96__support_chat_rooms_split.sql");
     private static final Path BACKFILL_MIGRATION = Path.of("src/main/resources/db/migration/V97__support_chat_rooms_backfill_repair.sql");
     private static final Path VISIT_RESERVATION_EXACT_TIME_MIGRATION = Path.of("src/main/resources/db/migration/V108__visit_support_reservations_exact_time.sql");
+    private static final Path DEMO_SEED_CLEANUP_MIGRATION = Path.of("src/main/resources/db/migration/V118__close_blocking_demo_support_seeds.sql");
 
     @Test
     void migrationCreatesDedicatedSupportChatTables() throws Exception {
@@ -111,6 +112,20 @@ class SupportChatMigrationContractTest {
                 .contains("scheduled_at");
     }
 
+    @Test
+    void demoSeedCleanupOnlyArchivesFixedSeedTicketsThatBlockNewIntake() throws Exception {
+        String sql = normalizedDemoSeedCleanupSql();
+
+        assertThat(sql)
+                .contains("UPDATE support_chat_rooms room")
+                .contains("SET status = 'ARCHIVED'")
+                .contains("UPDATE as_tickets SET status = 'CANCELLED'")
+                .contains("00000000-0000-4000-8000-000000006001")
+                .contains("00000000-0000-4000-8000-000000006002")
+                .doesNotContain("WHERE room.user_id")
+                .doesNotContain("WHERE user_id");
+    }
+
     private static String normalizedSql() throws Exception {
         return Files.readString(MIGRATION)
                 .replaceAll("\\s+", " ")
@@ -125,6 +140,12 @@ class SupportChatMigrationContractTest {
 
     private static String normalizedVisitReservationSql() throws Exception {
         return Files.readString(VISIT_RESERVATION_EXACT_TIME_MIGRATION)
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private static String normalizedDemoSeedCleanupSql() throws Exception {
+        return Files.readString(DEMO_SEED_CLEANUP_MIGRATION)
                 .replaceAll("\\s+", " ")
                 .trim();
     }

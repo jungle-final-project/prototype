@@ -129,6 +129,29 @@ class SupportChatServiceTest {
     }
 
     @Test
+    void currentDoesNotRecreateRoomForCancelledTicket() {
+        when(jdbcTemplate.queryForList(
+                contains("FROM as_tickets"),
+                eq("00000000-0000-4000-8000-000000006001"),
+                eq(USER.internalId())
+        )).thenReturn(List.of(Map.of(
+                "internal_id", 6001L,
+                "id", "00000000-0000-4000-8000-000000006001",
+                "symptom", "검은 화면",
+                "status", "CANCELLED"
+        )));
+
+        Map<String, Object> detail = service.current(
+                USER,
+                "00000000-0000-4000-8000-000000006001"
+        );
+
+        assertThat(detail).containsEntry("contact", null);
+        assertThat((List<Map<String, Object>>) detail.get("messages")).isEmpty();
+        verify(jdbcTemplate, never()).update(contains("INSERT INTO support_chat_rooms"), any(), any());
+    }
+
+    @Test
     void detailIncludesLatestVisitReservation() {
         mockRoom("ACTIVE", "OPEN", 0, 0);
         mockMessages();
@@ -198,6 +221,10 @@ class SupportChatServiceTest {
                 eq("CANCELLED"),
                 eq(6001L)
         );
+        verify(jdbcTemplate).update(
+                contains("UPDATE remote_support_sessions"),
+                eq(6001L)
+        );
     }
 
     @Test
@@ -214,6 +241,10 @@ class SupportChatServiceTest {
         verify(jdbcTemplate).update(
                 contains("UPDATE as_tickets"),
                 eq("CANCELLED"),
+                eq(6001L)
+        );
+        verify(jdbcTemplate).update(
+                contains("UPDATE remote_support_sessions"),
                 eq(6001L)
         );
     }

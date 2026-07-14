@@ -56,6 +56,8 @@ CRITICAL_FAILURES = {
     "DEPRECATED_WARNING_EXPOSED", "BUILD_COUNT_EXCEEDED", "REQUIRED_WARNING_MISSING",
     "HARD_CONSTRAINT_WARNING_MISSING", "CLARIFICATION_ECHO_MISSING",
     "NEGATED_CONSTRAINT_INCLUDED",
+    "BOARD_FOCUS_MISSING", "BOARD_FOCUS_CATEGORY_MISMATCH",
+    "BOARD_FOCUS_FALSE_POSITIVE", "BOARD_FOCUS_MUTATION", "BOARD_FOCUS_SCHEMA_INVALID",
 }
 
 
@@ -365,6 +367,10 @@ def visible_text(response: dict[str, Any]) -> str:
         for row in simulation.get("specComparisons") or []:
             if isinstance(row, dict):
                 pieces.extend(str(row.get(key) or "") for key in ("label", "currentValue", "targetValue", "deltaText"))
+    board_focus = response.get("boardFocus") or {}
+    if isinstance(board_focus, dict):
+        pieces.append(str(board_focus.get("label") or ""))
+        pieces.extend(str(value) for value in board_focus.get("categories") or [])
     for build in response.get("builds") or []:
         if isinstance(build, dict):
             pieces.extend(str(build.get(key) or "") for key in ("title", "summary", "tierLabel", "budgetLabel"))
@@ -377,7 +383,7 @@ def visible_text(response: dict[str, Any]) -> str:
 
 def has_next_action(response: dict[str, Any]) -> bool:
     return bool(
-        response.get("builds") or response.get("simulation") or response.get("clarification")
+        response.get("builds") or response.get("simulation") or response.get("boardFocus") or response.get("clarification")
         or response.get("quickReplies")
     )
 
@@ -396,6 +402,14 @@ def category_present(response: dict[str, Any], category: str | None) -> bool:
     simulation = response.get("simulation") or {}
     if isinstance(simulation, dict) and simulation.get("category") == category:
         return True
+    board_focus = response.get("boardFocus") or {}
+    if isinstance(board_focus, dict) and category in (board_focus.get("categories") or []):
+        return True
+    clarification = response.get("clarification") or {}
+    if isinstance(clarification, dict):
+        original = str(clarification.get("originalMessage") or "").lower().replace(" ", "")
+        if any(alias.lower().replace(" ", "") in original for alias in CATEGORY_ALIASES[category]):
+            return True
     for build in preview_builds(response):
         if category in (build.get("appliedPartCategories") or []):
             return True
@@ -415,12 +429,16 @@ def build_fact_failures(
     forbidden_build_terms = [
         str(term).lower().replace(" ", "") for term in expected.get("forbiddenBuildTerms") or []
     ]
+    required_build_categories = {str(value) for value in expected.get("requiredBuildCategories") or []}
     warnings = {str(value) for value in response.get("warnings") or []}
     if len(builds) > int(expected.get("maxBuilds", 3)):
         failures.append("BUILD_COUNT_EXCEEDED")
     for build in builds:
         computed_total = 0
         build_text = json.dumps(build.get("items") or [], ensure_ascii=False).lower().replace(" ", "")
+        build_categories = {str(item.get("category") or "") for item in build.get("items") or []}
+        if required_build_categories and not required_build_categories.issubset(build_categories):
+            failures.append("BUILD_CATEGORIES_MISSING")
         for item in build.get("items") or []:
             part_id = str(item.get("partId") or "")
             detail = client.part(part_id) if part_id else None
@@ -481,10 +499,15 @@ def outcome_failures(response: dict[str, Any], expected: dict[str, Any]) -> tupl
     outcome = str(expected.get("outcome") or "NEXT_ACTION")
     builds = response.get("builds") or []
     simulation = isinstance(response.get("simulation"), dict)
+    board_focus_payload = response.get("boardFocus")
+    board_focus = isinstance(board_focus_payload, dict)
     clarification = isinstance(response.get("clarification"), dict)
     next_action = has_next_action(response)
     preview = bool(preview_builds(response))
-    metrics = {"nextAction": next_action, "preview": preview, "simulation": simulation, "clarification": clarification}
+    metrics = {
+        "nextAction": next_action, "preview": preview, "simulation": simulation,
+        "boardFocus": board_focus, "clarification": clarification,
+    }
     warnings = {str(value) for value in response.get("warnings") or []}
     if "actions" in response:
         failures.append("PUBLIC_ACTIONS_EXPOSED")
@@ -506,6 +529,23 @@ def outcome_failures(response: dict[str, Any], expected: dict[str, Any]) -> tupl
         actual_slots = set(clarification_payload.get("missingSlots") or []) if isinstance(clarification_payload, dict) else set()
         if not required_slots.issubset(actual_slots):
             failures.append("CLARIFICATION_SLOTS_MISMATCH")
+    forbidden_slots = {str(value) for value in expected.get("forbiddenMissingSlots") or []}
+    if forbidden_slots and isinstance(clarification_payload, dict):
+        actual_slots = set(clarification_payload.get("missingSlots") or [])
+        if forbidden_slots & actual_slots:
+            failures.append("FORBIDDEN_CLARIFICATION_SLOT")
+    if expected.get("forbidClarification") and clarification:
+        failures.append("UNEXPECTED_CLARIFICATION")
+    normalized_message = str(response.get("message") or "").lower().replace(" ", "")
+    required_message_terms = [str(value).lower().replace(" ", "") for value in expected.get("messageContainsAll") or []]
+    if required_message_terms and not all(term in normalized_message for term in required_message_terms):
+        failures.append("REQUIRED_MESSAGE_TERM_MISSING")
+    alternative_message_terms = [str(value).lower().replace(" ", "") for value in expected.get("messageContainsAny") or []]
+    if alternative_message_terms and not any(term in normalized_message for term in alternative_message_terms):
+        failures.append("REQUIRED_MESSAGE_ALTERNATIVE_MISSING")
+    required_quick_replies = {str(value) for value in expected.get("requiredQuickReplies") or []}
+    if required_quick_replies and not required_quick_replies.issubset({str(value) for value in response.get("quickReplies") or []}):
+        failures.append("REQUIRED_QUICK_REPLY_MISSING")
     if outcome == "BUILDS" and not builds:
         failures.append("EXPECTED_BUILDS_MISSING")
     elif outcome == "BUILDS_OR_NEXT_ACTION" and not (builds or next_action):
@@ -520,6 +560,8 @@ def outcome_failures(response: dict[str, Any], expected: dict[str, Any]) -> tupl
         failures.append("DEAD_END")
     elif outcome == "SIMULATION_OR_CLARIFICATION" and not (simulation or clarification or response.get("quickReplies")):
         failures.append("EXPECTED_SIMULATION_OR_CLARIFICATION_MISSING")
+    elif outcome == "BOARD_FOCUS" and not board_focus:
+        failures.append("BOARD_FOCUS_MISSING")
     elif outcome == "CLARIFICATION" and not clarification:
         failures.append("EXPECTED_CLARIFICATION_MISSING")
     elif outcome == "CLARIFICATION_OR_NEXT_ACTION" and not (clarification or next_action):
@@ -528,6 +570,21 @@ def outcome_failures(response: dict[str, Any], expected: dict[str, Any]) -> tupl
         failures.append("DEAD_END")
     if simulation and builds:
         failures.append("SIMULATION_MUTATION")
+    if board_focus:
+        categories = board_focus_payload.get("categories") or []
+        if (board_focus_payload.get("type") != "PART_LOCATION"
+                or not isinstance(categories, list)
+                or not categories
+                or any(category not in CATEGORIES for category in categories)
+                or not str(board_focus_payload.get("label") or "").strip()):
+            failures.append("BOARD_FOCUS_SCHEMA_INVALID")
+        expected_categories = expected.get("expectedBoardFocusCategories") or []
+        if expected_categories and categories != expected_categories:
+            failures.append("BOARD_FOCUS_CATEGORY_MISMATCH")
+        if builds or simulation:
+            failures.append("BOARD_FOCUS_MUTATION")
+    if expected.get("forbidBoardFocus") and board_focus:
+        failures.append("BOARD_FOCUS_FALSE_POSITIVE")
     answer_types = set(expected.get("answerTypes") or [])
     if answer_types and response.get("answerType") not in answer_types:
         failures.append("ANSWER_TYPE_MISMATCH")
@@ -576,6 +633,7 @@ def response_fingerprint(response: dict[str, Any]) -> str:
             for build in response.get("builds") or []
         ],
         "simulation": response.get("simulation"),
+        "boardFocus": response.get("boardFocus"),
         "quickReplies": response.get("quickReplies"),
         "clarification": response.get("clarification"),
     }
@@ -600,15 +658,15 @@ def select_cases(cases: list[dict[str, Any]], args: argparse.Namespace) -> list[
 
 
 def validate_cases(cases: list[dict[str, Any]]) -> None:
-    if len(cases) != 600:
-        raise RuntimeError(f"expected exactly 600 scenarios, found {len(cases)}")
+    if len(cases) != 700:
+        raise RuntimeError(f"expected exactly 700 scenarios, found {len(cases)}")
     ids = [str(case.get("id") or "") for case in cases]
     if any(not case_id for case_id in ids) or len(set(ids)) != len(ids):
         raise RuntimeError("scenario ids must be non-empty and unique")
     expected_groups = {
         "BUDGET_BUILD": 100, "PART_RECOMMEND": 100, "DRAFT_PREVIEW": 100,
         "SIMULATION": 90, "CLARIFICATION": 80, "ROBUSTNESS": 70,
-        "CACHE_MINIMAL_PAIR": 60,
+        "CACHE_MINIMAL_PAIR": 60, "BOARD_FOCUS": 100,
     }
     actual_groups = Counter(str(case.get("group")) for case in cases)
     if dict(actual_groups) != expected_groups:
@@ -619,6 +677,12 @@ def validate_cases(cases: list[dict[str, Any]]) -> None:
     for case in cases:
         if case.get("contextMode") not in {"NONE", "CURRENT_DRAFT"}:
             raise RuntimeError(f"{case['id']}: invalid contextMode")
+        ui_context = case.get("uiContext")
+        if ui_context is not None and (
+                not isinstance(ui_context, dict)
+                or ui_context.get("surface") != "SELF_QUOTE"
+                or "BOARD_PART_FOCUS" not in (ui_context.get("capabilities") or [])):
+            raise RuntimeError(f"{case['id']}: invalid uiContext")
         turns = case.get("turns")
         if not isinstance(turns, list) or not turns:
             raise RuntimeError(f"{case['id']}: turns must be a non-empty list")
@@ -655,6 +719,9 @@ def run_turn(
         else:
             message = quick_replies[reply_index]
     request_body: dict[str, Any] = {"message": message or ""}
+    ui_context = turn_spec.get("uiContext") or case.get("uiContext")
+    if ui_context:
+        request_body["uiContext"] = ui_context
     if recent_builds:
         request_body["currentBuilds"] = recent_builds[:3]
     if case.get("contextMode") == "CURRENT_DRAFT":
@@ -739,7 +806,13 @@ def source_commit() -> str | None:
         return None
 
 
-def summarize(results: list[dict[str, Any]], draft_before: dict, draft_after: dict, args: argparse.Namespace) -> dict[str, Any]:
+def summarize(
+    results: list[dict[str, Any]],
+    draft_before: dict,
+    draft_after: dict,
+    args: argparse.Namespace,
+    wall_duration_ms: int,
+) -> dict[str, Any]:
     turn_counts = Counter("PASS" if row["success"] else "FAIL" for row in results)
     rows_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in results:
@@ -763,6 +836,8 @@ def summarize(results: list[dict[str, Any]], draft_before: dict, draft_after: di
     critical = sum(count for failure, count in failure_counts.items() if failure in CRITICAL_FAILURES)
     draft_changed = draft_before != draft_after
     acceptance_passed = case_counts.get("FAIL", 0) == 0 and critical == 0 and not draft_changed
+    duration_seconds = max(wall_duration_ms / 1000, 0.001)
+    status_counts = Counter(str(row.get("status")) for row in results)
     return {
         "generatedAt": dt.datetime.now(REPORT_TIMEZONE).isoformat(),
         "sourceCommit": source_commit(),
@@ -779,10 +854,25 @@ def summarize(results: list[dict[str, Any]], draft_before: dict, draft_after: di
             "over5Seconds": sum(value > 5_000 for value in latencies),
             "over5SecondsRate": round(sum(value > 5_000 for value in latencies) / len(latencies), 4) if latencies else 0,
         },
+        "load": {
+            "wallDurationMs": wall_duration_ms,
+            "throughputTurnsPerSecond": round(len(results) / duration_seconds, 3),
+            "httpStatusCounts": dict(status_counts),
+            "retryCount": sum(bool((row.get("transport") or {}).get("retried")) for row in results),
+            "reauthenticationCount": sum(bool((row.get("transport") or {}).get("reauthenticated")) for row in results),
+        },
         "metrics": {
             "nextActionRate": rate(row["metrics"]["nextAction"] for row in results),
             "previewRate": rate(row["metrics"]["preview"] for row in results if row["group"] == "DRAFT_PREVIEW"),
             "simulationRate": rate(row["metrics"]["simulation"] for row in results if row["group"] == "SIMULATION"),
+            "boardFocusRate": rate(
+                row["metrics"]["boardFocus"] for row in results
+                if (row.get("expected") or {}).get("expectedBoardFocusCategories")
+            ),
+            "boardFocusVetoPassRate": rate(
+                not row["metrics"]["boardFocus"] for row in results
+                if (row.get("expected") or {}).get("forbidBoardFocus")
+            ),
             "clarificationRate": rate(row["metrics"]["clarification"] for row in results if row["group"] == "CLARIFICATION" and row["turn"] == 1),
         },
         "draftChanged": draft_changed,
@@ -813,6 +903,7 @@ def write_outputs(
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     latency = summary["latency"]
+    load = summary["load"]
     lines = [
         "# Build Chat 전체 시나리오 QA 보고서", "",
         f"- 생성 시각: {summary['generatedAt']}", f"- 대상: `{summary['baseUrl']}`",
@@ -824,6 +915,7 @@ def write_outputs(
         f"- 대화 턴 판정: PASS {summary['turnOverall'].get('PASS', 0)} / FAIL {summary['turnOverall'].get('FAIL', 0)}",
         f"- 수용 기준 판정: {'PASS' if summary['acceptancePassed'] else 'FAIL'}",
         f"- 지연: 평균 {latency['avgMs']/1000:.3f}초 / p95 {latency['p95Ms']/1000:.3f}초 / 최대 {latency['maxMs']/1000:.3f}초 / 5초 초과 {latency['over5Seconds']}건 ({latency['over5SecondsRate']:.1%})",
+        f"- 실행 시간: {load['wallDurationMs']/1000:.3f}초 / 처리량: {load['throughputTurnsPerSecond']:.3f} turn/s / HTTP 상태: {load['httpStatusCounts']} / 재시도: {load['retryCount']}건",
         f"- 견적초안 변경: {'발생' if summary['draftChanged'] else '없음'}", "",
         "## 그룹별 결과", "", "| 그룹 | PASS | FAIL |", "|---|---:|---:|",
     ]
@@ -955,6 +1047,7 @@ def main() -> int:
     qa_draft = verified_virtual_draft(client, active_parts)
     start_draft = draft_fingerprint(persisted_draft)
     results: list[dict[str, Any]] = []
+    run_started = time.perf_counter()
     total_runs = len(selected) * repeat
     progress_path = Path(args.results_dir) / "build-chat-scenario-qa-progress.json"
     progress_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1042,11 +1135,12 @@ def main() -> int:
             persisted_draft = dict(persisted_draft)
             persisted_draft["parallelWorkerDraftChanged"] = True
     apply_pair_oracles(results)
+    wall_duration_ms = round((time.perf_counter() - run_started) * 1000)
     end_draft = draft_fingerprint(client.current_draft())
     if workers > 1 and persisted_draft.get("parallelWorkerDraftChanged"):
         end_draft = dict(end_draft)
         end_draft["parallelWorkerDraftChanged"] = True
-    summary = summarize(results, start_draft, end_draft, args)
+    summary = summarize(results, start_draft, end_draft, args, wall_duration_ms)
     md_path, json_path, raw_path = write_outputs(results, summary, args)
     review_path = manual_review_sample(results, Path(args.results_dir), args.stage)
     print(md_path)

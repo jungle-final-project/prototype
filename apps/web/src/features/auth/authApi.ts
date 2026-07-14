@@ -8,7 +8,13 @@ export type LoginResponse = {
     email: string;
     name: string;
     role: 'USER' | 'ADMIN';
+    phoneNumber?: string | null;
+    postalCode?: string | null;
+    addressLine1?: string | null;
+    addressLine2?: string | null;
+    authProviders?: Array<'LOCAL' | 'GOOGLE'>;
   };
+  profileVerificationToken?: string;
 };
 
 export type CurrentUser = LoginResponse['user'];
@@ -25,7 +31,14 @@ export function getCurrentUser() {
   return api<CurrentUser>('/api/auth/me');
 }
 
-type SignupPayload = {
+export type ContactAddressPayload = {
+  phoneNumber: string;
+  postalCode: string;
+  addressLine1: string;
+  addressLine2: string;
+};
+
+type SignupPayload = ContactAddressPayload & {
   name: string;
   email: string;
   password: string;
@@ -40,10 +53,34 @@ export function signup(payload: SignupPayload) {
   });
 }
 
+export type ProfileUpdatePayload = ContactAddressPayload & {
+  currentPassword?: string;
+  googleVerificationToken?: string;
+  name: string;
+};
+
+export function updateCurrentUser(payload: ProfileUpdatePayload) {
+  return api<CurrentUser>('/api/users/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function verifyProfilePassword(password: string) {
+  return api<void>('/api/users/me/password-verification', {
+    method: 'POST',
+    body: JSON.stringify({ password })
+  });
+}
+
 type AuthExchangePayload = {
   code: string;
   termsAccepted?: boolean;
   marketingAccepted?: boolean;
+  phoneNumber?: string;
+  postalCode?: string;
+  addressLine1?: string;
+  addressLine2?: string;
 };
 
 export function exchangeAuthCode(payload: AuthExchangePayload) {

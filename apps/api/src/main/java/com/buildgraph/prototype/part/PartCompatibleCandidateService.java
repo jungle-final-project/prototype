@@ -6,6 +6,7 @@ import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -100,6 +101,138 @@ public class PartCompatibleCandidateService {
                     return part;
                 })
                 .toList();
+    }
+
+    /**
+     * Filters a caller-provided candidate list against the authoritative active quote draft.
+     * Build Chat uses this gate immediately before exposing recommendation chips, so a candidate
+     * rejected by the same compatibility Tool policy as the parts screen cannot be recommended.
+     */
+    public List<String> compatibleCandidateIds(
+            CurrentUserService.CurrentUser user,
+            String category,
+            String compatibilityMode,
+            List<String> candidatePartIds
+    ) {
+        return compatibleCandidateIds(user, category, compatibilityMode, candidatePartIds, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Returns compatible ids in caller order and stops as soon as enough display candidates exist.
+     * Build Chat can therefore scan a wider fallback pool without Tool-checking every product.
+     */
+    public List<String> compatibleCandidateIds(
+            CurrentUserService.CurrentUser user,
+            String category,
+            String compatibilityMode,
+            List<String> candidatePartIds,
+            int maxAccepted
+    ) {
+        return compatibleCandidateSelection(user, category, compatibilityMode, candidatePartIds, maxAccepted).acceptedIds();
+    }
+
+    public CompatibleCandidateSelection compatibleCandidateSelection(
+            CurrentUserService.CurrentUser user,
+            String category,
+            String compatibilityMode,
+            List<String> candidatePartIds,
+            int maxAccepted
+    ) {
+        String normalizedCategory = normalizeCategory(category);
+        if (normalizedCategory == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 부품 카테고리입니다.");
+        }
+        String normalizedMode = firstText(text(compatibilityMode), "REPLACE").toUpperCase(Locale.ROOT);
+        if (!"ADD".equals(normalizedMode) && !"REPLACE".equals(normalizedMode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 compatibilityMode입니다.");
+        }
+        if (user == null || candidatePartIds == null || candidatePartIds.isEmpty() || maxAccepted <= 0) {
+            return CompatibleCandidateSelection.empty();
+        }
+        List<ToolBuildPart> baseParts = currentQuoteDraftParts(user);
+        List<String> checkedTools = checkedTools(normalizedCategory);
+        Set<String> selectedPartIds = baseParts.stream()
+                .filter(part -> normalizedCategory.equals(part.category()))
+                .map(ToolBuildPart::publicId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        LinkedHashSet<String> distinctIds = new LinkedHashSet<>(candidatePartIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .toList());
+        Map<String, ToolBuildPart> candidatesById = partsByPublicIds(List.copyOf(distinctIds));
+        List<String> passed = new ArrayList<>();
+        List<String> warningFallbacks = new ArrayList<>();
+        List<String> alreadySelected = new ArrayList<>();
+        for (String candidateId : distinctIds) {
+            // A recommendation list should not offer the exact product that is already selected.
+            // RAM/STORAGE still support adding another unit through the explicit add command; this
+            // gate only prevents a generic TOP3 response from looping back to the current item.
+            if (selectedPartIds.contains(candidateId)) {
+                alreadySelected.add(candidateId);
+                continue;
+            }
+            ToolBuildPart candidate = candidatesById.get(candidateId);
+            if (candidate == null || !normalizedCategory.equals(candidate.category())) {
+                continue;
+            }
+            CandidateEvaluation evaluation = evaluate(
+                    baseParts,
+                    new CandidatePart(candidate, Map.of()),
+                    normalizedCategory,
+                    checkedTools,
+                    normalizedMode,
+                    null
+            );
+            if ("PASS".equals(evaluation.status())) {
+                passed.add(candidateId);
+                if (passed.size() >= maxAccepted) {
+                    break;
+                }
+            } else if (!"FAIL".equals(evaluation.status())) {
+                warningFallbacks.add(candidateId);
+            }
+        }
+        if (passed.size() < maxAccepted) {
+            warningFallbacks.stream()
+                    .limit(maxAccepted - passed.size())
+                    .forEach(passed::add);
+        }
+        Set<String> warningIds = Set.copyOf(warningFallbacks);
+        List<String> acceptedWarnings = passed.stream().filter(warningIds::contains).toList();
+        return new CompatibleCandidateSelection(
+                List.copyOf(passed),
+                List.copyOf(alreadySelected),
+                acceptedWarnings
+        );
+    }
+
+    private Map<String, ToolBuildPart> partsByPublicIds(List<String> publicIds) {
+        if (publicIds == null || publicIds.isEmpty()) {
+            return Map.of();
+        }
+        String predicates = String.join(" OR ", java.util.Collections.nCopies(publicIds.size(), "public_id = ?::uuid"));
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               category,
+                               name,
+                               manufacturer,
+                               price,
+                               status,
+                               attributes
+                        FROM parts
+                        WHERE (%s)
+                          AND status = 'ACTIVE'
+                          AND deleted_at IS NULL
+                        """.formatted(predicates), publicIds.toArray());
+        Map<String, ToolBuildPart> result = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            ToolBuildPart part = toolPart(row);
+            if (part.publicId() != null) {
+                result.put(part.publicId(), part);
+            }
+        }
+        return result;
     }
 
     private List<ToolBuildPart> aiBuildParts(Map<String, Object> body) {
@@ -250,13 +383,31 @@ public class PartCompatibleCandidateService {
         List<ToolBuildPart> nextParts;
         if ("ADD".equals(mode)) {
             // 담기 평가: 기존 구성을 유지한 채 후보를 더한 상태로 검사한다 — RAM 만석에서 후보 킷이
-            // '호환 가능'으로 보였다가 담는 순간 FAIL로 반전되는 오탐을 막는다. 이미 담긴 부품이 후보로
-            // 오면(GET 경로는 장착 부품을 제외하지 않음) 추가 없이 현재 구성 그대로 평가한다.
-            boolean alreadyInBuild = baseParts.stream()
-                    .anyMatch(part -> category.equals(part.category()) && candidate.toolPart().publicId() != null
-                            && candidate.toolPart().publicId().equals(part.publicId()));
-            nextParts = new ArrayList<>(baseParts);
-            if (!alreadyInBuild) {
+            // '호환 가능'으로 보였다가 담는 순간 FAIL로 반전되는 오탐을 막는다. 이미 담긴 상품을 다시
+            // 고르면 실제 API가 동일 행 quantity를 +1 하므로, 평가에서도 행을 복제하지 않고 수량을 늘린다.
+            nextParts = new ArrayList<>();
+            boolean incremented = false;
+            for (ToolBuildPart part : baseParts) {
+                boolean samePart = category.equals(part.category())
+                        && candidate.toolPart().publicId() != null
+                        && candidate.toolPart().publicId().equals(part.publicId());
+                if (!samePart) {
+                    nextParts.add(part);
+                    continue;
+                }
+                incremented = true;
+                nextParts.add(new ToolBuildPart(
+                        part.internalId(),
+                        part.publicId(),
+                        part.category(),
+                        part.name(),
+                        part.manufacturer(),
+                        part.price(),
+                        part.attributes(),
+                        part.effectiveQuantity() + candidate.toolPart().effectiveQuantity()
+                ));
+            }
+            if (!incremented) {
                 nextParts.add(candidate.toolPart());
             }
         } else if (replaceTargetPartId != null) {
@@ -277,10 +428,168 @@ public class PartCompatibleCandidateService {
         List<String> applicableCheckedTools = ToolApplicabilityPolicy.applicableCandidateTools(checkedTools, nextParts);
         List<Map<String, Object>> relevantResults = toolResults.stream()
                 .filter(result -> applicableCheckedTools.contains(text(result.get("tool"))))
+                .map(result -> projectCandidateResult(category, result))
                 .toList();
         String status = worstStatus(relevantResults);
         String summary = summary(status, relevantResults);
         return new CandidateEvaluation(candidate.partMap(), status, summary, applicableCheckedTools);
+    }
+
+    /**
+     * A full-build Tool result can contain a failure unrelated to the candidate being viewed.
+     * Project aggregate compatibility/size details onto the candidate category so, for example,
+     * an existing RAM slot overflow does not label every CPU candidate as impossible.
+     */
+    private static Map<String, Object> projectCandidateResult(String category, Map<String, Object> result) {
+        Map<String, Object> details = objectMap(result.get("details"));
+        if (details.isEmpty()) {
+            return result;
+        }
+        String tool = text(result.get("tool"));
+        String projectedStatus = switch (tool == null ? "" : tool) {
+            case "compatibility" -> projectedCompatibilityStatus(category, details);
+            case "size" -> projectedSizeStatus(category, details);
+            default -> null;
+        };
+        if (projectedStatus == null) {
+            return result;
+        }
+        Map<String, Object> projected = new LinkedHashMap<>(result);
+        projected.put("status", projectedStatus);
+        projected.put("summary", projectedCandidateSummary(
+                category,
+                tool,
+                projectedStatus,
+                details,
+                text(result.get("summary"))));
+        return projected;
+    }
+
+    private static String projectedCompatibilityStatus(String category, Map<String, Object> details) {
+        List<String> relevantKeys = switch (category) {
+            case "CPU" -> List.of("socketMatched", "coolerSocketMatched", "coolerTdpMatched");
+            case "RAM" -> List.of("memoryTypeMatched", "ramFormFactorMatched", "ramSlotsMatched");
+            case "MOTHERBOARD" -> List.of("socketMatched", "memoryTypeMatched", "ramSlotsMatched", "m2SlotsMatched");
+            case "COOLER" -> List.of("coolerSocketMatched", "coolerTdpMatched");
+            case "STORAGE" -> List.of("m2SlotsMatched");
+            default -> List.of();
+        };
+        if (relevantKeys.isEmpty() || relevantKeys.stream().noneMatch(details::containsKey)) {
+            return null;
+        }
+        if (relevantKeys.stream().anyMatch(key -> Boolean.FALSE.equals(details.get(key)))) {
+            return "FAIL";
+        }
+        if (("CPU".equals(category) || "COOLER".equals(category))
+                && Boolean.TRUE.equals(details.get("coolerTdpMarginLow"))) {
+            return "WARN";
+        }
+        return "PASS";
+    }
+
+    private static String projectedSizeStatus(String category, Map<String, Object> details) {
+        return switch (category) {
+            case "GPU" -> dimensionalStatus(
+                    details.get("gpuLengthMm"),
+                    details.get("maxGpuLengthMm"),
+                    BuildSizeFitPolicy.GPU_WARN_HEADROOM_MM);
+            case "PSU" -> dimensionalStatus(
+                    details.get("psuDepthMm"),
+                    details.get("maxPsuLengthMm"),
+                    BuildSizeFitPolicy.PSU_WARN_HEADROOM_MM);
+            case "MOTHERBOARD" -> checkedMatchStatus(details, "boardFormFactorChecked", "boardFormFactorMatched");
+            case "COOLER" -> coolerSizeStatus(details);
+            // A case candidate changes every clearance relation, so keep the aggregate size result.
+            case "CASE" -> null;
+            default -> null;
+        };
+    }
+
+    private static String dimensionalStatus(Object currentValue, Object maximumValue, int warnBelowMm) {
+        Integer current = nullableNumber(currentValue);
+        Integer maximum = nullableNumber(maximumValue);
+        return BuildSizeFitPolicy.graphStatus(current, maximum, warnBelowMm, "WARN");
+    }
+
+    private static String checkedMatchStatus(Map<String, Object> details, String checkedKey, String matchedKey) {
+        if (!details.containsKey(checkedKey) && !details.containsKey(matchedKey)) {
+            return null;
+        }
+        if (!Boolean.TRUE.equals(details.get(checkedKey))) {
+            return "WARN";
+        }
+        return Boolean.FALSE.equals(details.get(matchedKey)) ? "FAIL" : "PASS";
+    }
+
+    private static String coolerSizeStatus(Map<String, Object> details) {
+        String coolerType = firstText(text(details.get("coolerType")), "").toUpperCase(Locale.ROOT);
+        if (coolerType.contains("LIQUID")) {
+            if (Boolean.FALSE.equals(details.get("radiatorMatched"))) {
+                return "FAIL";
+            }
+            if (!Boolean.TRUE.equals(details.get("radiatorChecked")) || details.get("radiatorSupportMm") == null) {
+                return "WARN";
+            }
+            return "PASS";
+        }
+        return dimensionalStatus(
+                details.get("coolerHeightMm"),
+                details.get("maxCpuCoolerHeightMm"),
+                BuildSizeFitPolicy.COOLER_WARN_HEADROOM_MM);
+    }
+
+    private static String projectedCandidateSummary(
+            String category,
+            String tool,
+            String status,
+            Map<String, Object> details,
+            String originalSummary
+    ) {
+        if ("PASS".equals(status)) {
+            return "현재 조합에서 이 후보와 직접 관련된 검증을 통과했습니다.";
+        }
+        if ("WARN".equals(status)) {
+            return "장착은 가능하지만 이 후보의 여유 치수 또는 스펙 근거를 추가 확인해 주세요.";
+        }
+        if ("compatibility".equals(tool)) {
+            if (("CPU".equals(category) || "MOTHERBOARD".equals(category))
+                    && Boolean.FALSE.equals(details.get("socketMatched"))) {
+                return "CPU와 메인보드 소켓이 맞지 않습니다.";
+            }
+            if (("RAM".equals(category) || "MOTHERBOARD".equals(category))
+                    && Boolean.FALSE.equals(details.get("memoryTypeMatched"))) {
+                return "RAM 규격과 메인보드 메모리 규격이 맞지 않습니다.";
+            }
+            if (Boolean.FALSE.equals(details.get("ramSlotsMatched"))) {
+                return "RAM 모듈 수가 메인보드 메모리 슬롯 수를 초과합니다.";
+            }
+            if (Boolean.FALSE.equals(details.get("m2SlotsMatched"))) {
+                return "M.2 SSD 수가 메인보드 M.2 슬롯 수를 초과합니다.";
+            }
+            if (("CPU".equals(category) || "COOLER".equals(category))
+                    && Boolean.FALSE.equals(details.get("coolerSocketMatched"))) {
+                return "CPU 소켓과 쿨러 지원 소켓이 맞지 않습니다.";
+            }
+            if (("CPU".equals(category) || "COOLER".equals(category))
+                    && Boolean.FALSE.equals(details.get("coolerTdpMatched"))) {
+                return "쿨러 냉각 용량이 CPU 발열 기준에 부족합니다.";
+            }
+        }
+        return firstText(originalSummary, "현재 조합과 함께 장착할 수 없는 후보입니다.");
+    }
+
+    private static Integer nullableNumber(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(value.toString());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static String summary(String status, List<Map<String, Object>> toolResults) {
@@ -498,6 +807,16 @@ public class PartCompatibleCandidateService {
     }
 
     private record CandidatePart(ToolBuildPart toolPart, Map<String, Object> partMap) {
+    }
+
+    public record CompatibleCandidateSelection(
+            List<String> acceptedIds,
+            List<String> alreadySelectedIds,
+            List<String> warningIds
+    ) {
+        private static CompatibleCandidateSelection empty() {
+            return new CompatibleCandidateSelection(List.of(), List.of(), List.of());
+        }
     }
 
     private record CandidateEvaluation(Map<String, Object> partMap, String status, String summary, List<String> checkedTools) {

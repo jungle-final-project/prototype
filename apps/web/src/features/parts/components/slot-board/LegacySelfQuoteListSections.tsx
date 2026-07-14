@@ -199,6 +199,10 @@ export function LegacySelfQuoteListSections() {
       navigate(`/login?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`);
       return;
     }
+    if (quantity <= 0) {
+      removePart(partId);
+      return;
+    }
     quantityMutation.mutate({ partId, quantity });
   };
 
@@ -536,7 +540,7 @@ function DraftQuantityStepper({ item, onChange, disabled }: { item: QuoteDraftIt
       <button
         type="button"
         aria-label={`${item.name} 수량 감소`}
-        disabled={disabled || item.quantity <= 1}
+        disabled={disabled}
         onClick={() => onChange(item.partId, item.quantity - 1)}
         className="w-7 bg-slate-50 text-sm font-bold text-slate-600 disabled:text-slate-300"
       >

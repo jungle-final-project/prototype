@@ -99,7 +99,7 @@ function compositeScoreFixture(score: number, label: string) {
   };
 }
 
-async function openMyQuotesAsUser(page: Page) {
+async function openMyQuotesAsUser(page: Page, assemblyItems: unknown[] = []) {
   const priceAlertRequests: unknown[] = [];
   const applyBuildRequests: unknown[] = [];
   const graphRequests: unknown[] = [];
@@ -129,6 +129,13 @@ async function openMyQuotesAsUser(page: Page) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ items: savedBuilds, page: 0, size: 20, total: savedBuilds.length })
+    });
+  });
+  await page.route('**/api/assembly-requests**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: assemblyItems, page: 0, size: 20, total: assemblyItems.length })
     });
   });
   await page.route('**/api/quote-drafts/current/apply-ai-build', async (route) => {
@@ -263,6 +270,7 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(page.getByTestId('my-quotes-build-count')).toContainText('2개');
   await expect(page.getByTestId('my-quotes-alert-count')).toContainText('2개');
   await expect(page.getByTestId('my-quotes-achieved-count')).toContainText('1개');
+  await expect(page.getByTestId('my-assembly-requests-link')).toHaveAttribute('href', '/my/assembly-requests');
 
   const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
   await expect(firstBuild).toContainText('QHD 균형 저장 견적');
@@ -311,6 +319,26 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   const triggeredAlert = page.getByTestId('price-alert-row-part-ssd-990pro');
   await expect(triggeredAlert).toContainText('Samsung 990 PRO 1TB');
   await expect(triggeredAlert).toContainText('목표 달성');
+});
+
+test('links directly from my quotes to a newly arrived technician offer', async ({ page }) => {
+  const requestId = '00000000-0000-4000-8000-000000020021';
+  await openMyQuotesAsUser(page, [{
+    id: requestId,
+    requestNo: 'ASM-MY-QUOTES-OFFER',
+    status: 'OFFERED',
+    serviceType: 'FULL_SERVICE',
+    region: '서울',
+    preferredDate: '2099-07-20',
+    deliveryMethod: 'DELIVERY',
+    estimatedPartsPrice: 2_000_000,
+    itemCount: 8,
+    availableOfferCount: 1
+  }]);
+
+  const link = page.getByTestId('my-assembly-requests-link');
+  await expect(link).toHaveAttribute('href', `/checkout/offers/${requestId}`);
+  await expect(link).toContainText('도착한 기사 제안 1건 확인');
 });
 
 test('limits target price dropdown to the selected quote and opens checkout for that quote', async ({ page }) => {

@@ -194,7 +194,64 @@ export type BuildGraphResolveResponse = {
   focusNodeIds: string[];
   insights: BuildGraphInsight[];
   compositeScore?: BuildCompositeScore;
+  buildAssessment?: AiBuildAssessment;
   toolResults: AiToolResult[];
+};
+
+export type AiAssessmentContext = {
+  source: 'QUOTE_DRAFT_CURRENT';
+  focusType: 'SCORE' | 'ISSUE';
+  category?: PartCategory;
+  tool?: 'compatibility' | 'power' | 'size' | 'performance' | 'price';
+};
+
+export type AiBuildAssessmentItem = {
+  code: string;
+  severity: 'PASS' | 'WARN' | 'FAIL';
+  title: string;
+  description: string;
+  relatedCategories: PartCategory[];
+};
+
+export type AiBuildAssessmentRecommendation = {
+  priority: number;
+  category: PartCategory;
+  title: string;
+  reason: string;
+  prompt: string;
+};
+
+export type AiBuildAssessment = {
+  type: 'COMPOSITE_SCORE_EXPLANATION';
+  score: number;
+  maxScore: number;
+  grade: string;
+  label: string;
+  summary: string;
+  strengths: AiBuildAssessmentItem[];
+  cautions: AiBuildAssessmentItem[];
+  recommendations: AiBuildAssessmentRecommendation[];
+  evaluatedAt: string;
+};
+
+export type AiSupportGuidanceAction = {
+  type: 'DOWNLOAD_PC_AGENT' | 'OPEN_SUPPORT_NEW';
+  label: string;
+  route?: '/support/new';
+};
+
+export type AiSupportGuidance = {
+  type: 'PC_AGENT_DIAGNOSTIC_ENTRY';
+  scope: 'PRE_DIAGNOSIS';
+  symptomCategory: 'DISPLAY_FREEZE' | 'POWER_RESTART' | 'BOOT_FAILURE' | 'PERFORMANCE_STUTTER' | 'THERMAL_NOISE' | 'STORAGE' | 'NETWORK' | 'AUDIO' | 'GENERAL';
+  title: string;
+  summary: string;
+  /** 신규 서버 응답에는 항상 포함되며, 필드 도입 전 로컬 세션 복원을 위해 optional로 읽는다. */
+  possibleCauses?: string[];
+  beforeDiagnosisChecks: string[];
+  agentRecommendation: 'OPTIONAL' | 'RECOMMENDED';
+  actions: AiSupportGuidanceAction[];
+  disclaimer: string;
 };
 
 export type AiChatMessage = {
@@ -206,6 +263,8 @@ export type AiChatMessage = {
   budgetWon?: number;
   builds?: AiRecommendedBuild[];
   simulation?: AiPerformanceSimulation | null;
+  buildAssessment?: AiBuildAssessment;
+  supportGuidance?: AiSupportGuidance;
   warnings?: string[];
   quickReplies?: string[];
   /** RAM/SSD처럼 다중 상품을 허용하는 구체 추천 칩의 직접 견적 추가 메타데이터. */
@@ -238,6 +297,7 @@ export type AiBuildChatRequest = {
     surface: 'HOME' | 'SELF_QUOTE';
     capabilities: Array<'BOARD_PART_FOCUS'>;
   };
+  assessmentContext?: AiAssessmentContext;
   /** 직전 되묻기(clarification)에 대한 답변임을 알리는 에코 — 서버가 원 요청과 합성한다. */
   clarificationContext?: { originalMessage: string };
 };
@@ -253,6 +313,8 @@ export type AiBuildChatResponse = {
   message: string;
   builds: AiRecommendedBuild[];
   simulation?: AiPerformanceSimulation | null;
+  buildAssessment?: AiBuildAssessment | null;
+  supportGuidance?: AiSupportGuidance | null;
   warnings?: string[];
   /** 모호 요청 되묻기 시 함께 오는 선택지 칩 — 그 자체로 완전한 프롬프트다. */
   quickReplies?: string[];

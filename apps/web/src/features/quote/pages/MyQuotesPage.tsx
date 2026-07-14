@@ -1,9 +1,10 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellRing, Check, CheckCircle2, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
+import { BellRing, Check, CheckCircle2, ClipboardList, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
+import { listAssemblyRequests } from '../../parts/assemblyApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
 import type { BuildCompositeScore, PartCategory } from '../aiSelection';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
@@ -36,6 +37,11 @@ export function MyQuotesPage() {
 
   const buildsQuery = useQuery({ queryKey: ['build-history'], queryFn: getBuildHistory });
   const alertsQuery = useQuery({ queryKey: ['price-alerts'], queryFn: getPriceAlerts });
+  const assemblyRequestsQuery = useQuery({
+    queryKey: ['assembly-requests'],
+    queryFn: () => listAssemblyRequests(),
+    refetchInterval: 5000
+  });
 
   const builds = buildsQuery.data?.items ?? [];
   const alerts = alertsQuery.data?.items ?? [];
@@ -52,6 +58,9 @@ export function MyQuotesPage() {
   const targetPriceNumber = Number(targetPrice.replace(/,/g, ''));
   const achievedAlertCount = alerts.filter((alert) => isPriceTargetAchieved(alert)).length;
   const nearestAlert = useMemo(() => findNearestAlert(alerts), [alerts]);
+  const offeredAssemblyRequest = assemblyRequestsQuery.data?.items.find(
+    (request) => request.status === 'OFFERED' && (request.availableOfferCount ?? 1) > 0
+  );
   const graphBuildItems = useMemo(() => graphBuild ? quoteDraftItemsForBuild(graphBuild) : [], [graphBuild]);
   const graphQuery = useQuery({
     queryKey: ['build-graph', 'saved-build', graphBuild?.id, graphBuildSignature(graphBuildItems), graphBuild?.totalPrice],
@@ -153,6 +162,18 @@ export function MyQuotesPage() {
               <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-slate-600">
                 저장한 견적을 확인하고, 관심 부품의 현재가가 목표가에 가까워지는지 한 화면에서 추적합니다.
               </p>
+              <Link
+                to={offeredAssemblyRequest ? `/checkout/offers/${offeredAssemblyRequest.id}` : '/my/assembly-requests'}
+                data-testid="my-assembly-requests-link"
+                className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 text-sm font-black text-commerce-ink transition hover:border-brand-blue hover:text-brand-blue"
+              >
+                <ClipboardList size={16} />
+                {offeredAssemblyRequest
+                  ? offeredAssemblyRequest.availableOfferCount == null
+                    ? '도착한 기사 제안 확인'
+                    : `도착한 기사 제안 ${offeredAssemblyRequest.availableOfferCount}건 확인`
+                  : '조립 요청 진행'}
+              </Link>
             </div>
             <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[520px]">
               <SummaryMetric testId="my-quotes-build-count" icon={<FileText size={17} />} label="저장 견적" value={`${builds.length}개`} />

@@ -14,6 +14,7 @@ class BuildChatIntentRouterTest {
         List<Case> cases = List.of(
                 // 견적 추천 (유지)
                 c("5090 들어간 PC 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
+                c("RTX 5090 말고 가성비 GPU로 견적 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("300만원 이하 RTX 5090 PC로 맞춰줘", BuildChatIntent.BUILD_RECOMMEND),
                 c("300만원 견적 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
                 c("3백만원 PC 추천해줘", BuildChatIntent.BUILD_RECOMMEND),
@@ -35,6 +36,8 @@ class BuildChatIntentRouterTest {
                 c("최상급 CPU와 GPU로 추천", BuildChatIntent.BUILD_RECOMMEND),
                 // 예산·용도·모델 번호가 전혀 없는 동사+명사 요청은 이제 되묻기로 보낸다 (역질문 흐름)
                 c("오래 쓸 수 있게 업그레이드 여유 있는 구성", BuildChatIntent.ASK_CLARIFICATION),
+                c("중3 아들 피시 맞출건데 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
+                c("대학 입학하는 조카에게 컴퓨터를 선물하려고 해", BuildChatIntent.ASK_CLARIFICATION),
                 c("컴퓨터 하나 맞춰줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("해상도 좋은 피시 맞춰줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("PC 견적 짜줘", BuildChatIntent.ASK_CLARIFICATION),
@@ -85,6 +88,22 @@ class BuildChatIntentRouterTest {
                 draft("9700X 대신 9900X 꽂으면 멀티코어 얼마나 차이나요", BuildChatIntent.SIMULATE_REPLACEMENT),
                 draft("5080에서 5090으로 넘어가면 4K에서 몇 프레임 더 나와?", BuildChatIntent.SIMULATE_REPLACEMENT),
                 draft("지피유 한 단계 윗급으로 교체하면 가성비 나올까", BuildChatIntent.SIMULATE_REPLACEMENT),
+                // 접수 전 PC 증상 안내 — 원인 진단은 하지 않고 Agent/AS 연결만 제공한다
+                c("게임하다 화면이 멈춰", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("나 게임이 좀 멈춰", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("검은 화면이 자꾸 떠", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("컴퓨터가 갑자기 재부팅돼", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("부팅이 안돼", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("게임 프레임이 갑자기 뚝뚝 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("팬 소리가 커지고 너무 뜨거워", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("SSD 디스크가 계속 100퍼센트야", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("인터넷이 자꾸 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("컴퓨터에서 소리가 안 나", BuildChatIntent.SUPPORT_GUIDANCE),
+                // 증상 단어와 비슷해도 쇼핑·시뮬레이션 요청이면 장애 안내로 가로채지 않는다
+                c("게임용 PC 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
+                c("검은색 케이스 추천해줘", BuildChatIntent.UNSUPPORTED),
+                c("안 멈추는 게임용 PC 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
+                draft("GPU를 바꾸면 게임 멈춤이 줄어?", BuildChatIntent.SIMULATE_REPLACEMENT),
                 // 셀프 견적 구성도 위치 강조 — 명시된 단일/복수 카테고리는 fast path
                 board("램 위치가 어디 있어?", BuildChatIntent.LOCATE_BOARD_PART),
                 board("메모리 꽂는 곳 표시해줘", BuildChatIntent.LOCATE_BOARD_PART),
@@ -142,9 +161,13 @@ class BuildChatIntentRouterTest {
                 draft("GPU 더 좋은 걸로 바꿔줘", BuildChatIntent.UNSUPPORTED),
                 draft("메인보드 MSI 걸로 맞춰줘", BuildChatIntent.UNSUPPORTED),
                 draft("케이스 리안리 216 모델꺼로 맞춰줘", BuildChatIntent.UNSUPPORTED),
-                // 일반 설명/상담 — 제거된 기능
-                c("이 견적 왜 좋아?", BuildChatIntent.UNSUPPORTED),
-                c("지금 견적 호환 괜찮아?", BuildChatIntent.UNSUPPORTED),
+                // 현재 견적 종합 점수·약점 설명 — 서버 Tool 재평가 경로
+                c("이 견적 왜 좋아?", BuildChatIntent.EXPLAIN_BUILD_SCORE),
+                c("지금 견적 호환 괜찮아?", BuildChatIntent.EXPLAIN_BUILD_SCORE),
+                c("왜 종합 점수가 낮아?", BuildChatIntent.EXPLAIN_BUILD_SCORE),
+                c("이 견적의 약점이 뭐야?", BuildChatIntent.EXPLAIN_BUILD_SCORE),
+                c("뭐부터 업그레이드해야 해?", BuildChatIntent.EXPLAIN_BUILD_SCORE),
+                c("5090 자체 점수 알려줘", BuildChatIntent.UNSUPPORTED),
                 c("예산 없이 끝판왕으로", BuildChatIntent.BUILD_RECOMMEND),
                 // 오통과 방어 — 스윕에서 발견된 케이스
                 draft("이 구성에서 램만 64기가로 올려줘", BuildChatIntent.UNSUPPORTED),
@@ -152,7 +175,7 @@ class BuildChatIntentRouterTest {
                 c("게이밍 노트북 추천해줘", BuildChatIntent.UNSUPPORTED),
                 c("32기가 램 추천 좀 해주세요", BuildChatIntent.UNSUPPORTED),
                 c("30만원대에서 살만한 CPU 하나만 골라줘", BuildChatIntent.UNSUPPORTED),
-                c("지금 견적에 병목 없는지 한번 봐줘", BuildChatIntent.UNSUPPORTED)
+                c("지금 견적에 병목 없는지 한번 봐줘", BuildChatIntent.EXPLAIN_BUILD_SCORE)
         );
 
         assertThat(cases).hasSizeGreaterThanOrEqualTo(40);
@@ -192,6 +215,41 @@ class BuildChatIntentRouterTest {
     }
 
     @Test
+    void relationshipRecommendationsUseTheCategoryNearestTheRecommendationVerb() {
+        assertThat(BuildChatService.detectRecommendationTargetCategory("현재 메인보드에 맞는 CPU 추천해줘"))
+                .isEqualTo("CPU");
+        assertThat(BuildChatService.detectRecommendationTargetCategory("이 CPU에 맞는 메인보드 후보 보여줘"))
+                .isEqualTo("MOTHERBOARD");
+        assertThat(BuildChatService.detectRecommendationTargetCategory("현재 견적과 호환되는 고성능 GPU 추천해줘"))
+                .isEqualTo("GPU");
+        assertThat(BuildChatService.detectPartCategory("M.2 SSD 추천해줘"))
+                .isEqualTo("STORAGE");
+
+        BuildChatIntentDecision categoryRecommendation = router.decide(
+                draftRequest("현재 견적과 호환되는 고성능 GPU 추천해줘"),
+                "현재 견적과 호환되는 고성능 GPU 추천해줘"
+        );
+        assertThat(categoryRecommendation.intent()).isNotEqualTo(BuildChatIntent.EXPLAIN_BUILD_SCORE);
+        assertThat(categoryRecommendation.targetCategory()).isEqualTo("GPU");
+
+        BuildChatIntentDecision scoreImprovement = router.decide(
+                draftRequest("현재 견적 점수를 실제로 높일 부품을 추천해줘"),
+                "현재 견적 점수를 실제로 높일 부품을 추천해줘"
+        );
+        assertThat(scoreImprovement.intent()).isEqualTo(BuildChatIntent.EXPLAIN_BUILD_SCORE);
+    }
+
+    @Test
+    void storageCandidateCompatibilityReviewIsNotMisclassifiedAsPcSymptom() {
+        String message = "지금 견적에 2TB NVMe SSD 추천해줘 첫 번째 후보를 적용하면 현재 구성에서 문제가 없는지 설명해줘";
+
+        BuildChatIntentDecision decision = router.decide(draftRequest(message), message);
+
+        assertThat(decision.intent()).isNotEqualTo(BuildChatIntent.SUPPORT_GUIDANCE);
+        assertThat(decision.targetCategory()).isEqualTo("STORAGE");
+    }
+
+    @Test
     void boardFocusRequiresCapabilityAndUsesFastPathForExplicitCategories() {
         BuildChatIntentDecision single = router.decide(
                 boardRequest("램 위치가 어디 있어?"),
@@ -219,6 +277,14 @@ class BuildChatIntentRouterTest {
         assertThat(userPhrase.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
         assertThat(userPhrase.targetCategories()).containsExactly("MOTHERBOARD", "RAM");
 
+        BuildChatIntentDecision findOnBoard = router.decide(
+                boardRequest("구성도에서 CPU 찾아줘"),
+                "구성도에서 CPU 찾아줘"
+        );
+        assertThat(findOnBoard.intent()).isEqualTo(BuildChatIntent.LOCATE_BOARD_PART);
+        assertThat(findOnBoard.preferredPath()).isEqualTo("FAST_BOARD_FOCUS");
+        assertThat(findOnBoard.targetCategories()).containsExactly("CPU");
+
         BuildChatIntentDecision compoundPartName = router.decide(
                 boardRequest("CPU 쿨러 위치가 어딜까?"),
                 "CPU 쿨러 위치가 어딜까?"
@@ -242,6 +308,32 @@ class BuildChatIntentRouterTest {
                 "램 위치가 어디 있어?"
         );
         assertThat(withoutCapability.intent()).isEqualTo(BuildChatIntent.UNSUPPORTED);
+    }
+
+    @Test
+    void marksExplicitRecipientContextForContextualClarification() {
+        BuildChatIntentDecision decision = router.decide(
+                Map.of("message", "중3 아들 피시 맞출건데 추천해줘"),
+                "중3 아들 피시 맞출건데 추천해줘"
+        );
+
+        assertThat(decision.intent()).isEqualTo(BuildChatIntent.ASK_CLARIFICATION);
+        assertThat(decision.ambiguityReasons())
+                .contains("LOW_INFORMATION", "RECIPIENT_CONTEXT")
+                .doesNotContain("USAGE_ONLY");
+
+        BuildChatIntentDecision recipientWithUseCase = router.decide(
+                Map.of("message", "중3 아들이 롤 할 피시 추천해줘"),
+                "중3 아들이 롤 할 피시 추천해줘"
+        );
+        assertThat(recipientWithUseCase.ambiguityReasons())
+                .contains("RECIPIENT_CONTEXT", "USAGE_ONLY");
+
+        BuildChatIntentDecision balanceRequest = router.decide(
+                Map.of("message", "균형 있는 PC 추천해줘"),
+                "균형 있는 PC 추천해줘"
+        );
+        assertThat(balanceRequest.ambiguityReasons()).doesNotContain("RECIPIENT_CONTEXT");
     }
 
     private static Case c(String message, BuildChatIntent intent) {

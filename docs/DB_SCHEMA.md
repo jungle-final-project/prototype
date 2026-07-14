@@ -13,7 +13,7 @@
 - 핵심 관계와 FK는 JSONB에 숨기지 않고 정규화한다.
 - JSONB는 가변 속성, Tool 요청/응답 원문, RAG metadata, 후보 배열에만 제한적으로 사용한다.
 - `products` 도메인은 사용하지 않고 `parts` 도메인을 사용한다.
-- 주문, 결제, 배송, 재고 차감, 타임세일은 V1 범위에서 제외한다.
+- 조립 기사 중개 요청·제안·가상 결제 상태는 V1에 포함한다. 실제 주문, PG 결제, 배송사 연동, 재고 차감, 타임세일은 제외한다.
 - LLM/RAG cache와 quota는 DB 테이블이 아니라 Redis/runtime 정책으로 관리한다.
 - Google OAuth one-time code도 DB에 저장하지 않고 Redis/runtime에서 짧은 TTL로 관리한다.
 - AWS 공용 DB는 검증 환경이며, 기준은 Git에 남는 Flyway/SQL 파일이다.
@@ -286,6 +286,10 @@ Owner: 5번
 | `email` | `VARCHAR(255)` | no | - | 로그인 이메일 |
 | `password_hash` | `VARCHAR(255)` | yes | - | local 가입자만 사용 |
 | `name` | `VARCHAR(100)` | no | - | 표시 이름 |
+| `phone_number` | `VARCHAR(30)` | yes | - | local 회원가입 전화번호 |
+| `postal_code` | `VARCHAR(20)` | yes | - | local 회원가입 우편번호 |
+| `address_line1` | `VARCHAR(255)` | yes | - | local 회원가입 기본 주소 |
+| `address_line2` | `VARCHAR(255)` | yes | - | local 회원가입 상세 주소 |
 | `role` | `VARCHAR(30)` | no | - | `USER`, `ADMIN` |
 | `terms_accepted_at` | `TIMESTAMPTZ` | no | - | 약관 동의 시각 |
 | `marketing_accepted_at` | `TIMESTAMPTZ` | yes | - | 마케팅 동의 시각 |
@@ -303,6 +307,7 @@ Index:
 Auth 저장 규칙:
 
 - `users.email`은 local 회원가입과 Google 연결 모두 소문자 trim 기준으로 저장한다.
+- local 회원가입과 신규 Google 회원가입은 `phone_number`, `postal_code`, `address_line1`, `address_line2`를 필수로 입력받아 저장한다. 서버는 전화번호를 하이픈 형식으로, 주소 공백을 단일 공백으로 정규화한다. 기존 사용자와 관리자 계정은 해당 컬럼이 `NULL`일 수 있다.
 - 공개 회원가입과 신규 Google 가입은 항상 `role='USER'`만 생성한다. 클라이언트 request의 role 값은 저장하지 않는다.
 - 관리자 계정은 seed/admin 운영 절차로만 `role='ADMIN'`을 갖는다. Google 로그인은 기존 `ADMIN` row에 provider를 연결할 수 있지만 신규 Google 가입으로 `ADMIN` row를 만들지 않는다.
 - `/admin/signup`용 별도 테이블이나 공개 관리자 가입 row는 만들지 않는다.
@@ -2668,6 +2673,35 @@ V108__visit_support_reservations_exact_time.sql
 
 현재 저장소에는 위 순서의 Flyway migration이 반영되어 있다. 기존 PostgreSQL volume이 남아 있으면 새 migration과 seed가 다시 실행되지 않으므로, 공통 DB를 처음부터 검증할 때는 `docker compose down -v` 후 `docker compose up --build`를 사용한다.
 
+## 조립 기사 중개
+
+`V115__assembly_brokerage.sql`은 견적 snapshot 기반의 조립 요청, 기사 제안, 가상 결제와 진행 이력을 추가한다. `V116__external_technician_bidding.sql`은 기존 USER 계정과 연결된 외부 기사 신청·직접 입찰 및 제안 활동 이력을 추가한다.
+
+| table | 책임 | 주요 상태/정책 |
+|---|---|---|
+| `technicians` | 내부 기사 또는 USER 계정과 1:1 연결된 외부 기사 프로필 | `provider_type=INTERNAL/EXTERNAL`, `verification_status=PENDING/APPROVED/REJECTED`, `ACTIVE/INACTIVE/SUSPENDED`, soft delete. `seeded=true`는 관리자 화면에만 노출한다. |
+| `assembly_requests` | 사용자 조립 요청과 원본 견적/호환성 snapshot 및 연락처·배송 주소 | `REQUESTED/OFFERED/MATCHED/CONFIRMED/ASSEMBLING/SHIPPED/COMPLETED/CANCELLED`. 연락처와 주소는 선택된 기사에게 결제 후에만 공개한다. |
+| `assembly_request_items` | 요청 시점 부품명·수량·가격·구매처 snapshot | 요청 생성 후 수정하지 않는다. 원본 `parts` 가격 변경과 무관하다. |
+| `assembly_offers` | 내부/외부 기사별 부품 확인가·조립비·배송비·일정과 제출자 | `AVAILABLE/SELECTED/WITHDRAWN/EXPIRED`, 요청별 SELECTED partial unique, 외부 기사당 요청별 1건 |
+| `assembly_payments` | 실제 PG 없는 가상 결제 상태 | 요청별 1건, `PENDING/PAID/CANCELLED/REFUNDED`, 카드·계좌 정보 없음 |
+| `assembly_request_status_history` | 사용자/관리자 상태 전이 타임라인 | actor와 before/after 상태, 메모를 append-only로 저장 |
+| `assembly_offer_activities` | 외부 기사와 관리자의 제안 제출·수정·철회 이력 | actor, action, 당시 제안 snapshot을 append-only로 저장 |
+
+운영 규칙:
+
+- `(assembly_requests.user_id, idempotency_key)`는 unique다. 같은 key의 request fingerprint가 다르면 API는 409를 반환한다.
+- 요청 생성은 현재 quote draft와 Build Graph Tool 결과를 서버에서 조회하고, blocking FAIL이면 transaction 전체를 rollback한다.
+- ACTIVE, APPROVED, non-deleted, 표준 AS 동의, 지역·서비스 방식 일치 INTERNAL 기사 최대 2명이 자동 제안 대상이다.
+- EXTERNAL 기사는 기존 USER와 `technicians.user_id`로 1:1 연결한다. 승인된 기사만 요청함을 조회하고 요청별 외부 AVAILABLE 제안 최대 3건 안에서 직접 입찰한다.
+- 승인 후 정지된 외부 기사는 신규 입찰 자격만 잃는다. 이미 선택된 제안과 낙찰 작업은 보존하며 해당 작업 조회는 계속 허용한다.
+- 외부 기사 제안은 생성·수정·철회마다 `assembly_offer_activities`에 snapshot을 남긴다. 철회 후 같은 요청에 다시 입찰할 수 없다.
+- `assembly_requests.contact_name/contact_phone/postal_code/address_*`와 자유 메모는 일반 입찰 후보에게 반환하지 않는다. 본인 제안이 `SELECTED`이고 가상 결제가 `PAID`인 기사에게만 API가 공개한다.
+- 기사 soft delete는 과거 제안의 FK와 `technician_snapshot`을 보존하며 이후 자동 제안에서만 제외한다.
+- `assembly_requests.selected_offer_id`와 요청별 SELECTED partial unique index를 함께 사용해 동시 선택을 막는다.
+- 사용자는 ASSEMBLING 전까지 취소할 수 있고, PAID 가상 결제는 같은 transaction에서 REFUNDED로 바뀐다.
+- 관리자 기사/제안/요청 상태 mutation은 `admin_audit_logs`에 남긴다.
+- 실제 PG 결제, 재고 차감, 배송 추적은 이 테이블의 책임이 아니다.
+
 ## V1 제외 테이블
 
 | 제외 항목 | 이유 |
@@ -2678,9 +2712,9 @@ V108__visit_support_reservations_exact_time.sql
 | `quota` | Redis/runtime 처리 |
 | OAuth one-time code 테이블 | Redis/runtime 처리 |
 | 부하 테스트 결과 테이블 | k6 리포트 파일로 관리 |
-| 주문 테이블 | MVP 범위 아님 |
-| 결제 테이블 | MVP 범위 아님 |
-| 배송 테이블 | MVP 범위 아님 |
+| 실제 주문 테이블 | 조립 중개 요청과 분리된 실제 상품 주문은 MVP 범위 아님 |
+| PG 결제 거래 테이블 | `assembly_payments`는 가상 상태만 저장하며 실제 승인/취소 거래는 범위 아님 |
+| 배송사 연동 테이블 | 조립 요청의 SHIPPED 상태만 기록하고 송장/배송사 연동은 범위 아님 |
 | 재고 차감 테이블 | MVP 범위 아님 |
 | 타임세일 테이블 | MVP 범위 아님 |
 | Quick Assist 세션 테이블 | V2 확장 |

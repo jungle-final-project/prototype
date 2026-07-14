@@ -5,16 +5,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
 /**
  * Build Chat 축소 정책(2026-07 회의)의 intent 라우터.
- * 지원 범위는 예산/그래프 기반 견적 추천, 부품 교체 성능 시뮬레이션, 셀프 견적 보드 위치 강조,
- * 명확화 질문이다. 화면 이동, 장바구니 조작, 단일 부품 추천, 일반 상담은 UNSUPPORTED로 고정 안내한다.
+ * 지원 범위는 예산/그래프 기반 견적 추천, 부품 교체 성능 시뮬레이션, 접수 전 PC 증상 안내,
+ * 셀프 견적 보드 위치 강조, 명확화 질문이다. 화면 이동, 장바구니 조작, 단일 부품 추천,
+ * 그 밖의 일반 상담은 UNSUPPORTED로 고정 안내한다.
  *
  * 분기 순서가 오탐 방어의 핵심이다:
- * 시뮬레이션 → 견적 완성 → 장바구니 조작 veto → 주변기기 veto → 견적 추천 → 보드 위치 → 명확화 → UNSUPPORTED
+ * 시뮬레이션 → 견적 완성 → 장바구니 조작 veto → 주변기기 veto → PC 증상 안내 → 견적 추천 → 보드 위치 → 명확화 → UNSUPPORTED
  */
 @Service
 public class BuildChatIntentRouter {
@@ -42,7 +44,12 @@ public class BuildChatIntentRouter {
     public BuildChatIntentDecision decide(Map<String, Object> request, String message) {
         Map<String, Object> body = request == null ? Map.of() : request;
         String normalized = normalize(message);
-        String category = firstText(text(body.get("selectedCategory")), BuildChatService.detectPartCategory(message), PartRouteResolver.inferCategory(message));
+        String category = firstText(
+                text(body.get("selectedCategory")),
+                BuildChatService.detectRecommendationTargetCategory(message),
+                BuildChatService.detectPartCategory(message),
+                PartRouteResolver.inferCategory(message)
+        );
         String partQuery = PartRouteResolver.extractPartQuery(message);
         boolean hasDraftItems = !objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty();
 
@@ -72,6 +79,27 @@ public class BuildChatIntentRouter {
             return unsupported(category, partQuery);
         }
 
+        if (isSupportGuidanceIntent(normalized)) {
+            return decision(
+                    BuildChatIntent.SUPPORT_GUIDANCE,
+                    "HIGH",
+                    "NONE",
+                    category,
+                    partQuery,
+                    "FAST_SUPPORT_GUIDANCE",
+                    "NONE",
+                    null,
+                    List.of("PC_SYMPTOM_REPORTED")
+            );
+        }
+
+        // 제외할 모델만 말하고 예산·용도를 주지 않은 요청은 임의 기본 예산으로 추천하지 않는다.
+        // 원문의 제외 조건을 clarificationContext에 보존한 채 기준을 되물으면 다음 턴에서 안전하게 합성된다.
+        if (isNegatedPreferenceOnlyBuildRequest(normalized, message)) {
+            return decision(BuildChatIntent.ASK_CLARIFICATION, "LOW", "NONE", category, partQuery,
+                    "FAST_CLARIFICATION", "NONE", null, List.of("LOW_INFORMATION"));
+        }
+
         if (isBuildRecommend(normalized, message, category)) {
             return decision(BuildChatIntent.BUILD_RECOMMEND, "HIGH", "NONE", category, partQuery, "LLM_OR_DETERMINISTIC",
                     standaloneContext(body) ? "SEMANTIC_READ_ONLY" : "EXACT_ONLY",
@@ -81,6 +109,20 @@ public class BuildChatIntentRouter {
         BuildChatIntentDecision boardLocation = boardLocationDecision(body, normalized, partQuery);
         if (boardLocation != null) {
             return boardLocation;
+        }
+
+        if (isBuildScoreExplanation(body, message, normalized, category)) {
+            return decision(
+                    BuildChatIntent.EXPLAIN_BUILD_SCORE,
+                    "HIGH",
+                    "NONE",
+                    category,
+                    partQuery,
+                    "LIVE_BUILD_ASSESSMENT",
+                    "NONE",
+                    null,
+                    List.of()
+            );
         }
 
         // 화면 이동/탐색과 설명 요청은 축소 정책상 미지원 — 모호 구매의향(명확화)으로 흡수되지 않게 먼저 자른다
@@ -100,6 +142,9 @@ public class BuildChatIntentRouter {
             if (hasBuildUseCaseSignal(normalized) && BuildChatService.parseBudgetWon(message) == null) {
                 clarificationReasons.add("USAGE_ONLY");
             }
+            if (hasRecipientContextSignal(normalized)) {
+                clarificationReasons.add("RECIPIENT_CONTEXT");
+            }
             return decision(BuildChatIntent.ASK_CLARIFICATION, "LOW", "NONE", category, partQuery, "FAST_CLARIFICATION", "NONE", null,
                     clarificationReasons);
         }
@@ -113,6 +158,98 @@ public class BuildChatIntentRouter {
 
     private static boolean isExplanationQuestion(String normalized) {
         return containsAny(normalized, "왜", "이유", "설명", "호환", "괜찮아", "병목");
+    }
+
+    private static boolean isSupportGuidanceIntent(String normalized) {
+        if (normalized.isBlank()) {
+            return false;
+        }
+        // 예방 목적의 상품 추천은 장애 신고가 아니다.
+        if (isRecommendationVerb(normalized)
+                && containsAny(normalized, "안멈추는", "멈추지않는", "안꺼지는", "문제없는", "고장안나는")) {
+            return false;
+        }
+
+        boolean explicitSymptom = containsAny(normalized,
+                "게임하다멈", "게임중멈", "화면멈", "컴퓨터멈", "pc멈", "프리징", "먹통",
+                "검은화면", "블랙스크린", "블루스크린", "갑자기꺼", "자꾸꺼", "재부팅",
+                "부팅이안", "부팅안", "전원이안", "전원안들", "튕겨", "튕김", "크래시",
+                "프레임드랍", "화면깨", "과열", "너무뜨거", "온도가너무", "팬소리",
+                "디스크100", "저장공간부족", "인터넷이자꾸끊", "네트워크가끊", "소리가안", "소리안나",
+                "갑자기느려", "느려졌");
+        if (explicitSymptom) {
+            return true;
+        }
+
+        boolean storageSaturation = containsAny(normalized,
+                "ssd사용률100", "ssd사용률이100", "디스크사용률100", "디스크사용률이100",
+                "ssd디스크가계속100", "디스크가계속100", "디스크가100");
+        boolean candidateReview = containsAny(normalized, "후보", "추천", "적용하면", "호환", "장착")
+                && containsAny(normalized, "현재구성", "현재견적", "다시선택", "문제없는지", "문제가없는지");
+        boolean storageSymptom = storageSaturation
+                || containsAny(normalized, "ssd", "디스크", "저장장치")
+                        && containsAny(normalized, "느려", "멈", "오류", "문제", "인식안", "공간부족")
+                        && !candidateReview;
+        if (storageSymptom) {
+            return true;
+        }
+
+        boolean genericSymptom = containsAny(normalized,
+                "멈춰", "멈춤", "멈춘", "얼어붙", "버벅", "끊겨", "끊김", "안켜", "안돼", "이상해");
+        boolean pcContext = containsAny(normalized,
+                "컴퓨터", "pc", "게임", "화면", "윈도우", "부팅", "전원", "그래픽", "드라이버",
+                "인터넷", "네트워크", "소리", "팬", "온도", "ssd", "디스크");
+        return genericSymptom && pcContext;
+    }
+
+    private static boolean isBuildScoreExplanation(
+            Map<String, Object> body,
+            String message,
+            String normalized,
+            String category
+    ) {
+        Map<String, Object> assessmentContext = objectMap(body.get("assessmentContext"));
+        boolean explicitAssessmentContext = "QUOTE_DRAFT_CURRENT".equalsIgnoreCase(text(assessmentContext.get("source")))
+                && ("SCORE".equalsIgnoreCase(text(assessmentContext.get("focusType")))
+                        || "ISSUE".equalsIgnoreCase(text(assessmentContext.get("focusType"))));
+        if (explicitAssessmentContext) {
+            return true;
+        }
+
+        boolean currentBuildSignal = containsAny(normalized,
+                "현재견적", "이견적", "담긴견적", "내견적", "지금견적", "현재구성", "이구성", "지금구성");
+        boolean scoreSignal = containsAny(normalized,
+                "종합점수", "총점", "이점수", "점수가", "점수를", "점수왜", "점수설명", "점수낮", "점수높");
+        boolean weaknessSignal = containsAny(normalized,
+                "병목", "약점", "부족한부분", "아쉬운부분", "문제점", "균형", "밸런스");
+        boolean prioritySignal = containsAny(normalized,
+                "뭐부터업그레이드", "무엇부터업그레이드", "뭘먼저업그레이드", "업그레이드우선", "먼저바꿀");
+        boolean cpuGpuContrast = containsAny(normalized, "cpu", "씨피유", "프로세서")
+                && containsAny(normalized, "gpu", "그래픽카드", "글카")
+                && containsAny(normalized, "왜", "이유", "낮", "높", "차이", "균형", "밸런스");
+
+        // "현재 견적에 호환되는 GPU 추천"은 점수 설명이 아니라 후보 요청이다. 반면
+        // "점수를 높일 부품 추천"처럼 카테고리를 정하지 않은 질문은 평가 결과가 개선 우선순위를 정한다.
+        boolean explicitCategoryRecommendation = category != null
+                && isRecommendationVerb(normalized)
+                && !scoreSignal
+                && !weaknessSignal
+                && !prioritySignal
+                && !cpuGpuContrast;
+        if (explicitCategoryRecommendation) {
+            return false;
+        }
+
+        if (!(scoreSignal || weaknessSignal || prioritySignal || (currentBuildSignal && isExplanationQuestion(normalized)) || cpuGpuContrast)) {
+            return false;
+        }
+        // 단일 상품의 독립 점수 질문은 현재 견적 1000점 설명으로 가져오지 않는다.
+        return currentBuildSignal
+                || scoreSignal && !hasSpecificPartSignal(message)
+                || weaknessSignal
+                || prioritySignal
+                || cpuGpuContrast
+                || category == null;
     }
 
     // 구매 의향/견적 관심은 있지만 예산·용도가 없는 요청 — 차단 대신 되묻기로 대화를 잇는다.
@@ -220,7 +357,7 @@ public class BuildChatIntentRouter {
     private static boolean hasBoardLocationSignal(String normalized) {
         return containsAny(normalized,
                 "위치", "어디", "어딜", "어느곳", "어디쯤", "자리", "슬롯", "꽂는곳", "꽂을곳", "장착하는곳", "장착할곳",
-                "가리켜", "표시해", "강조해", "어느부분", "어느쪽", "어디에달려", "어디에장착");
+                "가리켜", "표시해", "강조해", "찾아", "짚어", "어느부분", "어느쪽", "어디에달려", "어디에장착");
     }
 
     private static boolean hasBoardLocationVeto(String normalized) {
@@ -350,6 +487,15 @@ public class BuildChatIntentRouter {
                 || budgetWithCompositionConstraint || budgetWithPurchaseIntent;
     }
 
+    private static boolean isNegatedPreferenceOnlyBuildRequest(String normalized, String message) {
+        return specificPartSignalPolarity(message).negatedOnly()
+                && BuildChatService.parseBudgetWon(message) == null
+                && !hasOpenBudgetSignal(normalized)
+                && !hasBuildUseCaseSignal(normalized)
+                && isRecommendationVerb(normalized)
+                && hasBuildNoun(normalized);
+    }
+
     private static boolean hasBuildCompositionConstraint(String normalized) {
         if (containsAny(normalized, "포함", "들어간", "들어가는", "장착", "조합")) {
             return true;
@@ -377,8 +523,25 @@ public class BuildChatIntentRouter {
     }
 
     private static boolean hasSpecificPartSignal(String message) {
-        String compact = message == null ? "" : message.replaceAll("\\s+", "");
-        return GPU_MODEL_SIGNAL.matcher(compact).find() || CPU_MODEL_SIGNAL.matcher(compact).find();
+        return specificPartSignalPolarity(message).positive();
+    }
+
+    private static SpecificPartSignalPolarity specificPartSignalPolarity(String message) {
+        String compact = message == null ? "" : message.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        boolean positive = false;
+        boolean negated = false;
+        for (Pattern pattern : List.of(GPU_MODEL_SIGNAL, CPU_MODEL_SIGNAL)) {
+            Matcher matcher = pattern.matcher(compact);
+            while (matcher.find()) {
+                String suffix = compact.substring(matcher.end(), Math.min(compact.length(), matcher.end() + 10));
+                if (containsAny(suffix, "말고", "말구", "빼고", "제외", "없이", "아닌", "대신")) {
+                    negated = true;
+                } else {
+                    positive = true;
+                }
+            }
+        }
+        return new SpecificPartSignalPolarity(positive, negated && !positive);
     }
 
     private static boolean isDraftCompletionIntent(String normalized, boolean hasDraftItems) {
@@ -401,6 +564,24 @@ public class BuildChatIntentRouter {
                 "ai", "cuda", "로컬ai", "학습", "저소음", "조용", "컴팩트", "사무", "문서작업", "엑셀",
                 "방송", "스트리밍", "송출", "스트리머", "유튜브", "포토샵", "디자인", "3d",
                 "풀스펙", "최고사양", "하이엔드", "최상급", "끝판왕", "최강", "서버급", "괴물");
+    }
+
+    static boolean hasBuildUseCase(String message) {
+        return hasBuildUseCaseSignal(normalize(message));
+    }
+
+    static boolean hasOpenBudget(String message) {
+        return hasOpenBudgetSignal(normalize(message));
+    }
+
+    // 대상 맥락이 명시된 저정보 요청만 짧은 LLM 문장 다듬기 대상으로 표시한다. 이 목록은
+    // 추천 용도를 추론하기 위한 규칙이 아니라, 원문에 이미 있는 사람/상황을 자연스럽게 되받기 위한 게이트다.
+    private static boolean hasRecipientContextSignal(String normalized) {
+        return containsAny(normalized,
+                "아들", "딸", "자녀", "아이", "조카", "동생", "우리형", "친형", "형에게", "누나", "오빠", "언니", "친구",
+                "부모님", "아버지", "어머니", "엄마", "아빠", "할머니", "할아버지", "배우자", "아내", "남편", "가족",
+                "학생", "초등학교", "중학교", "고등학교", "대학생", "학년", "초1", "초2", "초3", "초4", "초5", "초6",
+                "중1", "중2", "중3", "고1", "고2", "고3", "입학", "졸업", "선물");
     }
 
     // 구매 의향은 있지만 예산/용도가 없는 모호한 요청 — 차단이 아니라 되묻기로 대화를 잇는다
@@ -500,5 +681,8 @@ public class BuildChatIntentRouter {
     }
 
     private record LocationCategoryMatch(String category, int index) {
+    }
+
+    private record SpecificPartSignalPolarity(boolean positive, boolean negatedOnly) {
     }
 }

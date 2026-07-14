@@ -10,6 +10,7 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -66,7 +67,15 @@ public class UserController {
 
     @PostMapping("/auth/exchange")
     Map<String, Object> exchange(@Valid @RequestBody AuthExchangeRequest request) {
-        return userQueryService.exchangeGoogleLogin(request.code(), request.termsAccepted(), request.marketingAccepted());
+        return userQueryService.exchangeGoogleLogin(
+                request.code(),
+                request.termsAccepted(),
+                request.marketingAccepted(),
+                request.phoneNumber(),
+                request.postalCode(),
+                request.addressLine1(),
+                request.addressLine2()
+        );
     }
 
     @PostMapping("/auth/logout")
@@ -85,6 +94,10 @@ public class UserController {
                 request.name(),
                 request.email(),
                 request.password(),
+                request.phoneNumber(),
+                request.postalCode(),
+                request.addressLine1(),
+                request.addressLine2(),
                 request.termsAccepted(),
                 request.marketingAccepted()
         );
@@ -93,6 +106,32 @@ public class UserController {
     @GetMapping("/auth/me")
     Map<String, Object> me(@RequestHeader(value = "Authorization", required = false) String authorization) {
         return userQueryService.me(authorization);
+    }
+
+    @PatchMapping("/users/me")
+    Map<String, Object> updateMe(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @Valid @RequestBody ProfileUpdateRequest request
+    ) {
+        return userQueryService.updateMe(
+                authorization,
+                request.currentPassword(),
+                request.googleVerificationToken(),
+                request.name(),
+                request.phoneNumber(),
+                request.postalCode(),
+                request.addressLine1(),
+                request.addressLine2()
+        );
+    }
+
+    @PostMapping("/users/me/password-verification")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void verifyProfilePassword(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @Valid @RequestBody PasswordVerificationRequest request
+    ) {
+        userQueryService.verifyProfilePassword(authorization, request.password());
     }
 
     @PostMapping("/users/me/agent-activation-token")
@@ -108,15 +147,41 @@ public class UserController {
     record RefreshRequest(@NotBlank String refreshToken) {
     }
 
-    record AuthExchangeRequest(@NotBlank String code, Boolean termsAccepted, Boolean marketingAccepted) {
+    record AuthExchangeRequest(
+            @NotBlank String code,
+            Boolean termsAccepted,
+            Boolean marketingAccepted,
+            String phoneNumber,
+            String postalCode,
+            String addressLine1,
+            String addressLine2
+    ) {
     }
 
     record SignupRequest(
             @NotBlank String name,
             @NotBlank @Email String email,
             @NotBlank String password,
+            @NotBlank String phoneNumber,
+            @NotBlank String postalCode,
+            @NotBlank String addressLine1,
+            @NotBlank String addressLine2,
             @NotNull Boolean termsAccepted,
             Boolean marketingAccepted
     ) {
+    }
+
+    record ProfileUpdateRequest(
+            String currentPassword,
+            String googleVerificationToken,
+            @NotBlank String name,
+            @NotBlank String phoneNumber,
+            @NotBlank String postalCode,
+            @NotBlank String addressLine1,
+            @NotBlank String addressLine2
+    ) {
+    }
+
+    record PasswordVerificationRequest(@NotBlank String password) {
     }
 }

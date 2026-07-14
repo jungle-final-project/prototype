@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type FocusEvent } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type RefObject } from 'react';
 import type { PartCategory } from '../../../quote/aiSelection';
 import type { QuoteDraftItem } from '../../types';
 import {
@@ -50,9 +50,11 @@ export function FusedPlateArt({
   const ramSlotCount = Math.min(4, ramItems.reduce((sum, item) => sum + itemStickCount(item), 0));
   const mountingRamSlots = useMountingRamSlots(ramSlotCount);
   const ramIncreaseTarget = ramSlotCount < 4 ? findRamIncreaseTarget(ramItems, ramSlotCount) : null;
-  const ramDecreaseAction = ramSlotCount > 1 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
+  const ramDecreaseAction = ramSlotCount > 0 ? findRamDecreaseAction(ramItems, ramSlotCount) : null;
   const isActionPending = isRemovePending || isQuantityPending;
   const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
+  const stageContainerRef = useRef<HTMLDivElement | null>(null);
+  const stageSize = useContainedPlateSize(stageContainerRef);
   const aiFocusSet = new Set(aiFocusCategories);
   const hasAiFocus = aiFocusSet.size > 0;
   const hasHoveredLayer = hoveredCategory
@@ -63,7 +65,7 @@ export function FusedPlateArt({
   const spotlightCategory = hasHoveredLayer ? hoveredCategory : null;
   const spotlightCategories = hasAiFocus
     ? aiFocusSet
-    : new Set<PartCategory>(spotlightCategory ? [spotlightCategory] : []);
+    : new Set<PartCategory>();
 
   useEffect(() => {
     FUSED_PRELOAD_URLS.forEach((src) => {
@@ -110,8 +112,13 @@ export function FusedPlateArt({
   };
 
   return (
-    <div data-testid="slot-board-fused-plate" className="absolute inset-0 hidden items-center justify-center bg-[#f6f7f9] lg:flex">
-      <div className="relative aspect-[1672/941] w-full max-h-full">
+    <div ref={stageContainerRef} data-testid="slot-board-fused-plate" className="absolute inset-0 hidden h-full w-full items-center justify-center overflow-hidden bg-[#f6f7f9] lg:flex">
+      <div
+        className="relative shrink-0"
+        style={stageSize
+          ? { width: stageSize.width, height: stageSize.height }
+          : { width: '100%', aspectRatio: `${FUSED_BOARD_SIZE.width} / ${FUSED_BOARD_SIZE.height}` }}
+      >
         <img
           src={FUSED_PLATE_BG}
           alt=""
@@ -134,24 +141,39 @@ export function FusedPlateArt({
               : flashingCategories.has(layer.category)
           );
           const status = statusByCategory.get(layer.category) ?? 'PASS';
+          const testId = `slot-fused-layer-${layer.category}${layer.slotIndex !== undefined ? `-${layer.slotIndex + 1}` : ''}`;
           return (
-            <img
-              key={layer.src}
-              data-testid={`slot-fused-layer-${layer.category}${layer.slotIndex !== undefined ? `-${layer.slotIndex + 1}` : ''}`}
-              data-visible={visible ? 'true' : 'false'}
-              data-hovered={hovered ? 'true' : 'false'}
-              data-spotlight={spotlighted ? 'true' : 'false'}
-              data-ai-spotlight={aiSpotlighted ? 'true' : 'false'}
-              data-dimmed={dimmed ? 'true' : 'false'}
-              data-mounting={mounting ? 'true' : 'false'}
-              data-status={status}
-              src={layer.src}
-              alt=""
-              aria-hidden="true"
-              className={`fused-part-layer pointer-events-none absolute inset-0 h-full w-full select-none object-contain ${
-                visible ? 'opacity-100' : 'opacity-0'
-              } ${focused || aiSpotlighted ? 'z-20' : 'z-10'}`}
-            />
+            <Fragment key={layer.src}>
+              <img
+                aria-hidden="true"
+                data-testid={`${testId}-problem-blur`}
+                data-visible={visible ? 'true' : 'false'}
+                data-spotlight={spotlighted ? 'true' : 'false'}
+                data-ai-spotlight={aiSpotlighted ? 'true' : 'false'}
+                data-dimmed={dimmed ? 'true' : 'false'}
+                data-status={status}
+                src={layer.src}
+                alt=""
+                className="fused-part-problem-blur fused-part-problem-glow pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+                style={{ zIndex: 4 }}
+              />
+              <img
+                data-testid={testId}
+                data-visible={visible ? 'true' : 'false'}
+                data-hovered={hovered ? 'true' : 'false'}
+                data-spotlight={spotlighted ? 'true' : 'false'}
+                data-ai-spotlight={aiSpotlighted ? 'true' : 'false'}
+                data-dimmed={dimmed ? 'true' : 'false'}
+                data-mounting={mounting ? 'true' : 'false'}
+                data-status={status}
+                src={layer.src}
+                alt=""
+                aria-hidden="true"
+                className={`fused-part-layer pointer-events-none absolute inset-0 h-full w-full select-none object-contain ${
+                  visible ? 'opacity-100' : 'opacity-0'
+                } ${focused || aiSpotlighted ? 'z-20' : 'z-10'}`}
+              />
+            </Fragment>
           );
         })}
         {FUSED_PART_AREAS.map((area) => {
@@ -290,6 +312,42 @@ export function FusedPlateArt({
   );
 }
 
+type ContainedPlateSize = { width: number; height: number };
+
+// 부모 영역 안에 전체 판을 맞추되 원본 비율은 유지한다. 이미지·번호·클릭 영역이 같은 무대를 공유해 좌표가 어긋나지 않는다.
+function useContainedPlateSize(containerRef: RefObject<HTMLDivElement>): ContainedPlateSize | null {
+  const [size, setSize] = useState<ContainedPlateSize | null>(null);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const update = () => {
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
+      if (containerWidth <= 0 || containerHeight <= 0) return;
+
+      const ratio = FUSED_BOARD_SIZE.width / FUSED_BOARD_SIZE.height;
+      const width = Math.min(containerWidth, containerHeight * ratio);
+      const height = width / ratio;
+      setSize((current) => (
+        current
+          && Math.abs(current.width - width) < 0.5
+          && Math.abs(current.height - height) < 0.5
+          ? current
+          : { width, height }
+      ));
+    };
+
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [containerRef]);
+
+  return size;
+}
+
 function useMountingRamSlots(ramSlotCount: number) {
   const previousRamSlotCountRef = useRef<number | null>(null);
   const [mountingRamSlots, setMountingRamSlots] = useState<Set<number>>(new Set());
@@ -375,13 +433,9 @@ function findRamDecreaseAction(ramItems: QuoteDraftItem[], ramSlotCount: number)
     return { type: 'quantity', item: quantityTarget, quantity: quantityTarget.quantity - 1 };
   }
 
-  if (ramItems.length <= 1) {
-    return null;
-  }
-
   for (let index = ramItems.length - 1; index >= 0; index -= 1) {
     const item = ramItems[index];
-    if (ramSlotCount - ramModuleCount(item) >= 1) {
+    if (ramSlotCount - ramModuleCount(item) >= 0) {
       return { type: 'remove', item };
     }
   }

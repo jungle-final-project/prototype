@@ -454,6 +454,7 @@ public class TicketQueryService {
                     SET status = ?, updated_at = now()
                     WHERE public_id = ?::uuid
                     """, status, id);
+            finishRemoteSupportForTerminalTicket(id, status);
         }
         if (adminNote != null) {
             jdbcTemplate.update("""
@@ -578,6 +579,41 @@ public class TicketQueryService {
         }
         validateRemoteSupportLink(remoteSupportLink);
         jdbcTemplate.update("""
+                WITH input AS (
+                  SELECT CAST(? AS text) AS session_url,
+                         CAST(? AS bigint) AS admin_id
+                ),
+                target_ticket AS (
+                  SELECT t.id,
+                         lu.device_id
+                  FROM as_tickets t
+                  LEFT JOIN agent_log_uploads lu ON lu.id = t.log_upload_id
+                  WHERE t.public_id = ?::uuid
+                    AND t.deleted_at IS NULL
+                ),
+                updated AS (
+                  UPDATE remote_support_sessions rs
+                  SET provider = 'EXTERNAL_LINK',
+                      session_url = input.session_url,
+                      status = CASE
+                        WHEN rs.status = 'IN_PROGRESS' THEN 'IN_PROGRESS'
+                        ELSE 'LINK_SENT'
+                      END,
+                      requested_by_admin_id = input.admin_id
+                  FROM target_ticket tt,
+                       input
+                  WHERE rs.as_ticket_id = tt.id
+                    AND rs.status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                    AND rs.id = (
+                      SELECT active.id
+                      FROM remote_support_sessions active
+                      WHERE active.as_ticket_id = tt.id
+                        AND active.status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                      ORDER BY active.created_at DESC, active.id DESC
+                      LIMIT 1
+                    )
+                  RETURNING rs.id
+                )
                 INSERT INTO remote_support_sessions (
                   as_ticket_id,
                   device_id,
@@ -586,17 +622,37 @@ public class TicketQueryService {
                   status,
                   requested_by_admin_id
                 )
-                SELECT t.id,
-                       lu.device_id,
+                SELECT tt.id,
+                       tt.device_id,
                        'EXTERNAL_LINK',
-                       ?,
+                       input.session_url,
                        'LINK_SENT',
-                       ?
-                FROM as_tickets t
-                LEFT JOIN agent_log_uploads lu ON lu.id = t.log_upload_id
-                WHERE t.public_id = ?::uuid
-                  AND t.deleted_at IS NULL
+                       input.admin_id
+                FROM target_ticket tt
+                CROSS JOIN input
+                WHERE NOT EXISTS (SELECT 1 FROM updated)
                 """, remoteSupportLink, admin == null ? null : admin.internalId(), ticketId);
+    }
+
+    private void finishRemoteSupportForTerminalTicket(String ticketId, String ticketStatus) {
+        String remoteStatus = switch (ticketStatus) {
+            case "RESOLVED", "CLOSED" -> "COMPLETED";
+            case "CANCELLED" -> "CANCELLED";
+            default -> null;
+        };
+        if (remoteStatus == null) {
+            return;
+        }
+        jdbcTemplate.update("""
+                UPDATE remote_support_sessions rs
+                SET status = ?,
+                    ended_at = COALESCE(ended_at, now()),
+                    ended_reason = COALESCE(ended_reason, ?)
+                FROM as_tickets t
+                WHERE rs.as_ticket_id = t.id
+                  AND t.public_id = ?::uuid
+                  AND rs.status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                """, remoteStatus, "TICKET_" + ticketStatus, ticketId);
     }
 
     private static void validateRemoteSupportLinkIfPresent(Map<String, Object> request) {
@@ -669,14 +725,14 @@ public class TicketQueryService {
                   'as_tickets',
                   ?,
                   jsonb_build_object(
-                    'beforeStatus', ?,
-                    'afterStatus', COALESCE(?, ?),
-                    'supportDecision', ?,
-                    'beforeSupportDecision', ?,
-                    'reviewStatus', ?,
-                    'exceptionApprovalReason', ?,
-                    'exceptionResponsibilityScope', ?,
-                    'exceptionUserMessage', ?
+                    'beforeStatus', CAST(? AS text),
+                    'afterStatus', COALESCE(CAST(? AS text), CAST(? AS text)),
+                    'supportDecision', CAST(? AS text),
+                    'beforeSupportDecision', CAST(? AS text),
+                    'reviewStatus', CAST(? AS text),
+                    'exceptionApprovalReason', CAST(? AS text),
+                    'exceptionResponsibilityScope', CAST(? AS text),
+                    'exceptionUserMessage', CAST(? AS text)
                   )
                 )
                 """,

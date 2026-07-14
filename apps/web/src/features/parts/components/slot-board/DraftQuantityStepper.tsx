@@ -13,7 +13,7 @@ export function DraftQuantityStepper({ item, disabled, onChange }: DraftQuantity
         type="button"
         aria-label={`${item.name} quantity decrease`}
         data-testid={`draft-quantity-decrease-${item.partId}`}
-        disabled={disabled || item.quantity <= 1}
+        disabled={disabled}
         onClick={() => onChange(item.partId, item.quantity - 1)}
         className="w-7 bg-slate-50 text-sm font-bold text-slate-600 disabled:text-slate-300"
       >
