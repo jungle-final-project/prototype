@@ -7,6 +7,7 @@ import { openAiAssistant, type PerfCompareTarget } from '../../../../lib/events'
 import { checkBuildPerformance, resolveBuildGraph, type GameFpsEvidence } from '../../../quote/quoteApi';
 import { listParts } from '../../partsApi';
 import type { PartCompatibility } from '../../types';
+import { HelpTip } from './HelpTip';
 import { withObjectParticle } from './koreanParticle';
 
 // 담긴 견적으로 FPS를 조회할 수 있는 게임·해상도 — game_fps_benchmarks 시드 커버리지 기준.
@@ -387,7 +388,16 @@ function PerfPanelBody({
           }`}>
             <div className="w-full min-w-0">
               <div className="flex flex-nowrap items-center justify-between gap-2 text-[9px] font-black">
-                <span data-testid="quote-composite-score-title" className="shrink-0 whitespace-nowrap text-slate-600">종합 점수</span>
+                <span className="flex shrink-0 items-center gap-0.5">
+                  <span data-testid="quote-composite-score-title" className="whitespace-nowrap text-slate-600">종합 점수</span>
+                  <HelpTip
+                    label="종합 점수 설명"
+                    text="현재 견적의 호환성·성능·전력 여유를 종합해 1000점 만점으로 계산한 점수입니다. 부품을 바꾸면 점수 변화를 바로 보여줍니다."
+                    placement="top"
+                    align="left"
+                    overlay
+                  />
+                </span>
                 {hasWorkspace ? (
                   <span className="flex min-w-0 items-center gap-1">
                     <span className="truncate text-slate-400">호환·성능·여유 종합 1000점</span>
@@ -436,24 +446,24 @@ function PerfPanelBody({
           <div data-testid="quote-fps-section" className="min-w-0 py-1">
             <div className={`flex items-start justify-between gap-2 ${activeComparison ? 'flex-wrap' : 'flex-nowrap'}`}>
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="shrink-0 text-[11px] font-black text-slate-600">
+                <span className="shrink-0 text-sm font-black text-slate-600">
                   {activeComparison ? '가격·성능 향상' : '게임 예상 성능'}
                 </span>
                 {!activeComparison && hasGpu ? (
                   resultAvg !== null ? (
-                    <span className="truncate text-[10px] font-bold text-slate-500">
+                    <span className="truncate text-xs font-bold text-slate-500">
                       {game.label} · {resolution.label} · {resultLabel}
-                      <strong data-testid="fps-avg" className="ml-1 text-base font-black text-commerce-ink">
+                      <strong data-testid="fps-avg" className="ml-1 text-xl font-black text-commerce-ink">
                         {Math.round(resultAvg)} FPS
                       </strong>
                     </span>
                   ) : (
-                    <span className="truncate text-[10px] font-bold text-slate-400">
+                    <span className="truncate text-xs font-bold text-slate-400">
                       {isFetching ? '성능을 계산하고 있어요' : '참고 자료 없음'}
                     </span>
                   )
                 ) : !activeComparison ? (
-                  <span className="truncate text-[10px] font-bold text-slate-400">GPU를 담으면 표시됩니다</span>
+                  <span className="truncate text-xs font-bold text-slate-400">GPU를 담으면 표시됩니다</span>
                 ) : null}
               </div>
 
@@ -475,7 +485,7 @@ function PerfPanelBody({
                       data-testid={`fps-res-${res.key}`}
                       aria-pressed={resKey === res.key}
                       onClick={() => setResKey(res.key)}
-                      className={`rounded px-2 py-0.5 text-[9px] font-black transition ${
+                      className={`rounded px-2.5 py-1 text-xs font-black transition ${
                         resKey === res.key ? 'bg-white text-commerce-ink shadow-sm' : 'text-slate-400 hover:text-slate-600'
                       }`}
                     >
@@ -501,7 +511,7 @@ function PerfPanelBody({
                       </div>
                       <div className="perf-block-in mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                         <CostEffectEmphasis {...costEffectDisplay(currentPart?.currentPrice, activeComparison.price)} compact />
-                        <span data-testid="cost-effect-fps" className="truncate text-[9px] font-bold text-slate-500">
+                        <span data-testid="cost-effect-fps" className="truncate text-[11px] font-bold text-slate-500">
                           예상 FPS {fpsRangeText(avg, hasLow ? low : undefined)} → {fpsRangeText(compareAvg, hasCompareLow ? compareLow : undefined)}
                         </span>
                       </div>
@@ -528,7 +538,7 @@ function PerfPanelBody({
                           data-testid={`fps-game-${g.key}`}
                           aria-pressed={gameKey === g.key}
                           onClick={() => setGameKey(g.key)}
-                          className={`rounded-full border px-2 py-0.5 text-[9px] font-black transition ${
+                          className={`rounded-full border px-2.5 py-1 text-xs font-black transition ${
                             gameKey === g.key
                               ? 'border-brand-blue bg-brand-blue text-white'
                               : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
@@ -541,26 +551,26 @@ function PerfPanelBody({
                   </div>
                   {isCompareReady ? (
                     <div className="mt-1.5 grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-                      <span className="text-[10px] font-black text-slate-500">FPS</span>
+                      <span className="text-xs font-black text-slate-500">FPS</span>
                       <div className="flex items-baseline gap-1 font-black leading-none">
-                        <span data-testid="fps-avg" className="text-sm text-slate-400">{Math.round(avg)}</span>
-                        <span className="text-[10px] text-slate-400">→</span>
-                        <span data-testid="fps-compare-avg" className="text-base text-brand-blue">{Math.round(compareAvg)}</span>
-                        <span data-testid="fps-compare-delta" className={`rounded-full border px-1 py-0.5 text-[9px] ${deltaBadgeTone(percentDelta(avg, compareAvg))}`}>
+                        <span data-testid="fps-avg" className="text-base text-slate-400">{Math.round(avg)}</span>
+                        <span className="text-xs text-slate-400">→</span>
+                        <span data-testid="fps-compare-avg" className="text-lg text-brand-blue">{Math.round(compareAvg)}</span>
+                        <span data-testid="fps-compare-delta" className={`rounded-full border px-1 py-0.5 text-[10px] ${deltaBadgeTone(percentDelta(avg, compareAvg))}`}>
                           {formatSignedPercent(percentDelta(avg, compareAvg))}
                         </span>
                       </div>
-                      <span className="text-[9px] font-bold text-slate-400">기존</span>
+                      <span className="text-[10px] font-bold text-slate-400">기존</span>
                       <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
                         <div className="h-full rounded-full bg-slate-400" style={{ width: `${Math.max(3, fpsPercent(avg))}%` }} />
                       </div>
-                      <span className="text-[9px] font-black text-brand-blue">변경</span>
+                      <span className="text-[10px] font-black text-brand-blue">변경</span>
                       <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
                         <div className="perf-bar-grow h-full rounded-full bg-brand-blue" style={{ width: `${Math.max(3, fpsPercent(compareAvg))}%` }} />
                       </div>
                     </div>
                   ) : (
-                    <div className="mt-1.5 text-[10px] font-bold text-slate-400">
+                    <div className="mt-1.5 text-xs font-bold text-slate-400">
                       {isCompareLoading ? '비교 성능을 계산하고 있어요' : '변경 조합의 참고 자료가 없습니다'}
                     </div>
                   )}
@@ -576,7 +586,7 @@ function PerfPanelBody({
                       data-testid={`fps-game-${g.key}`}
                       aria-pressed={gameKey === g.key}
                       onClick={() => setGameKey(g.key)}
-                      className={`rounded-full border px-2 py-0.5 text-[9px] font-black transition ${
+                      className={`rounded-full border px-2.5 py-1 text-xs font-black transition ${
                         gameKey === g.key
                           ? 'border-brand-blue bg-brand-blue text-white'
                           : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
@@ -989,7 +999,7 @@ function CandidateCombo({
                 onClearComparison?.();
               }
             }}
-            className={`rounded font-black transition ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-2.5 py-1 text-[10px]'} ${
+            className={`rounded font-black transition ${compact ? 'px-2.5 py-1 text-xs' : 'px-2.5 py-1 text-[10px]'} ${
               category === pickerCategory ? 'bg-brand-blue text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
@@ -997,7 +1007,7 @@ function CandidateCombo({
           </button>
         ))}
       </div>
-      <div className={`relative ${compact ? 'w-36 sm:w-44' : 'w-44 sm:w-56'}`}>
+      <div className={`relative ${compact ? 'w-44 sm:w-52' : 'w-44 sm:w-56'}`}>
         <button
           type="button"
           data-testid="perf-candidate-select"
@@ -1005,7 +1015,7 @@ function CandidateCombo({
           aria-haspopup="true"
           onClick={() => setIsPickerOpen((open) => !open)}
           className={`flex w-full items-center justify-between gap-2 rounded-md border border-commerce-line bg-white text-left font-black text-commerce-ink transition hover:border-brand-blue ${
-            compact ? 'px-2 py-1 text-[10px]' : 'px-2.5 py-1.5 text-[11px]'
+            compact ? 'px-2.5 py-1.5 text-xs' : 'px-2.5 py-1.5 text-[11px]'
           }`}
         >
           <span className={`truncate ${categoryComparison ? '' : 'text-slate-400'}`}>
@@ -1128,6 +1138,9 @@ function isPartCategory(category: string): category is PartCategory {
 // CompositeScoreGauge와 같은 반원 아크 경로(공용 컴포넌트는 수정 금지라 패널 로컬로 둔다).
 const COMPOSITE_ARC_PATH = 'M 24 112 A 86 86 0 0 1 196 112';
 const COMPOSITE_INNER_ARC_PATH = 'M 36 112 A 74 74 0 0 1 184 112';
+// compact 고스트 비교용 — CompositeScoreGauge size="compact"의 넓은 아크와 같은 폭으로 맞춘다.
+const COMPACT_GHOST_ARC_PATH = 'M 8 112 A 102 86 0 0 1 212 112';
+const COMPACT_GHOST_INNER_ARC_PATH = 'M 20 112 A 90 74 0 0 1 200 112';
 
 // 한 화면용 비교 게이지 — 기준 점수는 바깥 회색 아크, 변경 점수는 안쪽 파란 아크에 그려
 // 작은 카드에서도 두 값이 겹치지 않는다. 상세 게이지와 같은 숫자·델타 구조는 유지한다.
@@ -1151,13 +1164,19 @@ function CompactCompositeGhostArc({
   return (
     <div
       data-testid="quote-composite-ghost-gauge"
-      className="mx-auto w-[220px] text-center"
+      className="mx-auto w-[168px] text-center"
       aria-label={`종합 점수 기존 ${Math.round(baseScore).toLocaleString('ko-KR')}점 → 변경 ${Math.round(compareScore).toLocaleString('ko-KR')}점`}
     >
-      <div className="relative h-[48px]">
-        <svg className="h-[48px] w-full overflow-visible" viewBox="0 0 220 132" role="img" aria-hidden="true">
+      <div className="relative">
+        <svg
+          className="h-[78px] w-full overflow-visible"
+          viewBox="0 12 220 108"
+          preserveAspectRatio="none"
+          role="img"
+          aria-hidden="true"
+        >
           <path
-            d={COMPOSITE_ARC_PATH}
+            d={COMPACT_GHOST_ARC_PATH}
             fill="none"
             className="stroke-slate-200"
             strokeWidth={14}
@@ -1165,7 +1184,7 @@ function CompactCompositeGhostArc({
             pathLength={100}
           />
           <path
-            d={COMPOSITE_ARC_PATH}
+            d={COMPACT_GHOST_ARC_PATH}
             fill="none"
             className="stroke-slate-400"
             strokeWidth={6}
@@ -1174,7 +1193,7 @@ function CompactCompositeGhostArc({
             strokeDasharray={`${basePercent} 100`}
           />
           <path
-            d={COMPOSITE_INNER_ARC_PATH}
+            d={COMPACT_GHOST_INNER_ARC_PATH}
             fill="none"
             className="stroke-brand-blue"
             strokeWidth={9}
@@ -1183,7 +1202,7 @@ function CompactCompositeGhostArc({
             strokeDasharray={`${comparePercent} 100`}
           />
         </svg>
-        <div className="absolute inset-x-0 bottom-1 z-10 flex justify-center">
+        <div className="absolute inset-x-0 top-10 z-10 flex justify-center">
           <span
             key={compareKey}
             data-testid="quote-composite-compare-delta"
@@ -1193,7 +1212,7 @@ function CompactCompositeGhostArc({
           </span>
         </div>
       </div>
-      <div className="-mt-px flex items-baseline justify-center gap-1 bg-transparent font-black leading-none">
+      <div className="mt-1 flex items-baseline justify-center gap-1 font-black leading-none">
         <span data-testid="quote-composite-ghost-base" className="text-sm text-slate-400">
           {Math.round(baseScore).toLocaleString('ko-KR')}
         </span>
@@ -1202,7 +1221,7 @@ function CompactCompositeGhostArc({
           {Math.round(displayCompare).toLocaleString('ko-KR')}
         </span>
       </div>
-      <div className="-mt-1 flex items-center justify-between px-3 text-[8px] font-bold text-slate-400" aria-hidden="true">
+      <div className="mt-1 flex items-center justify-between px-1 text-[8px] font-bold text-slate-400" aria-hidden="true">
         <span>0</span>
         <span>{safeMax.toLocaleString('ko-KR')}</span>
       </div>
