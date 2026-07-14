@@ -408,6 +408,71 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return Optional.of(assistantMessage);
     }
 
+    private static final String SUPPORT_GUIDANCE_SYSTEM_PROMPT = """
+            당신은 BuildGraph PC AS 상담의 진단 전 안내 편집기입니다.
+            사용자 증상 원문을 근거로 한국어 존댓말로 작성하십시오.
+            message: 증상을 되짚고 원인 후보를 요약한 뒤 "PC Agent를 실행하면 증상 직후 로그로 가능성을 좁힐 수 있습니다."로 끝나는 2~3문장.
+            summary: 원인 후보를 한 문장으로 요약 ("...등이 원인 후보로 예상됩니다." 형태).
+            possibleCauses: 증상과 직접 관련된 원인 후보 3~4개, 각 20자 이내 명사구.
+            원인을 확정하지 말고, 증상에 없는 사실·가격·부품 추천을 만들지 마십시오.
+            출력은 서버가 제공한 JSON schema를 반드시 따릅니다.
+            """;
+    private static final int SUPPORT_GUIDANCE_MAX_OUTPUT_TOKENS = 400;
+
+    @Override
+    public Optional<SupportGuidanceDraft> draftSupportGuidance(
+            String symptom,
+            String symptomCategory,
+            String requestedAiProfile
+    ) {
+        String normalized = symptom == null ? "" : symptom.trim();
+        if (normalized.isEmpty() || !openAiResponsesClient.isConfigured()) {
+            return Optional.empty();
+        }
+        AiProfileDefinition profile = requireBuildChatProfile(requestedAiProfile);
+        LlmResponseResult result = openAiResponsesClient.createStructuredJsonResult(
+                SUPPORT_GUIDANCE_SYSTEM_PROMPT,
+                json(MockData.map("symptom", normalized, "symptomCategory", symptomCategory)),
+                "support_guidance_draft",
+                supportGuidanceDraftSchema(),
+                profile.model(),
+                profile.reasoningEffort(),
+                Math.min(SUPPORT_GUIDANCE_MAX_OUTPUT_TOKENS, profile.maxOutputTokens())
+        );
+        Map<String, Object> parsed = parseJsonObject(result.text());
+        String message = requireText(parsed.get("message"), "AS 안내 message가 필요합니다.");
+        String summary = requireText(parsed.get("summary"), "AS 안내 summary가 필요합니다.");
+        List<String> causes = stringList(parsed.get("possibleCauses"));
+        if (causes.isEmpty()) {
+            return Optional.empty();
+        }
+        log.info(
+                "Build Chat supportGuidance latencyMs={} model={} outputTokens={}",
+                result.latencyMs(),
+                result.model(),
+                result.outputTokens()
+        );
+        return Optional.of(new SupportGuidanceDraft(message, summary, causes));
+    }
+
+    private static Map<String, Object> supportGuidanceDraftSchema() {
+        return MockData.map(
+                "type", "object",
+                "additionalProperties", false,
+                "properties", MockData.map(
+                        "message", MockData.map("type", "string"),
+                        "summary", MockData.map("type", "string"),
+                        "possibleCauses", MockData.map(
+                                "type", "array",
+                                "items", MockData.map("type", "string"),
+                                "minItems", 3,
+                                "maxItems", 4
+                        )
+                ),
+                "required", List.of("message", "summary", "possibleCauses")
+        );
+    }
+
     private static Map<String, Object> lowInformationAcknowledgementSchema() {
         return MockData.map(
                 "type", "object",

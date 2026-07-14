@@ -39,5 +39,17 @@ public interface AiChatEngine {
         return Optional.empty();
     }
 
+    /**
+     * AS 상담 카드의 채팅 문구·요약·원인 후보를 증상 원문 기반으로 생성한다.
+     * empty를 돌려주면 호출측이 카테고리별 정적 프로필로 폴백한다(데모 안전).
+     */
+    default Optional<SupportGuidanceDraft> draftSupportGuidance(
+            String symptom,
+            String symptomCategory,
+            String requestedAiProfile
+    ) {
+        return Optional.empty();
+    }
+
     QuoteRequirementAnalysisResult analyzeQuoteRequirement(QuoteRequirementAnalysisRequest request);
 }
