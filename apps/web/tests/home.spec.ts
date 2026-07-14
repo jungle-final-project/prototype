@@ -1108,6 +1108,88 @@ test('chatbot gives symptom-based possibilities and connects to the separate Age
   await expect(page).toHaveURL(/\/support\/new$/);
 });
 
+// AI 대화창에서 말한 증상을 [PC Agent로 바로 접수]가 설치된 에이전트로 그대로 전달한다 (팀장 데모 시나리오 3번).
+test('chatbot support guidance submits the spoken symptom to the installed PC Agent', async ({ page }) => {
+  const symptomText = '게임 중 화면이 갑자기 검게 변하고 몇 초 뒤 다시 나옵니다.';
+  const guidancePayload = {
+    type: 'PC_AGENT_DIAGNOSTIC_ENTRY',
+    scope: 'PRE_DIAGNOSIS',
+    symptomCategory: 'DISPLAY_FREEZE',
+    title: '게임·화면 멈춤 증상',
+    summary: '그래픽 드라이버 충돌 등이 원인 후보로 예상됩니다.',
+    possibleCauses: ['그래픽 드라이버 충돌'],
+    beforeDiagnosisChecks: ['재현 직후 PC Agent 진단을 실행해 주세요.'],
+    agentRecommendation: 'RECOMMENDED',
+    actions: [
+      { type: 'DOWNLOAD_PC_AGENT', label: 'PC Agent 다운로드' },
+      { type: 'OPEN_SUPPORT_NEW', label: 'AS 접수 화면 보기', route: '/support/new' }
+    ],
+    disclaimer: '표시된 원인은 입력한 증상만으로 예상한 가능성입니다.'
+  };
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '증상으로 이해했습니다.',
+        builds: [],
+        warnings: [],
+        supportGuidance: guidancePayload
+      })
+    });
+  });
+  const diagnosisBodies: Array<{ symptom?: string; mode?: string; requestedChecks?: string[] }> = [];
+  let diagnosisResponseStatus: 'ACCEPTED' | 'DISCONNECTED' = 'DISCONNECTED';
+  await page.route('**/api/users/me/agent-diagnosis-requests', async (route) => {
+    diagnosisBodies.push(JSON.parse(route.request().postData() ?? '{}'));
+    if (diagnosisResponseStatus === 'DISCONNECTED') {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'AGENT_DISCONNECTED', message: 'no agent' })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        diagnosisId: 'diag-e2e-1',
+        deviceId: 'device-1',
+        requestedAt: '2026-07-15T00:00:00Z',
+        expiresAt: '2026-07-15T00:05:00Z',
+        mode: 'LIVE',
+        status: 'ACCEPTED'
+      })
+    });
+  });
+  await openHomeAsUser(page);
+  await openDesktopAiAssistant(page);
+
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill(symptomText);
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  const guidance = page.getByTestId('ai-support-guidance');
+  await expect(guidance).toBeVisible();
+  const submit = guidance.getByTestId('ai-agent-diagnosis-request');
+  await expect(submit).toContainText('PC Agent로 바로 접수');
+
+  // 1) 에이전트 미실행: 안내 문구가 뜨고 재시도 가능해야 한다.
+  await submit.click();
+  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('실행 중인 PC Agent가 없습니다');
+  expect(diagnosisBodies[0].symptom).toBe(symptomText); // 대화에서 말한 증상이 그대로 전달된다
+  expect(diagnosisBodies[0].mode).toBe('LIVE');
+
+  // 2) 에이전트 연결됨: 접수 성공 + 버튼이 접수 완료로 잠긴다.
+  diagnosisResponseStatus = 'ACCEPTED';
+  await submit.click();
+  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PC Agent가 증상을 접수했습니다');
+  await expect(submit).toContainText('접수 완료');
+  await expect(submit).toBeDisabled();
+  expect(diagnosisBodies[1].symptom).toBe(symptomText);
+});
+
 test('docks the desktop AI assistant and shifts the page while open', async ({ page }) => {
   await openHomeAsUser(page);
   await expect(page.getByTestId('ai-chatbot-panel')).toHaveCount(0);

@@ -7,6 +7,7 @@ import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib
 import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, requestPerfCompare, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
+import { requestPcAgentDiagnosis } from '../../support/supportApi';
 import { AiChatPendingBubble } from './AiChatPendingBubble';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -699,7 +700,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
                       revealCenterScrollbar();
                     }}
                   >
-                    {centeredMessages.map((message) => (
+                    {centeredMessages.map((message, messageIndex) => (
                       <ChatMessage
                         key={message.id}
                         message={message}
@@ -709,6 +710,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
                         applyingBuildId={applyingBuildId}
                         size="large"
                         reveal={message.id === revealMessageId}
+                        precedingUserText={precedingUserTextFor(centeredMessages, messageIndex)}
                       />
                     ))}
                     {pending && pendingVisible ? (
@@ -820,7 +822,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           </div>
         ) : null}
         <div data-testid="ai-chat-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-          {session.messages.map((message) => (
+          {session.messages.map((message, messageIndex) => (
             <ChatMessage
               key={message.id}
               message={message}
@@ -829,6 +831,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
               runningQuickReplyCommandId={runningQuickReplyCommandId}
               applyingBuildId={applyingBuildId}
               reveal={message.id === revealMessageId}
+              precedingUserText={precedingUserTextFor(session.messages, messageIndex)}
             />
           ))}
           {pending && pendingVisible ? (
@@ -941,6 +944,14 @@ function toolFromPrompt(prompt: string): BuildGraphFocus['tool'] {
   if (/성능|게임|QHD|FPS|개발|AI|CUDA/i.test(prompt)) return 'performance';
   if (/가격|예산|만원|원/.test(prompt)) return 'price';
   return undefined;
+}
+
+// index번째 메시지 직전의 사용자 발화 — PC 상담 카드가 접수 증상으로 그대로 쓴다.
+function precedingUserTextFor(messages: AiChatMessage[], index: number): string {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (messages[cursor].role === 'user') return messages[cursor].text;
+  }
+  return '';
 }
 
 // 답변 텍스트를 문장 단위로 자른다. 문장부호 뒤 공백 또는 줄바꿈에서만 끊어 "3.5" 같은 소수점은 보존한다.
@@ -1063,7 +1074,8 @@ const ChatMessage = memo(function ChatMessage({
   runningQuickReplyCommandId,
   applyingBuildId,
   size = 'default',
-  reveal = false
+  reveal = false,
+  precedingUserText = ''
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
@@ -1072,6 +1084,8 @@ const ChatMessage = memo(function ChatMessage({
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
   reveal?: boolean;
+  /** 이 assistant 답변을 만든 직전 사용자 메시지 — PC 상담 카드의 접수 증상으로 쓴다. */
+  precedingUserText?: string;
 }) {
   const isUser = message.role === 'user';
   const isLarge = size === 'large';
@@ -1157,8 +1171,8 @@ const ChatMessage = memo(function ChatMessage({
 
         {message.supportGuidance && revealNextExtra() ? (
           animate
-            ? <FadeInBlock><SupportGuidanceCard guidance={message.supportGuidance} size={size} /></FadeInBlock>
-            : <SupportGuidanceCard guidance={message.supportGuidance} size={size} />
+            ? <FadeInBlock><SupportGuidanceCard guidance={message.supportGuidance} size={size} symptom={precedingUserText} /></FadeInBlock>
+            : <SupportGuidanceCard guidance={message.supportGuidance} size={size} symptom={precedingUserText} />
         ) : null}
 
         {message.simulation && revealNextExtra() ? (
@@ -1199,16 +1213,57 @@ const ChatMessage = memo(function ChatMessage({
   && prev.applyingBuildId === next.applyingBuildId
   && prev.size === next.size
   && prev.reveal === next.reveal
+  && prev.precedingUserText === next.precedingUserText
 ));
 
-function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSupportGuidance; size?: AiChatMessageSize }) {
+function SupportGuidanceCard({
+  guidance,
+  size = 'default',
+  symptom = ''
+}: {
+  guidance: AiSupportGuidance;
+  size?: AiChatMessageSize;
+  /** 이 안내를 만든 사용자 증상 문장 — [PC Agent로 바로 접수]가 그대로 전달한다. */
+  symptom?: string;
+}) {
   const navigate = useNavigate();
   const isLarge = size === 'large';
   const possibleCauses = guidance.possibleCauses ?? [];
   const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'done' | 'error'>('idle');
   const [downloadMessage, setDownloadMessage] = useState('');
+  const [diagnosisState, setDiagnosisState] = useState<'idle' | 'requesting' | 'accepted' | 'rejected' | 'error'>('idle');
+  const [diagnosisMessage, setDiagnosisMessage] = useState('');
   const canDownload = guidance.actions.some((action) => action.type === 'DOWNLOAD_PC_AGENT');
   const supportRoute = guidance.actions.find((action) => action.type === 'OPEN_SUPPORT_NEW')?.route ?? '/support/new';
+
+  async function requestAgentDiagnosis() {
+    if (diagnosisState === 'requesting') return;
+    setDiagnosisState('requesting');
+    setDiagnosisMessage('');
+    try {
+      const response = await requestPcAgentDiagnosis({
+        symptom: symptom.trim(),
+        requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
+        mode: 'LIVE'
+      });
+      if (response.status === 'ACCEPTED') {
+        setDiagnosisState('accepted');
+        setDiagnosisMessage('설치된 PC Agent가 증상을 접수했습니다. PC 화면의 진단 창을 확인해 주세요.');
+      } else {
+        setDiagnosisState('rejected');
+        setDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
+      }
+    } catch (cause) {
+      setDiagnosisState('error');
+      if (cause instanceof ApiError && cause.code === 'AGENT_DISCONNECTED') {
+        setDiagnosisMessage('실행 중인 PC Agent가 없습니다. 아래에서 다운로드해 실행한 뒤 다시 접수해 주세요.');
+      } else if (cause instanceof ApiError && cause.status === 401) {
+        setDiagnosisMessage('로그인 후 PC Agent 접수를 이용해 주세요.');
+      } else {
+        setDiagnosisMessage('PC Agent 접수 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      }
+    }
+  }
 
   async function downloadAgent() {
     if (downloadState === 'downloading') return;
@@ -1276,6 +1331,18 @@ function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSuppo
       </p>
 
       <div className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-wrap`}>
+        {symptom.trim() ? (
+          <button
+            type="button"
+            data-testid="ai-agent-diagnosis-request"
+            disabled={diagnosisState === 'requesting' || diagnosisState === 'accepted'}
+            onClick={requestAgentDiagnosis}
+            className={`${isLarge ? 'px-4 py-2.5 text-sm' : 'px-3 py-2 text-xs'} inline-flex items-center gap-2 rounded-md bg-cyan-700 font-black text-white transition hover:bg-cyan-800 focus:outline-none focus:ring-4 focus:ring-cyan-100 disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            <LifeBuoy size={isLarge ? 18 : 15} />
+            {diagnosisState === 'requesting' ? '접수 중...' : diagnosisState === 'accepted' ? '접수 완료' : 'PC Agent로 바로 접수'}
+          </button>
+        ) : null}
         {canDownload ? (
           <button
             type="button"
@@ -1298,6 +1365,16 @@ function SupportGuidanceCard({ guidance, size = 'default' }: { guidance: AiSuppo
           AS 접수 화면 보기
         </button>
       </div>
+
+      {diagnosisMessage ? (
+        <p
+          aria-live="polite"
+          data-testid="ai-agent-diagnosis-status"
+          className={`${isLarge ? 'mt-3 text-sm' : 'mt-2 text-[11px]'} font-bold ${diagnosisState === 'accepted' ? 'text-emerald-700' : 'text-red-600'}`}
+        >
+          {diagnosisMessage}
+        </p>
+      ) : null}
 
       {downloadMessage ? (
         <p
