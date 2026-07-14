@@ -24,7 +24,8 @@ class AgentIdempotencyFilter extends OncePerRequestFilter {
             "/api/agent/heartbeat",
             "/api/agent/log-uploads",
             "/api/agent/log-uploads/as-rag-preview",
-            "/api/agent/as-drafts"
+            "/api/agent/as-drafts",
+            "/api/agent/as-requests"
     );
 
     private final AgentIdempotencyKeyExtractor keyExtractor;
@@ -72,10 +73,11 @@ class AgentIdempotencyFilter extends OncePerRequestFilter {
 
         CachedBodyHttpServletRequest cachedRequest = new CachedBodyHttpServletRequest(request);
         String requestHash = sha256Hex(cachedRequest.body());
+        String requestPath = path(request);
         AgentIdempotencyDecision decision = idempotencyService.reserve(
                 principal,
                 request.getMethod(),
-                path(request),
+                requestPath,
                 key.value(),
                 requestHash
         );
@@ -94,15 +96,31 @@ class AgentIdempotencyFilter extends OncePerRequestFilter {
         }
 
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
-        filterChain.doFilter(cachedRequest, responseWrapper);
-        String responseBody = new String(responseWrapper.getContentAsByteArray(), StandardCharsets.UTF_8);
-        idempotencyService.complete(
-                decision.recordId(),
-                responseWrapper.getStatus(),
-                responseBody,
-                responseWrapper.getContentType()
-        );
-        responseWrapper.copyBodyToResponse();
+        try {
+            filterChain.doFilter(cachedRequest, responseWrapper);
+            int responseStatus = responseWrapper.getStatus();
+            boolean asRequestFailure = "/api/agent/as-requests".equals(requestPath)
+                    && (responseStatus < 200 || responseStatus >= 300);
+            if (responseStatus >= HttpStatus.INTERNAL_SERVER_ERROR.value() || asRequestFailure) {
+                idempotencyService.abandon(decision.recordId());
+            } else {
+                String responseBody = new String(responseWrapper.getContentAsByteArray(), StandardCharsets.UTF_8);
+                idempotencyService.complete(
+                        decision.recordId(),
+                        responseWrapper.getStatus(),
+                        responseBody,
+                        responseWrapper.getContentType()
+                );
+            }
+            responseWrapper.copyBodyToResponse();
+        } catch (ServletException | IOException | RuntimeException exception) {
+            try {
+                idempotencyService.abandon(decision.recordId());
+            } catch (RuntimeException cleanupFailure) {
+                exception.addSuppressed(cleanupFailure);
+            }
+            throw exception;
+        }
     }
 
     private AgentPrincipal agentPrincipal() {

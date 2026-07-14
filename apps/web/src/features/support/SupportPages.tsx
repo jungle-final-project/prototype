@@ -6,14 +6,15 @@ import { ApiError, getCachedAuthUser } from '../../lib/api';
 import { formatSeoulTime } from '../../lib/dateTime';
 import { getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
-import { downloadPcAgentForCurrentUser } from './agentDownload';
+import { downloadAgentPackage } from './agentDownload';
 import { prepareSupportLogFile } from './logFileProcessing';
-import { createSupportTicket, getSupportDraft, getSupportTicket, previewAgentLogRag, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
 import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate, SupportChatContact } from './types';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
 type AgentDownloadState = 'idle' | 'issuing' | 'done' | 'error';
+type AgentDiagnosisRequestState = 'idle' | 'requesting' | 'accepted' | 'rejected' | 'error';
 type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
 type BlockingSupportChat = {
@@ -320,6 +321,8 @@ export function SupportNewPage() {
   const [submitState, setSubmitState] = useState<SubmitState>('default');
   const [agentDownloadState, setAgentDownloadState] = useState<AgentDownloadState>('idle');
   const [agentDownloadMessage, setAgentDownloadMessage] = useState('');
+  const [agentDiagnosisState, setAgentDiagnosisState] = useState<AgentDiagnosisRequestState>('idle');
+  const [agentDiagnosisMessage, setAgentDiagnosisMessage] = useState('');
   const [error, setError] = useState('');
   const [conflictChat, setConflictChat] = useState<BlockingSupportChat | null>(null);
   const authScope = authScopeKey(getCachedAuthUser());
@@ -428,7 +431,12 @@ export function SupportNewPage() {
     setAgentDownloadState('issuing');
     setAgentDownloadMessage('');
     try {
-      await downloadPcAgentForCurrentUser();
+      const activation = await issueAgentActivationToken();
+      await downloadAgentPackage(
+        activation.activationToken,
+        symptomDetail.trim() || symptomTitle.trim(),
+        symptomType
+      );
       setAgentDownloadState('done');
       setAgentDownloadMessage('PCAgent.zip을 내려받았습니다. 압축을 풀고 PCAgent.exe를 실행하면 자동 등록됩니다.');
     } catch (cause) {
@@ -436,6 +444,40 @@ export function SupportNewPage() {
       setAgentDownloadMessage(cause instanceof ApiError && cause.status === 401
         ? '로그인 후 PCAgent를 다운로드해 주세요.'
         : 'Agent 등록 토큰 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+  }
+
+  async function diagnoseWithPcAgent() {
+    const symptom = symptomDetail.trim() || symptomTitle.trim();
+    if (!symptom) {
+      setAgentDiagnosisState('error');
+      setAgentDiagnosisMessage('PC Agent에 전달할 증상을 먼저 입력해 주세요.');
+      return;
+    }
+    setAgentDiagnosisState('requesting');
+    setAgentDiagnosisMessage('');
+    try {
+      const response = await requestPcAgentDiagnosis({
+        symptom,
+        requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
+        mode: 'LIVE'
+      });
+      if (response.status === 'ACCEPTED') {
+        setAgentDiagnosisState('accepted');
+        setAgentDiagnosisMessage(`PC Agent가 진단 요청을 수신했습니다. (${response.diagnosisId})`);
+      } else {
+        setAgentDiagnosisState('rejected');
+        setAgentDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
+      }
+    } catch (cause) {
+      setAgentDiagnosisState('error');
+      if (cause instanceof ApiError && cause.code === 'AGENT_DISCONNECTED') {
+        setAgentDiagnosisMessage('연결된 PC Agent가 없습니다. PC Agent 실행 상태를 확인해 주세요.');
+      } else if (cause instanceof ApiError && cause.code === 'AGENT_RESPONSE_TIMEOUT') {
+        setAgentDiagnosisMessage('PC Agent 응답 시간이 초과되었습니다. 연결 상태를 확인해 주세요.');
+      } else {
+        setAgentDiagnosisMessage('PC Agent 진단 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      }
     }
   }
 
@@ -662,6 +704,14 @@ export function SupportNewPage() {
                 >
                   {agentDownloadState === 'issuing' ? '등록 토큰 발급 중...' : 'PCAgent 다운로드'}
                 </button>
+                <button
+                  type="button"
+                  className="rounded border border-brand-blue bg-brand-blue px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+                  onClick={diagnoseWithPcAgent}
+                  disabled={agentDiagnosisState === 'requesting'}
+                >
+                  {agentDiagnosisState === 'requesting' ? 'Agent 응답 대기 중...' : 'PC Agent로 진단'}
+                </button>
                 <a
                   className="rounded border border-slate-300 px-3 py-2 text-xs font-bold"
                   href="/downloads/pc-agent/README.txt"
@@ -685,6 +735,11 @@ export function SupportNewPage() {
               {agentDownloadMessage ? (
                 <p className={`mb-2 text-xs font-semibold ${agentDownloadState === 'error' ? 'text-red-600' : 'text-emerald-700'}`}>
                   {agentDownloadMessage}
+                </p>
+              ) : null}
+              {agentDiagnosisMessage ? (
+                <p className={`mb-2 text-xs font-semibold ${agentDiagnosisState === 'accepted' ? 'text-emerald-700' : 'text-red-600'}`}>
+                  {agentDiagnosisMessage}
                 </p>
               ) : null}
               <input
@@ -909,6 +964,7 @@ export function SupportTicketPage() {
             {ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : null}
           </div>
           {hasSafetyAdvice(ticket) ? <SafetyNoticePanel ticket={ticket} /> : null}
+          {hasAgentDiagnosis(ticket) ? <AgentDiagnosisPanel ticket={ticket} /> : null}
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
         </Panel>
         <Panel title="담당자 확인 자료" subtitle="업로드한 로그를 바탕으로 담당자가 접수 내용을 확인합니다.">
@@ -994,6 +1050,66 @@ export function SupportTicketPage() {
       </div>
     </Screen>
   );
+}
+
+function AgentDiagnosisPanel({ ticket }: { ticket: AsTicketDto }) {
+  const evidence = ticket.diagnosisEvidence ?? [];
+  return (
+    <div className="mb-4 rounded border border-orange-200 bg-orange-50 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-bold text-orange-950">PC Agent 진단 정보</p>
+        {ticket.diagnosisMode ? <StatusBadge status={ticket.diagnosisMode} /> : null}
+      </div>
+      <div className="space-y-2 text-sm">
+        <InfoRow label="요청 번호" value={ticket.requestNumber ?? '-'} />
+        <InfoRow label="요청 유형" value={diagnosisRequestTypeLabel(ticket.requestType)} />
+        <InfoRow label="진단 시각" value={formatTime(ticket.diagnosedAt ?? undefined)} />
+      </div>
+      {ticket.diagnosisTitle ? <p className="mt-4 font-bold text-slate-900">{ticket.diagnosisTitle}</p> : null}
+      {ticket.diagnosisSummary ? <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{ticket.diagnosisSummary}</p> : null}
+      {evidence.length ? (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-bold text-slate-600">핵심 측정 근거</p>
+          <ul className="space-y-1 text-sm leading-6 text-slate-700">
+            {evidence.map((item, index) => (
+              <li key={`${item.component ?? 'evidence'}-${item.metricType ?? index}-${index}`}>• {diagnosisEvidenceText(item, index)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function hasAgentDiagnosis(ticket: AsTicketDto) {
+  return Boolean(
+    ticket.requestNumber
+    || ticket.requestType
+    || ticket.diagnosisMode
+    || ticket.diagnosisTitle
+    || ticket.diagnosisSummary
+    || ticket.diagnosisEvidence?.length
+    || ticket.diagnosedAt
+  );
+}
+
+function diagnosisRequestTypeLabel(value?: string | null) {
+  if (value === 'PHYSICAL_INSPECTION') return '하드웨어 물리 점검';
+  if (value === 'USER_ACTION') return '사용자 조치';
+  if (value === 'SOFTWARE_RECOVERY') return '소프트웨어 복구';
+  return value ?? '-';
+}
+
+function diagnosisEvidenceText(item: NonNullable<AsTicketDto['diagnosisEvidence']>[number], index: number) {
+  if (item.summary) return item.summary;
+  if (item.label) return item.label;
+  const component = item.component?.toUpperCase();
+  const metricType = item.metricType ? statusLabel(item.metricType) : undefined;
+  const measuredValue = item.value == null ? undefined : `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`;
+  const detail = [component, metricType, measuredValue, item.status ? statusLabel(item.status) : undefined]
+    .filter(Boolean)
+    .join(' · ');
+  return detail || `측정 근거 ${index + 1}`;
 }
 
 function SafetyNoticePanel({ ticket }: { ticket: AsTicketDto }) {

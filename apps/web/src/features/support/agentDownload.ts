@@ -19,13 +19,16 @@ export async function downloadPcAgentForCurrentUser() {
   await downloadAgentPackage(activation.activationToken);
 }
 
-async function downloadAgentPackage(activationToken: string) {
+// AS 접수 흐름에서는 입력한 증상을 zip의 activation 설정에 동봉해 exe가 첫 실행 시 이어받는다.
+export async function downloadAgentPackage(activationToken: string, symptom?: string, symptomType?: string) {
   const manifest = await fetchAgentDownloadManifest();
   const exe = await fetchAgentExecutable(manifest);
   const config = {
     apiBaseUrl: resolveAgentApiBaseUrl(),
     webBaseUrl: window.location.origin,
     activationToken,
+    ...(symptom ? { symptom } : {}),
+    ...(symptomType ? { symptomType } : {}),
     environment: import.meta.env.MODE ?? 'local'
   };
   const encoder = new TextEncoder();
