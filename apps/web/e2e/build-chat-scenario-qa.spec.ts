@@ -123,8 +123,11 @@ async function runScenario(page: Page, scenario: Scenario): Promise<Result> {
   if (!response.message || !Array.isArray(response.builds) || !Array.isArray(response.warnings)) {
     errors.push('응답 계약이 올바르지 않습니다.');
   }
-  if (!await page.getByText(response.message, { exact: false }).last().isVisible().catch(() => false)) {
-    errors.push('서버 응답 문구가 챗봇 화면에 렌더링되지 않았습니다.');
+  const renderedMessage = page.getByTestId('ai-message-text').last();
+  try {
+    await expect(renderedMessage).toContainText(response.message, { timeout: 15_000 });
+  } catch {
+    errors.push('서버 응답 문구가 챗봇 화면에 끝까지 렌더링되지 않았습니다.');
   }
   if (response.builds.some((build) => build.toolResults?.some((tool) => tool.status === 'FAIL'))) {
     errors.push('Tool FAIL 조합이 화면 응답에 포함됐습니다.');

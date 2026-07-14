@@ -28,5 +28,16 @@ public interface AiChatEngine {
         return Optional.empty();
     }
 
+    /**
+     * 서버가 검증한 부품 후보와 변경 사실을 대화형 안내 문장으로만 다듬는다.
+     * 구현체는 후보, 가격, 호환성 판단을 추가하거나 변경하지 않는다.
+     */
+    default Optional<String> explainVerifiedChangeAdvice(
+            AiChatEngineRequest request,
+            String requestedAiProfile
+    ) {
+        return Optional.empty();
+    }
+
     QuoteRequirementAnalysisResult analyzeQuoteRequirement(QuoteRequirementAnalysisRequest request);
 }

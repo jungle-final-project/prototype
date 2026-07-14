@@ -4379,6 +4379,196 @@ test('applies a recent AI recommendation from the assistant without rendering du
   await expect(page.getByTestId('ai-selected-build-panel')).toHaveCount(0);
 });
 
+test('applies the single immediately preceding AI build from an explicit natural-language confirmation', async ({ page }) => {
+  const previewBuild = {
+    id: 'ai-draft-rebuild-natural-apply',
+    tier: 'balanced',
+    label: '전체 변경안',
+    title: '예산 맞춤 전체 변경안',
+    summary: '현재 견적을 대체하는 검증된 완성 조합입니다.',
+    totalPrice: 1800000,
+    badges: ['DRAFT_REBUILD_PREVIEW'],
+    budgetWon: 2000000,
+    budgetLabel: '목표 200만원',
+    tierLabel: '균형형',
+    appliedPartCategories: [],
+    items: [
+      { partId: 'part-natural-gpu', category: 'GPU', name: '자연어 적용 GPU', manufacturer: 'NVIDIA', quantity: 1, price: 1100000, note: '' },
+      { partId: 'part-natural-cpu', category: 'CPU', name: '자연어 적용 CPU', manufacturer: 'AMD', quantity: 1, price: 700000, note: '' }
+    ],
+    toolResults: [
+      { tool: 'compatibility', status: 'PASS', confidence: 'HIGH', summary: '호환성 통과' },
+      { tool: 'power', status: 'PASS', confidence: 'HIGH', summary: '전력 통과' }
+    ]
+  };
+  await page.addInitScript((build) => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-natural-apply', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-natural-apply', JSON.stringify({
+      messages: [
+        { id: 'msg-user', role: 'user', text: '전체를 200만원으로 맞춰줘', createdAt: '2026-07-15T09:00:00.000Z', kind: 'general' },
+        { id: 'msg-preview', role: 'assistant', text: '전체 변경안을 확인했습니다.', createdAt: '2026-07-15T09:00:01.000Z', kind: 'budget', builds: [build] }
+      ],
+      latestBuilds: [build],
+      savedBuildIds: {},
+      updatedAt: '2026-07-15T09:00:01.000Z'
+    }));
+  }, previewBuild);
+
+  const applyRequests: Array<{ buildId: string; itemCount: number }> = [];
+  let buildChatCalls = 0;
+  let currentDraft: {
+    id: string;
+    status: string;
+    name: string;
+    items: ReturnType<typeof draftItem>[];
+    totalPrice: number;
+    itemCount: number;
+  } = { ...emptyDraft, items: [] };
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'user-natural-apply', email: 'user@example.com', name: 'Demo User', role: 'USER' }) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'PUT' && url.pathname.endsWith('/apply-ai-build')) {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { buildId: string; items: Array<{ partId: string; category: string; quantity: number }> };
+      applyRequests.push({ buildId: body.buildId, itemCount: body.items.length });
+      const items = body.items.map((item) => draftItem(
+        item.partId,
+        item.category,
+        item.partId === 'part-natural-gpu' ? '자연어 적용 GPU' : '자연어 적용 CPU',
+        item.partId === 'part-natural-gpu' ? 1100000 : 700000
+      ));
+      currentDraft = {
+        ...emptyDraft,
+        items,
+        totalPrice: 1800000,
+        itemCount: 2
+      };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    buildChatCalls += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('그걸로 적용해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await expect.poll(() => applyRequests).toEqual([{ buildId: 'ai-draft-rebuild-natural-apply', itemCount: 2 }]);
+  expect(buildChatCalls).toBe(0);
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('변경안이 현재 견적에 적용되었습니다');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('1,800,000원');
+  await expect(page.getByTestId('checklist-GPU')).toContainText('자연어 적용 GPU');
+});
+
+test('does not apply an older build when the immediately preceding assistant turn has no build', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-natural-missing', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-natural-missing', JSON.stringify({
+      messages: [
+        { id: 'msg-old-build', role: 'assistant', text: '예전 추천입니다.', createdAt: '2026-07-15T09:00:00.000Z', kind: 'budget', builds: [{
+          id: 'old-build', tier: 'balanced', label: '추천', title: '예전 추천', summary: '', totalPrice: 1000000,
+          badges: [], budgetWon: 1000000, budgetLabel: '100만원', tierLabel: '균형형', appliedPartCategories: [],
+          items: [{ partId: 'old-part', category: 'CPU', name: '예전 CPU', manufacturer: 'AMD', quantity: 1, price: 1000000, note: '' }]
+        }] },
+        { id: 'msg-latest', role: 'assistant', text: '다른 설명을 드렸습니다.', createdAt: '2026-07-15T09:00:01.000Z', kind: 'general' }
+      ],
+      latestBuilds: [],
+      savedBuildIds: {},
+      updatedAt: '2026-07-15T09:00:01.000Z'
+    }));
+  });
+  let applyCalls = 0;
+  let buildChatCalls = 0;
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'user-natural-missing', email: 'user@example.com', name: 'Demo User', role: 'USER' }) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    if (route.request().method() === 'PUT') applyCalls += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    buildChatCalls += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('적용해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('바로 앞 대화에 적용할 변경안이 없습니다');
+  expect(applyCalls).toBe(0);
+  expect(buildChatCalls).toBe(0);
+});
+
+test('requires card selection when natural-language apply follows multiple builds', async ({ page }) => {
+  await page.addInitScript(() => {
+    const makeBuild = (id: string, partId: string, name: string) => ({
+      id,
+      tier: 'balanced',
+      label: '추천',
+      title: name,
+      summary: '',
+      totalPrice: 1500000,
+      badges: [],
+      budgetWon: 1500000,
+      budgetLabel: '150만원',
+      tierLabel: '균형형',
+      appliedPartCategories: [],
+      items: [{ partId, category: 'CPU', name, manufacturer: 'AMD', quantity: 1, price: 1500000, note: '' }]
+    });
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-natural-ambiguous', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-natural-ambiguous', JSON.stringify({
+      messages: [{
+        id: 'msg-multiple-builds',
+        role: 'assistant',
+        text: '두 가지 조합을 추천합니다.',
+        createdAt: '2026-07-15T09:00:00.000Z',
+        kind: 'budget',
+        builds: [makeBuild('build-a', 'part-a', '추천 CPU A'), makeBuild('build-b', 'part-b', '추천 CPU B')]
+      }],
+      latestBuilds: [],
+      savedBuildIds: {},
+      updatedAt: '2026-07-15T09:00:00.000Z'
+    }));
+  });
+  let applyCalls = 0;
+  let buildChatCalls = 0;
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'user-natural-ambiguous', email: 'user@example.com', name: 'Demo User', role: 'USER' }) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    if (route.request().method() === 'PUT') applyCalls += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    buildChatCalls += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('적용해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('선택 가능한 조합이 여러 개입니다');
+  expect(applyCalls).toBe(0);
+  expect(buildChatCalls).toBe(0);
+});
+
 test('hides the compare entry when there is no recent AI recommendation batch', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
