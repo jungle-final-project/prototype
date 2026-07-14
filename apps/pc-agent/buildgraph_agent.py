@@ -6641,6 +6641,61 @@ def upload_event_panel_request(
     return ticket_id, support_url(config.api_base_url, ticket_id, config.web_base_url)
 
 
+def status_pulse_frame(base_text: str, step: int) -> str:
+    """로딩 애니메이션의 step번째 프레임 문자열. 점 0~3개가 순환한다."""
+    return f"{base_text}{'.' * (step % 4)}"
+
+
+class StatusPulse:
+    """서버 응답을 기다리는 동안 상태 문구에 점(...)을 순환시키는 로딩 애니메이션.
+
+    tkinter에는 내장 스피너가 없고 이 앱의 대기 표시는 전부 문자열 기반이라,
+    위젯 after() 타이머로 프레임을 갱신한다. start/stop은 반드시 메인 스레드에서
+    호출한다(워커 스레드에서는 after(0, ...)로 마샬링). 위젯이 파괴되면 조용히 멈춘다.
+    """
+
+    def __init__(self, widget: Any, status_target: Any, interval_ms: int = 400) -> None:
+        self._widget = widget
+        # tk.StringVar처럼 .set()이 있으면 그것을, 아니면 호출 가능한 setter를 그대로 쓴다.
+        self._set = status_target.set if hasattr(status_target, "set") else status_target
+        self._interval_ms = interval_ms
+        self._job: Any = None
+        self._step = 0
+        self._base_text = ""
+
+    @property
+    def active(self) -> bool:
+        return self._job is not None
+
+    def start(self, base_text: str) -> None:
+        self.stop()
+        self._base_text = base_text
+        self._step = 0
+        self._tick()
+
+    def stop(self, final_text: str | None = None) -> None:
+        if self._job is not None:
+            try:
+                self._widget.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        if final_text is not None:
+            self._set(final_text)
+
+    def _tick(self) -> None:
+        try:
+            if not int(self._widget.winfo_exists()):
+                self._job = None
+                return
+            self._set(status_pulse_frame(self._base_text, self._step))
+            self._step += 1
+            self._job = self._widget.after(self._interval_ms, self._tick)
+        except Exception:
+            # 위젯 파괴 후 늦게 도착한 tick — 애니메이션만 조용히 종료한다.
+            self._job = None
+
+
 def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> None:
     if tk is None or ttk is None:
         return
@@ -6813,18 +6868,38 @@ def show_event_panel(config_path: Path, signals: Sequence[dict[str, Any]]) -> No
         wraplength=318,
     ).pack(fill="x", pady=(8, 8))
 
+    upload_pulse = StatusPulse(panel, status_text)
+
     def request_review() -> None:
+        # gzip 압축 + 20초 타임아웃 업로드가 메인 스레드를 얼리지 않도록 워커에서 수행한다.
+        # tk 위젯/변수는 메인 스레드 전용 — 모드는 미리 읽고, 결과는 after(0)로 되돌린다.
+        selected_mode = request_mode.get()
         send_button.configure(state="disabled")
-        status_text.set("AS 접수를 준비하고 있습니다.")
-        panel.update_idletasks()
-        try:
-            ticket_id, url = upload_event_panel_request(config, source, signals, request_mode.get())
-        except Exception as exception:
+        upload_pulse.start("AS 접수를 진행하고 있습니다")
+
+        def apply_success(ticket_id: str, url: str) -> None:
+            upload_pulse.stop(f"AS 접수가 완료되었습니다. 티켓 {ticket_id}")
+            webbrowser.open(url)
+
+        def apply_failure(exception: Exception) -> None:
+            upload_pulse.stop(event_panel_failure_message(exception))
             send_button.configure(state="normal")
-            status_text.set(event_panel_failure_message(exception))
-            return
-        status_text.set(f"AS 접수가 완료되었습니다. 티켓 {ticket_id}")
-        webbrowser.open(url)
+
+        def schedule_on_panel(callback: Any) -> None:
+            try:
+                panel.after(0, callback)
+            except Exception:
+                pass  # 업로드 중 패널이 닫힘 — 표시할 곳이 없다.
+
+        def run_upload() -> None:
+            try:
+                ticket_id, url = upload_event_panel_request(config, source, signals, selected_mode)
+            except Exception as exception:
+                schedule_on_panel(lambda current=exception: apply_failure(current))
+                return
+            schedule_on_panel(lambda: apply_success(ticket_id, url))
+
+        threading.Thread(target=run_upload, daemon=True).start()
 
     def open_detail() -> None:
         primary = model["primarySignal"]

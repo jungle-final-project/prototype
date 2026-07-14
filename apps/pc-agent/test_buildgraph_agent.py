@@ -2796,5 +2796,88 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(tray_image.size, (64, 64))
 
 
+class FakePulseWidget:
+    """StatusPulse가 쓰는 위젯 표면(after/after_cancel/winfo_exists)만 흉내낸다."""
+
+    def __init__(self) -> None:
+        self.exists = 1
+        self.pending: dict[int, Any] = {}
+        self._next_id = 0
+
+    def winfo_exists(self) -> int:
+        return self.exists
+
+    def after(self, _interval_ms: int, callback: Any) -> int:
+        self._next_id += 1
+        self.pending[self._next_id] = callback
+        return self._next_id
+
+    def after_cancel(self, job_id: int) -> None:
+        self.pending.pop(job_id, None)
+
+    def fire_next(self) -> None:
+        job_id, callback = next(iter(self.pending.items()))
+        del self.pending[job_id]
+        callback()
+
+
+class StatusPulseTest(unittest.TestCase):
+    def test_frame_cycles_zero_to_three_dots(self) -> None:
+        frames = [agent.status_pulse_frame("업로드 중", step) for step in range(5)]
+        self.assertEqual(
+            frames,
+            ["업로드 중", "업로드 중.", "업로드 중..", "업로드 중...", "업로드 중"],
+        )
+
+    def test_start_animates_and_stop_sets_final_text(self) -> None:
+        widget = FakePulseWidget()
+        values: list[str] = []
+        pulse = agent.StatusPulse(widget, values.append)
+        pulse.start("서버 확인")
+        self.assertTrue(pulse.active)
+        self.assertEqual(values[-1], "서버 확인")
+        widget.fire_next()
+        self.assertEqual(values[-1], "서버 확인.")
+        pulse.stop("완료되었습니다")
+        self.assertFalse(pulse.active)
+        self.assertEqual(values[-1], "완료되었습니다")
+        self.assertEqual(widget.pending, {})
+
+    def test_restart_cancels_previous_job(self) -> None:
+        widget = FakePulseWidget()
+        values: list[str] = []
+        pulse = agent.StatusPulse(widget, values.append)
+        pulse.start("첫 작업")
+        pulse.start("둘째 작업")
+        self.assertEqual(len(widget.pending), 1)
+        self.assertEqual(values[-1], "둘째 작업")
+
+    def test_destroyed_widget_stops_silently(self) -> None:
+        widget = FakePulseWidget()
+        values: list[str] = []
+        pulse = agent.StatusPulse(widget, values.append)
+        pulse.start("작업 중")
+        widget.exists = 0
+        widget.fire_next()
+        self.assertFalse(pulse.active)
+        self.assertEqual(values[-1], "작업 중")
+
+    def test_accepts_stringvar_like_target(self) -> None:
+        class VarLike:
+            def __init__(self) -> None:
+                self.value = ""
+
+            def set(self, text: str) -> None:
+                self.value = text
+
+        widget = FakePulseWidget()
+        var = VarLike()
+        pulse = agent.StatusPulse(widget, var)
+        pulse.start("접수 중")
+        self.assertEqual(var.value, "접수 중")
+        pulse.stop("접수 완료")
+        self.assertEqual(var.value, "접수 완료")
+
+
 if __name__ == "__main__":
     unittest.main()
