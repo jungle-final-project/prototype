@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -728,16 +728,24 @@ def can_offer_as(
         isinstance(result, DiagnosisResult)
         and isinstance(diagnosis, DiagnosisRunSnapshot)
         and result.diagnosis_id == diagnosis.diagnosis_id
-        and result.resolution_type == "PHYSICAL_INSPECTION"
         and bool(result.evidence)
         and diagnosis.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
         and diagnosis.transition_allowed
     )
     if not base_eligible or not isinstance(result, DiagnosisResult):
         return False
+    request = getattr(session, "request", None)
+    if result.resolution_type != "PHYSICAL_INSPECTION":
+        # 이상 근거가 없어도 사용자가 AS를 접수할 수 있게 한다. 다만 서버는 웹에서 발급한
+        # diagnosisId(UUID)와 증상 원문 일치를 요구하므로, 웹 접수로 시작한 세션에서만 연다.
+        return bool(
+            request is not None
+            and getattr(request, "diagnosis_id", None) == result.diagnosis_id
+            and getattr(request, "source", None) == "WEB_REQUEST"
+            and bool(str(getattr(request, "symptom", "") or "").strip())
+        )
     if result.diagnosis_type != "DEVICE_DRIVER_CONFIGURATION_ISSUE":
         return True
-    request = getattr(session, "request", None)
     return bool(
         result.remote_as_recommended
         and not result.can_auto_recover
@@ -748,6 +756,56 @@ def can_offer_as(
         and getattr(request, "mode", None) == "LIVE"
         and bool(str(getattr(request, "symptom", "") or "").strip())
     )
+
+
+WINDOWS_EVENT_METRIC_TYPE = "windows_event"
+MAX_WINDOWS_EVENT_EVIDENCE_PER_CATEGORY = 5
+MAX_RESULT_PAYLOAD_BYTES = 60_000
+
+
+def compact_result_evidence(
+    result: DiagnosisResult | None,
+    *,
+    max_events_per_category: int = MAX_WINDOWS_EVENT_EVIDENCE_PER_CATEGORY,
+    max_payload_bytes: int = MAX_RESULT_PAYLOAD_BYTES,
+) -> DiagnosisResult | None:
+    """Windows 이벤트 로그 근거를 상한선까지만 남긴다.
+
+    이벤트 1건이 evidence 1건이라 최대 300건까지 쌓이고, 그대로 직렬화하면 서버 WebSocket
+    텍스트 프레임 한계를 넘겨 연결이 끊긴다. 판정(findings)은 이 함수 호출 전에 이미
+    끝나므로 근거 목록만 줄어들 뿐 진단 결과는 달라지지 않는다. 판정이 참조하는 근거와
+    이벤트가 아닌 계측 근거는 언제나 보존한다.
+    """
+    if not isinstance(result, DiagnosisResult) or not result.evidence:
+        return result
+    referenced = {key for finding in result.findings for key in finding.evidence_keys}
+    kept: list[DiagnosisEvidence] = []
+    per_category: dict[str, int] = {}
+    for item in result.evidence:
+        if item.metric_type != WINDOWS_EVENT_METRIC_TYPE or item.key in referenced:
+            kept.append(item)
+            continue
+        category = item.category or ""
+        per_category[category] = per_category.get(category, 0) + 1
+        if per_category[category] <= max(0, max_events_per_category):
+            kept.append(item)
+
+    def droppable(index: int) -> bool:
+        item = kept[index]
+        return item.metric_type == WINDOWS_EVENT_METRIC_TYPE and item.key not in referenced
+
+    compacted = replace(result, evidence=tuple(kept))
+    while _payload_bytes(compacted) > max_payload_bytes:
+        drop_at = next((index for index in range(len(kept) - 1, -1, -1) if droppable(index)), None)
+        if drop_at is None:
+            break
+        kept.pop(drop_at)
+        compacted = replace(result, evidence=tuple(kept))
+    return compacted
+
+
+def _payload_bytes(result: DiagnosisResult) -> int:
+    return len(json.dumps(result.to_dict(), ensure_ascii=False).encode("utf-8"))
 
 
 def format_diagnosis_result_detail(

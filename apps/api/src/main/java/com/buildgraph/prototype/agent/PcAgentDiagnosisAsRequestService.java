@@ -185,9 +185,10 @@ public class PcAgentDiagnosisAsRequestService {
                 || !Objects.equals(resultId, text(result.get("resultId")))) {
             throw invalid("resultId does not match the stored diagnosis result.");
         }
-        if (!REQUEST_TYPE.equals(required(request.requestType(), "requestType"))
-                || !REQUEST_TYPE.equals(text(result.get("resolutionType")))) {
-            throw new ApiException(HttpStatus.CONFLICT, "AS_NOT_ELIGIBLE", "Only PHYSICAL_INSPECTION diagnosis results can create an AS request.");
+        // 진단 결과가 정상이거나 근거가 부족해도 사용자가 AS를 접수할 수 있다.
+        // 접수 유형만 PHYSICAL_INSPECTION으로 고정하고, 결과의 resolutionType은 제한하지 않는다.
+        if (!REQUEST_TYPE.equals(required(request.requestType(), "requestType"))) {
+            throw new ApiException(HttpStatus.CONFLICT, "AS_NOT_ELIGIBLE", "Only PHYSICAL_INSPECTION AS requests are supported.");
         }
         List<?> storedEvidence = list(result.get("evidence"));
         if (storedEvidence.isEmpty()) {
@@ -227,7 +228,7 @@ public class PcAgentDiagnosisAsRequestService {
                 findings,
                 diagnosedAt,
                 mode,
-                "CRITICAL".equals(severity) ? "HIGH" : "MEDIUM",
+                riskLevel(severity),
                 result
         );
     }
@@ -510,6 +511,17 @@ public class PcAgentDiagnosisAsRequestService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private static String riskLevel(String severity) {
+        if ("CRITICAL".equals(severity)) {
+            return "HIGH";
+        }
+        // 이상 근거가 없는 결과(정상·측정 정보 부족)로도 접수할 수 있으므로 위험도를 낮게 잡는다.
+        if ("NORMAL".equals(severity) || "INDETERMINATE".equals(severity)) {
+            return "LOW";
+        }
+        return "MEDIUM";
     }
 
     private static ApiException invalid(String message) {

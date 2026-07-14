@@ -79,13 +79,30 @@ class PcAgentDiagnosisAsRequestServiceTest {
     }
 
     @Test
-    void rejectsDiagnosisThatIsNotPhysicalInspectionOrHasNoEvidence() {
+    void acceptsDiagnosisThatIsNotPhysicalInspection() {
+        // 이상 근거가 없는 결과(정상·자동 복구 가능)로도 사용자가 AS를 접수할 수 있어야 한다.
         StubBroker software = broker("SOFTWARE_RECOVERY", evidence(), DEVICE_ID, "LIVE");
-        assertCode(() -> service(new StubJdbcTemplate(), software).create(PRINCIPAL, validRequest(), DIAGNOSIS_ID),
-                "AS_NOT_ELIGIBLE");
+        StubJdbcTemplate jdbc = new StubJdbcTemplate();
 
+        Map<String, Object> created = service(jdbc, software).create(PRINCIPAL, validRequest(), DIAGNOSIS_ID);
+
+        assertThat(created.get("requestType")).isEqualTo("PHYSICAL_INSPECTION");
+    }
+
+    @Test
+    void rejectsDiagnosisWithoutEvidence() {
         StubBroker noEvidence = broker("PHYSICAL_INSPECTION", List.of(), DEVICE_ID, "LIVE");
         assertCode(() -> service(new StubJdbcTemplate(), noEvidence).create(PRINCIPAL, validRequest(), DIAGNOSIS_ID),
+                "AS_NOT_ELIGIBLE");
+    }
+
+    @Test
+    void rejectsUnsupportedRequestType() {
+        PcAgentDiagnosisAsRequestService.CreateRequest remote = new PcAgentDiagnosisAsRequestService.CreateRequest(
+                DIAGNOSIS_ID, RESULT_ID, DEVICE_ID, "REMOTE_SUPPORT", SYMPTOM,
+                TITLE, SUMMARY, evidence(), EVALUATED_AT, "LIVE", true
+        );
+        assertCode(() -> service(new StubJdbcTemplate(), eligibleBroker()).create(PRINCIPAL, remote, DIAGNOSIS_ID),
                 "AS_NOT_ELIGIBLE");
     }
 
