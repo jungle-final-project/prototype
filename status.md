@@ -10,6 +10,9 @@
 - CI 수정: 최신 `origin/main`을 병합하고 채팅 UI 충돌 1건을 해결했다. 최신 도킹형 UI와 닫기 동작은 유지하면서 자동완성 차단, 빠른 질문 삭제, 임시 저장 안내 삭제를 반영했다.
 - 마지막 검증: 실패했던 Playwright `desktop-chromium` 테스트 4개를 단일 워커로 재실행해 4/4 통과했다. 전체 웹 테스트는 사용자 요청에 따라 실행하지 않았다. 이후 CI에서 발견된 빠른 질문 영역 관련 테스트 2개도 새 UI 계약에 맞춰 수정하고 해당 테스트만 재실행했다.
 
+- CI follow-up: Adjusted the compact performance panel first-column offset from `-10px` to `-12px` after the latest main padding change, restoring checklist edge alignment.
+- Verification: The single FPS performance-panel Playwright test passed on `desktop-chromium` (1/1).
+
 ## 현재 목표
 - PR #32(`feat/goal3-agent-idempotency`)가 최신 `upstream/main`과 충돌 없이 머지 가능하도록 정리한다.
 
