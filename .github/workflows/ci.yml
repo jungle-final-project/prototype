@@ -117,7 +117,8 @@ jobs:
           python tools/validate_openapi.py
           python -m unittest \
             tools.test_validate_openapi \
-            tools.test_validate_infrastructure_separation
+            tools.test_validate_infrastructure_separation \
+            tools.test_validate_green_deployment
 
   compose:
     name: compose
@@ -129,7 +130,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate Docker Compose
-        run: docker compose -f compose.yaml config
+        run: |
+          docker compose -f compose.yaml config
+          docker compose -p buildgraph-green -f compose.api.ecr.prod.yaml --env-file .env.prod.example --env-file .env.images.example config --quiet
+          test "$(docker compose -p buildgraph-green -f compose.api.ecr.prod.yaml --env-file .env.prod.example --env-file .env.images.example config --services | sort | tr '\n' ' ')" = "api nginx xgb-reranker "
 
   pc-agent:
     name: pc-agent
