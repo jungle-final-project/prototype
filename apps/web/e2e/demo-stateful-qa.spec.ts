@@ -126,6 +126,7 @@ test('4분 데모 대표 20개를 실제 웹 상태 전이로 재현한다', asy
         });
       }
       results.push({ caseId: scenario.id, group: scenario.group, verdict: failures.length ? 'FAIL' : 'PASS', failures, evidence });
+      console.log(`[${results.length}/${scenarios.length}] ${scenario.id} -> ${failures.length ? 'FAIL' : 'PASS'}`);
     }
   } finally {
     await replaceDraft(request, user.accessToken, original.items ?? []);

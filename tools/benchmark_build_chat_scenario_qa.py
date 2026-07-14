@@ -103,6 +103,10 @@ class ApiClient:
             "email": email,
             "password": password,
             "name": name,
+            "phoneNumber": "010-7000-0700",
+            "postalCode": "06236",
+            "addressLine1": "서울특별시 강남구 테헤란로 1",
+            "addressLine2": "Build Chat QA",
             "termsAccepted": True,
             "marketingAccepted": False,
         }, auth=False)
