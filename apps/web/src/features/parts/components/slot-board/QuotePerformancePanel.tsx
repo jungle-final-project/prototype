@@ -485,7 +485,7 @@ function PerfPanelBody({
                       data-testid={`fps-res-${res.key}`}
                       aria-pressed={resKey === res.key}
                       onClick={() => setResKey(res.key)}
-                      className={`rounded px-2 py-0.5 text-[11px] font-black transition ${
+                      className={`rounded px-2.5 py-1 text-xs font-black transition ${
                         resKey === res.key ? 'bg-white text-commerce-ink shadow-sm' : 'text-slate-400 hover:text-slate-600'
                       }`}
                     >
@@ -538,7 +538,7 @@ function PerfPanelBody({
                           data-testid={`fps-game-${g.key}`}
                           aria-pressed={gameKey === g.key}
                           onClick={() => setGameKey(g.key)}
-                          className={`rounded-full border px-2 py-0.5 text-[11px] font-black transition ${
+                          className={`rounded-full border px-2.5 py-1 text-xs font-black transition ${
                             gameKey === g.key
                               ? 'border-brand-blue bg-brand-blue text-white'
                               : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
@@ -586,7 +586,7 @@ function PerfPanelBody({
                       data-testid={`fps-game-${g.key}`}
                       aria-pressed={gameKey === g.key}
                       onClick={() => setGameKey(g.key)}
-                      className={`rounded-full border px-2.5 py-1 text-[11px] font-black transition ${
+                      className={`rounded-full border px-2.5 py-1 text-xs font-black transition ${
                         gameKey === g.key
                           ? 'border-brand-blue bg-brand-blue text-white'
                           : 'border-commerce-line bg-white text-slate-500 hover:border-brand-blue'
@@ -999,7 +999,7 @@ function CandidateCombo({
                 onClearComparison?.();
               }
             }}
-            className={`rounded font-black transition ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-2.5 py-1 text-[10px]'} ${
+            className={`rounded font-black transition ${compact ? 'px-2.5 py-1 text-xs' : 'px-2.5 py-1 text-[10px]'} ${
               category === pickerCategory ? 'bg-brand-blue text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
@@ -1007,7 +1007,7 @@ function CandidateCombo({
           </button>
         ))}
       </div>
-      <div className={`relative ${compact ? 'w-36 sm:w-44' : 'w-44 sm:w-56'}`}>
+      <div className={`relative ${compact ? 'w-44 sm:w-52' : 'w-44 sm:w-56'}`}>
         <button
           type="button"
           data-testid="perf-candidate-select"
@@ -1015,7 +1015,7 @@ function CandidateCombo({
           aria-haspopup="true"
           onClick={() => setIsPickerOpen((open) => !open)}
           className={`flex w-full items-center justify-between gap-2 rounded-md border border-commerce-line bg-white text-left font-black text-commerce-ink transition hover:border-brand-blue ${
-            compact ? 'px-2 py-1 text-[10px]' : 'px-2.5 py-1.5 text-[11px]'
+            compact ? 'px-2.5 py-1.5 text-xs' : 'px-2.5 py-1.5 text-[11px]'
           }`}
         >
           <span className={`truncate ${categoryComparison ? '' : 'text-slate-400'}`}>
