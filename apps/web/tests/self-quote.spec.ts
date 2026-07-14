@@ -4681,7 +4681,8 @@ test('returns to the product detail page after login from its redirect', async (
   await expect(page).toHaveURL('/parts/part-gpu-detail-test');
   await expect(page.getByRole('heading', { name: '상세 담기 RTX 테스트' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('buildgraph.refreshToken'))).toBe('demo-refresh-user');
-  await expect(page.getByText('로그인됨 · user@example.com · 사용자')).toBeVisible();
+  await page.getByText('계정', { exact: true }).click();
+  await expect(page.getByText('user@example.com')).toBeVisible();
 
   expect(savedToDraft).toBe(false);
 });

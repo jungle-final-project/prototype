@@ -651,7 +651,6 @@ async function openHomeAsUser(page: Page, options: { dismissHomeChoice?: boolean
     } else {
       localStorage.removeItem('buildgraph.homeLoginChoice.dismissed');
     }
-    sessionStorage.clear();
   }, { dismissHomeChoice });
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({
@@ -2201,7 +2200,7 @@ test('keeps the editorial home usable on mobile width', async ({ page }) => {
   await expect(main.getByRole('heading', { name: '견적부터 조립 후 AS까지, 한 흐름으로' })).toBeVisible();
   await expect(main.locator('.modern-home-hero')).toHaveCSS('border-color', 'rgb(229, 231, 236)');
   await expect(page.getByTestId('home-quick-start-panel')).toHaveCount(0);
-  await expect(main.getByRole('button', { name: 'AI로 견적 만들기' })).toBeVisible();
+  await expect(main.getByRole('link', { name: '나만의 견적 알아보기' })).toHaveAttribute('href', '/self-quote');
   await expect(page.getByTestId('ai-chatbot-panel')).toHaveCount(0);
   await expect(main.getByTestId('build-dependency-graph')).toHaveCount(0);
 
