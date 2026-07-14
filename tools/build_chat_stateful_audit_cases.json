@@ -1042,43 +1042,129 @@
     "tags": []
   },
   {
-    "id": "state-context-01-generic-build",
+    "id": "state-context-01-recipient-usecase-budget",
     "group": "CLARIFICATION_CONTEXT",
     "profile": "BUILD_CHAT_54_MINI_FAST",
     "setupDraft": {
-      "template": "COMPLETE_VERIFIED"
+      "template": "EMPTY"
     },
     "turns": [
       {
         "expect": {
-          "outcome": "CLARIFICATION_OR_NEXT_ACTION"
+          "outcome": "CLARIFICATION",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "requiredWarnings": [
+            "LOW_INFORMATION"
+          ],
+          "requiredMissingSlots": [
+            "budget",
+            "useCase"
+          ],
+          "clarificationEcho": true,
+          "originalMessage": "중3 아들 피시 맞춰줄건데 피시 추천해줘",
+          "messageContainsAll": [
+            "최소",
+            "예산",
+            "용도"
+          ],
+          "messageContainsAny": [
+            "중3",
+            "중학교 3학년",
+            "아들",
+            "아드님"
+          ],
+          "requiredQuickReplies": [
+            "150만원 사무용 PC 추천해줘",
+            "200만원 게이밍 PC 추천해줘",
+            "300만원 게이밍 PC 추천해줘",
+            "400만원 영상편집 PC 추천해줘"
+          ]
         },
-        "message": "컴퓨터 맞춰줘"
+        "message": "중3 아들 피시 맞춰줄건데 피시 추천해줘"
       },
       {
         "expect": {
-          "outcome": "BUILDS_OR_NEXT_ACTION"
+          "outcome": "CLARIFICATION",
+          "answerTypes": [
+            "GENERAL"
+          ],
+          "requiredWarnings": [
+            "LOW_INFORMATION"
+          ],
+          "requiredMissingSlots": [
+            "budget"
+          ],
+          "forbiddenMissingSlots": [
+            "useCase"
+          ],
+          "clarificationEcho": true,
+          "originalMessage": "중3 아들 피시 맞춰줄건데 피시 추천해줘",
+          "messageContainsAll": [
+            "게이밍",
+            "최소",
+            "예산"
+          ],
+          "messageContainsAny": [
+            "중3",
+            "중학교 3학년",
+            "아들",
+            "아드님"
+          ],
+          "requiredQuickReplies": [
+            "200만원 게이밍 PC 추천해줘",
+            "300만원 게이밍 PC 추천해줘",
+            "400만원 게이밍 PC 추천해줘",
+            "예산 무관 고성능 게이밍 PC 추천해줘"
+          ]
         },
-        "message": "200만원 QHD 게임용으로",
-        "useClarification": true
+        "message": "게임용으로 쓸듯"
       },
       {
         "expect": {
-          "outcome": "BUILDS_OR_NEXT_ACTION",
-          "forbidBoardFocus": false
+          "outcome": "BUILDS",
+          "answerTypes": [
+            "BUDGET"
+          ],
+          "messageContainsAll": [
+            "400만원"
+          ],
+          "messageContainsAny": [
+            "게이밍",
+            "게임용"
+          ],
+          "forbidClarification": true,
+          "minTotal": 3500000,
+          "maxTotal": 4500000,
+          "maxBuilds": 3,
+          "requiredBuildCategories": [
+            "CPU",
+            "MOTHERBOARD",
+            "RAM",
+            "GPU",
+            "STORAGE",
+            "PSU",
+            "CASE",
+            "COOLER"
+          ]
         },
-        "message": "GPU 추천도 같이 해줘"
+        "message": "400만원 게이밍 PC 추천해줘"
       }
     ],
     "expectedInvariants": [
       "DRAFT_UNCHANGED",
       "NO_TOOL_FAIL",
       "NO_DEAD_END",
-      "CONTEXT_NOT_STALE"
+      "CONTEXT_NOT_STALE",
+      "RECIPIENT_CONTEXT_PRESERVED"
     ],
     "webReplay": true,
-    "risk": "MEDIUM",
-    "tags": []
+    "risk": "HIGH",
+    "tags": [
+      "CORE_GUARANTEE",
+      "DEMO_CONVERSATION"
+    ]
   },
   {
     "id": "state-context-02-use-only",

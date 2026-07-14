@@ -1714,6 +1714,8 @@ test('submits the server-authoritative score explanation and renders the assessm
   await page.getByTestId('quote-score-ai-explain').click();
 
   await expect(page.getByTestId('ai-build-assessment')).toBeVisible();
+  await expect(page.getByTestId('ai-build-assessment')).toHaveAttribute('data-response-surface', 'plain');
+  await expect(page.getByTestId('ai-build-assessment')).not.toHaveClass(/border-blue-100|bg-blue-50/);
   await expect(page.getByTestId('ai-build-assessment')).toContainText('742');
   await expect(page.getByTestId('ai-build-assessment')).toContainText('GPU 상향 우선');
   expect(chatRequest['assessmentContext']).toEqual({ source: 'QUOTE_DRAFT_CURRENT', focusType: 'SCORE' });
@@ -2087,12 +2089,9 @@ test('shows game FPS reference in the performance panel with game and resolution
       page.getByTestId('quote-performance-score-column').boundingBox(),
       page.getByTestId('quote-checklist').boundingBox()
     ]);
-    return Boolean(
-      scoreBox
-      && checklistBox
-      && Math.abs((scoreBox.x + scoreBox.width) - (checklistBox.x + checklistBox.width)) <= 1
-    );
-  }).toBe(true);
+    if (!scoreBox || !checklistBox) return Number.POSITIVE_INFINITY;
+    return Math.abs((scoreBox.x + scoreBox.width) - (checklistBox.x + checklistBox.width));
+  }).toBeLessThanOrEqual(1);
   // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 하위 1% 평균(1% low).
   await expect(fps.getByTestId('fps-avg')).toHaveText('130 FPS');
 
@@ -5003,8 +5002,8 @@ test('records home recommendation detail and draft add events on product detail 
   ]));
 });
 
-// 셀프견적 임베드 어시스턴트도 홈과 동일한 공용 컴포넌트라 응답 대기 버블이 떠야 한다(surface별 회귀 방지).
-test('셀프견적 임베드 챗봇도 느린 응답 동안 대기 버블을 보여준다', async ({ page }) => {
+// 셀프견적 임베드 어시스턴트도 홈과 동일한 공용 컴포넌트라 응답 대기 상태가 떠야 한다(surface별 회귀 방지).
+test('셀프견적 임베드 챗봇도 느린 응답 동안 박스 없는 대기 표시를 보여준다', async ({ page }) => {
   await loginAsUser(page);
   // AI 세션 소유자 키는 캐시된 authUser에서 나온다. auth/me 응답을 기다리는 경합 없이
   // 첫 제출부터 owner 키가 준비되도록 localStorage를 직접 심는다(홈 헬퍼와 동일한 패턴).
@@ -5038,6 +5037,7 @@ test('셀프견적 임베드 챗봇도 느린 응답 동안 대기 버블을 보
 
   const pending = page.getByTestId('ai-chat-pending');
   await expect(pending).toBeVisible();
+  await expect(pending).toHaveAttribute('data-response-surface', 'plain');
   await expect(pending).toContainText('답변을 준비하고 있어요');
   expect(chatCalls).toBe(1);
 

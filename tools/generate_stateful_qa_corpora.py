@@ -122,8 +122,75 @@ def phase1_cases() -> list[dict[str, Any]]:
         ))
 
     # 12: clarification and follow-up context.
+    add(chain(
+        "state-context-01-recipient-usecase-budget", "CLARIFICATION_CONTEXT", "EMPTY",
+        [
+            turn(
+                "중3 아들 피시 맞춰줄건데 피시 추천해줘",
+                outcome="CLARIFICATION",
+                extra={
+                    "answerTypes": ["GENERAL"],
+                    "requiredWarnings": ["LOW_INFORMATION"],
+                    "requiredMissingSlots": ["budget", "useCase"],
+                    "clarificationEcho": True,
+                    "originalMessage": "중3 아들 피시 맞춰줄건데 피시 추천해줘",
+                    "messageContainsAll": ["최소", "예산", "용도"],
+                    "messageContainsAny": ["중3", "중학교 3학년", "아들", "아드님"],
+                    "requiredQuickReplies": [
+                        "150만원 사무용 PC 추천해줘",
+                        "200만원 게이밍 PC 추천해줘",
+                        "300만원 게이밍 PC 추천해줘",
+                        "400만원 영상편집 PC 추천해줘",
+                    ],
+                },
+            ),
+            turn(
+                "게임용으로 쓸듯",
+                outcome="CLARIFICATION",
+                extra={
+                    "answerTypes": ["GENERAL"],
+                    "requiredWarnings": ["LOW_INFORMATION"],
+                    "requiredMissingSlots": ["budget"],
+                    "forbiddenMissingSlots": ["useCase"],
+                    "clarificationEcho": True,
+                    "originalMessage": "중3 아들 피시 맞춰줄건데 피시 추천해줘",
+                    "messageContainsAll": ["게이밍", "최소", "예산"],
+                    "messageContainsAny": ["중3", "중학교 3학년", "아들", "아드님"],
+                    "requiredQuickReplies": [
+                        "200만원 게이밍 PC 추천해줘",
+                        "300만원 게이밍 PC 추천해줘",
+                        "400만원 게이밍 PC 추천해줘",
+                        "예산 무관 고성능 게이밍 PC 추천해줘",
+                    ],
+                },
+            ),
+            turn(
+                "400만원 게이밍 PC 추천해줘",
+                outcome="BUILDS",
+                extra={
+                    "answerTypes": ["BUDGET"],
+                    "messageContainsAll": ["400만원"],
+                    "messageContainsAny": ["게이밍", "게임용"],
+                    "forbidClarification": True,
+                    "minTotal": 3_500_000,
+                    "maxTotal": 4_500_000,
+                    "maxBuilds": 3,
+                    "requiredBuildCategories": [
+                        "CPU", "MOTHERBOARD", "RAM", "GPU",
+                        "STORAGE", "PSU", "CASE", "COOLER",
+                    ],
+                },
+            ),
+        ],
+        invariants=[
+            "DRAFT_UNCHANGED", "NO_TOOL_FAIL", "NO_DEAD_END",
+            "CONTEXT_NOT_STALE", "RECIPIENT_CONTEXT_PRESERVED",
+        ],
+        web=True,
+        risk="HIGH",
+        tags=["CORE_GUARANTEE", "DEMO_CONVERSATION"],
+    ))
     clarification_rows = [
-        ("generic-build", "컴퓨터 맞춰줘", "200만원 QHD 게임용으로", "GPU 추천도 같이 해줘"),
         ("use-only", "게임용 PC 필요해", "예산은 250만원이야", "QHD 배그 기준으로 골라줘"),
         ("budget-only", "300만원", "게임하고 개발도 해", "저소음도 고려해줘"),
         ("part-generic", "RAM 추천해줘", "32GB DDR5로", "이번에는 고성능 GPU 추천해줘"),
@@ -136,7 +203,7 @@ def phase1_cases() -> list[dict[str, Any]]:
         ("simulation-followup", "GPU 바꾸면 어때?", "RTX 5090으로", "배그 QHD 프레임도 알려줘"),
         ("location-followup", "부품 위치 알려줘", "CPU랑 RAM", "이제 GPU 추천해줘"),
     ]
-    for index, (suffix, first, second, third) in enumerate(clarification_rows, 1):
+    for index, (suffix, first, second, third) in enumerate(clarification_rows, 2):
         add(chain(
             f"state-context-{index:02d}-{suffix}", "CLARIFICATION_CONTEXT", "COMPLETE_VERIFIED",
             [
@@ -145,7 +212,7 @@ def phase1_cases() -> list[dict[str, Any]]:
                 turn(third, outcome="BUILDS_OR_NEXT_ACTION", extra={"forbidBoardFocus": suffix == "location-followup"}),
             ],
             invariants=["DRAFT_UNCHANGED", "NO_TOOL_FAIL", "NO_DEAD_END", "CONTEXT_NOT_STALE"],
-            web=index in {1, 4}, risk="HIGH" if index in {4, 10, 12} else "MEDIUM",
+            web=index == 4, risk="HIGH" if index in {4, 10, 12} else "MEDIUM",
         ))
 
     # 10: exact names, aliases, and ambiguous candidates.
