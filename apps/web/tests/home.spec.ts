@@ -1046,7 +1046,7 @@ test('chatbot uses build-chat API and updates latest home AI recommendations', a
   expect(buildChatRequests[0].message).toBe('200만원 PC 추천');
   expect(buildChatRequests[0].currentQuoteDraft).toBeUndefined();
   await expect(chatbotPanel).toContainText('AI 견적 어시스턴트');
-  await expect(chatbotPanel).toContainText('가격 통과');
+  await expect(chatbotPanel).toContainText('이 조합으로 셀프 견적 보기');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 실속형');
   await expect(main.getByTestId('home-ai-recommendations')).toContainText('200만원 균형형');
   await expect(main.getByTestId('home-ai-recommendations').getByRole('img', { name: /케이스 이미지/ })).toHaveCount(0);
@@ -2330,4 +2330,218 @@ test('allows guests to view the public home and requires login for self quote', 
 
   await page.getByRole('link', { name: '나만의 견적 알아보기' }).click();
   await expect(page).toHaveURL(/\/login\?redirect=%2Fself-quote/);
+});
+
+// AI 챗봇 응답 대기 버블 — 느린 LLM 응답 구간에만 임시 말풍선을 띄운다.
+// 신규 describe 블록으로만 추가하고 기존 테스트/헬퍼는 수정하지 않는다.
+test.describe('AI 챗봇 응답 대기 표시', () => {
+  const CHAT_INPUT = 'AI 챗봇에게 PC 사양 질문';
+  const SEND_BUTTON = '질문 보내기';
+
+  // 지연·상태코드를 제어할 수 있는 build-chat mock. LIFO 라우팅이라 다른 mock 뒤에 등록하면 우선한다.
+  async function mockBuildChat(page: Page, options: { delayMs?: number; status?: number; message?: string; builds?: ReturnType<typeof budgetBuilds> } = {}) {
+    const { delayMs = 0, status = 200, message = '200만원 예산 기준으로 조합을 계산했습니다.', builds = [] } = options;
+    const state = { calls: 0 };
+    await page.route('**/api/ai/build-chat', async (route) => {
+      state.calls += 1;
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      if (status !== 200) {
+        await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ message: '서버 오류' }) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ answerType: 'BUDGET', message, builds, warnings: [] })
+      });
+    });
+    return state;
+  }
+
+  async function openAssistant(page: Page) {
+    await mockCurrentQuoteDraftApi(page);
+    await openHomeAsUser(page);
+    await openDesktopAiAssistant(page);
+    const panel = page.getByTestId('ai-chatbot-panel');
+    return {
+      panel,
+      input: page.getByRole('textbox', { name: CHAT_INPUT }),
+      send: page.getByRole('button', { name: SEND_BUTTON })
+    };
+  }
+
+  test('느린 응답 동안 대기 버블과 요약 인용을 보여준다', async ({ page }) => {
+    await mockBuildChat(page, { delayMs: 1500 });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 게이밍 PC 추천');
+    await send.click();
+
+    const pending = panel.getByTestId('ai-chat-pending');
+    await expect(pending).toBeVisible();
+    await expect(pending).toContainText('답변을 준비하고 있어요');
+    await expect(panel.getByTestId('ai-chat-pending-excerpt')).toContainText('200만원 게이밍 PC 추천');
+  });
+
+  test('요약 인용은 30자에서 잘리고 말줄임표가 붙는다', async ({ page }) => {
+    await mockBuildChat(page, { delayMs: 1500 });
+    const { panel, input, send } = await openAssistant(page);
+
+    const unit = '가나다라마바사아자차'; // 10자
+    await input.fill(unit.repeat(4)); // 40자
+    await send.click();
+
+    const excerpt = panel.getByTestId('ai-chat-pending-excerpt');
+    await expect(excerpt).toBeVisible();
+    const text = (await excerpt.textContent()) ?? '';
+    expect(text).toContain(unit.repeat(3)); // 앞 30자는 남는다
+    expect(text).toContain('…');
+    expect(text).not.toContain(unit.repeat(4)); // 원문 40자는 잘려서 없다
+  });
+
+  test('응답이 도착하면 대기 버블이 사라지고 실제 답변만 남는다', async ({ page }) => {
+    await mockBuildChat(page, { delayMs: 700, message: '실제 추천 답변이 도착했습니다.' });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    await expect(panel.getByTestId('ai-chat-pending')).toBeVisible();
+    await expect(panel).toContainText('실제 추천 답변이 도착했습니다.');
+    await expect(panel.getByTestId('ai-chat-pending')).toHaveCount(0); // 실답과 대기 버블은 공존하지 않는다
+  });
+
+  test('300ms 이내 빠른 응답에는 대기 버블이 뜨지 않는다', async ({ page }) => {
+    const state = await mockBuildChat(page, { delayMs: 40, message: '빠른 응답 도착.' });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    await expect(panel).toContainText('빠른 응답 도착.');
+    expect(state.calls).toBe(1);
+    await expect(panel.getByTestId('ai-chat-pending')).toHaveCount(0);
+  });
+
+  test('빠른 카테고리 이동은 API 없이 처리되고 대기 버블을 만들지 않는다', async ({ page }) => {
+    const state = await mockBuildChat(page, { delayMs: 1500 });
+    const { input, send } = await openAssistant(page);
+
+    await input.fill('메인보드 보여줘');
+    await send.click();
+
+    await expect(page).toHaveURL(/\/self-quote\?category=MOTHERBOARD/);
+    expect(state.calls).toBe(0);
+    await expect(page.getByTestId('ai-chat-pending')).toHaveCount(0);
+  });
+
+  test('서버 오류 시 대기 버블이 사라지고 기존 오류 안내가 뜬다', async ({ page }) => {
+    await mockBuildChat(page, { delayMs: 500, status: 500 });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    await expect(panel.getByRole('alert')).toContainText('AI 추천 API 호출에 실패했습니다');
+    await expect(panel.getByTestId('ai-chat-pending')).toHaveCount(0);
+  });
+
+  test('전송 중 중복 제출은 무시되어 대기 버블이 중복되지 않는다', async ({ page }) => {
+    const state = await mockBuildChat(page, { delayMs: 900, message: '단일 응답만 반영.' });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+    await expect(panel.getByTestId('ai-chat-pending')).toBeVisible();
+    await send.click({ force: true }); // isSending 가드로 두 번째 제출은 막혀야 한다
+
+    await expect(panel.getByTestId('ai-chat-pending')).toHaveCount(1);
+    await expect(panel).toContainText('단일 응답만 반영.');
+    await expect(panel.getByTestId('ai-chat-pending')).toHaveCount(0);
+    expect(state.calls).toBe(1);
+  });
+
+  test('모션 최소화 설정에서는 점 애니메이션이 정지한다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await mockBuildChat(page, { delayMs: 1500 });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    const dot = panel.getByTestId('ai-chat-pending-dot').first();
+    await expect(dot).toBeVisible();
+    const animationName = await dot.evaluate((element) => window.getComputedStyle(element).animationName);
+    expect(animationName).toBe('none');
+  });
+
+  test('다중 문장 답변은 문장 단위로 순차 노출된다', async ({ page }) => {
+    const first = '첫 번째 문장입니다.';
+    const last = '마지막 세 번째 문장으로 끝납니다.';
+    await mockBuildChat(page, { delayMs: 300, message: `${first} 두 번째 문장이 이어집니다. ${last}` });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    // 첫 문장은 곧바로 보이지만 마지막 문장은 아직 노출되지 않는다(한 번에 팍 뜨지 않음).
+    await expect(panel).toContainText(first);
+    await expect(panel).not.toContainText(last, { timeout: 150 });
+
+    // 잠시 뒤 세 문장이 모두 노출된다.
+    await expect(panel).toContainText(last);
+    await expect(panel.getByTestId('ai-message-sentence')).toHaveCount(3);
+  });
+
+  test('모션 최소화 설정에서는 답변이 문장 분할 없이 한 번에 노출된다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const last = '마지막 세 번째 문장으로 끝납니다.';
+    await mockBuildChat(page, { delayMs: 300, message: `첫 번째 문장입니다. 두 번째 문장이 이어집니다. ${last}` });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    await expect(panel).toContainText(last); // 전체가 즉시 노출
+    await expect(panel.getByTestId('ai-message-sentence')).toHaveCount(0); // 문장 span 없이 통짜 렌더
+  });
+
+  test('카드형(견적) 답변은 카드가 하나씩 순차로 노출된다', async ({ page }) => {
+    await mockBuildChat(page, { delayMs: 300, message: '요청하신 예산으로 세 조합을 계산했어요.', builds: budgetBuilds(2_000_000) });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    const cards = panel.getByTestId('ai-build-card');
+    // 첫 카드가 뜬 직후엔 3장이 한꺼번에 뜨지 않는다(확 나오지 않고 순차).
+    await expect(cards.first()).toBeVisible();
+    await expect(cards).not.toHaveCount(3, { timeout: 150 });
+    // 잠시 뒤 3장이 모두 노출된다.
+    await expect(cards).toHaveCount(3);
+
+    // AI 견적 카드는 툴 통과 상태·부품 목록 없이, 담기 버튼과 조합별 특이점(짧은 설명)을 보여준다.
+    const firstCard = cards.first();
+    await expect(firstCard).toContainText('이 조합으로 셀프 견적 보기');
+    await expect(firstCard).not.toContainText('통과'); // 툴 검증 칩 제거
+    await expect(firstCard).not.toContainText('서버 추천'); // 부품명 미노출(잘림 방지)
+    // 조합마다 특이점 설명이 달라야 한다: 최저가는 가성비, 최고가는 고사양.
+    await expect(cards.first()).toContainText('가성비');
+    await expect(cards.nth(2)).toContainText('고사양');
+  });
+
+  test('모션 최소화 설정에서는 카드가 한 번에 노출된다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await mockBuildChat(page, { delayMs: 300, message: '요청하신 예산으로 세 조합을 계산했어요.', builds: budgetBuilds(2_000_000) });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('200만원 PC 추천');
+    await send.click();
+
+    // 첫 카드가 보이는 순간 이미 3장이 모두 있어야 한다(순차 노출 없음).
+    await expect(panel.getByTestId('ai-build-card').first()).toBeVisible();
+    await expect(panel.getByTestId('ai-build-card')).toHaveCount(3);
+  });
 });
