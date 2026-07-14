@@ -189,14 +189,6 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   }, [isDesktopAssistant, isEmbedded]);
 
   useEffect(() => {
-    const shouldReserveSpace = !isEmbedded && open && isDesktopAssistant && placement === 'side';
-    document.documentElement.classList.toggle('ai-assistant-open', shouldReserveSpace);
-    return () => {
-      document.documentElement.classList.remove('ai-assistant-open');
-    };
-  }, [open, isDesktopAssistant, placement, isEmbedded]);
-
-  useEffect(() => {
     setAiAssistantOpen(!isEmbedded && open);
   }, [open, isEmbedded]);
 
@@ -516,10 +508,6 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     }
   }, [applyingBuildId, queryClient, navigate]);
 
-  if (!isPanelOpen && isDesktopAssistant) {
-    return null;
-  }
-
   if (!isPanelOpen) {
     return (
       <button
@@ -527,7 +515,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         aria-label="AI 견적 챗봇 열기"
         data-testid="ai-chatbot-launcher"
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 right-5 z-50 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-900 bg-slate-950 text-white shadow-2xl transition hover:-translate-y-0.5 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-blue-200 md:hidden"
+        className="fixed bottom-5 right-5 z-50 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-900 bg-slate-950 text-white shadow-2xl transition hover:-translate-y-0.5 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-blue-200"
       >
         <span className="relative grid h-11 w-11 place-items-center rounded-xl bg-white text-slate-950">
           <Bot size={26} />
@@ -697,7 +685,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const panelClassName = isEmbedded
     ? 'panel flex h-full min-h-0 flex-col overflow-hidden bg-[#f8fbff]'
     : isDesktopAssistant
-    ? 'fixed inset-y-0 right-0 z-50 flex h-dvh w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#f8fbff] shadow-2xl'
+    ? 'fixed bottom-4 right-4 z-50 flex h-[min(620px,calc(100vh-2rem))] w-[min(390px,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-[#f8fbff] shadow-2xl'
     : 'fixed bottom-4 right-3 z-50 w-[min(calc(100vw-1.5rem),460px)] overflow-hidden rounded-2xl border border-slate-200 bg-[#f8fbff] shadow-2xl';
   const bodyClassName = `${isEmbedded || isDesktopAssistant ? 'min-h-0 flex-1' : 'max-h-[78vh]'} flex flex-col`;
 
@@ -706,15 +694,15 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       data-testid="ai-chatbot-panel"
       className={panelClassName}
     >
-      <div className="border-b border-slate-200 bg-white px-4 py-3">
+      <div className={isEmbedded ? 'border-b border-slate-200 bg-white px-4 py-3' : 'border-b border-blue-700 bg-brand-blue px-4 py-3 text-white'}>
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-blue text-white shadow-sm">
+            <div className={isEmbedded ? 'grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-blue text-white shadow-sm' : 'grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-brand-blue shadow-sm'}>
               <Sparkles size={20} />
             </div>
             <div className="min-w-0">
-              <h2 className="truncate text-sm font-black text-commerce-ink">AI 견적 어시스턴트</h2>
-              <p className="truncate text-xs font-bold text-slate-500">{surface === 'home' ? '내부 견적 자산 기준 · 호환성 자동 체크' : '현재 견적 기준 · 부품 교체 자동 적용'}</p>
+              <h2 className={isEmbedded ? 'truncate text-sm font-black text-commerce-ink' : 'truncate text-sm font-black text-white'}>AI 견적 어시스턴트</h2>
+              <p className={isEmbedded ? 'truncate text-xs font-bold text-slate-500' : 'truncate text-xs font-bold text-blue-100'}>{surface === 'home' ? '내부 견적 자산 기준 · 호환성 자동 체크' : '현재 견적 기준 · 부품 교체 자동 적용'}</p>
             </div>
           </div>
           {!isEmbedded ? (
@@ -722,7 +710,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
               type="button"
               aria-label="AI 견적 챗봇 닫기"
               onClick={() => setOpen(false)}
-              className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-blue-100"
+              className="grid h-9 w-9 place-items-center rounded-md border border-white/20 text-white transition hover:bg-white/10 focus:outline-none focus:ring-4 focus:ring-white/20"
             >
               <X size={17} />
             </button>

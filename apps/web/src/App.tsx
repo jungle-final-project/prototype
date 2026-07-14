@@ -9,12 +9,13 @@ import { SupportChatWidget } from './features/support/SupportChatWidget';
 import { AdminAssemblyPage, AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminSupportChatSessionsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
 import { AiBuildAssistant } from './features/quote/components/AiBuildAssistant';
 import { TechnicianApplyPage, TechnicianDashboardPage, TechnicianJobsPage, TechnicianRequestDetailPage } from './features/technician/TechnicianPages';
+import { getToken } from './lib/api';
 
 export default function App() {
   return (
     <>
       <Routes>
-        <Route path="/" element={<RequireUser preserveRedirect={false}><HomePage /></RequireUser>} />
+        <Route path="/" element={<HomePage />} />
         <Route path="/requirements/new" element={<RequireUser><RequirementPage /></RequireUser>} />
         <Route path="/builds/latest" element={<RequireUser><LatestBuildResultPage /></RequireUser>} />
         <Route path="/builds/:buildId" element={<RequireUser><BuildResultPage /></RequireUser>} />
@@ -68,7 +69,7 @@ export default function App() {
 
 function GlobalSupportChatWidget() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/support/new' || pathname === '/my/profile') {
+  if (!getToken() || pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/support/new' || pathname === '/my/profile') {
     return null;
   }
   return <SupportChatWidget />;
@@ -76,7 +77,7 @@ function GlobalSupportChatWidget() {
 
 function GlobalAiBuildAssistant() {
   const { pathname } = useLocation();
-  if (pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/self-quote' || pathname === '/my/profile') {
+  if (!getToken() || pathname === '/login' || pathname === '/signup' || pathname === '/auth/callback' || pathname.startsWith('/admin') || pathname.startsWith('/technician') || pathname === '/self-quote' || pathname === '/my/profile') {
     return null;
   }
   return <AiBuildAssistant surface="home" />;

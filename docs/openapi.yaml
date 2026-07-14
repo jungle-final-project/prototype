@@ -25,6 +25,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+  /api/public/home:
+    get:
+      summary: 비로그인 홈 화면 데이터 조회
+      description: 저장된 ACTIVE 부품과 deterministic fallback 추천만 반환한다. 사용자 개인화, 추천 이벤트 기록, 외부 API 실시간 호출은 수행하지 않는다.
+      security: []
+      responses:
+        "200":
+          description: 공개 홈 화면 데이터
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicHomeResponse"
   /api/demo/manufacturer-release-feed.xml:
     get:
       summary: 로컬 제조사 신제품 감지 데모 RSS
@@ -4960,6 +4972,50 @@ components:
         createdAt:
           type: string
           format: date-time
+    PublicHomeResponse:
+      type: object
+      required: [categoryParts, recommendedParts]
+      properties:
+        categoryParts:
+          $ref: "#/components/schemas/PublicHomeCategoryParts"
+        recommendedParts:
+          $ref: "#/components/schemas/HomeRecommendedPartsResponse"
+    PublicHomeCategoryParts:
+      type: object
+      required: [CPU, GPU, MOTHERBOARD, RAM, STORAGE, PSU, CASE, COOLER]
+      properties:
+        CPU:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        GPU:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        MOTHERBOARD:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        RAM:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        STORAGE:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        PSU:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        CASE:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
+        COOLER:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartDto"
     HomeRecommendedPartsResponse:
       type: object
       required: [items, generatedAt, fallbackUsed]
