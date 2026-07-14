@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { BuildDetailSections, latestUserMessage, temporaryBuildToBuildSummary } from '../components/BuildDetailSections';
 import { QuoteCard } from '../components/QuoteCard';
-import { getBuild, saveBuildFromChat } from '../quoteApi';
+import { buildSaveErrorMessage, getBuild, saveBuildFromChat } from '../quoteApi';
 import { markAssistantBuildSaved, readAssistantSession, type AiRecommendedBuild } from '../aiSelection';
 
 export function BuildResultPage() {
@@ -83,7 +83,7 @@ export function BuildResultPage() {
                 {saveMutation.isPending ? '저장 중' : '견적 저장'}
               </button>
               {saveMutation.isError ? (
-                <StateMessage type="warn" title="견적 저장 실패" body="AI 챗봇 추천 견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+                <StateMessage type="warn" title="견적 저장 실패" body={buildSaveErrorMessage(saveMutation.error)} />
               ) : null}
             </>
           ) : (

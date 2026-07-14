@@ -24,7 +24,7 @@ import {
   type AiSelectedBuild
 } from '../../quote/aiSelection';
 import { AiBuildAssistant } from '../../quote/components/AiBuildAssistant';
-import { resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
+import { buildSaveErrorMessage, resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
 import { DraftQuantityStepper } from '../components/slot-board/DraftQuantityStepper';
@@ -455,6 +455,7 @@ function SelfQuoteSlotBoardPage() {
               isSavePending={saveQuoteMutation.isPending}
               isSaveSuccess={saveQuoteMutation.isSuccess}
               isSaveError={saveQuoteMutation.isError}
+              saveErrorMessage={buildSaveErrorMessage(saveQuoteMutation.error)}
               showCheckoutActions={draftItems.length === 0}
               compact
             />

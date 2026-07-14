@@ -17,6 +17,7 @@ type SlotStatusBarProps = {
   isSavePending: boolean;
   isSaveSuccess: boolean;
   isSaveError: boolean;
+  saveErrorMessage: string;
   showCheckoutActions?: boolean;
   compact?: boolean;
 };
@@ -32,6 +33,7 @@ export function SlotStatusBar({
   isSavePending,
   isSaveSuccess,
   isSaveError,
+  saveErrorMessage,
   showCheckoutActions = true,
   compact = false
 }: SlotStatusBarProps) {
@@ -56,7 +58,7 @@ export function SlotStatusBar({
         ) : null}
         {isSaveError ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-black text-amber-700">
-            내 견적함 추가 실패 — 잠시 후 다시 시도해 주세요.
+            {saveErrorMessage}
           </div>
         ) : null}
       </section>
@@ -121,7 +123,7 @@ export function SlotStatusBar({
         </div>
       ) : null}
       {isSaveError ? (
-        <StateMessage type="warn" title="내 견적함 추가 실패" body="현재 견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+        <StateMessage type="warn" title="내 견적함 추가 실패" body={saveErrorMessage} />
       ) : null}
     </section>
   );

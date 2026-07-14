@@ -125,6 +125,26 @@ class BuildQueryServiceFromChatTest {
         verify(jdbcTemplate, never()).queryForObject(contains("INSERT INTO requirements"), eq(Long.class), any());
     }
 
+    @Test
+    void saveFromChatRejectsAnAlreadySavedPartCombination() {
+        when(jdbcTemplate.queryForList(contains("FROM parts"), eq("00000000-0000-4000-8000-000000000101")))
+                .thenReturn(List.of(part(101L, "00000000-0000-4000-8000-000000000101", "CPU", "Ryzen 7", 500000)));
+        when(jdbcTemplate.queryForList(contains("FROM parts"), eq("00000000-0000-4000-8000-000000000201")))
+                .thenReturn(List.of(part(201L, "00000000-0000-4000-8000-000000000201", "GPU", "RTX 5070", 900000)));
+        when(jdbcTemplate.queryForList(contains("SELECT b.id AS build_id"), eq(USER.internalId())))
+                .thenReturn(List.of(
+                        Map.of("build_id", 77L, "part_id", "00000000-0000-4000-8000-000000000101"),
+                        Map.of("build_id", 77L, "part_id", "00000000-0000-4000-8000-000000000201")
+                ));
+
+        assertThatThrownBy(() -> service.saveFromChat(request(), USER))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getReason()).isEqualTo("이미 저장되었습니다.");
+                });
+        verify(jdbcTemplate, never()).queryForObject(contains("INSERT INTO requirements"), eq(Long.class), any());
+    }
+
     private static Map<String, Object> request() {
         return MockData.map(
                 "sourceBuildId", "ai-budget-2000000-balanced",
