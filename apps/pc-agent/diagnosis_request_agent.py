@@ -200,7 +200,14 @@ class DiagnosisSessionStore:
 
     def is_busy(self) -> bool:
         with self._lock:
-            return self._session is not None and self._session.agent_state in ACTIVE_DIAGNOSIS_STATES
+            return (
+                self._session is not None
+                and self._session.agent_state in ACTIVE_DIAGNOSIS_STATES
+                and not (
+                    self._session.agent_state == "REQUEST_RECEIVED"
+                    and self._session.request.source == STANDALONE
+                )
+            )
 
     def accept(self, session: DiagnosisSession) -> None:
         with self._lock:

@@ -111,6 +111,18 @@ class DiagnosisRequestProcessorTest(unittest.TestCase):
         self.assertEqual(STANDALONE, restored.request.source)
         self.assertEqual("", restored.request.symptom)
 
+    def test_web_request_replaces_default_standalone_request_received_session(self):
+        standalone = DiagnosisRequest.from_payload(
+            request_payload(diagnosis_id="standalone-1", symptom=""),
+            source=STANDALONE,
+        )
+        self.store.accept(DiagnosisSession(standalone))
+
+        decision = self.processor.process(request_payload(), authenticated=True)
+
+        self.assertEqual("ACCEPTED", decision.status)
+        self.assertEqual(WEB_REQUEST, self.store.session.request.source)
+
     def test_rejects_auth_device_expiry_and_busy_cases(self):
         self.assertEqual("AUTH_FAILED", self.processor.process(request_payload(), authenticated=False).status)
         self.assertEqual("DEVICE_MISMATCH", self.processor.process(request_payload(device_id="other"), True).status)
