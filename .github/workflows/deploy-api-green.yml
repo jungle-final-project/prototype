@@ -1,0 +1,175 @@
+name: Deploy Green API
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/api/**"
+      - "infra/nginx/api.conf"
+      - "compose.api.ecr.prod.yaml"
+      - "tools/deploy_green_ecr.sh"
+      - "tools/test_validate_green_deployment.py"
+      - ".github/workflows/deploy-api-green.yml"
+  workflow_dispatch:
+    inputs:
+      git_sha:
+        description: "40-character Git SHA to publish and deploy; defaults to the selected branch SHA"
+        required: false
+        type: string
+      publish_only:
+        description: "Publish the ECR image without changing Green EC2"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-green-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: test-publish-deploy-green-api
+    if: github.event_name == 'workflow_dispatch' || vars.GREEN_CD_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Resolve immutable deployment target
+        id: target
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.git_sha }}
+          DEFAULT_SHA: ${{ github.sha }}
+          PUBLISH_ONLY: ${{ inputs.publish_only || false }}
+        run: |
+          set -euo pipefail
+          target_sha="${REQUESTED_SHA:-$DEFAULT_SHA}"
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::git_sha must be a 40-character lowercase Git SHA"
+            exit 1
+          }
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "publish_only=$PUBLISH_ONLY" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify target belongs to main
+        env:
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tools/requirements.txt
+
+      - name: Validate Green deployment contracts
+        run: |
+          python -m pip install -r tools/requirements.txt
+          python -m unittest tools.test_validate_infrastructure_separation tools.test_validate_green_deployment
+          python tools/validate_infrastructure_separation.py
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run API tests
+        working-directory: apps/api
+        run: ./gradlew test --no-daemon
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Reuse or publish immutable API image
+        id: image
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.GREEN_API_ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          : "${ECR_REPOSITORY:?GREEN_API_ECR_REPOSITORY repository variable is required}"
+          image_uri="${ECR_REGISTRY}/${ECR_REPOSITORY}:${DEPLOY_SHA}"
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$DEPLOY_SHA" >/dev/null 2>&1; then
+            echo "Reusing existing immutable API image for $DEPLOY_SHA"
+          else
+            docker build --pull -t "$image_uri" apps/api
+            docker push "$image_uri"
+          fi
+          echo "uri=$image_uri" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy API to Green EC2 through SSM
+        if: steps.target.outputs.publish_only != 'true'
+        id: deploy
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          IMAGE_URI: ${{ steps.image.outputs.uri }}
+          INSTANCE_ID: ${{ vars.GREEN_EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          : "${INSTANCE_ID:?GREEN_EC2_INSTANCE_ID repository variable is required}"
+          remote_command="sudo -iu ubuntu -- /opt/buildgraph/prototype/tools/deploy_green_ecr.sh api $DEPLOY_SHA $IMAGE_URI"
+          parameters="$(jq -nc --arg command "$remote_command" '{commands:[$command]}')"
+          command_id="$(aws ssm send-command --document-name AWS-RunShellScript --instance-ids "$INSTANCE_ID" --comment "BuildGraph Green API $DEPLOY_SHA" --parameters "$parameters" --query 'Command.CommandId' --output text)"
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+          result=""
+          command_status="Pending"
+          for attempt in $(seq 1 180); do
+            if result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null)"; then
+              command_status="$(jq -r '.Status' <<<"$result")"
+              case "$command_status" in
+                Success|Cancelled|TimedOut|Failed|Cancelling)
+                  break
+                  ;;
+              esac
+            fi
+            sleep 10
+          done
+          [[ -n "$result" ]] || {
+            echo "::error::Green API deployment did not return an SSM result"
+            exit 1
+          }
+          jq -r '.StandardOutputContent, .StandardErrorContent' <<<"$result"
+          [[ "$command_status" == "Success" ]] || {
+            echo "::error::Green API deployment failed with SSM status $command_status"
+            exit 1
+          }
+
+      - name: Record deployment
+        if: success()
+        run: |
+          {
+            echo "### Green API pipeline succeeded"
+            echo
+            echo "- Commit: \`${{ steps.target.outputs.sha }}\`"
+            echo "- Image: \`${{ steps.image.outputs.uri }}\`"
+            echo "- Publish only: \`${{ steps.target.outputs.publish_only }}\`"
+            echo "- SSM command: \`${{ steps.deploy.outputs.command_id || 'not-run' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
