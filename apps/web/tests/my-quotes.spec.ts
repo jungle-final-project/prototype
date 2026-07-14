@@ -249,7 +249,7 @@ async function openMyQuotesAsUser(page: Page, assemblyItems: unknown[] = []) {
     const partIds = (body.items ?? []).map((item: { partId?: string }) => item.partId).join('|');
     const isWorkstation = partIds.includes('part-gpu-5080');
     const compositeScore = isWorkstation ? compositeScoreFixture(924, '고성능') : compositeScoreFixture(854, '고성능');
-    const cpuBenchmarkScore = isWorkstation ? 80 : 72;
+    const cpuBenchmarkScore = isWorkstation ? 73 : 72;
     const gpuBenchmarkScore = isWorkstation ? 92 : 78;
     await route.fulfill({
       status: 200,
@@ -296,14 +296,13 @@ async function openMyQuotesAsUser(page: Page, assemblyItems: unknown[] = []) {
 test('shows saved quotes, actionable price alert setup, and alert progress', async ({ page }) => {
   const { priceAlertRequests } = await openMyQuotesAsUser(page);
 
-  await expect(page.getByRole('heading', { name: '내 견적함 / 목표가 알림' })).toBeVisible();
-  await expect(page.getByTestId('my-quotes-build-count')).toContainText('3개');
-  await expect(page.getByTestId('my-quotes-alert-count')).toContainText('2개');
-  await expect(page.getByTestId('my-quotes-achieved-count')).toContainText('1개');
-  await expect(page.getByTestId('my-assembly-requests-link')).toHaveAttribute('href', '/my/assembly-requests');
+  await expect(page.getByRole('heading', { name: '내 견적함 / 목표가 알림' })).toHaveCount(0);
 
   const firstBuild = page.getByTestId('saved-build-card-build-qhd-balanced');
   await expect(firstBuild).toContainText('QHD 균형 저장 견적');
+  const alertRegistration = page.getByTestId('quote-alert-registration');
+  await expect(alertRegistration).toBeVisible();
+  expect((await alertRegistration.boundingBox())?.y).toBeLessThan((await firstBuild.boundingBox())?.y ?? 0);
   await expect(firstBuild.getByRole('link', { name: '견적 상세' })).toHaveAttribute('href', '/builds/build-qhd-balanced');
   await expect(firstBuild.getByRole('button', { name: '부품 변경' })).toBeVisible();
   // 저장 견적 비교 — 비교할 견적을 고르면 전 카테고리 부품 + 성능을 좌우로 나열.
@@ -313,7 +312,7 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(perfMatrix).toContainText('QHD 균형 저장 견적');
   await expect(perfMatrix).toContainText('작업용 저장 견적');
   // 부품 비교 섹션 — 카테고리별 실제 부품이 대칭 행으로 나열된다.
-  await expect(perfMatrix).toContainText('견적 A 구성 및 가격');
+  await expect(perfMatrix).toContainText('A 견적');
   await expect(perfMatrix).toContainText('메인보드');
   await expect(perfMatrix).toContainText('AMD Ryzen 7 9700X');
   await expect(perfMatrix).toContainText('GeForce RTX 5070');
@@ -324,17 +323,25 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   await expect(perfMatrix.getByTestId('quote-summary-B')).toContainText('3,140,000원');
   await expect(perfMatrix.getByTestId('quote-summary-B')).toContainText('924점');
   await expect(perfMatrix.getByTestId('quote-compare-price-delta')).toContainText('A가 960,000원 저렴');
-  await expect(perfMatrix.getByTestId('quote-compare-score-delta')).toContainText('B가 종합점수 70점 높음');
+  await expect(perfMatrix.getByTestId('quote-compare-score-delta')).toContainText('B가 70점 높음');
   // 수치가 있는 부품만 동일 색상 상대 막대를 사용한다.
   await expect(perfMatrix.getByTestId('quote-compare-bar-CPU-A')).toContainText('72점');
   await expect(perfMatrix.getByTestId('quote-compare-bar-GPU-B')).toContainText('92점');
-  await expect(perfMatrix.getByTestId('quote-compare-row-RAM')).toContainText('B의 RAM 용량이 32GB 큼');
-  await expect(perfMatrix.getByTestId('quote-compare-row-STORAGE')).toContainText('B의 SSD 읽기 속도가 약 95% 높음');
-  await expect(perfMatrix.getByTestId('quote-compare-row-PSU')).toContainText('B의 정격 출력이 200W 높음');
-  // 규격형 부품에는 임의 점수나 막대를 만들지 않는다.
-  await expect(perfMatrix.getByTestId('quote-compare-row-MOTHERBOARD')).toContainText('동일 부품');
-  await expect(perfMatrix.getByTestId('quote-compare-row-MOTHERBOARD').getByText('수치 막대 없음')).toHaveCount(2);
-  await expect(perfMatrix.getByTestId('quote-compare-row-COOLER')).toContainText('견적 B에 미포함');
+  await expect(perfMatrix.getByTestId('quote-compare-description-CPU')).toContainText('CPU 성능 유사 · B +1%');
+  await expect(perfMatrix.getByTestId('quote-compare-description-GPU')).toContainText('B GPU 성능 +18%');
+  await expect(perfMatrix.getByTestId('quote-compare-description-RAM')).toContainText('B RAM 용량 +32GB');
+  await expect(perfMatrix.getByTestId('quote-compare-description-STORAGE')).toContainText('B SSD 읽기 속도 +95%');
+  await expect(perfMatrix.getByTestId('quote-compare-description-PSU')).toContainText('B 정격 출력 +200W');
+  // 규격형 부품은 실제 규격을 보이며 의미 없는 막대를 반복하지 않는다.
+  const motherboardRow = perfMatrix.getByTestId('quote-compare-row-MOTHERBOARD');
+  await expect(motherboardRow).toContainText('동일 부품');
+  await expect(motherboardRow).toHaveClass(/py-2\.5/);
+  await expect(motherboardRow.getByTestId('quote-compare-spec-MOTHERBOARD-A')).toContainText('AM5 · B650 · DDR5');
+  await expect(motherboardRow.getByTestId('quote-compare-bar-MOTHERBOARD-A')).toHaveCount(0);
+  await expect(perfMatrix.getByTestId('quote-compare-row-COOLER')).toContainText('B 미포함');
+  await expect(perfMatrix.getByTestId('quote-compare-description-CPU')).toHaveClass(/text-slate-500/);
+  await expect(perfMatrix.getByTestId('quote-compare-description-GPU')).toHaveClass(/text-emerald-700/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   // 2개 선택 중에는 세 번째 견적 선택을 막는다.
   await expect(perfMatrix.getByTestId('compare-toggle-build-office')).toBeDisabled();
   // 견적 선택 해제 시 결과 대신 안내가 나오고 다른 견적을 선택할 수 있다.
@@ -362,26 +369,6 @@ test('shows saved quotes, actionable price alert setup, and alert progress', asy
   const triggeredAlert = page.getByTestId('price-alert-row-part-ssd-990pro');
   await expect(triggeredAlert).toContainText('Samsung 990 PRO 1TB');
   await expect(triggeredAlert).toContainText('목표 달성');
-});
-
-test('links directly from my quotes to a newly arrived technician offer', async ({ page }) => {
-  const requestId = '00000000-0000-4000-8000-000000020021';
-  await openMyQuotesAsUser(page, [{
-    id: requestId,
-    requestNo: 'ASM-MY-QUOTES-OFFER',
-    status: 'OFFERED',
-    serviceType: 'FULL_SERVICE',
-    region: '서울',
-    preferredDate: '2099-07-20',
-    deliveryMethod: 'DELIVERY',
-    estimatedPartsPrice: 2_000_000,
-    itemCount: 8,
-    availableOfferCount: 1
-  }]);
-
-  const link = page.getByTestId('my-assembly-requests-link');
-  await expect(link).toHaveAttribute('href', `/checkout/offers/${requestId}`);
-  await expect(link).toContainText('도착한 기사 제안 1건 확인');
 });
 
 test('limits target price dropdown to the selected quote and opens checkout for that quote', async ({ page }) => {
@@ -470,9 +457,8 @@ test('opens a read-only dependency graph popup for each saved quote', async ({ p
   await expect(dialog).toHaveCount(0);
 });
 
-test('renames, duplicates, and soft-deletes a saved quote', async ({ page }) => {
+test('renames and soft-deletes a saved quote without offering duplicate', async ({ page }) => {
   const patchRequests: Array<{ id: string; name: string }> = [];
-  const duplicateRequests: string[] = [];
   const deleteRequests: string[] = [];
   let builds = savedBuilds.map((build) => ({ ...build }));
 
@@ -491,14 +477,6 @@ test('renames, duplicates, and soft-deletes a saved quote', async ({ page }) => 
 
     if (path.endsWith('/history')) {
       return json({ items: builds });
-    }
-    const dupMatch = path.match(/\/api\/builds\/([^/]+)\/duplicate$/);
-    if (method === 'POST' && dupMatch) {
-      const source = builds.find((build) => build.id === dupMatch[1]) ?? builds[0];
-      const copy = { ...source, id: `${source.id}-copy`, name: `${source.name} (사본)` };
-      builds = [copy, ...builds];
-      duplicateRequests.push(dupMatch[1]);
-      return json(copy);
     }
     const idMatch = path.match(/\/api\/builds\/([^/]+)$/);
     if (method === 'PATCH' && idMatch) {
@@ -526,10 +504,7 @@ test('renames, duplicates, and soft-deletes a saved quote', async ({ page }) => 
   await expect.poll(() => patchRequests.some((request) => request.name === '내 메인 견적')).toBe(true);
   await expect(firstCard.getByRole('heading', { name: '내 메인 견적' })).toBeVisible();
 
-  // 복제 → 사본 카드가 생긴다
-  await firstCard.getByTestId('duplicate-build-qhd-balanced').click();
-  await expect.poll(() => duplicateRequests.length).toBe(1);
-  await expect(page.getByTestId('saved-build-card-build-qhd-balanced-copy')).toBeVisible();
+  await expect(firstCard.getByRole('button', { name: '복제' })).toHaveCount(0);
 
   // 삭제(인라인 확인) → 카드가 사라진다
   const workstationCard = page.getByTestId('saved-build-card-build-workstation');

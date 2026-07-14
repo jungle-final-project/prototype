@@ -1,14 +1,13 @@
-import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellRing, Check, CheckCircle2, ClipboardList, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
+import { Check, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
-import { listAssemblyRequests } from '../../parts/assemblyApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
 import type { BuildCompositeScore, PartCategory } from '../aiSelection';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
-import { createQuotePriceAlert, deleteBuild, duplicateBuild, getBuildHistory, getPriceAlerts, renameBuild, resolveBuildGraph, type PriceAlert } from '../quoteApi';
+import { createQuotePriceAlert, deleteBuild, getBuildHistory, getPriceAlerts, renameBuild, resolveBuildGraph, type PriceAlert } from '../quoteApi';
 import type { BuildItem, BuildSummary } from '../types';
 
 type SavedPartOption = {
@@ -36,13 +35,10 @@ export function MyQuotesPage() {
 
   const buildsQuery = useQuery({ queryKey: ['build-history'], queryFn: getBuildHistory });
   const alertsQuery = useQuery({ queryKey: ['price-alerts'], queryFn: getPriceAlerts });
-  const assemblyRequestsQuery = useQuery({
-    queryKey: ['assembly-requests'],
-    queryFn: () => listAssemblyRequests(),
-    refetchInterval: 5000
-  });
-
-  const builds = buildsQuery.data?.items ?? [];
+  const builds = useMemo(
+    () => uniqueBuildsByPartCombination(buildsQuery.data?.items ?? []),
+    [buildsQuery.data?.items]
+  );
   const alerts = alertsQuery.data?.items ?? [];
   const selectedAlertBuild = useMemo(
     () => builds.find((build) => build.id === selectedAlertBuildId) ?? builds[0],
@@ -55,11 +51,7 @@ export function MyQuotesPage() {
   const selectedSavedPart = savedPartOptions.find((option) => option.partId === selectedSavedPartId);
   const selectedPartIdForSubmit = selectedSavedPartId;
   const targetPriceNumber = Number(targetPrice.replace(/,/g, ''));
-  const achievedAlertCount = alerts.filter((alert) => isPriceTargetAchieved(alert)).length;
   const nearestAlert = useMemo(() => findNearestAlert(alerts), [alerts]);
-  const offeredAssemblyRequest = assemblyRequestsQuery.data?.items.find(
-    (request) => request.status === 'OFFERED' && (request.availableOfferCount ?? 1) > 0
-  );
   const graphBuildItems = useMemo(() => graphBuild ? quoteDraftItemsForBuild(graphBuild) : [], [graphBuild]);
   const graphQuery = useQuery({
     queryKey: ['build-graph', 'saved-build', graphBuild?.id, graphBuildSignature(graphBuildItems), graphBuild?.totalPrice],
@@ -107,10 +99,6 @@ export function MyQuotesPage() {
     mutationFn: ({ buildId, name }: { buildId: string; name: string }) => renameBuild(buildId, name),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['build-history'] })
   });
-  const duplicateBuildMutation = useMutation({
-    mutationFn: (buildId: string) => duplicateBuild(buildId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['build-history'] })
-  });
   const deleteBuildMutation = useMutation({
     mutationFn: (buildId: string) => deleteBuild(buildId),
     onSuccess: (_result, buildId) => {
@@ -153,43 +141,15 @@ export function MyQuotesPage() {
   return (
     <Screen>
       <div className="space-y-5">
-        <section className="rounded-md border border-commerce-line bg-white p-5 shadow-product">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-            <div>
-              <p className="text-xs font-black tracking-wide text-brand-blue">견적 데스크</p>
-              <h1 className="mt-1 text-2xl font-black tracking-tight text-commerce-ink">내 견적함 / 목표가 알림</h1>
-              <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-slate-600">
-                저장한 견적을 확인하고, 관심 부품의 현재가가 목표가에 가까워지는지 한 화면에서 추적합니다.
-              </p>
-              <Link
-                to={offeredAssemblyRequest ? `/checkout/offers/${offeredAssemblyRequest.id}` : '/my/assembly-requests'}
-                data-testid="my-assembly-requests-link"
-                className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-commerce-line bg-white px-4 text-sm font-black text-commerce-ink transition hover:border-brand-blue hover:text-brand-blue"
-              >
-                <ClipboardList size={16} />
-                {offeredAssemblyRequest
-                  ? offeredAssemblyRequest.availableOfferCount == null
-                    ? '도착한 기사 제안 확인'
-                    : `도착한 기사 제안 ${offeredAssemblyRequest.availableOfferCount}건 확인`
-                  : '조립 요청 진행'}
-              </Link>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[520px]">
-              <SummaryMetric testId="my-quotes-build-count" icon={<FileText size={17} />} label="저장 견적" value={`${builds.length}개`} />
-              <SummaryMetric testId="my-quotes-alert-count" icon={<BellRing size={17} />} label="목표가 알림" value={`${alerts.length}개`} />
-              <SummaryMetric testId="my-quotes-achieved-count" icon={<CheckCircle2 size={17} />} label="목표 달성" value={`${achievedAlertCount}개`} tone="success" />
-            </div>
-          </div>
-        </section>
-
         {!buildsQuery.isLoading && !buildsQuery.isError && builds.length ? (
           <SavedBuildsComparison builds={builds} />
         ) : null}
 
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid gap-5">
           <Panel
             title="저장 견적"
             subtitle="상세 확인, 부품 변경, 목표가 알림 등록까지 바로 이어집니다."
+            className="order-2"
             action={<Link to="/requirements/new" className="rounded-md bg-brand-blue px-3 py-2 text-xs font-black text-white hover:bg-blue-700">AI 견적 시작</Link>}
           >
             {buildsQuery.isLoading ? (
@@ -209,10 +169,8 @@ export function MyQuotesPage() {
                     onEditParts={openSelfQuoteForBuild}
                     onOpenGraph={setGraphBuild}
                     onRename={(name) => renameBuildMutation.mutate({ buildId: build.id, name })}
-                    onDuplicate={() => { if (!duplicateBuildMutation.isPending) duplicateBuildMutation.mutate(build.id); }}
                     onDelete={() => { if (!deleteBuildMutation.isPending) deleteBuildMutation.mutate(build.id); }}
                     isRenaming={renameBuildMutation.isPending && renameBuildMutation.variables?.buildId === build.id}
-                    isDuplicating={duplicateBuildMutation.isPending && duplicateBuildMutation.variables === build.id}
                     isDeleting={deleteBuildMutation.isPending && deleteBuildMutation.variables === build.id}
                   />
                 ))}
@@ -231,14 +189,14 @@ export function MyQuotesPage() {
             )}
           </Panel>
 
-          <div ref={alertFormRef} className="xl:sticky xl:top-5 xl:self-start">
+          <div ref={alertFormRef} data-testid="quote-alert-registration" className="order-1">
             <Panel title="목표가 알림 등록" subtitle="선택한 저장 견적에 포함된 부품만 목표가 알림으로 등록할 수 있습니다.">
-              <form onSubmit={submitAlert} className="space-y-4">
+              <form onSubmit={submitAlert} className="grid gap-4 lg:grid-cols-[minmax(320px,1.4fr)_minmax(180px,0.7fr)_160px_minmax(220px,0.9fr)] lg:items-end">
                 <div>
                   {selectedAlertBuild ? (
                     <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
                       <div className="text-[11px] font-black text-brand-blue">선택한 저장 견적</div>
-                      <div className="mt-1 truncate text-sm font-black text-commerce-ink" title={selectedAlertBuild.name}>{selectedAlertBuild.name}</div>
+                      <div className="mt-1 truncate text-sm font-black text-commerce-ink" title={displayBuildName(selectedAlertBuild)}>{displayBuildName(selectedAlertBuild)}</div>
                     </div>
                   ) : null}
                   <label htmlFor="quote-alert-saved-part" className="mb-1 block text-xs font-black text-slate-600">저장 견적 부품</label>
@@ -296,13 +254,13 @@ export function MyQuotesPage() {
                   </div>
                 ) : null}
 
-                {createAlertMutation.isSuccess ? <StateMessage type="success" title="알림 등록 완료" body="목표가 알림 목록에 반영했습니다." /> : null}
-                {createAlertMutation.isError ? <StateMessage type="warn" title="알림 등록 실패" body="이미 같은 목표가 알림이 있거나 부품 ID가 유효하지 않습니다." /> : null}
+                {createAlertMutation.isSuccess ? <div className="lg:col-span-full"><StateMessage type="success" title="알림 등록 완료" body="목표가 알림 목록에 반영했습니다." /></div> : null}
+                {createAlertMutation.isError ? <div className="lg:col-span-full"><StateMessage type="warn" title="알림 등록 실패" body="이미 같은 목표가 알림이 있거나 부품 ID가 유효하지 않습니다." /></div> : null}
               </form>
             </Panel>
           </div>
 
-          <Panel title="목표가 알림" subtitle="현재가가 목표가에 얼마나 가까운지 차액과 진행률로 확인합니다." className="xl:col-span-2">
+          <Panel title="목표가 알림" subtitle="현재가가 목표가에 얼마나 가까운지 차액과 진행률로 확인합니다." className="order-3">
             {alertsQuery.isLoading ? (
               <AlertSkeleton />
             ) : alertsQuery.isError ? (
@@ -332,35 +290,6 @@ export function MyQuotesPage() {
   );
 }
 
-function SummaryMetric({
-  icon,
-  label,
-  value,
-  testId,
-  tone = 'default'
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  testId: string;
-  tone?: 'default' | 'success';
-}) {
-  return (
-    <div data-testid={testId} className={`rounded-md border px-3 py-3 ${
-      tone === 'success'
-        ? 'border-emerald-100 bg-emerald-50'
-        : 'border-slate-200 bg-slate-50'
-    }`}
-    >
-      <div className="flex items-center gap-2 text-xs font-black text-slate-500">
-        <span className={tone === 'success' ? 'text-emerald-600' : 'text-brand-blue'}>{icon}</span>
-        {label}
-      </div>
-      <div className="mt-1 text-xl font-black text-commerce-ink">{value}</div>
-    </div>
-  );
-}
-
 function AlertStatusPill({ alert }: { alert: PriceAlert }) {
   const achieved = isPriceTargetAchieved(alert);
   return (
@@ -384,10 +313,8 @@ function SavedBuildCard({
   onEditParts,
   onOpenGraph,
   onRename,
-  onDuplicate,
   onDelete,
   isRenaming,
-  isDuplicating,
   isDeleting
 }: {
   build: BuildSummary;
@@ -398,17 +325,15 @@ function SavedBuildCard({
   onEditParts: (build: BuildSummary) => void;
   onOpenGraph: (build: BuildSummary) => void;
   onRename: (name: string) => void;
-  onDuplicate: () => void;
   onDelete: () => void;
   isRenaming: boolean;
-  isDuplicating: boolean;
   isDeleting: boolean;
 }) {
   const mainItems = (build.items ?? []).slice(0, 4);
   const hasAlertablePart = Boolean(resolvePartId(build.items?.[0]));
   const hasCheckoutItems = quoteDraftItemsForBuild(build).length > 0;
   const [isEditingName, setIsEditingName] = useState(false);
-  const [nameInput, setNameInput] = useState(build.name);
+  const [nameInput, setNameInput] = useState(displayBuildName(build));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   function submitRename() {
@@ -417,12 +342,12 @@ function SavedBuildCard({
     if (trimmed && trimmed !== build.name) {
       onRename(trimmed);
     } else {
-      setNameInput(build.name);
+      setNameInput(displayBuildName(build));
     }
   }
 
   function cancelRename() {
-    setNameInput(build.name);
+    setNameInput(displayBuildName(build));
     setIsEditingName(false);
   }
 
@@ -466,12 +391,12 @@ function SavedBuildCard({
             </div>
           ) : (
             <div className="mt-2 flex items-center gap-1.5">
-              <h2 className="min-w-0 text-lg font-black leading-6 text-commerce-ink">{isRenaming ? nameInput : build.name}</h2>
+              <h2 className="min-w-0 text-lg font-black leading-6 text-commerce-ink">{isRenaming ? nameInput : displayBuildName(build)}</h2>
               <button
                 type="button"
-                aria-label={`${build.name} 이름 변경`}
+                aria-label={`${displayBuildName(build)} 이름 변경`}
                 data-testid={`rename-${build.id}`}
-                onClick={() => { setNameInput(build.name); setIsEditingName(true); }}
+                onClick={() => { setNameInput(displayBuildName(build)); setIsEditingName(true); }}
                 className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
               >
                 <Pencil size={14} />
@@ -523,17 +448,8 @@ function SavedBuildCard({
         >
           <Target size={14} /> 목표가 등록
         </button>
-        {/* 견적 관리: 복제·삭제(삭제는 인라인 확인). 오른쪽으로 밀어 주요 액션과 구분한다. */}
+        {/* 동일 부품 조합은 중복 저장하지 않으므로 관리 액션은 삭제만 제공한다. */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            data-testid={`duplicate-${build.id}`}
-            disabled={isDuplicating}
-            onClick={onDuplicate}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink disabled:cursor-wait disabled:text-slate-400"
-          >
-            <Copy size={14} /> {isDuplicating ? '복제 중' : '복제'}
-          </button>
           {confirmingDelete ? (
             <div className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1">
               <span className="text-[11px] font-black text-red-700">삭제할까요?</span>
@@ -594,6 +510,13 @@ type CategoryComparison = {
   description: string;
   metaA: string[];
   metaB: string[];
+  samePart: boolean;
+};
+
+type ComparisonOutcome = {
+  prefix: string;
+  emphasis?: string;
+  tone: 'positive' | 'neutral' | 'muted';
 };
 
 function itemsForCategory(build: BuildSummary, category: string): BuildItem[] {
@@ -698,12 +621,12 @@ function SavedBuildsComparison({ builds }: { builds: BuildSummary[] }) {
                     ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300'
                     : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
               }`}
-              title={build.name}
+              title={displayBuildName(build)}
             >
               <span className={`inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-black ${active ? 'bg-brand-blue text-white' : 'bg-slate-200 text-slate-400'}`}>
                 {active ? (selectionIndex === 0 ? 'A' : 'B') : ''}
               </span>
-              <span className="truncate">{build.name}</span>
+              <span className="truncate">{displayBuildName(build)}</span>
             </button>
           );
         })}
@@ -724,7 +647,7 @@ function SavedBuildComparisonResult({ columnA, columnB }: { columnA: ComparisonC
   );
 
   return (
-    <div className="mt-5 space-y-5">
+    <div className="mt-4 space-y-4">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.9fr)_minmax(0,1fr)]">
         <QuoteSummaryCard label="A" column={columnA} />
         <ComparisonDeltaCard columnA={columnA} columnB={columnB} />
@@ -732,12 +655,12 @@ function SavedBuildComparisonResult({ columnA, columnB }: { columnA: ComparisonC
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="hidden grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] items-center border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-center text-[11px] font-black text-slate-500 md:grid">
-          <span>견적 A 구성 및 가격</span>
+        <div className="hidden grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] items-center border-b border-slate-200 bg-slate-50 px-4 py-2 text-center text-[11px] font-black text-slate-500 md:grid">
+          <span>A 견적</span>
           <span>A 지표</span>
-          <span>부품군</span>
+          <span>부품</span>
           <span>B 지표</span>
-          <span>견적 B 구성 및 가격</span>
+          <span>B 견적</span>
         </div>
         <div className="divide-y divide-slate-100">
           {categories.map((category) => {
@@ -763,15 +686,15 @@ function SavedBuildComparisonResult({ columnA, columnB }: { columnA: ComparisonC
 function QuoteSummaryCard({ label, column }: { label: 'A' | 'B'; column: ComparisonColumn }) {
   const score = column.compositeScore;
   return (
-    <article data-testid={`quote-summary-${label}`} className="rounded-lg border border-blue-200 bg-white px-4 py-4 shadow-sm">
+    <article data-testid={`quote-summary-${label}`} className="rounded-lg border border-blue-200 bg-white px-4 py-3 shadow-sm">
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-blue text-base font-black text-white">{label}</span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-black text-commerce-ink" title={column.build.name}>{column.build.name}</div>
-          <div className="mt-3 grid grid-cols-2 divide-x divide-slate-200">
+          <div className="truncate text-base font-black text-commerce-ink" title={displayBuildName(column.build)}>{displayBuildName(column.build)}</div>
+          <div className="mt-2 grid grid-cols-2 divide-x divide-slate-200">
             <div className="pr-3">
               <div className="text-[10px] font-bold text-slate-400">총 견적 금액</div>
-              <div className="mt-1 text-lg font-black tracking-tight text-brand-blue">{column.build.totalPrice.toLocaleString('ko-KR')}원</div>
+              <div className="mt-1 text-lg font-black tracking-tight text-commerce-ink">{column.build.totalPrice.toLocaleString('ko-KR')}원</div>
             </div>
             <div className="pl-3">
               <div className="text-[10px] font-bold text-slate-400">종합 점수</div>
@@ -786,10 +709,10 @@ function QuoteSummaryCard({ label, column }: { label: 'A' | 'B'; column: Compari
 
 function ScoreValue({ column }: { column: ComparisonColumn }) {
   if (column.isLoading) return <div className="mt-1 h-6 w-20 animate-pulse rounded bg-slate-200" />;
-  if (column.isError) return <div className="mt-1 text-xs font-black text-red-500">조회 실패</div>;
+  if (column.isError) return <div className="mt-1 text-xs font-black text-slate-500">조회 실패</div>;
   if (!column.compositeScore) return <div className="mt-1 text-xs font-black text-slate-400">자료 없음</div>;
   return (
-    <div className="mt-1 text-lg font-black tracking-tight text-brand-blue">
+    <div className="mt-1 text-lg font-black tracking-tight text-commerce-ink">
       {column.compositeScore.score.toLocaleString('ko-KR')}점
       <span className="ml-1 text-[10px] font-bold text-slate-400">/ {column.compositeScore.maxScore.toLocaleString('ko-KR')}</span>
     </div>
@@ -797,17 +720,29 @@ function ScoreValue({ column }: { column: ComparisonColumn }) {
 }
 
 function ComparisonDeltaCard({ columnA, columnB }: { columnA: ComparisonColumn; columnB: ComparisonColumn }) {
+  const price = priceDeltaOutcome(columnA.build.totalPrice, columnB.build.totalPrice);
+  const score = scoreDeltaOutcome(columnA, columnB);
   return (
-    <article className="flex min-h-[132px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-4 text-center shadow-sm">
-      <div>
-        <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full border-2 border-brand-blue bg-white text-brand-blue">
-          <Check size={19} strokeWidth={3} />
-        </div>
-        <p data-testid="quote-compare-price-delta" className="mt-2 text-sm font-black text-commerce-ink">{priceDeltaText(columnA.build.totalPrice, columnB.build.totalPrice)}</p>
-        <p data-testid="quote-compare-score-delta" className="mt-1 text-sm font-black text-brand-blue">{scoreDeltaText(columnA, columnB)}</p>
-        <p className="mt-2 text-[10px] font-bold text-slate-400">가격과 종합점수는 각각 독립적으로 비교</p>
+    <article className="flex min-h-[116px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3 shadow-sm">
+      <div className="w-full max-w-[220px] space-y-2.5">
+        <ComparisonResultLine label="가격" testId="quote-compare-price-delta" outcome={price} />
+        <ComparisonResultLine label="종합 성능" testId="quote-compare-score-delta" outcome={score} />
+        <p className="pt-0.5 text-center text-[10px] font-bold text-slate-400">가격·성능은 독립 비교</p>
       </div>
     </article>
+  );
+}
+
+function ComparisonResultLine({ label, testId, outcome }: { label: string; testId: string; outcome: ComparisonOutcome }) {
+  const emphasisClass = outcome.tone === 'positive' ? 'text-emerald-700' : outcome.tone === 'muted' ? 'text-slate-400' : 'text-slate-600';
+  return (
+    <div className="grid grid-cols-[56px_minmax(0,1fr)] items-baseline gap-2 text-sm">
+      <span className="text-[10px] font-black text-slate-400">{label}</span>
+      <p data-testid={testId} className="min-w-0 text-right font-bold text-commerce-ink">
+        <span>{outcome.prefix}</span>
+        {outcome.emphasis ? <span className={`font-black ${emphasisClass}`}>{outcome.emphasis}</span> : null}
+      </p>
+    </div>
   );
 }
 
@@ -822,14 +757,18 @@ function PartComparisonRow({
   itemsB: BuildItem[];
   comparison: CategoryComparison;
 }) {
+  const specification = isSpecificationCategory(category);
+  const compact = comparison.samePart;
   return (
     <article
       data-testid={`quote-compare-row-${category}`}
-      className="grid grid-cols-[minmax(0,1fr)_64px_minmax(0,1fr)] gap-x-3 gap-y-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] md:items-center"
+      className={`grid grid-cols-[minmax(0,1fr)_64px_minmax(0,1fr)] gap-x-3 gap-y-2 px-4 md:grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] md:items-center ${compact ? 'py-2.5' : 'py-3'}`}
     >
-      <PartSummary items={itemsA} meta={comparison.metaA} side="A" />
+      <PartSummary items={itemsA} meta={specification ? [] : comparison.metaA} side="A" />
       <div className="col-start-1 row-start-2 md:col-start-2 md:row-start-1">
-        <MetricBar category={category} metric={comparison.metric} side="A" hasPart={itemsA.length > 0} />
+        {specification
+          ? <SpecificationMetric category={category} values={comparison.metaA} side="A" hasPart={itemsA.length > 0} />
+          : <MetricBar category={category} metric={comparison.metric} side="A" hasPart={itemsA.length > 0} samePart={comparison.samePart} />}
       </div>
       <div className="col-start-2 row-span-2 row-start-1 flex self-center justify-center md:col-start-3 md:row-span-1 md:row-start-1">
         <span className="inline-flex min-h-8 min-w-14 items-center justify-center rounded-md bg-slate-100 px-2 text-[11px] font-black text-slate-600">
@@ -837,10 +776,12 @@ function PartComparisonRow({
         </span>
       </div>
       <div className="col-start-3 row-start-2 md:col-start-4 md:row-start-1">
-        <MetricBar category={category} metric={comparison.metric} side="B" hasPart={itemsB.length > 0} />
+        {specification
+          ? <SpecificationMetric category={category} values={comparison.metaB} side="B" hasPart={itemsB.length > 0} />
+          : <MetricBar category={category} metric={comparison.metric} side="B" hasPart={itemsB.length > 0} samePart={comparison.samePart} />}
       </div>
-      <PartSummary items={itemsB} meta={comparison.metaB} side="B" />
-      <p className="col-span-3 row-start-3 break-keep text-center text-[11px] font-black leading-5 text-brand-blue md:col-span-5 md:row-start-2">
+      <PartSummary items={itemsB} meta={specification ? [] : comparison.metaB} side="B" />
+      <p data-testid={`quote-compare-description-${category}`} className={`col-span-3 row-start-3 truncate text-center text-[11px] font-black leading-4 md:col-span-5 md:row-start-2 ${comparisonDescriptionClass(comparison.description)}`}>
         {comparison.description}
       </p>
     </article>
@@ -862,27 +803,38 @@ function PartSummary({ items, meta, side }: { items: BuildItem[]; meta: string[]
       <div className="line-clamp-2 text-xs font-black leading-5 text-commerce-ink" title={items.map((item) => item.name).join(', ')}>
         {primary.name}{rest.length > 0 ? ` 외 ${rest.length}` : ''}
       </div>
-      <div className="mt-0.5 text-[11px] font-bold text-slate-500">{totalPrice.toLocaleString('ko-KR')}원</div>
-      {meta.length > 0 ? <div className="mt-1 text-[10px] font-semibold leading-4 text-slate-400">{meta.join(' · ')}</div> : null}
+      <div className="mt-px text-[11px] font-bold text-slate-500">{totalPrice.toLocaleString('ko-KR')}원</div>
+      {meta.length > 0 ? <div className="mt-0.5 truncate text-[10px] font-semibold leading-4 text-slate-400" title={meta.slice(0, 2).join(' · ')}>{meta.slice(0, 2).join(' · ')}</div> : null}
     </div>
   );
 }
 
-function MetricBar({ category, metric, side, hasPart }: { category: string; metric: CompareMetric | null; side: 'A' | 'B'; hasPart: boolean }) {
+function MetricBar({ category, metric, side, hasPart, samePart }: { category: string; metric: CompareMetric | null; side: 'A' | 'B'; hasPart: boolean; samePart: boolean }) {
   if (!hasPart) return <div className="text-center text-[10px] font-bold text-slate-300">미포함</div>;
-  if (!metric) return <div className="text-center text-[10px] font-bold text-slate-400">수치 막대 없음</div>;
+  if (!metric) return null;
+  if (samePart) return <div data-testid={`quote-compare-bar-${category}-${side}`} className="text-center text-[10px] font-black text-slate-400">동일</div>;
   const value = side === 'A' ? metric.valueA : metric.valueB;
   const max = Math.max(metric.valueA, metric.valueB);
   const index = Math.round((value / max) * 100);
   return (
     <div data-testid={`quote-compare-bar-${category}-${side}`} className="min-w-0">
-      <div className={`mb-1 flex items-baseline gap-1 ${side === 'A' ? 'justify-end' : 'justify-start'}`}>
+      <div className={`mb-0.5 flex items-baseline gap-1 ${side === 'A' ? 'justify-end' : 'justify-start'}`}>
         <span className="text-[11px] font-black text-slate-600">{formatMetricValue(value, metric.unit)}</span>
         <span className="text-[9px] font-bold text-slate-400">{metric.label}</span>
       </div>
-      <div className={`flex h-2.5 overflow-hidden rounded-full bg-slate-100 ${side === 'A' ? 'justify-end' : 'justify-start'}`}>
+      <div className={`flex h-2 overflow-hidden rounded-full bg-slate-100 ${side === 'A' ? 'justify-end' : 'justify-start'}`}>
         <div className="h-full rounded-full bg-brand-blue transition-[width] duration-500" style={{ width: `${index}%` }} />
       </div>
+    </div>
+  );
+}
+
+function SpecificationMetric({ category, values, side, hasPart }: { category: string; values: string[]; side: 'A' | 'B'; hasPart: boolean }) {
+  if (!hasPart) return <div className="text-center text-[10px] font-bold text-slate-300">미포함</div>;
+  if (values.length === 0) return null;
+  return (
+    <div data-testid={`quote-compare-spec-${category}-${side}`} className={`line-clamp-2 text-[10px] font-bold leading-4 text-slate-500 ${side === 'A' ? 'text-right' : 'text-left'}`} title={values.slice(0, 3).join(' · ')}>
+      {values.slice(0, 3).join(' · ')}
     </div>
   );
 }
@@ -898,8 +850,8 @@ function compareCategory(
   const metaA = partMeta(category, itemsA);
   const metaB = partMeta(category, itemsB);
   if (itemsA.length === 0 || itemsB.length === 0) {
-    const missing = itemsA.length === 0 && itemsB.length === 0 ? '두 견적 모두 미포함' : itemsA.length === 0 ? '견적 A에 미포함' : '견적 B에 미포함';
-    return { metric: null, description: missing, metaA, metaB };
+    const missing = itemsA.length === 0 && itemsB.length === 0 ? '모두 미포함' : itemsA.length === 0 ? 'A 미포함' : 'B 미포함';
+    return { metric: null, description: missing, metaA, metaB, samePart: false };
   }
 
   if (category === 'CPU' || category === 'GPU') {
@@ -909,9 +861,10 @@ function compareCategory(
     const metric = positiveMetric(`${category} 벤치마크`, valueA, valueB, '점');
     return {
       metric,
-      description: samePart ? '동일 부품' : metric ? percentageDescription(category === 'CPU' ? 'CPU 벤치마크' : 'GPU 벤치마크', metric.valueA, metric.valueB) : '비교 가능한 수치 없음',
+      description: samePart ? '동일 부품' : metric ? percentageDescription(`${category} 성능`, metric.valueA, metric.valueB) : '비교 가능한 수치 없음',
       metaA,
-      metaB
+      metaB,
+      samePart
     };
   }
 
@@ -923,9 +876,9 @@ function compareCategory(
     const metric = positiveMetric('RAM 용량', capacityA, capacityB, 'GB');
     let description = samePart ? '동일 부품' : numericDifferenceDescription('RAM 용량', capacityA, capacityB, 'GB', '큼');
     if (!samePart && capacityA === capacityB && capacityA !== null) {
-      description = numericDifferenceDescription('RAM 클럭', speedA, speedB, 'MHz', '높음', 'RAM 용량과 클럭 동일');
+      description = numericDifferenceDescription('RAM 클럭', speedA, speedB, 'MHz', '높음');
     }
-    return { metric, description, metaA, metaB };
+    return { metric, description, metaA, metaB, samePart };
   }
 
   if (category === 'STORAGE') {
@@ -942,7 +895,7 @@ function compareCategory(
       : useRead && metric
         ? percentageDescription('SSD 읽기 속도', metric.valueA, metric.valueB)
         : storageCapacityDescription(capacityA, capacityB);
-    return { metric, description, metaA, metaB };
+    return { metric, description, metaA, metaB, samePart };
   }
 
   if (category === 'PSU') {
@@ -953,7 +906,8 @@ function compareCategory(
       metric,
       description: samePart ? '동일 부품' : numericDifferenceDescription('정격 출력', capacityA, capacityB, 'W', '높음'),
       metaA,
-      metaB
+      metaB,
+      samePart
     };
   }
 
@@ -961,7 +915,8 @@ function compareCategory(
     metric: null,
     description: samePart ? '동일 부품' : specificationDescription(category, itemsA[0], itemsB[0]),
     metaA,
-    metaB
+    metaB,
+    samePart
   };
 }
 
@@ -1021,9 +976,15 @@ function partMeta(category: string, items: BuildItem[]): string[] {
   } else if (category === 'MOTHERBOARD') {
     values.push(attributeText(item, 'socket'), attributeText(item, 'chipset'), attributeText(item, 'memoryType'), attributeText(item, 'formFactor'));
   } else if (category === 'CASE') {
-    values.push(attributeText(item, 'formFactor'), unitText(attributeNumber(item, 'maxGpuLengthMm'), 'mm GPU'), unitText(attributeNumber(item, 'maxCpuCoolerHeightMm'), 'mm 쿨러'));
+    const maxGpu = unitText(attributeNumber(item, 'maxGpuLengthMm'), 'mm');
+    const maxCooler = unitText(attributeNumber(item, 'maxCpuCoolerHeightMm'), 'mm');
+    values.push(attributeText(item, 'formFactor'), maxGpu ? `GPU ${maxGpu}` : null, maxCooler ? `쿨러 ${maxCooler}` : null);
   } else if (category === 'COOLER') {
-    values.push(attributeText(item, 'coolerType'), unitText(attributeNumber(item, 'radiatorMm'), 'mm 라디에이터'), unitText(attributeNumber(item, 'heightMm') ?? attributeNumber(item, 'coolerHeightMm'), 'mm 높이'), unitText(attributeNumber(item, 'tdpW'), 'W TDP'));
+    values.push(
+      coolerTypeText(attributeText(item, 'coolerType')),
+      unitText(attributeNumber(item, 'radiatorMm'), 'mm'),
+      unitText(attributeNumber(item, 'tdpW'), 'W')
+    );
   }
   return values.filter((value): value is string => Boolean(value));
 }
@@ -1040,11 +1001,11 @@ function partIdentity(item: BuildItem) {
 }
 
 function percentageDescription(label: string, valueA: number, valueB: number) {
-  if (valueA === valueB) return `${label} 동일`;
+  if (valueA === valueB) return '동일 수준';
   const winner = valueA > valueB ? 'A' : 'B';
   const lower = Math.min(valueA, valueB);
   const percent = lower > 0 ? Math.round((Math.abs(valueA - valueB) / lower) * 100) : 0;
-  return `${winner}의 ${label}가 약 ${percent}% 높음`;
+  return percent <= 3 ? `${label} 유사 · ${winner} +${percent}%` : `${winner} ${label} +${percent}%`;
 }
 
 function numericDifferenceDescription(
@@ -1052,20 +1013,20 @@ function numericDifferenceDescription(
   valueA: number | null,
   valueB: number | null,
   unit: string,
-  adjective: string,
-  equalText = `${label} 동일`
+  _adjective: string,
+  equalText = '동일 수준'
 ) {
   if (valueA === null || valueB === null) return '비교 가능한 수치 없음';
   if (valueA === valueB) return equalText;
   const winner = valueA > valueB ? 'A' : 'B';
-  return `${winner}의 ${label}이 ${formatMetricValue(Math.abs(valueA - valueB), unit)} ${adjective}`;
+  return `${winner} ${label} +${formatMetricValue(Math.abs(valueA - valueB), unit)}`;
 }
 
 function storageCapacityDescription(valueA: number | null, valueB: number | null) {
   if (valueA === null || valueB === null) return '비교 가능한 수치 없음';
-  if (valueA === valueB) return '저장 용량 동일';
+  if (valueA === valueB) return '동일 수준';
   const winner = valueA > valueB ? 'A' : 'B';
-  return `${winner}의 저장 공간이 ${formatCapacity(Math.abs(valueA - valueB))} 큼`;
+  return `${winner} 저장 용량 +${formatCapacity(Math.abs(valueA - valueB))}`;
 }
 
 function specificationDescription(category: string, itemA: BuildItem, itemB: BuildItem) {
@@ -1096,9 +1057,32 @@ function specificationDescription(category: string, itemA: BuildItem, itemB: Bui
   }));
   const comparable = compared.filter((field) => field.valueA !== null && field.valueB !== null);
   const different = comparable.filter((field) => normalizeSpec(field.valueA) !== normalizeSpec(field.valueB));
-  if (different.length > 0) return `${joinKorean(different.map((field) => field.label))} 규격이 다름`;
-  if (compared.some((field) => (field.valueA === null) !== (field.valueB === null))) return '일부 주요 규격 데이터가 한쪽에만 있음';
+  if (different.length > 0) {
+    if (category === 'COOLER' && different.length > 1) {
+      return `${different.slice(0, 2).map((field) => field.label).join('·')} 다름`;
+    }
+    return `${different[0].label} 다름`;
+  }
+  if (compared.some((field) => (field.valueA === null) !== (field.valueB === null))) return '주요 규격 일부 없음';
   return comparable.length > 0 ? '주요 규격 동일' : '비교 가능한 수치 없음';
+}
+
+function comparisonDescriptionClass(description: string) {
+  if (description.includes('미포함') || description.includes('비교 가능한')) return 'text-slate-400';
+  if (description.includes('동일') || description.includes('유사') || description.includes('규격')) return 'text-slate-500';
+  return 'text-emerald-700';
+}
+
+function isSpecificationCategory(category: string) {
+  return category === 'MOTHERBOARD' || category === 'CASE' || category === 'COOLER';
+}
+
+function coolerTypeText(value: string | null) {
+  if (!value) return null;
+  const normalized = value.toUpperCase();
+  if (normalized.includes('AIR') || value.includes('공랭')) return '공랭';
+  if (normalized.includes('WATER') || normalized.includes('AIO') || value.includes('수랭')) return '수랭';
+  return value;
 }
 
 function firstAttributeValue(item: BuildItem, keys: string[]) {
@@ -1111,11 +1095,6 @@ function firstAttributeValue(item: BuildItem, keys: string[]) {
 
 function normalizeSpec(value: string | null) {
   return value?.replace(/\s+/g, '').toLowerCase() ?? '';
-}
-
-function joinKorean(values: string[]) {
-  if (values.length <= 1) return values[0] ?? '';
-  return `${values.slice(0, -1).join(', ')}과 ${values[values.length - 1]}`;
 }
 
 function isPositive(value: number | null): value is number {
@@ -1136,21 +1115,29 @@ function formatMetricValue(value: number, unit: string) {
   return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 1 })}${unit}`;
 }
 
-function priceDeltaText(priceA: number, priceB: number) {
-  if (priceA === priceB) return '가격 동일';
+function priceDeltaOutcome(priceA: number, priceB: number): ComparisonOutcome {
+  if (priceA === priceB) return { prefix: '동일', tone: 'neutral' };
   const winner = priceA < priceB ? 'A' : 'B';
-  return `${winner}가 ${Math.abs(priceA - priceB).toLocaleString('ko-KR')}원 저렴`;
+  return {
+    prefix: `${winner}가 `,
+    emphasis: `${Math.abs(priceA - priceB).toLocaleString('ko-KR')}원 저렴`,
+    tone: 'positive'
+  };
 }
 
-function scoreDeltaText(columnA: ComparisonColumn, columnB: ComparisonColumn) {
-  if (columnA.isLoading || columnB.isLoading) return '종합점수 계산 중';
-  if (columnA.isError || columnB.isError) return '종합점수 조회 실패';
+function scoreDeltaOutcome(columnA: ComparisonColumn, columnB: ComparisonColumn): ComparisonOutcome {
+  if (columnA.isLoading || columnB.isLoading) return { prefix: '계산 중', tone: 'muted' };
+  if (columnA.isError || columnB.isError) return { prefix: '조회 실패', tone: 'muted' };
   const scoreA = columnA.compositeScore?.score;
   const scoreB = columnB.compositeScore?.score;
-  if (scoreA === undefined || scoreB === undefined) return '종합점수 자료 없음';
-  if (scoreA === scoreB) return '종합점수 동일';
+  if (scoreA === undefined || scoreB === undefined) return { prefix: '자료 없음', tone: 'muted' };
+  if (scoreA === scoreB) return { prefix: '동일 수준', tone: 'neutral' };
   const winner = scoreA > scoreB ? 'A' : 'B';
-  return `${winner}가 종합점수 ${Math.abs(scoreA - scoreB).toLocaleString('ko-KR')}점 높음`;
+  return {
+    prefix: `${winner}가 `,
+    emphasis: `${Math.abs(scoreA - scoreB).toLocaleString('ko-KR')}점 높음`,
+    tone: 'positive'
+  };
 }
 
 function PriceAlertRow({ alert }: { alert: PriceAlert }) {
@@ -1230,7 +1217,7 @@ function SavedBuildGraphDialog({
         <header className="flex items-start justify-between gap-4 border-b border-commerce-line px-4 py-3 sm:px-5">
           <div className="min-w-0">
             <div className="text-xs font-black text-brand-blue">읽기 전용</div>
-            <h2 className="mt-1 truncate text-lg font-black text-commerce-ink" title={build.name}>{build.name}</h2>
+            <h2 className="mt-1 truncate text-lg font-black text-commerce-ink" title={displayBuildName(build)}>{displayBuildName(build)}</h2>
             <p className="mt-1 text-xs font-semibold text-slate-500">저장 견적의 부품 관계를 확인합니다. 이 팝업에서는 부품 교체나 담기 동작을 하지 않습니다.</p>
           </div>
           <button
@@ -1291,7 +1278,7 @@ function collectSavedPartOptions(build: BuildSummary): SavedPartOption[] {
       partId,
       label: `${labelForCategory(item.category)} · ${item.name}`,
       category: item.category,
-      buildName: build.name,
+      buildName: displayBuildName(build),
       price: item.price
     });
   }
@@ -1338,6 +1325,52 @@ function isApplyingBuild(
 
 function resolvePartId(item?: BuildItem) {
   return item?.partId ?? item?.id ?? '';
+}
+
+function uniqueBuildsByPartCombination(builds: BuildSummary[]) {
+  const seen = new Set<string>();
+  return builds.filter((build) => {
+    const signature = buildPartCombinationSignature(build);
+    if (!signature || seen.has(signature)) return !signature;
+    seen.add(signature);
+    return true;
+  });
+}
+
+function buildPartCombinationSignature(build: BuildSummary) {
+  const items = build.items ?? [];
+  if (items.length === 0) return '';
+  const parts = items.map((item) => {
+    const partId = resolvePartId(item);
+    return partId ? `${item.category}:${partId}` : '';
+  });
+  if (parts.some((part) => !part)) return '';
+  return [...new Set(parts)].sort().join('|');
+}
+
+function displayBuildName(build: BuildSummary) {
+  const currentName = build.name?.trim();
+  if (currentName && !/\bbuild\b/i.test(currentName)) return currentName;
+
+  const context = [currentName, build.recommendedFor, build.summary]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  const purpose = context.includes('qhd')
+    ? 'QHD 게이밍'
+    : /creator|work|작업/.test(context)
+      ? '작업용'
+      : /high|performance|고성능/.test(context)
+        ? '고성능'
+        : /gaming|game|게이밍/.test(context)
+          ? '게이밍'
+          : /balanced|balance|균형/.test(context)
+            ? '균형'
+            : /budget|value|가성비/.test(context)
+              ? '가성비'
+              : '맞춤';
+  const priceBand = Math.max(10, Math.round(build.totalPrice / 100_000) * 10);
+  return `약 ${priceBand}만원 · ${purpose} 견적`;
 }
 
 function quantityForBuildItem(item: BuildItem) {
