@@ -52,12 +52,6 @@ type CenterScrollbarState = {
 
 const LOGIN_REQUIRED_MESSAGE = '로그인이 필요합니다. 다시 로그인해 주세요.';
 const GENERIC_SUBMIT_ERROR_MESSAGE = 'AI 추천 API 호출에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-const COMMON_QUICK_PROMPTS = [
-  { label: '200만원 게이밍 PC', prompt: '200만원으로 게이밍 PC 추천해줘' },
-  { label: '견적 마저 채우기', prompt: '지금 견적 기준으로 나머지 부품 채워줘' },
-  { label: '성능 비교', prompt: 'CPU를 9700X로 바꾸면 성능 어떻게 돼?' },
-  { label: 'PC 문제 상담', prompt: '게임하다 화면이 자꾸 멈춰' }
-];
 
 const ASSISTANT_DESKTOP_QUERY = '(min-width: 768px)';
 const CENTER_SCROLLBAR_TRACK_TOP = 8;
@@ -576,7 +570,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     const centeredMessages = session.messages.filter((message) => message.id !== 'ai-intro');
     const hasMessages = centeredMessages.length > 0;
     const centeredPromptForm = (
-      <form onSubmit={submitPrompt} className="mx-auto w-full max-w-[896px]">
+      <form autoComplete="off" onSubmit={submitPrompt} className="mx-auto w-full max-w-[896px]">
         {submitError ? (
           <div role="alert" className="mb-3 rounded-xl bg-red-50 px-4 py-3 text-base font-bold text-red-700">
             {submitError}
@@ -600,6 +594,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           <input
             id="ai-build-chat-input"
             aria-label="AI에게 PC 견적 질문"
+            autoComplete="off"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             disabled={isSending}
@@ -765,22 +760,6 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       </div>
 
       <div className={bodyClassName}>
-        <div className="border-b border-slate-100 bg-[#f8fbff] px-4 py-3">
-          <div className="mb-2 text-[11px] font-black text-slate-400">이렇게 물어보세요</div>
-          <div className="flex flex-wrap gap-2">
-            {COMMON_QUICK_PROMPTS.map((example) => (
-              <button
-                key={example.label}
-                type="button"
-                onClick={() => setPrompt(example.prompt)}
-                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-black text-slate-600 shadow-sm transition hover:border-brand-blue hover:text-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
-              >
-                {example.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div data-testid="ai-chat-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
           {session.messages.map((message) => (
             <ChatMessage
@@ -800,7 +779,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           <div ref={messagesEndRef} />
         </div>
 
-        <form onSubmit={submitPrompt} className="border-t border-slate-200 bg-white p-3">
+        <form autoComplete="off" onSubmit={submitPrompt} className="border-t border-slate-200 bg-white p-3">
           {submitError ? (
             <div role="alert" className="mb-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
               {submitError}
@@ -824,6 +803,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
             <input
               id="ai-build-chat-input"
               aria-label="AI 챗봇에게 PC 사양 질문"
+              autoComplete="off"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               disabled={isSending}
@@ -838,10 +818,6 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
             >
               <Send size={17} />
             </button>
-          </div>
-          <div className="mt-2 flex items-center gap-2 text-[11px] font-bold text-slate-500">
-            <CheckCircle2 size={14} className="text-commerce-green" />
-            추천은 서버의 부품 데이터 기준으로 계산되며 대화 기록은 브라우저에만 임시 저장됩니다(창을 닫으면 사라집니다).
           </div>
         </form>
       </div>
