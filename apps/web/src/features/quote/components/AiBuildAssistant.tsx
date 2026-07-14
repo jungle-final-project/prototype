@@ -7,6 +7,7 @@ import { AUTH_CHANGED_EVENT, ApiError, clearToken, getToken } from '../../../lib
 import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD_ASSISTANT_TOGGLE_EVENT, SUPPORT_CHAT_CLOSE_EVENT, SUPPORT_CHAT_OPEN_EVENT, requestPerfCompare, setAiAssistantOpen, type AiAssistantOpenDetail } from '../../../lib/events';
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
+import { AiChatPendingBubble } from './AiChatPendingBubble';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   PART_CATEGORY_LABELS,
@@ -105,6 +106,12 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [prompt, setPrompt] = useState('');
   const [session, setSession] = useState(() => readAssistantSession());
   const [isSending, setIsSending] = useState(false);
+  // 응답 대기 임시 버블. 300ms 이내 응답에는 띄우지 않아 깜빡임을 막는다(pendingVisible 게이트).
+  // 세션에 저장하지 않고 React 상태로만 둬서 새로고침 시 유령 버블이 남지 않게 한다.
+  const [pending, setPending] = useState<{ id: string; excerpt: string } | null>(null);
+  const [pendingVisible, setPendingVisible] = useState(false);
+  const activeRequestRef = useRef<string | null>(null);
+  const pendingTimerRef = useRef<number | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [failedBuild, setFailedBuild] = useState<AiRecommendedBuild | null>(null);
@@ -313,6 +320,10 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSubmit, isSending]);
 
+  useEffect(() => () => {
+    if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
+  }, []);
+
   async function submitPrompt(event: FormEvent) {
     event.preventDefault();
     await sendMessage(prompt);
@@ -370,6 +381,18 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     }
 
     setIsSending(true);
+
+    // 응답 대기 표시 arm — fastCategory route는 위에서 이미 return했으므로 여기까지 오지 않는다.
+    // 300ms 타이머가 발화하기 전에 응답이 오면 finally가 타이머를 지워 버블이 뜨지 않는다.
+    const requestId = createAiMessageId('pending');
+    activeRequestRef.current = requestId;
+    const excerpt = nextPrompt.length > 30 ? `${nextPrompt.slice(0, 30)}…` : nextPrompt;
+    setPending({ id: requestId, excerpt });
+    setPendingVisible(false);
+    if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
+    pendingTimerRef.current = window.setTimeout(() => {
+      if (activeRequestRef.current === requestId) setPendingVisible(true);
+    }, 300);
 
     try {
       // 셀프견적에서는 어떤 후속 질문도 현재 장바구니와 충돌할 수 있으므로 최신 draft를 항상 보낸다.
@@ -444,6 +467,17 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       }
       setSubmitError(GENERIC_SUBMIT_ERROR_MESSAGE);
     } finally {
+      // 이 요청이 아직 최신이면 대기 버블을 정리한다(응답/오류로 교체). 늦게 도착한 이전 요청은
+      // activeRequestRef가 달라 최신 UI를 덮지 않는다. 실제 응답이 오는 즉시 교체하며 인위 지연은 없다.
+      if (pendingTimerRef.current !== null) {
+        window.clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+      if (activeRequestRef.current === requestId) {
+        activeRequestRef.current = null;
+        setPending(null);
+        setPendingVisible(false);
+      }
       setIsSending(false);
     }
   }
@@ -670,10 +704,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
                         size="large"
                       />
                     ))}
-                    {isSending ? (
-                      <div className="rounded-[22px] bg-slate-50 px-5 py-4 text-[20px] font-bold leading-8 text-slate-500">
-                        서버에서 추천 조합을 계산하는 중입니다.
-                      </div>
+                    {pending && pendingVisible ? (
+                      <AiChatPendingBubble excerpt={pending.excerpt} size="large" />
                     ) : null}
                     <div ref={messagesEndRef} />
                   </div>
@@ -792,10 +824,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
               applyingBuildId={applyingBuildId}
             />
           ))}
-          {isSending ? (
-            <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-500 shadow-sm">
-              서버에서 추천 조합을 계산하는 중입니다.
-            </div>
+          {pending && pendingVisible ? (
+            <AiChatPendingBubble excerpt={pending.excerpt} />
           ) : null}
           <div ref={messagesEndRef} />
         </div>
