@@ -375,9 +375,9 @@ function PerfPanelBody({
     return (
       <div
         data-testid="quote-performance-grid"
-        className="rounded-lg border border-commerce-line bg-white px-2.5 py-1 lg:min-h-[98px]"
+        className="rounded-lg border border-commerce-line bg-white px-3 py-2 lg:min-h-[106px]"
       >
-        <div className={`grid gap-2 lg:items-center ${
+        <div className={`grid gap-3 lg:items-center ${
           activeComparison
             ? 'lg:grid-cols-[calc(clamp(256px,18vw,320px)-10px)_minmax(0,1fr)_auto]'
             : 'lg:grid-cols-[calc(clamp(256px,18vw,320px)-10px)_minmax(0,1fr)]'
@@ -433,9 +433,9 @@ function PerfPanelBody({
             </div>
           </div>
 
-          <div data-testid="quote-fps-section" className="min-w-0">
-            <div className={`flex items-center justify-between gap-1.5 ${activeComparison ? 'flex-wrap' : 'flex-nowrap'}`}>
-              <div className="flex min-w-0 items-baseline gap-2">
+          <div data-testid="quote-fps-section" className="min-w-0 py-1">
+            <div className={`flex items-start justify-between gap-2 ${activeComparison ? 'flex-wrap' : 'flex-nowrap'}`}>
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span className="shrink-0 text-[11px] font-black text-slate-600">
                   {activeComparison ? '가격·성능 향상' : '게임 예상 성능'}
                 </span>
@@ -457,7 +457,7 @@ function PerfPanelBody({
                 ) : null}
               </div>
 
-              <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
+              <div className="flex shrink-0 flex-nowrap items-center justify-end gap-2">
                 {hasWorkspace && onStartComparison ? (
                   <CandidateCombo
                     perfItems={perfItems}
@@ -567,8 +567,8 @@ function PerfPanelBody({
                 </div>
               </div>
             ) : (
-              <div className="mt-1 min-w-0">
-                <div className="flex min-w-0 items-center gap-1 overflow-hidden" role="group" aria-label="게임 선택">
+              <div className="mt-2 min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5 overflow-hidden" role="group" aria-label="게임 선택">
                   {FPS_GAMES.map((g) => (
                     <button
                       key={g.key}
@@ -586,7 +586,7 @@ function PerfPanelBody({
                     </button>
                   ))}
                 </div>
-                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
                   <div
                     className="h-full rounded-full bg-gradient-to-r from-brand-blue to-emerald-300 transition-[width] duration-500"
                     style={{ width: `${resultAvg === null ? 0 : Math.min(100, (resultAvg / FPS_CAP) * 100)}%` }}

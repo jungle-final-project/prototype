@@ -1447,8 +1447,18 @@ test('shows graph edge labels on the fallback topology relationships', async ({ 
       relationMapProblemBanner.boundingBox(),
       relationMapLegend.boundingBox()
     ]);
-    return Boolean(bannerBox && legendBox && legendBox.y >= bannerBox.y + bannerBox.height);
+    return Boolean(bannerBox && legendBox && legendBox.y >= bannerBox.y + bannerBox.height + 12);
   }).toBe(true);
+  const legendBoxBeforeExpand = await relationMapLegend.boundingBox();
+  if (!legendBoxBeforeExpand) {
+    throw new Error('relation map legend bounding box is missing before expanding the problem list');
+  }
+  await relationMapProblemBanner.click();
+  await expect(page.getByTestId('slot-board-problem-list')).toBeVisible();
+  await expect.poll(async () => {
+    const legendBoxAfterExpand = await relationMapLegend.boundingBox();
+    return legendBoxAfterExpand ? Math.abs(legendBoxAfterExpand.y - legendBoxBeforeExpand.y) : Number.POSITIVE_INFINITY;
+  }).toBeLessThanOrEqual(1);
   const relationMapFitsBoard = await page.getByTestId('relation-map-stage').evaluate((stage) => {
     const board = stage.closest('[data-testid="slot-board"]');
     if (!(board instanceof HTMLElement)) return false;
@@ -1904,6 +1914,10 @@ test('keeps the ATX case mismatch warning in context without overlapping board c
   await expect(banner).toContainText(message);
   await expect(banner.getByTestId('slot-problem-ai-explain')).toBeVisible();
   await expectStatusOverlayInBoard();
+  const defaultProblemBannerBox = await banner.boundingBox();
+  if (!defaultProblemBannerBox) {
+    throw new Error('default relation diagram problem banner bounding box is missing');
+  }
 
   for (const control of [
     page.getByTestId('relation-map-open'),
@@ -1937,6 +1951,12 @@ test('keeps the ATX case mismatch warning in context without overlapping board c
   await expect(relationMapProblemBanner).not.toContainText(message);
   await expect(page.getByTestId('relation-map-bottom-banner')).toHaveCount(0);
   await expectStatusOverlayInRelationMapFrame();
+  await expect.poll(async () => {
+    const relationMapProblemBannerBox = await relationMapProblemBanner.boundingBox();
+    return relationMapProblemBannerBox
+      ? Math.abs(relationMapProblemBannerBox.y - defaultProblemBannerBox.y)
+      : Number.POSITIVE_INFINITY;
+  }).toBeLessThanOrEqual(1);
   await page.getByTestId('relation-map-open').click();
   await expect(page.getByTestId('slot-board')).toHaveAttribute('data-visual-mode', 'fused');
   await expectStatusOverlayInBoard();

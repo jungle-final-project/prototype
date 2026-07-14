@@ -588,14 +588,14 @@ function RelationMapBoardBody({
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white p-3"
     >
       <div ref={frameRef} data-testid="relation-map-frame" className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-lg bg-white">
-        <div className="pointer-events-none absolute inset-x-3 top-3 z-40">
+        <div className="pointer-events-none absolute inset-x-3 top-2 z-40">
           <SlotBoardProblemBanner
             problems={problems}
             placement="overlay"
             forceSummary
             onExplain={onProblemExplain}
           />
-          <div className="mt-1.5 flex w-full justify-end pointer-events-auto">
+          <div className="mt-4 flex w-full justify-end pointer-events-auto">
             <RelationMapStatusLegend />
           </div>
         </div>
@@ -651,20 +651,20 @@ const RELATION_MAP_NODE_ORDER: PartCategory[] = [
 ];
 
 const RELATION_MAP_LAYOUTS: Record<PartCategory, SlotConfig['layout']> = {
-  CPU: { x: 4.8, y: 36.4, w: 26.4, h: 25.2 },
-  COOLER: { x: 4.8, y: 68.4, w: 26.4, h: 25.2 },
-  RAM: { x: 39.6, y: 6.4, w: 22.8, h: 25.2 },
-  STORAGE: { x: 39.6, y: 68.4, w: 22.8, h: 25.2 },
-  MOTHERBOARD: { x: 37.8, y: 36.4, w: 26.4, h: 25.2 },
-  GPU: { x: 71, y: 37.6, w: 24, h: 25.2 },
-  PSU: { x: 71, y: 5.2, w: 24, h: 25.2 },
-  CASE: { x: 71, y: 68.4, w: 24, h: 25.2 }
+  CPU: { x: 4.8, y: 36.8, w: 26.4, h: 24.2 },
+  COOLER: { x: 4.8, y: 71.2, w: 26.4, h: 24.2 },
+  RAM: { x: 39.6, y: 4.4, w: 22.8, h: 24.2 },
+  STORAGE: { x: 39.6, y: 71.2, w: 22.8, h: 24.2 },
+  MOTHERBOARD: { x: 37.8, y: 36.8, w: 26.4, h: 24.2 },
+  GPU: { x: 71, y: 37.4, w: 24, h: 24.2 },
+  PSU: { x: 71, y: 4.4, w: 24, h: 24.2 },
+  CASE: { x: 71, y: 71.2, w: 24, h: 24.2 }
 };
 
 type RelationMapLane = 'straight' | 'topRail' | 'bottomRail';
 type RelationMapEdgeEmphasis = 'direct' | 'indirect';
-const RELATION_MAP_TOP_RAIL_Y = 2.4;
-const RELATION_MAP_BOTTOM_RAIL_Y = 97.2;
+const RELATION_MAP_TOP_RAIL_Y = 0.4;
+const RELATION_MAP_BOTTOM_RAIL_Y = 99;
 
 const RELATION_MAP_CANONICAL_EDGES: Array<{
   from: PartCategory;
@@ -773,9 +773,9 @@ function RelationMapNode({
         aria-label={`${slot.label} 선택`}
         aria-pressed={isSelected}
         title={fullNameTitle}
-        className="grid h-full min-h-0 w-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] items-center gap-x-2 overflow-hidden rounded-md px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+        className="grid h-full min-h-0 w-full grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-2.5 overflow-hidden rounded-md px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       >
-        <span className={`row-span-2 grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded ${
+        <span className={`grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-md ${
             filled ? 'border border-slate-100 bg-slate-50' : 'border border-slate-300 bg-slate-50 shadow-inner'
           }`}>
           <img
@@ -788,30 +788,33 @@ function RelationMapNode({
             className="h-full w-full object-contain p-1"
           />
         </span>
-        <span className="min-w-0 self-end">
-          <span className="block truncate text-sm font-black leading-tight text-slate-700">
-            {slot.label}
+        <span className="flex min-h-0 min-w-0 flex-col justify-center gap-1.5">
+          <span className="flex min-w-0 items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs font-black leading-none text-brand-blue">
+              {slot.label}
+            </span>
+            <span
+              title={reason?.detail ?? statusLabel}
+              className={`max-w-[58%] shrink-0 truncate rounded-full px-2 py-0.5 text-[10px] font-black leading-none ${
+                isFocused
+                  ? 'bg-blue-50 text-brand-blue'
+                  : status === 'FAIL'
+                    ? 'bg-red-50 text-red-600'
+                    : status === 'WARN'
+                      ? 'bg-amber-50 text-amber-700'
+                      : filled
+                        ? 'bg-slate-50 text-slate-500'
+                        : 'bg-white text-slate-400'
+              }`}
+            >
+              {statusLabel}
+            </span>
           </span>
           <span
             title={fullNameTitle}
-            className={`block truncate text-xs font-bold leading-tight ${filled ? 'text-commerce-ink' : 'text-slate-400'}`}
+            className={`block overflow-hidden text-xs font-bold leading-[1.35] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] ${filled ? 'text-commerce-ink' : 'text-slate-400'}`}
           >
             {itemTitle}
-          </span>
-        </span>
-        <span className="flex min-w-0 self-start justify-end">
-          <span className={`max-w-full truncate rounded px-1.5 py-px text-[11px] font-black leading-tight ${
-            isFocused
-              ? 'bg-blue-50 text-brand-blue'
-              : status === 'FAIL'
-                ? 'bg-red-50 text-red-600'
-                : status === 'WARN'
-                  ? 'bg-amber-50 text-amber-700'
-                  : filled
-                    ? 'bg-slate-50 text-slate-500'
-                    : 'bg-white text-slate-400'
-          }`}>
-            {statusLabel}
           </span>
         </span>
       </button>
@@ -2044,7 +2047,7 @@ function SlotBoardProblemBanner({
         ? 'pointer-events-none w-full min-w-0 max-w-full shrink-0 px-3 py-0'
         : 'w-full min-w-0 max-w-full shrink-0 border-b border-commerce-line bg-slate-50/70 px-3 py-2'}
     >
-      <div ref={rootRef} className={`mx-auto w-full max-w-[576px] ${isOverlay ? 'pointer-events-auto' : ''}`}>
+      <div ref={rootRef} className={`mx-auto w-full max-w-[576px] ${isOverlay ? 'pointer-events-auto relative z-50' : ''}`}>
         <button
           type="button"
           data-testid="slot-board-problem-banner"
@@ -2082,7 +2085,8 @@ function SlotBoardProblemBanner({
             id="slot-board-problem-list"
             data-testid="slot-board-problem-list"
             className={[
-              'mt-2 max-h-60 overflow-y-auto rounded-lg border bg-white',
+              isOverlay ? 'absolute left-0 right-0 top-full z-50 mt-2' : 'mt-2',
+              'max-h-60 overflow-y-auto rounded-lg border bg-white',
               overallStatus === 'FAIL'
                 ? 'border-red-300 shadow-[0_14px_30px_rgba(239,68,68,0.24)]'
                 : 'border-amber-300 shadow-[0_14px_30px_rgba(245,158,11,0.2)]'
