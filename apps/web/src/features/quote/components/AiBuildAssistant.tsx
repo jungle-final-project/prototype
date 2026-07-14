@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, Bot, CheckCircle2, Download, LifeBuoy, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -970,12 +970,11 @@ function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: bo
   );
 }
 
-// 카드가 통째로 뜨면 "확" 나온 느낌이라, 위에서부터 높이가 펼쳐지며(0→auto) 내용이 채워지듯 등장시킨다.
-// grid-rows 0fr→1fr 트릭으로 커스텀 keyframe 없이 auto-height를 부드럽게 애니메이션한다(index.css 무수정).
+// 카드 프레임이 부드럽게 등장(내용은 카드 내부에서 한 칸씩 채워짐 — CompactBuildCard 참고).
 function FadeInBlock({ children }: { children: ReactNode }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
-    // 접힌 상태(0fr)를 최소 한 프레임 페인트한 뒤 펼쳐야 트랜지션이 스냅 없이 애니메이션된다(이중 rAF).
+    // 초기 숨김 상태를 한 프레임 페인트한 뒤 표시해 트랜지션이 스냅 없이 재생되게 한다(이중 rAF).
     let raf2 = 0;
     const raf1 = window.requestAnimationFrame(() => {
       raf2 = window.requestAnimationFrame(() => setShown(true));
@@ -986,13 +985,35 @@ function FadeInBlock({ children }: { children: ReactNode }) {
     };
   }, []);
   return (
-    <div
-      className="grid transition-all duration-[600ms] ease-out"
-      style={{ gridTemplateRows: shown ? '1fr' : '0fr', opacity: shown ? 1 : 0 }}
-    >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+    <div className={`transition-all duration-300 ease-out ${shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'}`}>
+      {children}
     </div>
   );
+}
+
+// 카드 내부 섹션을 순서대로 하나씩 노출하기 위한 스텝 카운터(0→count). active가 아니면 즉시 전체 노출.
+function useStepReveal(count: number, active: boolean, stepMs: number): number {
+  const [shown, setShown] = useState(active ? 1 : count);
+  useEffect(() => {
+    if (!active) {
+      setShown(count);
+      return;
+    }
+    setShown(1);
+    let cancelled = false;
+    const timers: number[] = [];
+    for (let index = 1; index < count; index += 1) {
+      const nextShown = index + 1;
+      timers.push(window.setTimeout(() => {
+        if (!cancelled) setShown(nextShown);
+      }, index * stepMs));
+    }
+    return () => {
+      cancelled = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [active, count, stepMs]);
+  return active ? shown : count;
 }
 
 function prefersReducedMotion() {
@@ -1145,8 +1166,9 @@ const ChatMessage = memo(function ChatMessage({
             {message.builds.map((build) => {
               if (!revealNextExtra()) return null;
               const key = `${message.id}-${build.id}`;
-              const card = <CompactBuildCard build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />;
-              return animate ? <FadeInBlock key={key}>{card}</FadeInBlock> : <CompactBuildCard key={key} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />;
+              return animate
+                ? <FadeInBlock key={key}><CompactBuildCard build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} reveal /></FadeInBlock>
+                : <CompactBuildCard key={key} build={build} onSelectBuild={onSelectBuild} applyingBuildId={applyingBuildId} size={size} />;
             })}
           </div>
         ) : null}
@@ -1475,12 +1497,14 @@ function CompactBuildCard({
   build,
   onSelectBuild,
   applyingBuildId,
-  size = 'default'
+  size = 'default',
+  reveal = false
 }: {
   build: AiRecommendedBuild;
   onSelectBuild: (build: AiRecommendedBuild) => void;
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
+  reveal?: boolean;
 }) {
   // 변경 미리보기 카드는 전체 견적이 아니라 바뀐 부품만 보여준다(전체 8부품 나열은 무엇이 바뀌는지 흐린다).
   // 적용은 여전히 build 전체(items 전량)로 하므로 나머지 부품이 삭제되지 않는다.
@@ -1506,9 +1530,27 @@ function CompactBuildCard({
   const isApplyingThis = applyingBuildId === build.id;
   const isApplyDisabled = Boolean(applyingBuildId);
 
+  // 카드 내부를 헤더 → 제목·가격 → 검증칩 → 부품목록 → 버튼 순서로 하나씩 채운다(강조).
+  const animateSections = reveal && !prefersReducedMotion();
+  const hasTools = Boolean(build.toolResults?.length);
+  let sectionIndex = 0;
+  const headerIdx = sectionIndex++;
+  const titleIdx = sectionIndex++;
+  const toolsIdx = hasTools ? sectionIndex++ : -1;
+  const partsIdx = sectionIndex++;
+  const buttonIdx = sectionIndex++;
+  const visibleSections = useStepReveal(sectionIndex, animateSections, 120);
+  const sectionStyle = (idx: number): CSSProperties | undefined => (animateSections
+    ? {
+      opacity: idx < visibleSections ? 1 : 0,
+      transform: idx < visibleSections ? 'translateY(0)' : 'translateY(6px)',
+      transition: 'opacity 300ms ease-out, transform 300ms ease-out, color 150ms ease, background-color 150ms ease, border-color 150ms ease'
+    }
+    : undefined);
+
   return (
     <article data-testid="ai-build-card" className={`${isLarge ? 'rounded-[22px] p-5' : 'rounded-2xl p-3'} border border-slate-200 bg-white shadow-sm`}>
-      <div className={`${isLarge ? 'gap-3' : 'gap-2'} flex flex-wrap items-center`}>
+      <div style={sectionStyle(headerIdx)} className={`${isLarge ? 'gap-3' : 'gap-2'} flex flex-wrap items-center`}>
         <span className={`${isLarge ? 'px-3 py-1.5 text-[15px]' : 'px-2.5 py-1 text-[11px]'} rounded-full bg-brand-blue font-black text-white`}>{build.label}</span>
         {build.appliedPartCategories.map((category) => (
           <span key={category} className={`${isLarge ? 'px-3 py-1.5 text-[15px]' : 'px-2.5 py-1 text-[11px]'} rounded-full bg-emerald-50 font-black text-emerald-700`}>
@@ -1516,7 +1558,7 @@ function CompactBuildCard({
           </span>
         ))}
       </div>
-      <div className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-col sm:flex-row sm:items-start sm:justify-between`}>
+      <div style={sectionStyle(titleIdx)} className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-col sm:flex-row sm:items-start sm:justify-between`}>
         <div className="min-w-0">
           <h3 className={`${isLarge ? 'text-[20px] leading-8' : 'text-sm leading-5'} font-black text-commerce-ink`}>{build.title}</h3>
           <p className={`${isLarge ? 'mt-2 text-base leading-7' : 'mt-1 text-xs leading-5'} line-clamp-2 break-keep text-slate-500`}>{build.summary}</p>
@@ -1529,7 +1571,7 @@ function CompactBuildCard({
         </div>
       </div>
       {build.toolResults?.length ? (
-        <div className={`${isLarge ? 'mt-4 gap-2' : 'mt-3 gap-1.5'} flex flex-wrap`} aria-label="검증 결과">
+        <div style={sectionStyle(toolsIdx)} className={`${isLarge ? 'mt-4 gap-2' : 'mt-3 gap-1.5'} flex flex-wrap`} aria-label="검증 결과">
           {build.toolResults.map((result) => (
             <span
               key={`${result.tool}-${result.status}`}
@@ -1541,7 +1583,7 @@ function CompactBuildCard({
           ))}
         </div>
       ) : null}
-      <div className={`${isLarge ? 'mt-4 gap-2 text-base' : 'mt-3 gap-1.5 text-xs'} grid`}>
+      <div style={sectionStyle(partsIdx)} className={`${isLarge ? 'mt-4 gap-2 text-base' : 'mt-3 gap-1.5 text-xs'} grid`}>
         {primaryItems.map((item) => (
           <div key={item.partId} className={`${isLarge ? 'grid-cols-[78px_minmax(0,1fr)] gap-3 rounded-xl px-4 py-2.5' : 'grid-cols-[56px_minmax(0,1fr)] gap-2 rounded-lg px-2.5 py-1.5'} grid bg-slate-50`}>
             <span className="font-black text-brand-blue">{PART_CATEGORY_LABELS[item.category]}</span>
@@ -1553,6 +1595,7 @@ function CompactBuildCard({
         type="button"
         onClick={() => onSelectBuild(build)}
         disabled={isApplyDisabled}
+        style={sectionStyle(buttonIdx)}
         className={`${isLarge ? 'mt-4 min-h-14 gap-3 px-4 text-base' : 'mt-3 min-h-10 gap-2 px-3 text-xs'} flex w-full items-center justify-center rounded-full border border-blue-200 bg-white font-black text-brand-blue transition hover:border-brand-blue hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400`}
       >
         <ShoppingCart size={isLarge ? 21 : 15} />
