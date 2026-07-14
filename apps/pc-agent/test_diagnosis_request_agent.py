@@ -65,6 +65,15 @@ class DiagnosisRequestProcessorTest(unittest.TestCase):
         self.assertEqual(WEB_REQUEST, self.store.session.request.source)
         self.assertEqual(1, len(self.shown))
 
+    def test_accepts_java_instant_with_nanosecond_precision(self):
+        payload = request_payload()
+        payload["requestedAt"] = "2026-07-13T01:00:00.123456789Z"
+        payload["expiresAt"] = "2026-07-13T01:02:00.123456789Z"
+
+        decision = self.processor.process(payload, authenticated=True)
+
+        self.assertEqual("ACCEPTED", decision.status)
+
     def test_preserves_each_web_symptom_without_replacing_it(self):
         symptoms = ("게임 A에서만 화면이 멈춥니다.", "렌더링 중 GPU 온도가 상승합니다.")
         for index, symptom in enumerate(symptoms):

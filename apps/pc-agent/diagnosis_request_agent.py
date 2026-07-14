@@ -50,6 +50,17 @@ def parse_server_datetime(value: Any) -> datetime | None:
     text = value.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
+    fraction_start = text.find(".")
+    if fraction_start >= 0:
+        offset_positions = (
+            position
+            for position in (text.find("+", fraction_start), text.find("-", fraction_start))
+            if position >= 0
+        )
+        fraction_end = min(offset_positions, default=len(text))
+        fraction = text[fraction_start + 1:fraction_end]
+        if fraction.isdigit() and len(fraction) > 6:
+            text = text[:fraction_start + 1] + fraction[:6] + text[fraction_end:]
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError:
