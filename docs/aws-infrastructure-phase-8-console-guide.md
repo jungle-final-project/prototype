@@ -1456,35 +1456,4 @@ SSM 배포가 target SHA를 fetch·checkout하지 않은 것이다. API image뿐
 
 ## 29. Phase 8 결과 기록표
 
-Secret value, password, token, `.env.prod` 원문은 기록하지 않는다.
 
-| 항목 | 기록값 |
-| --- | --- |
-| Phase 8 시작 시각 | |
-| Phase 8 완료 시각 | |
-| 배포 승인 Git SHA | |
-| API ECR repository URI | |
-| XGB ECR repository URI | |
-| 최초 API image digest | |
-| 최초 XGB image digest | |
-| GitHub OIDC provider ARN | |
-| GitHub Green Role ARN | |
-| GitHub Role inline policy | `BuildGraphGreenDeployPolicy` |
-| Web workflow run URL | |
-| API workflow run URL | |
-| XGB workflow run URL | |
-| 최초 SSM Command ID | |
-| Green active API SHA | |
-| Green active XGB SHA | |
-| API rollback 대상 SHA | |
-| API rollback 결과 | |
-| `.env.prod` 권한 | |
-| `green-images.env` 권한 | |
-| ECR Compose config SHA-256 | |
-| Green `/api/health` | |
-| Green CloudFront Web | |
-| Green CloudFront API | |
-| Blue health 무변경 | |
-| Blue CloudFront 무변경 | |
-| `GREEN_CD_ENABLED` 최종값 | |
-| 미완료·보류 항목 | |
