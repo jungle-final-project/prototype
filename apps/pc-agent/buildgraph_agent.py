@@ -5872,6 +5872,24 @@ def show_log_viewer(
         result = ui.get("diagnosisResult")
         result_available = diagnosis_result_available(active_session, snapshot, result)
 
+        # 실제 진행률은 태스크 종료 시에만 계단식으로 뛰므로 표시용 스무딩을 거친다.
+        smoother = ui.get("progressSmoother")
+        if not isinstance(smoother, SmoothedProgress) or ui.get("progressSmootherId") != snapshot.diagnosis_id:
+            smoother = SmoothedProgress()
+            ui["progressSmoother"] = smoother
+            ui["progressSmootherId"] = snapshot.diagnosis_id
+        display_progress = smoother.update(100 if result_available else progress, time.monotonic())
+        if display_progress < 100 and not ui.get("ringTickScheduled"):
+            # 링이 이벤트 없이도 계속 움직이도록 진단 화면이 떠 있는 동안 120ms 재렌더한다.
+            ui["ringTickScheduled"] = True
+
+            def ring_tick() -> None:
+                ui["ringTickScheduled"] = False
+                if isinstance(ui.get("diagnosisSession"), DiagnosisSession):
+                    render()
+
+            root.after(120, ring_tick)
+
         round_rect(70, 180, 930, 650, 12, "#ffffff", "#d7dce0")
         canvas.create_oval(94, 207, 136, 249, fill="#ffffff", outline="#d7dce0")
         draw_chat_icon(115, 228, 9)
@@ -5880,8 +5898,8 @@ def show_log_viewer(
         text(153, 252, scope_text, 11, colors["muted"])
         line(95, 278, 905, 278)
         text(500, 298, "진단 완료" if result_available else "진단 진행 중", 21, colors["text"], "semibold", "center")
-        draw_progress_ring(462, 342, progress)
-        text(515, 342, f"{progress}%", 24, colors["text"], "regular", "center")
+        draw_progress_ring(462, 342, display_progress)
+        text(515, 342, f"{display_progress}%", 24, colors["text"], "regular", "center")
         detail = "진단 작업이 완료되었습니다." if result_available else ui["status"] or current_label
         text(500, 376, str(detail), 12, colors["muted"], "regular", "center")
         line(95, 404, 905, 404)
@@ -6658,6 +6676,45 @@ def upload_event_panel_request(
     )
     ticket_id = str(result["ticketId"])
     return ticket_id, support_url(config.api_base_url, ticket_id, config.web_base_url)
+
+
+class SmoothedProgress:
+    """진단 진행률 링의 표시용 스무딩.
+
+    실제 진행률은 태스크가 끝날 때만 계단식으로 뛰므로 그대로 그리면 링이
+    15%→100%처럼 점프한다. 표시값은 실제값을 초당 FAST_RATE로 부드럽게 뒤쫓고,
+    실제값이 정체된 동안에도 CREEP_RATE로 조금씩 전진해 링이 항상 움직인다.
+    단 실제값+HEADROOM과 CEILING(96%)을 넘지 않아 거짓 완료를 만들지 않으며,
+    표시값은 단조 증가한다. 실제 100% 도달 시 100까지 마무리 스윕한다.
+    """
+
+    FAST_RATE = 45.0
+    CREEP_RATE = 1.5
+    HEADROOM = 12.0
+    CEILING = 96.0
+
+    def __init__(self) -> None:
+        self._display = 0.0
+        self._last_seconds: float | None = None
+
+    def update(self, actual: int, now_seconds: float) -> int:
+        target = float(max(0, min(100, actual)))
+        if self._last_seconds is None:
+            # 진행 중 화면에 뒤늦게 합류한 경우 현재 값에서 시작한다(0부터 훑지 않음).
+            self._last_seconds = now_seconds
+            self._display = target if target >= 100.0 else min(target, self.CEILING)
+            return int(self._display)
+        elapsed = max(0.0, now_seconds - self._last_seconds)
+        self._last_seconds = now_seconds
+        if target >= 100.0:
+            self._display = min(100.0, self._display + self.FAST_RATE * elapsed)
+        elif self._display < target:
+            self._display = min(target, self._display + self.FAST_RATE * elapsed)
+        else:
+            stall_cap = min(target + self.HEADROOM, self.CEILING)
+            if self._display < stall_cap:
+                self._display = min(stall_cap, self._display + self.CREEP_RATE * elapsed)
+        return int(self._display)
 
 
 def status_pulse_frame(base_text: str, step: int) -> str:

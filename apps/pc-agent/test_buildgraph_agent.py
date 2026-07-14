@@ -2879,5 +2879,40 @@ class StatusPulseTest(unittest.TestCase):
         self.assertEqual(var.value, "접수 완료")
 
 
+class SmoothedProgressTest(unittest.TestCase):
+    def test_first_update_starts_at_actual_without_sweep(self) -> None:
+        smoother = agent.SmoothedProgress()
+        self.assertEqual(smoother.update(60, 0.0), 60)
+
+    def test_jump_becomes_smooth_sweep(self) -> None:
+        smoother = agent.SmoothedProgress()
+        smoother.update(10, 0.0)
+        # 실제값이 10→90으로 점프해도 표시값은 초당 45%로만 따라간다.
+        self.assertEqual(smoother.update(90, 1.0), 55)
+        self.assertEqual(smoother.update(90, 2.0), 90)
+
+    def test_stall_creeps_but_never_exceeds_headroom_or_ceiling(self) -> None:
+        smoother = agent.SmoothedProgress()
+        smoother.update(15, 0.0)
+        # 정체 60초: 크리핑은 실제+12(=27)에서 멈춘다.
+        self.assertEqual(smoother.update(15, 60.0), 27)
+        self.assertEqual(smoother.update(15, 120.0), 27)
+        # 실제 90 정체 장기화: 상한 96에서 멈춘다(거짓 100% 없음).
+        smoother2 = agent.SmoothedProgress()
+        smoother2.update(90, 0.0)
+        self.assertEqual(smoother2.update(90, 600.0), 96)
+
+    def test_completion_sweeps_to_exactly_100(self) -> None:
+        smoother = agent.SmoothedProgress()
+        smoother.update(80, 0.0)
+        smoother.update(100, 0.2)  # 스윕 시작
+        self.assertEqual(smoother.update(100, 5.0), 100)
+
+    def test_display_is_monotonic(self) -> None:
+        smoother = agent.SmoothedProgress()
+        values = [smoother.update(actual, t * 0.2) for t, actual in enumerate([0, 10, 10, 10, 40, 40, 100, 100, 100])]
+        self.assertEqual(values, sorted(values))
+
+
 if __name__ == "__main__":
     unittest.main()
