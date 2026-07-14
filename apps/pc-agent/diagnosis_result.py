@@ -40,7 +40,7 @@ class DiagnosisEvidence:
     task_id: str
     component: str
     metric_type: str
-    value: float | str | None
+    value: Any
     unit: str
     availability: str
     status: str
@@ -48,13 +48,17 @@ class DiagnosisEvidence:
     sampled_at: str
     error_code: str | None = None
     failure_reason: str | None = None
+    category: str | None = None
+    code: int | str | None = None
+    occurred_at: str | None = None
+    description: str | None = None
 
     @property
     def key(self) -> str:
         return f"{self.component}.{self.metric_type}"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "taskId": self.task_id,
             "component": self.component,
             "metricType": self.metric_type,
@@ -67,6 +71,16 @@ class DiagnosisEvidence:
             "errorCode": self.error_code,
             "failureReason": self.failure_reason,
         }
+        if self.category:
+            payload["category"] = self.category
+            payload["code"] = self.code
+        elif self.code is not None:
+            payload["code"] = self.code
+        if self.occurred_at:
+            payload["occurredAt"] = self.occurred_at
+        if self.description:
+            payload["description"] = self.description
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "DiagnosisEvidence":
@@ -82,6 +96,10 @@ class DiagnosisEvidence:
             sampled_at=str(payload.get("sampledAt") or ""),
             error_code=str(payload["errorCode"]) if payload.get("errorCode") else None,
             failure_reason=str(payload["failureReason"]) if payload.get("failureReason") else None,
+            category=str(payload["category"]) if payload.get("category") else None,
+            code=payload.get("code"),
+            occurred_at=str(payload["occurredAt"]) if payload.get("occurredAt") else None,
+            description=str(payload["description"]) if payload.get("description") else None,
         )
 
 

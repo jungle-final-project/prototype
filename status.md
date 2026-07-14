@@ -1,37 +1,30 @@
 # 작업 상태
 
 ## 현재 목표
-- PR #32(`feat/goal3-agent-idempotency`)가 최신 `upstream/main`과 충돌 없이 머지 가능하도록 정리한다.
+- 실제 Windows Display PnP 장치, signed driver, 그래픽/WHEA/Kernel-Power 이벤트를 읽기 전용으로 수집하고 공통 evidence로 변환한다.
 
 ## 완료한 일
-- `upstream/main`을 현재 브랜치에 병합했다.
-- `apps/web/src/features/admin/adminApi.ts` 충돌을 해결해 Agent/AS 관리자 API와 upstream 관리자 parts/manufacturer API를 모두 유지했다.
-- Flyway migration 버전 중복을 해소했다.
-  - `V53__pc_agent_gold_mode_contract.sql` -> `V56__pc_agent_gold_mode_contract.sql`
-  - `V54__agent_idempotency_records.sql` -> `V57__agent_idempotency_records.sql`
-- 테스트와 문서의 migration 파일명 참조를 갱신했다.
-- 기존 PR DB에서 `V53/V54` Agent migration이 이미 적용된 상태로 최신 upstream을 받으면 Flyway checksum mismatch가 나는 원인을 확인했다.
-- 기존 DB 삭제 없이 업그레이드되도록 legacy Agent `V53/V54` 이력 감지 시 Flyway repair를 수행하고, `V56/V57`은 기존 객체가 있으면 no-op 되게 수정했다.
-- 기존 PR DB가 놓친 upstream manufacturer release source seed를 `V58` 후속 migration으로 보강했다.
+- 기존 PowerShell 숨김 실행 방식과 Provider 패턴을 재사용한 `WindowsGraphicsDiagnosticsProvider`를 추가했다.
+- `Win32_PnPEntity`에서 Display 장치 status와 실제 `ConfigManagerErrorCode`를 수집한다.
+- `Get-PnpDevice`/`Get-PnpDeviceProperty` 경로는 CIM 조회 실패 시 fallback으로 유지한다.
+- `Win32_PnPSignedDriver`에서 공급자, 버전, 날짜, 서명 여부, signer, INF를 수집한다.
+- provider/eventId 기반으로 최근 그래픽, WHEA, Kernel-Power 이벤트를 조회한다.
+- 이벤트 없음, 조회 실패, 권한 부족을 서로 다른 상태로 보존한다.
+- 기존 `DiagnosisEvidence`에 category, code, occurredAt, description 선택 필드만 확장했다.
+- 정상 장치, problem code 22, 이벤트 없음/조회 실패 구분 테스트 3개를 추가했다.
 
 ## 마지막 검증 결과
-- `./gradlew.bat clean compileJava compileTestJava`: 통과
-- `./gradlew.bat test --no-daemon`: 통과
-- `npm run build` in `apps/web`: 통과
-- `python tools/validate_openapi.py`: 통과
-- 충돌 마커 검색: 없음
-- Docker 전체 웹 실행: 성공
-  - Web: `http://localhost:5173` HTTP 200
-  - API: `http://localhost:8080/api/health` HTTP 200
-  - Web proxy: `http://localhost:5173/api/health` HTTP 200
-- 기존 `buildgraph` DB 업그레이드 검증: 성공
-  - 삭제 없이 Flyway `V53/V54` legacy 이력 repair
-  - `V55/V56/V57/V58` 적용 완료
-  - manufacturer source seed 10개 보강 확인
-- `./gradlew.bat clean compileJava compileTestJava`: 통과
-- `./gradlew.bat test --no-daemon`: 통과
-- `npm run build` in `apps/web`: 통과
-- `python tools/validate_openapi.py`: 통과
+- 변경 Python 파일 3개 문법 검사: 통과
+- `python -m pytest -q test_windows_graphics_diagnostics.py test_diagnosis_result.py`: 17 passed
+- 실제 read-only Provider smoke test: 통과
+  - Intel(R) Iris(R) Xe Graphics: PnP OK, problem code 0
+  - Intel(R) Arc(TM) A350M Graphics: PnP Error, problem code 43, DEVICE_REPORTED_PROBLEM
+  - 두 Display driver 모두 signed=true, signer/INF 조회 성공
+  - 최근 7일 그래픽 이벤트 0건, WHEA 0건, Kernel-Power 0건
 
 ## 남은 일
-- PR 리뷰 승인 후 머지한다.
+- 이번 단계 범위에는 없음. 판정, 결과 문구, UI, AS 연결은 다음 단계에서만 진행한다.
+
+## 막힌 점 / 리스크
+- 이 PC에서 직접 `Get-PnpDevice` 조회는 timeout됐지만, `Win32_PnPEntity` 우선 경로로 필수 PnP status/problem code를 실제 검증했다.
+- `Get-PnpDevice` fallback 자체는 단위 테스트 대상이 아니며, CIM 조회 실패 환경에서만 실행된다.
