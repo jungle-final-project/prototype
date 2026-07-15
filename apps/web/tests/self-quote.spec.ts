@@ -3725,7 +3725,7 @@ test('shows save failure feedback while keeping the current self quote', async (
   await page.getByTestId('quote-checkout-actions').getByRole('button', { name: '내 견적함에 추가' }).click();
 
   const statusBar = page.getByTestId('slot-status-bar');
-  await expect(statusBar.getByText('내 견적함 추가 실패 — 잠시 후 다시 시도해 주세요.')).toBeVisible();
+  await expect(statusBar.getByText('견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.')).toBeVisible();
   await expect(page).toHaveURL('/self-quote');
   await expect(page.getByTestId('checklist-GPU')).toContainText('RTX 5070 구매 테스트');
 });

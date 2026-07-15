@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { CategorySidebar, DataTable, Panel, StateMessage } from '../../../../components/ui';
 import { getToken } from '../../../../lib/api';
-import { saveBuildFromChat } from '../../../quote/quoteApi';
+import { buildSaveErrorMessage, saveBuildFromChat } from '../../../quote/quoteApi';
 import { handlePartImageError, partImageUrl, partShortSpec } from '../../partDisplay';
 import { deleteQuoteDraftItem, getCurrentQuoteDraft, getPartPriceHistory, listParts, patchQuoteDraftItem, putQuoteDraftItem } from '../../partsApi';
 import { quoteDraftToRecommendedBuild, selfQuoteBuildId } from '../../selfQuoteBuild';
@@ -339,7 +339,7 @@ export function LegacySelfQuoteListSections() {
               </div>
             ) : null}
             {saveQuoteMutation.isError ? (
-              <StateMessage type="warn" title="내 견적함 추가 실패" body="현재 견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+              <StateMessage type="warn" title="내 견적함 추가 실패" body={buildSaveErrorMessage(saveQuoteMutation.error)} />
             ) : null}
           </div>
           <div className="mt-4 space-y-3">
