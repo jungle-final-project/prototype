@@ -83,6 +83,10 @@ buildgraph:
       enabled: ${PAYMENT_MOCK_ENABLED:false}
       webhook-secret: ${PAYMENT_MOCK_WEBHOOK_SECRET:}
   auth:
+    # requireUser의 JWT subject→사용자 캐시 TTL(초). 0이면 캐시 끔(요청마다 users SELECT).
+    # role 변경·소프트 삭제 반영이 최대 이 시간만큼 늦을 수 있다 — 프로필 변경은 즉시 무효화된다.
+    user-cache:
+      ttl-seconds: ${AUTH_USER_CACHE_TTL_SECONDS:30}
     google:
       client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
       client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
@@ -228,6 +232,11 @@ recommendation:
   # 홈 응답(사용자 무관) 인메모리 캐시 TTL(초). 0이면 캐시 끔. 가격은 일일 갱신이라 수십 초 지연 무해.
   home-cache:
     ttl-seconds: ${HOME_CACHE_TTL_SECONDS:30}
+  # 인증 홈추천의 ACTIVE 후보 전수 스캔(3 LATERAL) row 캐시 TTL(초). 0이면 캐시 끔.
+  # 점수·순위·shadow 기록은 여전히 요청마다 계산된다 — DB 스캔만 재사용.
+  home-parts:
+    candidate-cache:
+      ttl-seconds: ${HOME_PARTS_CANDIDATE_CACHE_TTL_SECONDS:30}
   reranker:
     enabled: ${RECOMMENDATION_RERANKER_ENABLED:false}
     shadow-enabled: ${RECOMMENDATION_RERANKER_SHADOW_ENABLED:true}
