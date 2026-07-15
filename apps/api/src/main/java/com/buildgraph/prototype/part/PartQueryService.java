@@ -2,14 +2,17 @@ package com.buildgraph.prototype.part;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ReadThroughTtlCache;
 import com.buildgraph.prototype.recommendation.PartContextRecommendationService;
 import com.buildgraph.prototype.user.CurrentUserService;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -22,16 +25,29 @@ public class PartQueryService {
     private final JdbcTemplate jdbcTemplate;
     private final PartCompatibleCandidateService compatibilityService;
     private final PartContextRecommendationService recommendationService;
+    // 유저 무관 카탈로그 조회(순수 parts 경로)만 짧은 TTL 캐시. draft 기반 compatibility 경로는 캐시하지 않는다.
+    private final ReadThroughTtlCache<PartSearch, Map<String, Object>> partsCache;
 
     @Autowired
     public PartQueryService(
             JdbcTemplate jdbcTemplate,
             PartCompatibleCandidateService compatibilityService,
-            PartContextRecommendationService recommendationService
+            PartContextRecommendationService recommendationService,
+            @Value("${part.query-cache.ttl-seconds:30}") long cacheTtlSeconds
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.compatibilityService = compatibilityService;
         this.recommendationService = recommendationService;
+        this.partsCache = new ReadThroughTtlCache<>(Duration.ofSeconds(cacheTtlSeconds), 512);
+    }
+
+    // 편의 생성자(테스트/내부용) — 캐시 기본 TTL(30초).
+    public PartQueryService(
+            JdbcTemplate jdbcTemplate,
+            PartCompatibleCandidateService compatibilityService,
+            PartContextRecommendationService recommendationService
+    ) {
+        this(jdbcTemplate, compatibilityService, recommendationService, 30L);
     }
 
     public PartQueryService(JdbcTemplate jdbcTemplate, PartCompatibleCandidateService compatibilityService) {
@@ -61,14 +77,16 @@ public class PartQueryService {
         if (normalizedCompatibilitySource != null && search.category() != null) {
             // compatibilityMode/replaceTargetPartId는 호환 평가가 켜졌을 때만 의미가 있다 —
             // compatibilitySource 단독 무시 규칙과 같은 원칙으로, 평가 없는 조회에서는 무시한다.
+            // 이 경로는 사용자 draft에 따라 응답이 달라지므로 캐시하지 않는다.
             return partsWithCompatibility(user, search, normalizedCompatibilitySource, compatibilityMode, replaceTargetPartId);
         }
-        return MockData.map(
+        // 순수 카탈로그 조회는 사용자 무관이라 검색 조건(PartSearch)만으로 캐시된다 — 반복 목록·홈 조회 가속.
+        return partsCache.get(search, () -> MockData.map(
                 "items", partRows(search).stream().map(this::stripInternalFields).toList(),
                 "page", search.page(),
                 "size", search.size(),
                 "total", countParts(search)
-        );
+        ));
     }
 
     public Map<String, Object> parts(
