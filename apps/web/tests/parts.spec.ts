@@ -187,7 +187,7 @@ test('uses one horizontal action style for add, replace, and remove while markin
   await expect(tableActionButtons[0]).toHaveCSS('color', 'rgb(17, 24, 39)');
   await expect(tableActionButtons[0]).toHaveCSS('border-color', 'rgb(17, 24, 39)');
   for (const actionButton of tableActionButtons.slice(1)) {
-    await expect(actionButton).toHaveCSS('background-color', 'rgb(17, 24, 39)');
+    await expect(actionButton).toHaveCSS('background-color', 'rgb(222, 108, 45)');
     await expect(actionButton).toHaveCSS('color', 'rgb(255, 255, 255)');
   }
   for (const actionButton of tableActionButtons) {
