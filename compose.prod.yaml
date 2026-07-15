@@ -243,6 +243,14 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    # nginx worker_rlimit_nofile 16384(이미지에 COPY된 nginx.conf)가 실제로 먹히도록 FD 상한을 올린다.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # spike 순간 연결 폭주 대비: listen backlog=4096(conf)이 커널 상한에 잘리지 않게.
+    sysctls:
+      net.core.somaxconn: 4096
     depends_on:
       - api
 

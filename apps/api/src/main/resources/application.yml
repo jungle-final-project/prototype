@@ -11,6 +11,11 @@ server:
       min-spare: ${TOMCAT_THREADS_MIN_SPARE:20}
     # worker가 모두 바쁠 때 OS 소켓 백로그 큐 길이. 초과 연결은 즉시 거절되어 빠른 실패를 유도한다.
     accept-count: ${TOMCAT_ACCEPT_COUNT:100}
+    # nginx upstream keepalive(64 conn, 30s idle, 1000 req)와 정렬. Tomcat이 nginx보다 항상
+    # 나중에 닫도록 상한을 크게 둔다 — 같은 값(1000/30s)이면 양쪽이 동시에 닫는 경계에서
+    # 재사용 커넥션에 실린 비멱등 POST가 502가 되는 레이스가 생긴다.
+    max-keep-alive-requests: ${TOMCAT_MAX_KEEP_ALIVE_REQUESTS:10000}
+    keep-alive-timeout: ${TOMCAT_KEEP_ALIVE_TIMEOUT_MS:75000}
 
 spring:
   application:
