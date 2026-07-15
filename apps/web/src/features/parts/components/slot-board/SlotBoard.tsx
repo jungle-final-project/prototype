@@ -314,8 +314,9 @@ export function SlotBoard({
             />
             <div
               data-testid="slot-candidate-overlay-layer"
-              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))]"
+              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))] lg:p-3"
             >
+              {/* 여백(p-3) 안에서 패널이 떠 보이게 — 하단이 보드 절단면이 아니라 패널 자신의 모서리로 끝난다. */}
               <div className="pointer-events-auto h-full w-full">{bodyOverlay}</div>
             </div>
           </>

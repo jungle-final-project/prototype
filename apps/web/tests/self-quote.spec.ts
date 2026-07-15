@@ -954,6 +954,61 @@ test('placement board part click explains relations instead of opening the candi
   await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
 });
 
+// 후보 패널(데스크톱)은 헤더를 잡고 드래그해 옮길 수 있다(제언). 보드 밖으로는 못 나간다.
+test('candidate panel can be dragged by its header on desktop', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildGraphResponse()) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByTestId('checklist-GPU').click();
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+
+  // 등장 애니메이션(slot-panel-in 220ms)이 끝난 뒤 측정 — 애니메이션 중엔 transform을 애니메이션이 쥔다.
+  await page.waitForTimeout(350);
+  const handle = page.getByTestId('slot-candidate-panel-handle');
+  const before = await panel.boundingBox();
+  expect(before).not.toBeNull();
+
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  const startX = (handleBox?.x ?? 0) + (handleBox?.width ?? 0) / 2;
+  const startY = (handleBox?.y ?? 0) + 12;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  // 이동량은 보드 경계 클램프 안쪽으로 작게(패널 상하 여백은 12px) — 경계에선 그만큼만 움직이는 게 설계다.
+  await page.mouse.move(startX + 24, startY + 8, { steps: 4 });
+  await page.mouse.up();
+
+  const after = await panel.boundingBox();
+  expect(Math.round((after?.x ?? 0) - (before?.x ?? 0))).toBe(24);
+  expect(Math.round((after?.y ?? 0) - (before?.y ?? 0))).toBe(8);
+  // 과감히 밖으로 끌어도 보드 경계 안에서 멈춘다(클램프).
+  await page.mouse.move(startX + 24, startY + 8);
+  await page.mouse.down();
+  await page.mouse.move(startX + 600, startY + 600, { steps: 4 });
+  await page.mouse.up();
+  const clamped = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="slot-board"]')!.getBoundingClientRect();
+    const p = document.querySelector('[data-testid="slot-candidate-panel"]')!.getBoundingClientRect();
+    return { right: b.right - p.right, bottom: b.bottom - p.bottom };
+  });
+  expect(clamped.bottom).toBeGreaterThanOrEqual(0);
+  expect(clamped.right).toBeGreaterThanOrEqual(0);
+
+  // 헤더 안의 닫기 버튼은 드래그로 삼키지 않고 그대로 동작한다.
+  await panel.getByRole('button', { name: '후보 패널 닫기' }).click();
+  await expect(panel).toHaveCount(0);
+});
+
 test('draws a card-to-part elbow connector only for the selected card in 3D view', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/quote-drafts/current**', async (route) => {
