@@ -240,7 +240,7 @@ public class BuildQueryService {
         if (buildIds.isEmpty()) {
             return Map.of();
         }
-        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?"));
+        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?::uuid"));
         Map<String, List<PartCandidate>> result = new LinkedHashMap<>();
         jdbcTemplate.queryForList("""
                         SELECT b.public_id::text AS build_id,
@@ -254,7 +254,7 @@ public class BuildQueryService {
                         FROM build_items bi
                         JOIN builds b ON b.id = bi.build_id
                         JOIN parts p ON p.id = bi.part_id
-                        WHERE b.public_id::text IN (""" + placeholders + """
+                        WHERE b.public_id IN (""" + placeholders + """
                         )
                         ORDER BY b.public_id, bi.id
                         """, buildIds.toArray())
@@ -268,13 +268,13 @@ public class BuildQueryService {
         if (buildIds.isEmpty()) {
             return Map.of();
         }
-        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?"));
+        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?::uuid"));
         Map<String, Integer> result = new LinkedHashMap<>();
         jdbcTemplate.queryForList("""
                         SELECT b.public_id::text AS build_id, r.budget
                         FROM builds b
                         JOIN requirements r ON r.id = b.requirement_id
-                        WHERE b.public_id::text IN (""" + placeholders + """
+                        WHERE b.public_id IN (""" + placeholders + """
                         )
                         """, buildIds.toArray())
                 .forEach(row -> result.put(DbValueMapper.string(row, "build_id"), DbValueMapper.integer(row, "budget")));
@@ -286,7 +286,7 @@ public class BuildQueryService {
         if (buildIds.isEmpty()) {
             return Map.of();
         }
-        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?"));
+        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?::uuid"));
         Map<String, String> result = new LinkedHashMap<>();
         jdbcTemplate.queryForList("""
                         SELECT DISTINCT ON (b.public_id)
@@ -294,7 +294,7 @@ public class BuildQueryService {
                                s.public_id::text AS session_id
                         FROM agent_sessions s
                         JOIN builds b ON (b.requirement_id = s.requirement_id OR b.id = s.build_id)
-                        WHERE b.public_id::text IN (""" + placeholders + """
+                        WHERE b.public_id IN (""" + placeholders + """
                         )
                         ORDER BY b.public_id, s.created_at DESC, s.id DESC
                         """, buildIds.toArray())
@@ -306,12 +306,12 @@ public class BuildQueryService {
         if (sessionIds.isEmpty()) {
             return Map.of();
         }
-        String placeholders = String.join(", ", Collections.nCopies(sessionIds.size(), "?"));
+        String placeholders = String.join(", ", Collections.nCopies(sessionIds.size(), "?::uuid"));
         Map<String, String> result = new LinkedHashMap<>();
         jdbcTemplate.queryForList("""
                         SELECT public_id::text AS id, summary
                         FROM agent_sessions
-                        WHERE public_id::text IN (""" + placeholders + """
+                        WHERE public_id IN (""" + placeholders + """
                         )
                         """, sessionIds.toArray())
                 .forEach(row -> result.put(DbValueMapper.string(row, "id"), DbValueMapper.string(row, "summary")));
@@ -324,13 +324,13 @@ public class BuildQueryService {
         if (sessionIds.isEmpty()) {
             return Map.of();
         }
-        String placeholders = String.join(", ", Collections.nCopies(sessionIds.size(), "?"));
+        String placeholders = String.join(", ", Collections.nCopies(sessionIds.size(), "?::uuid"));
         Map<String, List<String>> result = new LinkedHashMap<>();
         jdbcTemplate.queryForList("""
                         SELECT s.public_id::text AS session_id, re.public_id::text AS evidence_id
                         FROM rag_evidence re
                         JOIN agent_sessions s ON s.id = re.agent_session_id
-                        WHERE s.public_id::text IN (""" + placeholders + """
+                        WHERE s.public_id IN (""" + placeholders + """
                         )
                         ORDER BY s.public_id, re.id
                         """, sessionIds.toArray())
