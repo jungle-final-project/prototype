@@ -71,6 +71,11 @@ services:
     build:
       context: ./apps/api
     restart: unless-stopped
+    # JVM MaxRAMPercentage=70(Dockerfile)의 분모. 이 한도가 있어야 heap이 유계가 되고 호스트 OOM을 막는다.
+    # ~4GB 호스트에서 7컨테이너 예산 배분 시작값(문서 8.4). 실서버 RSS 확인 후 API_MEM_LIMIT로 조정 가능.
+    mem_limit: ${API_MEM_LIMIT:-1280m}
+    # graceful shutdown이 SIGKILL로 잘리지 않도록 application.yml의 종료 timeout(30s)보다 크게 둔다.
+    stop_grace_period: 40s
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-buildgraph}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-buildgraph}
