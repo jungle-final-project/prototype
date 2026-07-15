@@ -311,7 +311,7 @@ export function SlotBoard({
             />
             <div
               data-testid="slot-candidate-overlay-layer"
-              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))]"
+              className="slot-candidate-overlay-layer pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))]"
             >
               <div className="pointer-events-auto h-full w-full">{bodyOverlay}</div>
             </div>

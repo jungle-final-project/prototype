@@ -1267,6 +1267,67 @@ test('overlays photo candidates on the board body without resizing the compatibi
   await expect(page).toHaveURL('/self-quote');
 });
 
+test('keeps desktop candidate results scrollable and compact at a 150 percent zoom-sized viewport', async ({ page }) => {
+  // 2048x1152 화면을 Chrome 150%로 보는 상황과 비슷한 CSS viewport다.
+  // 너비는 데스크톱 breakpoint를 유지하지만 세로 작업 공간이 줄어드는 회귀를 재현한다.
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await loginAsUser(page);
+
+  const currentCpu = draftItem('cpu-zoom-current', 'CPU', '현재 장착된 CPU', 499000);
+  const zoomDraft = {
+    ...emptyDraft,
+    id: 'draft-zoom-candidate-panel',
+    items: [currentCpu],
+    totalPrice: currentCpu.lineTotal,
+    itemCount: 1
+  };
+  const cpuCandidates = Array.from({ length: 8 }, (_, index) =>
+    candidatePart(`cpu-zoom-${index + 1}`, 'CPU', `확대 환경 CPU 후보 ${index + 1}`, {
+      price: 250000 + index * 30000
+    })
+  );
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(zoomDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: cpuCandidates, page: 0, size: 20, total: cpuCandidates.length })
+    });
+  });
+
+  await page.goto('/self-quote?category=CPU');
+
+  const panel = page.getByTestId('slot-candidate-panel');
+  const candidateList = panel.getByTestId('slot-candidate-list');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveCSS('position', 'static');
+  await expect(panel.getByTestId('candidate-panel-description')).toBeHidden();
+  await expect(panel.getByTestId('candidate-panel-header')).toHaveCSS('padding-top', '8px');
+  await expect(panel.getByTestId('candidate-panel-search')).toHaveCSS('padding-top', '6px');
+  await expect(panel.getByTestId('candidate-panel-filters')).toHaveCSS('padding-top', '6px');
+  await expect(panel.getByTestId('candidate-panel-selected')).toHaveCSS('padding-top', '6px');
+
+  const metrics = await candidateList.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollbarGutter: style.scrollbarGutter,
+      scrollbarWidth: style.scrollbarWidth
+    };
+  });
+  expect(metrics.clientHeight).toBeGreaterThanOrEqual(120);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  expect(metrics.scrollbarGutter).toContain('stable');
+  expect(metrics.scrollbarWidth).not.toBe('none');
+
+  await candidateList.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect(panel.getByText('확대 환경 CPU 후보 8')).toBeVisible();
+});
+
 test('blocks purchase when a tool check fails without a matching edge', async ({ page }) => {
   await loginAsUser(page);
   // 감사 P1-3①: GPU가 없어 GPU-PSU 엣지가 안 생기는 견적에서 파워 용량 부족(power 툴 FAIL)이
