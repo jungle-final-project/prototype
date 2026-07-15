@@ -22,9 +22,22 @@ public class ToolCheckService {
 
     /** Checks every MVP Tool against the same build candidate. */
     public List<Map<String, Object>> checkBuild(List<ToolBuildPart> parts, int budget) {
+        return checkBuild(parts, budget, null);
+    }
+
+    /**
+     * checkBuild with prefetched benchmark rows, so callers evaluating many builds at once
+     * (예: builds/history)는 build마다 벤치마크를 조회하지 않는다(N+1 회피). null이면 기존처럼 조회한다.
+     */
+    public List<Map<String, Object>> checkBuild(List<ToolBuildPart> parts, int budget, Map<Long, Map<String, Object>> benchmarkRows) {
         return TOOL_ORDER.stream()
-                .map(tool -> checkResolvedTool(tool, parts, budget, total(parts), Map.of()))
+                .map(tool -> checkResolvedTool(tool, parts, budget, total(parts), Map.of(), benchmarkRows))
                 .toList();
+    }
+
+    /** 여러 build 부품의 최신 벤치마크를 한 번에 로드한다 — 호출처가 checkBuild에 주입해 build별 조회를 없앤다. */
+    public Map<Long, Map<String, Object>> loadLatestBenchmarks(List<ToolBuildPart> parts) {
+        return latestBenchmarks(parts);
     }
 
     /** Runs one Tool API request through the shared validation engine. */
@@ -64,12 +77,23 @@ public class ToolCheckService {
             int currentTotalPrice,
             Map<String, Object> context
     ) {
+        return checkResolvedTool(tool, parts, budget, currentTotalPrice, context, null);
+    }
+
+    private Map<String, Object> checkResolvedTool(
+            String tool,
+            List<ToolBuildPart> parts,
+            int budget,
+            int currentTotalPrice,
+            Map<String, Object> context,
+            Map<Long, Map<String, Object>> prefetchedBenchmarks
+    ) {
         Map<String, ToolBuildPart> byCategory = byCategory(parts);
         return switch (tool) {
             case "compatibility" -> compatibility(byCategory, parts);
             case "power" -> power(byCategory, parts);
             case "size" -> size(byCategory);
-            case "performance" -> performance(byCategory, context);
+            case "performance" -> performance(byCategory, context, prefetchedBenchmarks);
             case "price" -> price(parts, budget, currentTotalPrice);
             default -> throw new IllegalArgumentException("지원하지 않는 Tool입니다: " + tool);
         };
@@ -361,9 +385,19 @@ public class ToolCheckService {
 
     /** Evaluates coarse workload fit without promising exact FPS. */
     private Map<String, Object> performance(Map<String, ToolBuildPart> byCategory, Map<String, Object> context) {
+        return performance(byCategory, context, null);
+    }
+
+    private Map<String, Object> performance(
+            Map<String, ToolBuildPart> byCategory,
+            Map<String, Object> context,
+            Map<Long, Map<String, Object>> prefetchedBenchmarks
+    ) {
         ToolBuildPart cpu = byCategory.get("CPU");
         ToolBuildPart gpu = byCategory.get("GPU");
-        Map<Long, Map<String, Object>> benchmarkRows = latestBenchmarks(new ArrayList<>(byCategory.values()));
+        Map<Long, Map<String, Object>> benchmarkRows = prefetchedBenchmarks != null
+                ? prefetchedBenchmarks
+                : latestBenchmarks(new ArrayList<>(byCategory.values()));
         Double cpuScore = benchmarkScore(benchmarkRows, cpu);
         Double gpuScore = benchmarkScore(benchmarkRows, gpu);
         int vramGb = intAttr(gpu, "vramGb", 0);
