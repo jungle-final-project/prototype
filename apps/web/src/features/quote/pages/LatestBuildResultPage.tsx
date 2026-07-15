@@ -28,7 +28,7 @@ import {
   type BuildGraphResolveResponse,
   type BuildGraphStatus
 } from '../aiSelection';
-import { resolveBuildGraph, saveBuildFromChat } from '../quoteApi';
+import { buildSaveErrorMessage, resolveBuildGraph, saveBuildFromChat } from '../quoteApi';
 
 type RecommendationFilter = 'all' | AiBuildTier;
 type CompactGraphNodeData = {
@@ -261,7 +261,9 @@ export function LatestBuildResultPage() {
             build={selectedBuild}
             savedBuildId={selectedSavedBuildId}
             isSaving={saveMutation.isPending && saveMutation.variables?.key === selectedEntry?.key}
-            saveError={saveMutation.isError && saveMutation.variables?.key === selectedEntry?.key}
+            saveErrorMessage={saveMutation.isError && saveMutation.variables?.key === selectedEntry?.key
+              ? buildSaveErrorMessage(saveMutation.error)
+              : undefined}
             onSave={() => selectedEntry ? saveMutation.mutate(selectedEntry) : undefined}
             onGraphCardClick={() => openSelfQuoteFromGraph(selectedBuild)}
             onClose={closeDetail}
@@ -284,7 +286,7 @@ function LatestBuildDetailDrawer({
   build,
   savedBuildId,
   isSaving,
-  saveError,
+  saveErrorMessage,
   onSave,
   onGraphCardClick,
   onClose
@@ -292,7 +294,7 @@ function LatestBuildDetailDrawer({
   build: AiRecommendedBuild;
   savedBuildId?: string;
   isSaving: boolean;
-  saveError: boolean;
+  saveErrorMessage?: string;
   onSave: () => void;
   onGraphCardClick: () => void;
   onClose: () => void;
@@ -337,7 +339,7 @@ function LatestBuildDetailDrawer({
           displayBuild={displayBuild}
           savedBuildId={savedBuildId}
           isSaving={isSaving}
-          saveError={saveError}
+          saveErrorMessage={saveErrorMessage}
           onSave={onSave}
           onGraphCardClick={onGraphCardClick}
           onClose={onClose}
@@ -352,7 +354,7 @@ function LatestBuildDetailPanelContent({
   displayBuild,
   savedBuildId,
   isSaving,
-  saveError,
+  saveErrorMessage,
   onSave,
   onGraphCardClick,
   onClose
@@ -361,7 +363,7 @@ function LatestBuildDetailPanelContent({
   displayBuild: ReturnType<typeof temporaryBuildToBuildSummary>;
   savedBuildId?: string;
   isSaving: boolean;
-  saveError: boolean;
+  saveErrorMessage?: string;
   onSave: () => void;
   onGraphCardClick: () => void;
   onClose: () => void;
@@ -510,8 +512,8 @@ function LatestBuildDetailPanelContent({
                 >
                   {isSaving ? '저장 중' : '견적 저장'}
                 </button>
-                {saveError ? (
-                  <StateMessage type="warn" title="견적 저장 실패" body="AI 챗봇 추천 견적을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." />
+                {saveErrorMessage ? (
+                  <StateMessage type="warn" title="견적 저장 실패" body={saveErrorMessage} />
                 ) : null}
               </div>
             )}
