@@ -17,6 +17,7 @@ import com.buildgraph.prototype.quote.QuoteDraftQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -169,8 +170,11 @@ public class BuildQueryService {
         );
     }
 
+    // 내 견적함 목록. 과거엔 build마다 부품·예산·에이전트세션·근거·벤치마크를 개별 조회해
+    // 30개 기준 ~180 쿼리(N+1)가 나갔다. 이제 상위 목록 1회 + build_id IN(...) 배치 5~6회로 상수화한다.
+    // 배치 쿼리 결과는 buildSummary(단건)와 동일함을 실데이터로 대조 검증했다(세션 DISTINCT ON=LIMIT1, 부품·근거 parity).
     public List<Map<String, Object>> builds(CurrentUserService.CurrentUser user) {
-        return jdbcTemplate.queryForList("""
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                         SELECT b.public_id::text AS id, b.name, b.total_price, b.confidence, b.warnings, b.created_at
                         FROM builds b
                         JOIN requirements r ON r.id = b.requirement_id
@@ -178,10 +182,162 @@ public class BuildQueryService {
                           AND b.deleted_at IS NULL
                         ORDER BY b.created_at DESC, b.id DESC
                         LIMIT 30
-                        """, user.internalId())
-                .stream()
-                .map(this::buildSummary)
+                        """, user.internalId());
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        List<String> buildIds = rows.stream().map(row -> DbValueMapper.string(row, "id")).toList();
+
+        Map<String, List<PartCandidate>> partsByBuild = partCandidatesByBuildIds(buildIds);
+        Map<String, Integer> budgetByBuild = budgetsByBuildIds(buildIds);
+        Map<String, String> sessionByBuild = latestSessionIdsByBuildIds(buildIds);
+        List<String> sessionIds = sessionByBuild.values().stream()
+                .filter(value -> value != null)
+                .distinct()
                 .toList();
+        Map<String, String> summaryBySession = sessionSummariesByIds(sessionIds);
+        Map<String, List<String>> evidenceBySession = evidenceIdsBySessionIds(sessionIds);
+
+        // 모든 build 부품의 최신 벤치마크를 한 번에 로드해 build별 performance Tool의 벤치마크 조회(N+1)를 없앤다.
+        Map<String, List<ToolBuildPart>> toolPartsByBuild = new LinkedHashMap<>();
+        partsByBuild.forEach((id, parts) -> toolPartsByBuild.put(id, parts.stream().map(this::toolPart).toList()));
+        List<ToolBuildPart> allToolParts = toolPartsByBuild.values().stream().flatMap(List::stream).toList();
+        Map<Long, Map<String, Object>> benchmarks = toolCheckService.loadLatestBenchmarks(allToolParts);
+
+        List<Map<String, Object>> result = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            String id = DbValueMapper.string(row, "id");
+            List<PartCandidate> parts = partsByBuild.getOrDefault(id, List.of());
+            Integer totalPrice = DbValueMapper.integer(row, "total_price");
+            Integer rawBudget = budgetByBuild.get(id);
+            int budget = rawBudget == null || rawBudget <= 0 ? (totalPrice == null ? total(parts) : totalPrice) : rawBudget;
+            List<Map<String, Object>> toolResults = toolCheckService.checkBuild(
+                    toolPartsByBuild.getOrDefault(id, List.of()), budget, benchmarks);
+            String sessionId = sessionByBuild.get(id);
+            result.add(MockData.map(
+                    "id", id,
+                    "name", DbValueMapper.string(row, "name"),
+                    "recommendedFor", recommendedFor(DbValueMapper.string(row, "name")),
+                    "summary", summaryText(DbValueMapper.string(row, "name")),
+                    "totalPrice", totalPrice,
+                    "confidence", DbValueMapper.string(row, "confidence"),
+                    "items", parts.stream().map(this::partItem).toList(),
+                    "warnings", DbValueMapper.json(row, "warnings", List.of()),
+                    "evidenceIds", sessionId == null ? List.of() : evidenceBySession.getOrDefault(sessionId, List.of()),
+                    "agentSessionId", sessionId,
+                    "agentSummary", sessionId == null ? null : summaryBySession.get(sessionId),
+                    "changeableCategories", List.of("CPU", "GPU", "RAM", "STORAGE", "PSU", "CASE", "COOLER"),
+                    "createdAt", DbValueMapper.timestamp(row, "created_at"),
+                    "toolResults", toolResults
+            ));
+        }
+        return result;
+    }
+
+    // ---- builds() 배치 로더: 각 쿼리는 buildSummary(단건)의 개별 조회를 build_id IN(...)로 묶은 것이다 ----
+
+    private Map<String, List<PartCandidate>> partCandidatesByBuildIds(List<String> buildIds) {
+        if (buildIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?"));
+        Map<String, List<PartCandidate>> result = new LinkedHashMap<>();
+        jdbcTemplate.queryForList("""
+                        SELECT b.public_id::text AS build_id,
+                               p.id AS internal_id,
+                               p.public_id::text AS id,
+                               p.category,
+                               p.name,
+                               p.manufacturer,
+                               bi.price,
+                               p.attributes
+                        FROM build_items bi
+                        JOIN builds b ON b.id = bi.build_id
+                        JOIN parts p ON p.id = bi.part_id
+                        WHERE b.public_id::text IN (""" + placeholders + """
+                        )
+                        ORDER BY b.public_id, bi.id
+                        """, buildIds.toArray())
+                .forEach(row -> result
+                        .computeIfAbsent(DbValueMapper.string(row, "build_id"), key -> new ArrayList<>())
+                        .add(partCandidate(row)));
+        return result;
+    }
+
+    private Map<String, Integer> budgetsByBuildIds(List<String> buildIds) {
+        if (buildIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?"));
+        Map<String, Integer> result = new LinkedHashMap<>();
+        jdbcTemplate.queryForList("""
+                        SELECT b.public_id::text AS build_id, r.budget
+                        FROM builds b
+                        JOIN requirements r ON r.id = b.requirement_id
+                        WHERE b.public_id::text IN (""" + placeholders + """
+                        )
+                        """, buildIds.toArray())
+                .forEach(row -> result.put(DbValueMapper.string(row, "build_id"), DbValueMapper.integer(row, "budget")));
+        return result;
+    }
+
+    // build마다 (requirement_id 매칭 OR build_id 매칭)로 최신 세션 1개 — DISTINCT ON이 build별 LIMIT 1과 같다.
+    private Map<String, String> latestSessionIdsByBuildIds(List<String> buildIds) {
+        if (buildIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(buildIds.size(), "?"));
+        Map<String, String> result = new LinkedHashMap<>();
+        jdbcTemplate.queryForList("""
+                        SELECT DISTINCT ON (b.public_id)
+                               b.public_id::text AS build_id,
+                               s.public_id::text AS session_id
+                        FROM agent_sessions s
+                        JOIN builds b ON (b.requirement_id = s.requirement_id OR b.id = s.build_id)
+                        WHERE b.public_id::text IN (""" + placeholders + """
+                        )
+                        ORDER BY b.public_id, s.created_at DESC, s.id DESC
+                        """, buildIds.toArray())
+                .forEach(row -> result.put(DbValueMapper.string(row, "build_id"), DbValueMapper.string(row, "session_id")));
+        return result;
+    }
+
+    private Map<String, String> sessionSummariesByIds(List<String> sessionIds) {
+        if (sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(sessionIds.size(), "?"));
+        Map<String, String> result = new LinkedHashMap<>();
+        jdbcTemplate.queryForList("""
+                        SELECT public_id::text AS id, summary
+                        FROM agent_sessions
+                        WHERE public_id::text IN (""" + placeholders + """
+                        )
+                        """, sessionIds.toArray())
+                .forEach(row -> result.put(DbValueMapper.string(row, "id"), DbValueMapper.string(row, "summary")));
+        return result;
+    }
+
+    // 세션 null인 build는 buildSummary에서 evidenceIds(build)를 쓰지만, 세션이 없으면 그 조회도 항상 빈 결과라
+    // (같은 OR 조인) 여기선 세션 있는 build만 근거를 배치 조회하고 나머지는 빈 목록으로 둔다 — 결과 동치.
+    private Map<String, List<String>> evidenceIdsBySessionIds(List<String> sessionIds) {
+        if (sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(sessionIds.size(), "?"));
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        jdbcTemplate.queryForList("""
+                        SELECT s.public_id::text AS session_id, re.public_id::text AS evidence_id
+                        FROM rag_evidence re
+                        JOIN agent_sessions s ON s.id = re.agent_session_id
+                        WHERE s.public_id::text IN (""" + placeholders + """
+                        )
+                        ORDER BY s.public_id, re.id
+                        """, sessionIds.toArray())
+                .forEach(row -> result
+                        .computeIfAbsent(DbValueMapper.string(row, "session_id"), key -> new ArrayList<>())
+                        .add(DbValueMapper.string(row, "evidence_id")));
+        return result;
     }
 
     @Transactional
