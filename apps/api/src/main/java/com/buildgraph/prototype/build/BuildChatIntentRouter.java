@@ -196,7 +196,8 @@ public class BuildChatIntentRouter {
         }
 
         boolean genericSymptom = containsAny(normalized,
-                "멈춰", "멈춤", "멈춘", "얼어붙", "버벅", "끊겨", "끊김", "안켜", "안돼", "이상해");
+                // "끊켜/끊킴"은 실사용에서 흔한 표기 변형(제보 재현) — 함께 인식한다.
+                "멈춰", "멈춤", "멈춘", "얼어붙", "버벅", "끊겨", "끊김", "끊켜", "끊킴", "안켜", "안돼", "이상해");
         boolean pcContext = containsAny(normalized,
                 "컴퓨터", "pc", "게임", "화면", "윈도우", "부팅", "전원", "그래픽", "드라이버",
                 "인터넷", "네트워크", "소리", "팬", "온도", "ssd", "디스크");

@@ -2517,7 +2517,8 @@ public class BuildChatService {
         if (containsAnyNormalized(normalized, "소리가안", "소리안나", "오디오")) {
             return "AUDIO";
         }
-        if (containsAnyNormalized(normalized, "프레임드랍", "버벅", "끊겨", "끊김", "갑자기느려", "느려졌", "튕겨", "튕김", "크래시")) {
+        // "끊켜/끊킴"은 실사용에서 흔한 표기 변형이라 함께 인식한다.
+        if (containsAnyNormalized(normalized, "프레임드랍", "버벅", "끊겨", "끊김", "끊켜", "끊킴", "갑자기느려", "느려졌", "튕겨", "튕김", "크래시")) {
             return "PERFORMANCE_STUTTER";
         }
         if (containsAnyNormalized(normalized, "과열", "너무뜨거", "온도가너무", "팬소리")) {
@@ -5390,6 +5391,12 @@ public class BuildChatService {
             BuildChatIntentDecision previousDecision
     ) {
         String normalized = normalizeCommand(message);
+        // 고장 증상 호소("게임이 자꾸 끊켜", "자꾸 꺼져요")는 그 자체로 새 AS 진단 대화다 —
+        // 직전 추천/미리보기 원문과 합성하면 라우터가 부품 변경 경로로 가로채 증상마다
+        // 케이스 교체안이 반복 제시되는 핑퐁이 생긴다(실사용 재현).
+        if (!"GENERAL".equals(inferSupportSymptomCategory(message))) {
+            return true;
+        }
         if (detectPartCategory(message) != null
                 && containsAnyNormalized(
                         normalized,
