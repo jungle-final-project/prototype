@@ -728,7 +728,7 @@ PC Agent 등록/인증 규칙:
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/dashboard` | ADMIN | 5번 | - | `{ "agentRunning": 1, "openTickets": 3, "priceJobsRunning": 0, "degraded": false, "generatedAt": "2026-06-29T10:50:00Z" }` | `agent_sessions`, `as_tickets`, `price_jobs` |
+| `GET` | `/api/admin/dashboard` | ADMIN | 5번 | - | `{ "agentRunning": 1, "openTickets": 3, "priceJobsRunning": 0, "todayRevenue": 27800, "weekRevenue": 230100, "revenueTrend": [{ "date": "2026-07-16", "label": "07/16", "revenue": 27800 }], "orderStatus": [{ "status": "PENDING", "label": "처리대기", "count": 1 }], "degraded": false, "generatedAt": "2026-06-29T10:50:00Z" }` | `agent_sessions`, `as_tickets`, `price_jobs`, `assembly_payments`, `assembly_requests` |
 | `GET` | `/api/admin/audit-logs/recent` | ADMIN | 5번 | - | `{ "items": [{ "action": "AS_TICKET_UPDATED", "targetType": "as_tickets", "targetId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "metadata": { "beforeStatus": "OPEN", "afterStatus": "IN_PROGRESS" }, "createdAt": "2026-06-29T10:45:00Z" }] }` | `admin_audit_logs` |
 | `GET` | `/api/admin/pipeline-job-runs` | ADMIN | 5번 | `?limit=30` | `{ "items": [{ "id": "5a3f...", "jobName": "DANAWA_SNAPSHOT_REFRESH", "triggerType": "SCHEDULED", "status": "SUCCEEDED", "resultSummary": { "attempted": 7 }, "errorSummary": null, "startedAt": "2026-07-03T04:00:00Z", "finishedAt": "2026-07-03T04:01:10Z", "durationMs": 70000 }], "total": 1 }` | `pipeline_job_runs` |
 | `GET` | `/api/health` | no | 5번 | - | `200 { "status": "UP", "database": "UP" }`, DB 연결 실패 시 `503 { "status": "DOWN" }` | runtime |
@@ -992,8 +992,18 @@ PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/
 | `AdminDashboardDto` | `agentRunning` | `number` | no | `1` |
 | `AdminDashboardDto` | `openTickets` | `number` | no | `3` |
 | `AdminDashboardDto` | `priceJobsRunning` | `number` | no | `0` |
+| `AdminDashboardDto` | `todayRevenue` | `number` | no | `27800` |
+| `AdminDashboardDto` | `weekRevenue` | `number` | no | `230100` |
+| `AdminDashboardDto` | `revenueTrend` | `AdminRevenueTrendPointDto[]` | no | `[{ "date": "2026-07-16", "label": "07/16", "revenue": 27800 }]` |
+| `AdminDashboardDto` | `orderStatus` | `AdminOrderStatusDto[]` | no | `[{ "status": "PENDING", "label": "처리대기", "count": 1 }]` |
 | `AdminDashboardDto` | `degraded` | `boolean` | no | `false` |
 | `AdminDashboardDto` | `generatedAt` | `string` | yes | `2026-06-29T10:50:00Z` |
+| `AdminRevenueTrendPointDto` | `date` | `string` | no | `2026-07-16` |
+| `AdminRevenueTrendPointDto` | `label` | `string` | no | `07/16` |
+| `AdminRevenueTrendPointDto` | `revenue` | `number` | no | `27800` |
+| `AdminOrderStatusDto` | `status` | `string` | no | `PENDING` |
+| `AdminOrderStatusDto` | `label` | `string` | no | `처리대기` |
+| `AdminOrderStatusDto` | `count` | `number` | no | `1` |
 | `AuditLogDto` | `action` | `string` | no | `AS_TICKET_UPDATED` |
 | `AuditLogDto` | `targetType` | `string` | no | `as_tickets` |
 | `AuditLogDto` | `targetId` | `string` | yes | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |

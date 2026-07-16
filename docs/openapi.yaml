@@ -8308,7 +8308,7 @@ components:
           type: boolean
     AdminDashboardDto:
       type: object
-      required: [agentRunning, openTickets, priceJobsRunning, degraded]
+      required: [agentRunning, openTickets, priceJobsRunning, todayRevenue, weekRevenue, revenueTrend, orderStatus, degraded]
       properties:
         agentRunning:
           type: integer
@@ -8316,11 +8316,48 @@ components:
           type: integer
         priceJobsRunning:
           type: integer
+        todayRevenue:
+          type: integer
+          format: int64
+        weekRevenue:
+          type: integer
+          format: int64
+        revenueTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminRevenueTrendPointDto"
+        orderStatus:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminOrderStatusDto"
         degraded:
           type: boolean
         generatedAt:
           type: string
           format: date-time
+    AdminRevenueTrendPointDto:
+      type: object
+      required: [date, label, revenue]
+      properties:
+        date:
+          type: string
+          format: date
+        label:
+          type: string
+        revenue:
+          type: integer
+          format: int64
+    AdminOrderStatusDto:
+      type: object
+      required: [status, label, count]
+      properties:
+        status:
+          type: string
+          enum: [PENDING, IN_PROGRESS, COMPLETED, CANCELLED]
+        label:
+          type: string
+        count:
+          type: integer
     AuditLogDto:
       type: object
       required: [action, targetType, createdAt]
