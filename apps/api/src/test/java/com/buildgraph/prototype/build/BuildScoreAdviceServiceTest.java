@@ -3,7 +3,7 @@ package com.buildgraph.prototype.build;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;

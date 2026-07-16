@@ -17,6 +17,9 @@ export default defineConfig({
   },
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${webPort} --strictPort`,
+    env: {
+      VITE_DEV_PROXY_TARGET: process.env.PLAYWRIGHT_API_PROXY_TARGET ?? 'http://127.0.0.1:65535'
+    },
     url: webBaseUrl,
     reuseExistingServer: false,
     timeout: 120_000

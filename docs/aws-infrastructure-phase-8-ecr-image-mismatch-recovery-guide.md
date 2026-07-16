@@ -802,35 +802,35 @@ done
 
 ## 15. 완료 조건
 
-- [ ] `GREEN_CD_ENABLED=false`로 수정 중 자동 배포 차단
-- [ ] 기존 셸 image 환경변수가 candidate를 덮는 회귀 테스트 작성
-- [ ] 수정 전 회귀 테스트 FAIL 확인
-- [ ] `source + set -a` 제거
-- [ ] manifest 값을 export하지 않고 지역 변수로 읽음
-- [ ] Compose 실행 시 `API_IMAGE_URI`, `XGB_IMAGE_URI` 상위 환경 제거
-- [ ] 배포 후 실제 Container image URI 검증 추가
-- [ ] image 불일치 시 배포 실패와 rollback 수행
-- [ ] Shell 문법 검사 PASS
-- [ ] Green deployment validator PASS
-- [ ] Infrastructure validator PASS
-- [ ] ECR Compose config PASS
-- [ ] 수정 commit이 `main`에 반영됨
-- [ ] Green EC2에 수정 스크립트 bootstrap 완료
-- [ ] API workflow 수동 배포 PASS
-- [ ] API 실행 image와 manifest SHA 일치
-- [ ] API 배포 중 XGB Container ID 유지
-- [ ] XGB workflow 수동 배포 PASS
-- [ ] XGB 실행 image와 manifest SHA 일치
-- [ ] XGB 배포 중 API Container ID 유지
-- [ ] Green `/healthz`, `/api/health` PASS
-- [ ] Green CloudFront `/api/health` PASS
+- [x] `GREEN_CD_ENABLED=false`로 수정 중 자동 배포 차단
+- [x] 기존 셸 image 환경변수가 candidate를 덮는 회귀 테스트 작성
+- [ ] 수정 전 회귀 테스트 FAIL 확인 — 실행 로그 미제공
+- [x] `source + set -a` 제거
+- [x] manifest 값을 export하지 않고 지역 변수로 읽음
+- [x] Compose 실행 시 `API_IMAGE_URI`, `XGB_IMAGE_URI` 상위 환경 제거
+- [x] 배포 후 실제 Container image URI 검증 추가
+- [x] image 불일치 시 배포 실패와 rollback 수행
+- [x] Shell 문법 검사 PASS
+- [x] Green deployment validator PASS
+- [x] Infrastructure validator PASS
+- [x] ECR Compose config PASS
+- [x] 수정 commit이 `main`에 반영됨 (`0a49108f1376df2f73deb7e0cf5fc7997faf1108`)
+- [x] Green EC2에 수정 스크립트 bootstrap 완료
+- [x] API workflow 수동 배포 PASS
+- [x] API 실행 image와 manifest SHA 일치
+- [ ] API 배포 중 XGB Container ID 유지 — 배포 전 `/tmp/xgb-before-api-deploy.txt`가 없어 미검증. 당시 출력된 FAIL은 빈 기준값으로 인한 무효 판정
+- [x] XGB workflow 수동 배포 PASS
+- [x] XGB 실행 image와 manifest SHA 일치
+- [ ] XGB 배포 중 API Container ID 유지 — FAIL. 배포 전 기록한 API Container ID와 배포 후 ID가 다름
+- [x] Green `/healthz`, `/api/health` PASS
+- [x] Green CloudFront `/api/health` PASS
 - [ ] API rollback drill PASS
 - [ ] rollback 후 FIX_SHA 복귀 PASS
 - [ ] `GREEN_CD_ENABLED=true` 재활성화
-- [ ] Web/API/XGB path 기반 독립 자동 배포 확인
-- [ ] Blue EC2·CloudFront·Compose 무변경
+- [ ] Web/API/XGB path 기반 독립 자동 배포 확인 — XGB 배포 중 API Container ID 유지 조건 실패로 미완료
+- [ ] Blue EC2·CloudFront·Compose 무변경 — 미검증
 
-모든 조건이 통과해야 이 문제를 해결 완료로 판정하고 Phase 8 완료 조건을 갱신한다.
+현재 판정은 **진행 중**이다. 이미지와 manifest 불일치 복구 및 health 검증은 통과했지만, 독립 배포 Container ID 검증·rollback drill·자동 CD 재활성화·Blue 무변경 확인이 남아 있다. 모든 조건이 통과해야 이 문제를 해결 완료로 판정한다.
 
 ---
 
@@ -840,20 +840,31 @@ Secret value는 기록하지 않는다.
 
 | 항목 | 값 |
 | --- | --- |
-| 장애 확인 시각 |  |
+| 장애 확인 시각 | 미기록 |
 | 장애 API 요청 SHA | `3b351c25eb1b2d8c9c4d4de1a4318a3610f24a63` |
 | 장애 시 실제 API image SHA | `93a7f672f84added76246f55c8fc368a36c12e00` |
-| 수정 commit FIX_SHA |  |
-| API workflow Run URL |  |
-| API SSM Command ID |  |
-| API ECR image URI |  |
-| API 실행 image URI |  |
-| XGB workflow Run URL |  |
-| XGB SSM Command ID |  |
-| XGB ECR image URI |  |
-| XGB 실행 image URI |  |
-| 이전 정상 rollback SHA |  |
-| rollback Run URL |  |
-| 최신 FIX_SHA 복귀 Run URL |  |
-| 자동 CD 재활성화 시각 |  |
-| Blue 무변경 확인 | PASS / FAIL |
+| 수정 commit FIX_SHA | `0a49108f1376df2f73deb7e0cf5fc7997faf1108` |
+| Green EC2 수정 스크립트 bootstrap | PASS |
+| API workflow Run URL | 미기록 |
+| API SSM Command ID | 미기록 |
+| API ECR image URI | `443915990705.dkr.ecr.ap-northeast-2.amazonaws.com/buildgraph-demo-api-green:0a49108f1376df2f73deb7e0cf5fc7997faf1108` |
+| API 실행 image URI | `443915990705.dkr.ecr.ap-northeast-2.amazonaws.com/buildgraph-demo-api-green:0a49108f1376df2f73deb7e0cf5fc7997faf1108` |
+| API image와 manifest 일치 | PASS |
+| API 배포 중 XGB Container ID 유지 | 미검증 — 배포 전 기준 파일 누락 |
+| XGB workflow Run URL | 미기록 |
+| XGB SSM Command ID | 미기록 |
+| XGB ECR image URI | `443915990705.dkr.ecr.ap-northeast-2.amazonaws.com/buildgraph-demo-xgb-reranker-green:0a49108f1376df2f73deb7e0cf5fc7997faf1108` |
+| XGB 실행 image URI | `443915990705.dkr.ecr.ap-northeast-2.amazonaws.com/buildgraph-demo-xgb-reranker-green:0a49108f1376df2f73deb7e0cf5fc7997faf1108` |
+| XGB image와 manifest 일치 | PASS |
+| XGB health | `healthy` |
+| XGB 배포 전 API Container ID | `d8a646ce3374fb355102a1b17d45f01310b2a2d08f04599f1e7b2c40767185bf` |
+| XGB 배포 중 API Container ID 유지 | FAIL — 배포 후 Container ID 변경 확인 |
+| Green `/healthz` | PASS — `ok` |
+| Green `/api/health` | PASS — `status=UP`, `database=UP` |
+| Green CloudFront `/api/health` | PASS — `status=UP`, `database=UP` |
+| 이전 정상 rollback SHA | 미선정 |
+| rollback Run URL | 미실행 |
+| 최신 FIX_SHA 복귀 Run URL | 미실행 |
+| 자동 CD 재활성화 시각 | 미실행 |
+| Blue 무변경 확인 | 미검증 |
+| Phase 8 최종 판정 | 진행 중 |

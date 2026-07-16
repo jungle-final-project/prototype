@@ -10,7 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
@@ -362,6 +362,342 @@ class BuildGraphServiceTest {
     }
 
     @Test
+    void aiBuildQuantityCountsIntoRamStickOverflow() {
+        // B1 회귀: AI_BUILD resolve가 item.quantity를 버리면 2개들이 킷 × 수량 2(스틱 4 > 슬롯 2)가
+        // PASS(초록)로 둔갑한다. 실제 ToolCheckService로 스틱 합산까지 관통 검증한다.
+        stubPart("qty-board", part("qty-board", 801L, "MOTHERBOARD", "2슬롯 보드", 250000,
+                MockData.map("socket", "AM5", "memoryType", "DDR5", "memorySlots", 2)));
+        stubPart("qty-ram", part("qty-ram", 802L, "RAM", "32GB 2개들이 킷", 180000,
+                MockData.map("memoryType", "DDR5", "moduleCount", 2)));
+        BuildGraphService realToolService = new BuildGraphService(
+                jdbcTemplate, new ToolCheckService(jdbcTemplate), currentUserService, buildGraphLayoutService, buildCompositeScoreService);
+
+        Map<String, Object> graph = realToolService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "items", List.of(
+                        Map.of("partId", "qty-board", "category", "MOTHERBOARD", "quantity", 1),
+                        Map.of("partId", "qty-ram", "category", "RAM", "quantity", 2)
+                )
+        ));
+
+        List<Map<String, Object>> edges = castList(graph.get("edges"));
+        assertThat(edges).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-board-ram-memory");
+            assertThat(edge.get("status")).isEqualTo("FAIL");
+            assertThat((String) edge.get("summary")).contains("RAM 스틱 4개").contains("슬롯 2개");
+        });
+        // 사유별 분리 인사이트: 걸린 조건(스틱 초과) 문장이 연루 부품(RAM/보드)에만 tool 필드와 함께 귀속된다.
+        List<Map<String, Object>> insights = castList(graph.get("insights"));
+        assertThat(insights).anySatisfy(insight -> {
+            assertThat(insight.get("tool")).isEqualTo("compatibility");
+            assertThat(insight.get("status")).isEqualTo("FAIL");
+            assertThat((String) insight.get("description")).contains("RAM 스틱 수(4개)");
+            assertThat(castStringList(insight.get("relatedNodeIds")))
+                    .containsExactlyInAnyOrder("part-RAM", "part-MOTHERBOARD");
+        });
+    }
+
+    @Test
+    void aiBuildNonNumericOrMissingQuantityDefaultsToSingle() {
+        stubPart("qty-board", part("qty-board", 801L, "MOTHERBOARD", "2슬롯 보드", 250000,
+                MockData.map("socket", "AM5", "memoryType", "DDR5", "memorySlots", 2)));
+        stubPart("qty-ram", part("qty-ram", 802L, "RAM", "32GB 2개들이 킷", 180000,
+                MockData.map("memoryType", "DDR5", "moduleCount", 2)));
+        BuildGraphService realToolService = new BuildGraphService(
+                jdbcTemplate, new ToolCheckService(jdbcTemplate), currentUserService, buildGraphLayoutService, buildCompositeScoreService);
+
+        Map<String, Object> graph = realToolService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "items", List.of(
+                        Map.of("partId", "qty-board", "category", "MOTHERBOARD"),
+                        Map.of("partId", "qty-ram", "category", "RAM", "quantity", "한가득")
+                )
+        ));
+
+        // 비숫자/누락 quantity는 1개로 방어한다 — 스틱 2 ≤ 슬롯 2라 PASS.
+        assertThat(castList(graph.get("edges"))).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-board-ram-memory");
+            assertThat(edge.get("status")).isEqualTo("PASS");
+        });
+    }
+
+    @Test
+    void insightsSplitPerIssueAndAttributeOnlyMountedParts() {
+        stubPart("iss-cpu", part("iss-cpu", 811L, "CPU", "Ryzen 7", 420000, MockData.map("socket", "AM5", "tdpW", 120)));
+        stubPart("iss-cooler", part("iss-cooler", 812L, "COOLER", "저가 쿨러", 30000, MockData.map("socketSupport", List.of("AM5"), "tdpW", 65)));
+        when(toolCheckService.checkBuild(anyList(), eq(450_000))).thenReturn(List.of(
+                tool("compatibility", "FAIL", "쿨러 TDP 65W가 CPU TDP 120W에 못 미쳐 냉각이 부족합니다",
+                        MockData.map(
+                                "socketMatched", true,
+                                "memoryTypeMatched", true,
+                                "coolerSocketMatched", true,
+                                "issueCategories", List.of("COOLER", "CPU", "RAM"),
+                                "issues", List.of(
+                                        MockData.map("categories", List.of("COOLER", "CPU"), "message", "쿨러 TDP 65W가 CPU TDP 120W에 못 미쳐 냉각이 부족합니다", "status", "FAIL"),
+                                        // 장착되지 않은 부품(RAM/MOTHERBOARD)은 인사이트 귀속에서 걸러져야 한다.
+                                        MockData.map("categories", List.of("RAM", "MOTHERBOARD"), "message", "메모리 규격 정보가 없어 검사를 못 했습니다", "status", "WARN")
+                                )))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 450_000,
+                "items", List.of(
+                        requestItem("iss-cpu", "CPU"),
+                        requestItem("iss-cooler", "COOLER")
+                )
+        ));
+
+        List<Map<String, Object>> insights = castList(graph.get("insights"));
+        assertThat(insights).anySatisfy(insight -> {
+            assertThat(insight.get("id")).isEqualTo("insight-compatibility-1");
+            assertThat(insight.get("tool")).isEqualTo("compatibility");
+            assertThat(insight.get("status")).isEqualTo("FAIL");
+            assertThat(insight.get("title")).isEqualTo("호환성 확인");
+            assertThat(insight.get("description")).isEqualTo("쿨러 TDP 65W가 CPU TDP 120W에 못 미쳐 냉각이 부족합니다");
+            assertThat(castStringList(insight.get("relatedNodeIds"))).containsExactlyInAnyOrder("part-COOLER", "part-CPU");
+        });
+        assertThat(insights).anySatisfy(insight -> {
+            assertThat(insight.get("id")).isEqualTo("insight-compatibility-2");
+            assertThat(insight.get("status")).isEqualTo("WARN");
+            assertThat(castStringList(insight.get("relatedNodeIds"))).isEmpty();
+        });
+    }
+
+    @Test
+    void summaryCountsProblemEdgesInsteadOfProblemTools() {
+        // B5b: size 툴 하나가 FAIL 엣지 2개(GPU 길이·쿨러 높이)를 만들면 "확인이 필요한 관계 2개"라고 말해야 한다.
+        stubPart("cnt-gpu", part("cnt-gpu", 821L, "GPU", "RTX 5090", 3980000, MockData.map("wattage", 575, "lengthMm", 380)));
+        stubPart("cnt-cooler", part("cnt-cooler", 822L, "COOLER", "Tall Cooler", 80000, MockData.map("heightMm", 170)));
+        stubPart("cnt-case", part("cnt-case", 823L, "CASE", "Small Case", 110000, MockData.map("maxGpuLengthMm", 360, "maxCpuCoolerHeightMm", 150)));
+        when(toolCheckService.checkBuild(anyList(), eq(5_000_000))).thenReturn(List.of(
+                tool("size", "FAIL", "GPU 길이(380mm)가 케이스 허용(360mm)을 초과합니다 · 쿨러 높이(170mm)가 케이스 허용(150mm)을 초과합니다",
+                        MockData.map("gpuLengthMm", 380, "maxGpuLengthMm", 360, "coolerHeightMm", 170, "maxCpuCoolerHeightMm", 150)),
+                tool("price", "PASS", "저장된 현재가 기준 예산 안에 들어옵니다.", MockData.map("budget", 5000000, "totalPrice", 4170000, "priceDiff", -830000))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 5_000_000,
+                "items", List.of(
+                        requestItem("cnt-gpu", "GPU"),
+                        requestItem("cnt-cooler", "COOLER"),
+                        requestItem("cnt-case", "CASE")
+                )
+        ));
+
+        assertThat(graph.get("summary")).isEqualTo("추천 조합에서 확인이 필요한 관계 2개를 표시했습니다.");
+    }
+
+    @Test
+    void powerSummaryWithoutGpuDoesNotClaimGpuRecommendation() {
+        // B7: GPU가 없어 vendorRecommendedPsuW=0이면 내부 추정치(부하+120)를 'GPU 권장 파워'로 부르지 않는다.
+        stubPart("nogpu-psu", part("nogpu-psu", 831L, "PSU", "600W Bronze", 70000, MockData.map("capacityW", 600)));
+        when(toolCheckService.checkBuild(anyList(), eq(70_000))).thenReturn(List.of(
+                tool("power", "PASS", "PSU 정격 출력이 예상 지속 부하와 GPU 권장 정격 파워를 충족합니다.",
+                        MockData.map(
+                                "estimatedContinuousLoadW", 211,
+                                "psuRatedCapacityW", 600,
+                                "vendorRecommendedPsuW", 0,
+                                "requiredRatedCapacityW", 331,
+                                "ratedHeadroomW", 389))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 70_000,
+                "items", List.of(requestItem("nogpu-psu", "PSU"))
+        ));
+
+        assertThat(castList(graph.get("nodes"))).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("constraint-power");
+            assertThat((String) node.get("detail"))
+                    .contains("필요 정격(추정) 331W")
+                    .doesNotContain("GPU 권장 파워");
+        });
+    }
+
+    @Test
+    void powerEdgeWithMissingPsuCapacityDoesNotFabricateZeroWatt() {
+        // PSU 용량 결측은 details가 null로 내려온다 — "현재 파워 0W" 같은 허구 숫자를 만들지 않는다.
+        stubPart("cap-gpu", part("cap-gpu", 841L, "GPU", "RTX 5070", 890000, MockData.map("wattage", 250, "requiredSystemPowerW", 750)));
+        stubPart("cap-psu", part("cap-psu", 842L, "PSU", "용량 미표기 PSU", 90000, MockData.map()));
+        when(toolCheckService.checkBuild(anyList(), eq(980_000))).thenReturn(List.of(
+                tool("power", "WARN", "파워 용량 정보가 없어 전력 검사를 못 했습니다",
+                        MockData.map(
+                                "estimatedContinuousLoadW", 320,
+                                "psuRatedCapacityW", null,
+                                "vendorRecommendedPsuW", 750,
+                                "requiredRatedCapacityW", 750,
+                                "ratedHeadroomW", null,
+                                "ratedLoadPercent", null))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 980_000,
+                "items", List.of(
+                        requestItem("cap-gpu", "GPU"),
+                        requestItem("cap-psu", "PSU")
+                )
+        ));
+
+        assertThat(castList(graph.get("edges"))).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-gpu-psu-power");
+            assertThat(edge.get("status")).isEqualTo("WARN");
+            assertThat(edge.get("label")).isEqualTo("파워 용량 미확인");
+            assertThat((String) edge.get("summary"))
+                    .isEqualTo("파워 용량 정보가 없어 전력 검사를 못 했습니다")
+                    .doesNotContain("0W");
+        });
+    }
+
+    @Test
+    void sataOnlyStorageEdgeStaysPassWithoutGhostWarning() {
+        // SATA SSD만 담긴 정상 구성(M.2 저장장치 0개)은 '미검사=WARN'이 아니라 검사할 것 없음(PASS)이다.
+        stubPart("sata-board", part("sata-board", 851L, "MOTHERBOARD", "B850 Board", 250000, MockData.map("socket", "AM5", "memoryType", "DDR5", "m2Slots", 2)));
+        stubPart("sata-ssd", part("sata-ssd", 852L, "STORAGE", "SATA 2.5인치 SSD", 90000, MockData.map("interface", "SATA", "capacityGb", 1024)));
+        when(toolCheckService.checkBuild(anyList(), eq(340_000))).thenReturn(List.of(
+                tool("compatibility", "PASS", "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다.",
+                        MockData.map(
+                                "socketMatched", true,
+                                "memoryTypeMatched", true,
+                                "coolerSocketMatched", true,
+                                "m2StorageTotal", 0,
+                                "m2Slots", 2,
+                                "m2SlotsChecked", false,
+                                "m2SlotsMatched", true))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 340_000,
+                "items", List.of(
+                        requestItem("sata-board", "MOTHERBOARD"),
+                        requestItem("sata-ssd", "STORAGE")
+                )
+        ));
+
+        assertThat(castList(graph.get("edges"))).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-board-storage-m2");
+            assertThat(edge.get("status")).isEqualTo("PASS");
+            assertThat(edge.get("label")).isEqualTo("M.2 슬롯 미사용");
+            assertThat(edge.get("summary")).isEqualTo("선택한 저장장치는 M.2 슬롯을 사용하지 않습니다.");
+        });
+    }
+
+    @Test
+    void aioCoolerNodeDetailShowsRadiatorSizeInsteadOfThickness() {
+        // 수랭 쿨러의 heightMm(라디에이터 두께 38mm)를 "높이 38mm"로 표기하지 않는다.
+        stubPart("aio-cooler", part("aio-cooler", 861L, "COOLER", "360mm 수랭", 180000,
+                MockData.map("coolerType", "LIQUID_AIO", "heightMm", 38, "radiatorSizeMm", 360, "socketSupport", List.of("AM5"))));
+        when(toolCheckService.checkBuild(anyList(), eq(180_000))).thenReturn(List.of());
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 180_000,
+                "items", List.of(requestItem("aio-cooler", "COOLER"))
+        ));
+
+        assertThat(castList(graph.get("nodes"))).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-COOLER");
+            assertThat(node.get("detail")).isEqualTo("라디에이터 360mm");
+        });
+
+        // 라디에이터 크기 결측이면 두께를 높이처럼 쓰지 않고 소켓 지원 표기로 폴백한다.
+        stubPart("aio-noradiator", part("aio-noradiator", 862L, "COOLER", "크기 미표기 수랭", 150000,
+                MockData.map("coolerType", "LIQUID", "heightMm", 38, "socketSupport", List.of("AM5"))));
+        when(toolCheckService.checkBuild(anyList(), eq(150_000))).thenReturn(List.of());
+
+        Map<String, Object> fallbackGraph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 150_000,
+                "items", List.of(requestItem("aio-noradiator", "COOLER"))
+        ));
+
+        assertThat(castList(fallbackGraph.get("nodes"))).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-COOLER");
+            assertThat(node.get("detail")).isEqualTo("AM5 지원");
+        });
+    }
+
+    @Test
+    void memoryEdgeIsWarnWhenTypeUnchecked() {
+        // 규격 정보 결측으로 검사를 생략한 RAM-보드 관계는 초록(근거 없는 통과)도 빨강도 아닌
+        // WARN(확인 필요)이다 — PENDING은 공유 소비처(BuildDependencyGraph)의 PASS/WARN/FAIL 계약 밖이라
+        // '호환 가능'(초록)으로 폴백 렌더되는 부작용이 있어 쓰지 않는다.
+        stubPart("pend-board", part("pend-board", 871L, "MOTHERBOARD", "B850 Board", 250000, MockData.map("socket", "AM5", "memoryType", "DDR4")));
+        stubPart("pend-ram", part("pend-ram", 872L, "RAM", "규격 미표기 RAM", 140000, MockData.map("capacityGb", 32)));
+        when(toolCheckService.checkBuild(anyList(), eq(390_000))).thenReturn(List.of(
+                tool("compatibility", "WARN", "메모리 규격 정보가 없어 검사를 못 했습니다",
+                        MockData.map(
+                                "socketMatched", true,
+                                "memoryTypeMatched", true,
+                                "memoryTypeChecked", false,
+                                "coolerSocketMatched", true,
+                                "ramSlotsMatched", true,
+                                "ramFormFactorMatched", true))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 390_000,
+                "items", List.of(
+                        requestItem("pend-board", "MOTHERBOARD"),
+                        requestItem("pend-ram", "RAM")
+                )
+        ));
+
+        assertThat(castList(graph.get("edges"))).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-board-ram-memory");
+            assertThat(edge.get("status")).isEqualTo("WARN");
+            assertThat(edge.get("label")).isEqualTo("규격 미확인");
+            assertThat(edge.get("summary")).isEqualTo("RAM 미확인 / 메인보드 지원 DDR4입니다. 메모리 규격 정보가 없어 호환 검사를 못 했습니다.");
+        });
+        // 미확인 WARN 엣지는 부품 카드 뱃지에도 '주의'로 반영된다(툴 WARN과 일관).
+        assertThat(castList(graph.get("nodes"))).anySatisfy(node -> {
+            assertThat(node.get("id")).isEqualTo("part-RAM");
+            assertThat(node.get("status")).isEqualTo("WARN");
+        });
+    }
+
+    @Test
+    void memoryEdgeSummaryNamesMixedRamTypesInsteadOfFirstRamOnly() {
+        // 혼합 규격(DDR4+DDR5)에서 첫 RAM만 보면 보드와 일치해 보이는 거짓 문구가 된다 —
+        // 엣지 요약이 전 행 집계(ramMemoryTypes)로 실제 사유를 말해야 같은 tool 인사이트가
+        // 프론트에서 억제돼도 팝오버에 사실이 남는다.
+        stubPart("mixed-board", part("mixed-board", 881L, "MOTHERBOARD", "B850 Board", 250000, MockData.map("socket", "AM5", "memoryType", "DDR5")));
+        stubPart("mixed-ram", part("mixed-ram", 882L, "RAM", "DDR5 32GB", 140000, MockData.map("memoryType", "DDR5")));
+        when(toolCheckService.checkBuild(anyList(), eq(390_000))).thenReturn(List.of(
+                tool("compatibility", "FAIL", "서로 다른 RAM 규격(DDR5, DDR4)이 함께 담겨 있어 같은 보드에 장착할 수 없습니다",
+                        MockData.map(
+                                "socketMatched", true,
+                                "memoryTypeMatched", false,
+                                "memoryTypeChecked", true,
+                                "ramMemoryTypes", List.of("DDR5", "DDR4"),
+                                "coolerSocketMatched", true,
+                                "ramSlotsMatched", true,
+                                "ramFormFactorMatched", true))
+        ));
+
+        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+                "source", "AI_BUILD",
+                "budgetWon", 390_000,
+                "items", List.of(
+                        requestItem("mixed-board", "MOTHERBOARD"),
+                        requestItem("mixed-ram", "RAM")
+                )
+        ));
+
+        assertThat(castList(graph.get("edges"))).anySatisfy(edge -> {
+            assertThat(edge.get("id")).isEqualTo("edge-board-ram-memory");
+            assertThat(edge.get("status")).isEqualTo("FAIL");
+            assertThat(edge.get("summary")).isEqualTo(
+                    "RAM 규격 DDR5·DDR4 / 메인보드 지원 DDR5입니다. 서로 다른 RAM 규격이 함께 담겨 있어 같은 보드에 장착할 수 없습니다.");
+        });
+    }
+
+    @Test
     void aiBuildGraphRejectsUnknownPartIdBeforeToolCheck() {
         when(jdbcTemplate.queryForList(anyString(), eq("missing-part"))).thenReturn(List.of());
 
@@ -441,6 +777,11 @@ class BuildGraphServiceTest {
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> castList(Object value) {
         return (List<Map<String, Object>>) value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> castStringList(Object value) {
+        return (List<String>) value;
     }
 
     @SuppressWarnings("unchecked")

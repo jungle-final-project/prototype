@@ -1,8 +1,8 @@
 package com.buildgraph.prototype.price;
 
 import com.buildgraph.prototype.common.RabbitQueueConfig;
-import com.buildgraph.prototype.part.DanawaPriceSnapshotService;
-import com.buildgraph.prototype.part.NaverShoppingOfferService;
+import com.buildgraph.prototype.part.price.DanawaPriceSnapshotService;
+import com.buildgraph.prototype.part.price.NaverShoppingOfferService;
 import java.util.Map;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Value;

@@ -1,7 +1,7 @@
 package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
