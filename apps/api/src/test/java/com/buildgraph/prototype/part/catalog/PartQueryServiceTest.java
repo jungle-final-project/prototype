@@ -1,6 +1,7 @@
 package com.buildgraph.prototype.part.catalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -18,6 +19,26 @@ class PartQueryServiceTest {
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final PartCompatibleCandidateService compatibilityService = mock(PartCompatibleCandidateService.class);
     private final PartQueryService service = new PartQueryService(jdbcTemplate, compatibilityService);
+
+    @Test
+    void topActivePartsByCategoryPriceDescGroupsRowsByCategoryFromSingleQuery() {
+        List<Map<String, Object>> rawRows = List.of(
+                part("cpu-high", 201L, "CPU", "Ryzen 9", 720_000),
+                part("gpu-high", 301L, "GPU", "RTX 5080", 1_490_000),
+                part("gpu-mid", 302L, "GPU", "RTX 5070", 850_000)
+        );
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(rawRows);
+
+        Map<String, Object> response = service.topActivePartsByCategoryPriceDesc(List.of("CPU", "GPU"), 4);
+
+        assertThat(response.keySet()).containsExactly("CPU", "GPU");
+        List<Map<String, Object>> cpus = castList(response.get("CPU"));
+        List<Map<String, Object>> gpus = castList(response.get("GPU"));
+        assertThat(cpus).extracting(item -> item.get("name")).containsExactly("Ryzen 9");
+        assertThat(gpus).extracting(item -> item.get("name")).containsExactly("RTX 5080", "RTX 5070");
+        assertThat(cpus.get(0)).doesNotContainKey("internal_id");
+        assertThat(gpus.get(0)).doesNotContainKey("internal_id");
+    }
 
     @Test
     void partsWithCompatibilitySortEvaluateAllRowsThenPaginateByStatusPriority() {

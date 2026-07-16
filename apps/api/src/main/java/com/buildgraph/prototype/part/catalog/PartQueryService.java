@@ -6,6 +6,7 @@ import com.buildgraph.prototype.recommendation.PartContextRecommendationService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -83,6 +84,117 @@ public class PartQueryService {
             String sort
     ) {
         return parts(null, category, query, manufacturer, status, minPrice, maxPrice, page, size, sort, null, null, null);
+    }
+
+    public Map<String, Object> topActivePartsByCategoryPriceDesc(List<String> categories, int sizePerCategory) {
+        List<String> safeCategories = new ArrayList<>();
+        for (String category : categories) {
+            String normalized = normalizeEnum(category, CATEGORIES, "吏?먰븯吏 ?딅뒗 遺??category?낅땲??");
+            if (normalized != null && !safeCategories.contains(normalized)) {
+                safeCategories.add(normalized);
+            }
+        }
+        Map<String, List<Map<String, Object>>> grouped = new LinkedHashMap<>();
+        for (String category : safeCategories) {
+            grouped.put(category, new ArrayList<>());
+        }
+        if (safeCategories.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+
+        int safeSize = Math.min(Math.max(sizePerCategory, 1), 100);
+        List<Object> params = new ArrayList<>(safeCategories);
+        params.add(safeSize);
+        jdbcTemplate.queryForList("""
+                        WITH requested_categories(category, category_order) AS (
+                          VALUES """ + categoryValues(safeCategories.size()) + """
+                        )
+                        SELECT part.internal_id,
+                               part.id,
+                               part.category,
+                               part.name,
+                               part.manufacturer,
+                               part.price,
+                               part.status,
+                               part.attributes,
+                               bs.summary AS benchmark_summary,
+                               bs.score AS benchmark_score,
+                               CASE
+                                 WHEN peo.low_price IS NOT NULL AND peo.low_price = part.price THEN peo.source
+                                 ELSE ps.source
+                               END AS latest_price_source,
+                               CASE
+                                 WHEN peo.low_price IS NOT NULL AND peo.low_price = part.price THEN peo.refreshed_at
+                                 ELSE ps.collected_at
+                               END AS latest_price_collected_at,
+                               peo.title AS external_offer_title,
+                               peo.image_url AS external_offer_image_url,
+                               peo.supplier_name AS external_offer_supplier_name,
+                               peo.offer_url AS external_offer_url,
+                               peo.low_price AS external_offer_low_price,
+                               peo.source AS external_offer_source,
+                               peo.refreshed_at AS external_offer_refreshed_at
+                        FROM requested_categories requested
+                        JOIN LATERAL (
+                          SELECT p.id AS internal_id,
+                                 p.public_id::text AS id,
+                                 p.category,
+                                 p.name,
+                                 p.manufacturer,
+                                 p.price,
+                                 p.status,
+                                 p.attributes
+                          FROM parts p
+                          WHERE p.deleted_at IS NULL
+                            AND p.status = 'ACTIVE'
+                            AND p.category = requested.category
+                          ORDER BY p.price DESC, p.id ASC
+                          LIMIT ?
+                        ) part ON true
+                        LEFT JOIN LATERAL (
+                          SELECT b.summary, b.score
+                          FROM benchmark_summaries b
+                          WHERE b.part_id = part.internal_id
+                            AND b.deleted_at IS NULL
+                          ORDER BY b.created_at DESC, b.id DESC
+                          LIMIT 1
+                        ) bs ON true
+                        LEFT JOIN LATERAL (
+                          SELECT snapshot.source, snapshot.collected_at
+                          FROM price_snapshots snapshot
+                          WHERE snapshot.part_id = part.internal_id
+                            AND snapshot.collected_at <= now()
+                          ORDER BY snapshot.collected_at DESC, snapshot.id DESC
+                          LIMIT 1
+                        ) ps ON true
+                        LEFT JOIN LATERAL (
+                          SELECT offer.*
+                          FROM part_external_offers offer
+                          WHERE offer.part_id = part.internal_id
+                            AND offer.deleted_at IS NULL
+                          ORDER BY
+                            CASE offer.source
+                              WHEN 'NAVER_SHOPPING_SEARCH' THEN 1
+                              WHEN 'ADMIN_MANUAL' THEN 2
+                              ELSE 9
+                            END,
+                            offer.refreshed_at DESC,
+                            offer.id DESC
+                          LIMIT 1
+                        ) peo ON true
+                        ORDER BY requested.category_order ASC, part.price DESC, part.internal_id ASC
+                        """, params.toArray())
+                .forEach(row -> {
+                    String category = DbValueMapper.string(row, "category");
+                    List<Map<String, Object>> items = grouped.get(category);
+                    if (items != null) {
+                        items.add(stripInternalFields(partMap(row)));
+                    }
+                });
+
+        Map<String, Object> categoryParts = new LinkedHashMap<>();
+        grouped.forEach(categoryParts::put);
+        return categoryParts;
     }
 
     public Map<String, Object> part(String id) {
@@ -550,6 +662,14 @@ public class PartQueryService {
                     p.id ASC
                     """;
         };
+    }
+
+    private static String categoryValues(int count) {
+        List<String> values = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            values.add("(?, " + (index + 1) + ")");
+        }
+        return String.join(", ", values);
     }
 
     private Map<String, Object> ruleFor(String toolName) {
