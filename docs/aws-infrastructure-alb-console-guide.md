@@ -1065,38 +1065,38 @@ origin 검증 header 이름과 값은 이 표에 기록하지 않는다.
 
 ### 생성
 
-- [ ] ALB 전용 SG 생성
+- [x] ALB 전용 SG 생성
 - [ ] ALB SG inbound가 CloudFront prefix list로 제한됨
-- [ ] ALB SG outbound가 EC2 SG TCP `80`으로 제한됨
-- [ ] Target Group target type `Instances`
-- [ ] Target protocol `HTTP1` / port `80`
-- [ ] Health check `/api/health` / matcher `200`
-- [ ] Green EC2 한 대만 Target 등록
-- [ ] ALB Public 2a·2b 선택
-- [ ] ALB `Active`
-- [ ] Target `Healthy`
+- [x] ALB SG outbound가 EC2 SG TCP `80`으로 제한됨
+- [x] Target Group target type `Instances`
+- [x] Target protocol `HTTP1` / port `80`
+- [x] Health check `/api/health` / matcher `200`
+- [x] Green EC2 한 대만 Target 등록
+- [x] ALB Public 2a·2b 선택
+- [x] ALB `Active`
+- [x] Target `Healthy`
 
 ### listener·보안
 
-- [ ] listener 기본 Target Group forward 상태 확인
-- [ ] custom header·기본 `403` 미적용 예외를 작업 기록에 남김
-- [ ] idle timeout `3600초`
+- [x] listener 기본 Target Group forward 상태 확인
+- [x] custom header·기본 `403` 미적용 예외를 작업 기록에 남김
+- [x] idle timeout `3600초`
 - [ ] 작업자 IP 임시 rule 삭제
-- [ ] ALB SG에 `0.0.0.0/0`가 없음
+- [x] ALB SG에 `0.0.0.0/0`가 없음
 
 ### CloudFront
 
-- [ ] 기존 EC2 origin 보존
-- [ ] ALB origin 신규 생성
-- [ ] ALB origin HTTP `80`
-- [ ] origin response timeout `120초`
-- [ ] origin custom header 미적용 상태를 확인하고 후속 작업으로 기록
+- [x] 기존 EC2 origin 보존
+- [x] ALB origin 신규 생성
+- [x] ALB origin HTTP `80`
+- [x] origin response timeout `120초`
+- [x] origin custom header 미적용 상태를 확인하고 후속 작업으로 기록
 - [ ] `/api/*`만 먼저 전환
 - [ ] API smoke PASS 후 `/ws/*` 전환
-- [ ] Cache policy `CachingDisabled` 유지
-- [ ] Origin request policy `AllViewer` 유지
-- [ ] Default S3 behavior 무변경
-- [ ] Green CloudFront `Deployed`
+- [x] Cache policy `CachingDisabled` 유지
+- [x] Origin request policy `AllViewer` 유지
+- [x] Default S3 behavior 무변경
+- [x] Green CloudFront `Deployed`
 
 ### 검증
 
@@ -1108,8 +1108,8 @@ origin 검증 header 이름과 값은 이 표에 기록하지 않는다.
 - [ ] 업로드 PASS
 - [ ] WebSocket `101`
 - [ ] WebSocket frame·재연결 PASS
-- [ ] ALB 5xx 이상 없음
-- [ ] Target 5xx 이상 없음
+- [x] ALB 5xx 이상 없음
+- [x] Target 5xx 이상 없음
 - [ ] Blue 무변경
 
 ### 후속 origin 보호
