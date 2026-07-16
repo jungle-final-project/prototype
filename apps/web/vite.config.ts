@@ -1,7 +1,26 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const apiProxyTarget = process.env.VITE_DEV_PROXY_TARGET ?? 'http://api:8080';
+const defaultApiProxyTarget = 'http://localhost:8080';
+
+function resolveApiProxyTarget(value: string | undefined) {
+  const candidate = value?.trim().replace(/^(['"])(.*)\1$/, '$2');
+
+  if (!candidate) {
+    return defaultApiProxyTarget;
+  }
+
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.origin
+      : defaultApiProxyTarget;
+  } catch {
+    return defaultApiProxyTarget;
+  }
+}
+
+const apiProxyTarget = resolveApiProxyTarget(process.env.VITE_DEV_PROXY_TARGET);
 
 export default defineConfig({
   plugins: [react()],

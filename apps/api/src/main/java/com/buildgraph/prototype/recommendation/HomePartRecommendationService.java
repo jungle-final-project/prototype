@@ -2,10 +2,12 @@ package com.buildgraph.prototype.recommendation;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ReadThroughTtlCache;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,6 +50,11 @@ public class HomePartRecommendationService {
     // request_hash별 최근 shadow 기록 시각 — 같은 후보 집합의 연속 새로고침이 scorer 호출과
     // shadow 테이블 행을 무한 증식시키지 않도록 스로틀한다.
     private final Map<String, Long> recentShadowRequests = new ConcurrentHashMap<>();
+    // ACTIVE 후보 전수 스캔(3 LATERAL + FPS EXISTS) 결과 row의 단기 캐시 — 사용자와 무관한 데이터인데
+    // 인증 홈추천이 요청마다 재실행하던 최중량 쿼리다. row는 읽기 전용으로 공유하고,
+    // rankPosition/score를 변이하는 HomePartCandidate 래퍼는 요청마다 새로 만든다(공유 변이 방지).
+    private final ReadThroughTtlCache<String, List<Map<String, Object>>> candidateRowsCache;
+    private static final String CANDIDATE_ROWS_KEY = "active-candidates";
 
     @Autowired
     public HomePartRecommendationService(
@@ -55,7 +62,8 @@ public class HomePartRecommendationService {
             RecommendationScoringClient scoringClient,
             RecommendationModelRegistry modelRegistry,
             @Value("${recommendation.reranker.shadow-enabled:true}") boolean shadowEnabled,
-            @Value("${recommendation.reranker.shadow-throttle-ms:300000}") long shadowThrottleMs
+            @Value("${recommendation.reranker.shadow-throttle-ms:300000}") long shadowThrottleMs,
+            @Value("${recommendation.home-parts.candidate-cache.ttl-seconds:30}") long candidateCacheTtlSeconds
     ) {
         this(jdbcTemplate, scoringClient, modelRegistry, shadowEnabled,
                 Executors.newSingleThreadExecutor(runnable -> {
@@ -63,7 +71,8 @@ public class HomePartRecommendationService {
                     thread.setDaemon(true);
                     return thread;
                 }),
-                shadowThrottleMs);
+                shadowThrottleMs,
+                candidateCacheTtlSeconds);
     }
 
     HomePartRecommendationService(
@@ -72,8 +81,8 @@ public class HomePartRecommendationService {
             RecommendationModelRegistry modelRegistry,
             boolean shadowEnabled
     ) {
-        // 테스트용: 비동기 경로를 같은 스레드에서 실행하고 스로틀을 끈다.
-        this(jdbcTemplate, scoringClient, modelRegistry, shadowEnabled, Runnable::run, 0L);
+        // 테스트용: 비동기 경로를 같은 스레드에서 실행하고 스로틀·후보 캐시를 끈다(기존 단건 동작 그대로).
+        this(jdbcTemplate, scoringClient, modelRegistry, shadowEnabled, Runnable::run, 0L, 0L);
     }
 
     HomePartRecommendationService(
@@ -84,12 +93,25 @@ public class HomePartRecommendationService {
             Executor shadowExecutor,
             long shadowThrottleMs
     ) {
+        this(jdbcTemplate, scoringClient, modelRegistry, shadowEnabled, shadowExecutor, shadowThrottleMs, 0L);
+    }
+
+    HomePartRecommendationService(
+            JdbcTemplate jdbcTemplate,
+            RecommendationScoringClient scoringClient,
+            RecommendationModelRegistry modelRegistry,
+            boolean shadowEnabled,
+            Executor shadowExecutor,
+            long shadowThrottleMs,
+            long candidateCacheTtlSeconds
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.scoringClient = scoringClient;
         this.modelRegistry = modelRegistry;
         this.shadowEnabled = shadowEnabled;
         this.shadowExecutor = shadowExecutor;
         this.shadowThrottleMs = shadowThrottleMs;
+        this.candidateRowsCache = new ReadThroughTtlCache<>(Duration.ofSeconds(candidateCacheTtlSeconds), 4);
     }
 
     /**
@@ -174,6 +196,13 @@ public class HomePartRecommendationService {
         );
     }
     private List<HomePartCandidate> loadCandidates() {
+        // row는 캐시에서 공유(불변 취급), 변이 가능한 래퍼는 요청마다 새로 생성.
+        return candidateRowsCache.get(CANDIDATE_ROWS_KEY, this::queryCandidateRows).stream()
+                .map(row -> new HomePartCandidate(row, deterministicScore(row)))
+                .toList();
+    }
+
+    private List<Map<String, Object>> queryCandidateRows() {
         return jdbcTemplate.queryForList("""
                         SELECT p.id AS internal_id,
                                p.public_id::text AS id,
@@ -245,9 +274,7 @@ public class HomePartRecommendationService {
                           AND p.deleted_at IS NULL
                           AND p.price IS NOT NULL
                           AND p.price > 0
-                        """).stream()
-                .map(row -> new HomePartCandidate(row, deterministicScore(row)))
-                .toList();
+                        """);
     }
 
     private ScoringOutcome scoreCandidates(CurrentUserService.CurrentUser user, List<HomePartCandidate> candidates, int limit) {

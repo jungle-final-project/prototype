@@ -2,7 +2,7 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;

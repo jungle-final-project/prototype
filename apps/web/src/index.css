@@ -72,10 +72,6 @@ html.page-scrollbar-hidden body::-webkit-scrollbar {
  * 세로 여백을 줄여 후보 결과 영역을 최소 1개 카드 이상 읽을 수 있게 확보한다.
  */
 @media (min-width: 1024px) and (max-height: 800px) {
-  .slot-candidate-overlay-layer {
-    width: min(100%, clamp(420px, 68%, 580px));
-  }
-
   .slot-candidate-panel__header {
     align-items: center;
     gap: 8px;
@@ -825,19 +821,6 @@ textarea {
   filter:
     drop-shadow(0 7px 20px rgba(37, 99, 235, 0.72))
     drop-shadow(0 0 12px rgba(37, 99, 235, 0.38));
-}
-
-.iso-part[data-selected='true'][data-spotlight='true'] .iso-part-img,
-.iso-part[data-selected='true'][data-hovered='true'] .iso-part-img,
-.iso-part[data-selected='true'] .iso-part-img {
-  filter:
-    drop-shadow(0 0 2px rgba(37, 99, 235, 0.95))
-    drop-shadow(0 0 7px rgba(37, 99, 235, 0.88))
-    drop-shadow(0 6px 20px rgba(37, 99, 235, 0.72));
-}
-
-.iso-part[data-selected='true'][data-mounting='false'][data-status='FAIL'] .iso-part-img {
-  animation: none;
 }
 
 .slot-problem-marker {

@@ -1,9 +1,9 @@
 package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.common.DbValueMapper;
-import com.buildgraph.prototype.part.ToolApplicabilityPolicy;
-import com.buildgraph.prototype.part.ToolBuildPart;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolApplicabilityPolicy;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;

@@ -2,9 +2,9 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.BuildSizeFitPolicy;
-import com.buildgraph.prototype.part.ToolBuildPart;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.BuildSizeFitPolicy;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -150,9 +150,27 @@ public class BuildGraphService {
             if (requestedCategory != null && !requestedCategory.equals(part.category())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "partId와 category가 일치하지 않습니다.");
             }
-            parts.add(part);
+            // 요청 item.quantity를 반영한다 — 버리면 RAM 스틱 수·M.2 장착 수·전력 부하·총액이 전부
+            // 1개분으로 계산돼 슬롯 초과 구성이 PASS(초록)로 둔갑한다(QUOTE_DRAFT 경로와 동일 계열 규칙).
+            parts.add(withRequestedQuantity(part, item.get("quantity")));
         }
         return parts;
+    }
+
+    /** 요청 quantity를 부품에 싣는다 — 비숫자·1 미만은 1개로 방어한다(계약 minimum 1). */
+    private static ToolBuildPart withRequestedQuantity(ToolBuildPart part, Object quantity) {
+        Integer parsed = numberValue(quantity);
+        int safeQuantity = parsed == null || parsed < 1 ? 1 : parsed;
+        return new ToolBuildPart(
+                part.internalId(),
+                part.publicId(),
+                part.category(),
+                part.name(),
+                part.manufacturer(),
+                part.price(),
+                part.attributes(),
+                safeQuantity
+        );
     }
 
     private ToolBuildPart partByPublicId(String publicId) {
@@ -204,8 +222,21 @@ public class BuildGraphService {
         boolean ramSlotsExceeded = Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramSlotsMatched")));
         boolean ramFormFactorBad = Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramFormFactorMatched")));
         Boolean memoryTypeMatched = booleanValue(compatibilityDetails.get("memoryTypeMatched"));
-        Boolean memoryEdgeOk = ramSlotsExceeded || ramFormFactorBad ? Boolean.FALSE : memoryTypeMatched;
-        String memoryStatus = booleanStatus(memoryEdgeOk, toolStatus(toolByName, "compatibility"));
+        // 규격 정보 결측으로 검사를 생략한 경우(memoryTypeChecked=false)는 WARN(확인 필요)으로 그린다 —
+        // 검사 안 된 관계를 초록(근거 없는 통과)이나 무관한 툴 status 상속(빨강)으로 그리지 않는다.
+        // 이 응답은 Home 프리뷰·Build 상세(BuildDependencyGraph)도 공유하는데 그쪽 status 계약이
+        // PASS/WARN/FAIL이라, 계약 밖 값(PENDING)을 내리면 '호환 가능'(초록)으로 폴백 렌더된다.
+        // memoryTypeMatched는 미검사 시에도 true라(booleanStatus 상속 부작용 방지 계약) checked를 먼저 본다.
+        Boolean memoryTypeChecked = booleanValue(compatibilityDetails.get("memoryTypeChecked"));
+        boolean memoryTypeUnknown = Boolean.FALSE.equals(memoryTypeChecked);
+        String memoryStatus;
+        if (ramSlotsExceeded || ramFormFactorBad || Boolean.FALSE.equals(memoryTypeMatched)) {
+            memoryStatus = "FAIL";
+        } else if (memoryTypeUnknown) {
+            memoryStatus = "WARN";
+        } else {
+            memoryStatus = booleanStatus(memoryTypeMatched, toolStatus(toolByName, "compatibility"));
+        }
         // 쿨러 엣지는 소켓 지원과 TDP 대응(냉각 용량)을 함께 본다 — 나쁜 쪽 상태가 엣지를 결정한다.
         String coolerSocketStatus = booleanStatus(booleanValue(compatibilityDetails.get("coolerSocketMatched")), toolStatus(toolByName, "compatibility"));
         String coolerStatus = worseStatus(coolerSocketStatus, coolerTdpStatus(compatibilityDetails));
@@ -248,7 +279,7 @@ public class BuildGraphService {
 
         List<Map<String, Object>> edges = new ArrayList<>();
         addEdgeIfPossible(edges, byCategory, "CPU", "MOTHERBOARD", "edge-cpu-board-socket", "REQUIRES", socketStatus, socketLabel(socketStatus), socketSummary(byCategory, socketStatus));
-        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, ramFormFactorBad ? "RAM 폼팩터" : ramSlotsExceeded ? "메모리 슬롯" : "DDR 규격", memorySummary(byCategory, compatibilityDetails, memoryStatus));
+        addEdgeIfPossible(edges, byCategory, "MOTHERBOARD", "RAM", "edge-board-ram-memory", "REQUIRES", memoryStatus, memoryLabel(ramFormFactorBad, ramSlotsExceeded, memoryTypeUnknown), memorySummary(byCategory, compatibilityDetails, memoryStatus, memoryTypeUnknown));
         addEdgeIfPossible(edges, byCategory, "CPU", "COOLER", "edge-cpu-cooler-socket", "REQUIRES", coolerStatus, coolerLabel(compatibilityDetails), coolerSummary(byCategory, compatibilityDetails, coolerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "PSU", "edge-gpu-psu-power", "AFFECTS", powerStatus, powerLabel(powerDetails, powerStatus), powerSummary(toolByName, powerStatus));
         addEdgeIfPossible(edges, byCategory, "GPU", "CASE", "edge-gpu-case-length", "REQUIRES", gpuLengthStatus, gpuLengthLabel(sizeDetails, gpuLengthStatus), gpuLengthSummary(toolByName, gpuLengthStatus));
@@ -268,7 +299,7 @@ public class BuildGraphService {
 
         List<Map<String, Object>> insights = insights(toolByName, byCategory, budget, total);
         List<String> focusNodeIds = focusNodeIds(edges, focus, insights);
-        String summary = summary(mode, focus, toolByName, byCategory, parts);
+        String summary = summary(mode, focus, toolByName, parts, edges);
         return new GraphDraft(summary, nodes, edges, focusNodeIds, insights);
     }
 
@@ -308,6 +339,11 @@ public class BuildGraphService {
         for (Map<String, Object> edge : edges) {
             String status = text(edge.get("status"));
             if (status == null) {
+                continue;
+            }
+            // 노드 뱃지 계약(PASS/WARN/FAIL) 밖의 status는 최악치 계산에서 제외한다(방어) —
+            // 백엔드는 현재 세 값만 내리지만, 계약 밖 값이 끼어도 뱃지를 오염시키지 않게 한다.
+            if (!"PASS".equals(status) && !"WARN".equals(status) && !"FAIL".equals(status)) {
                 continue;
             }
             for (String endpointKey : List.of("source", "target")) {
@@ -395,11 +431,15 @@ public class BuildGraphService {
 
     private List<Map<String, Object>> insights(Map<String, Map<String, Object>> toolByName, Map<String, ToolBuildPart> byCategory, int budget, int total) {
         List<Map<String, Object>> items = new ArrayList<>();
-        addToolInsight(items, toolByName, "compatibility", "호환성 확인", List.of("part-CPU", "part-MOTHERBOARD", "part-RAM", "part-COOLER"));
-        addToolInsight(items, toolByName, "power", "파워 여유 확인", List.of("part-GPU", "part-PSU"));
-        addToolInsight(items, toolByName, "size", "장착 규격 확인", List.of("part-GPU", "part-CASE", "part-COOLER"));
-        addToolInsight(items, toolByName, "performance", "성능 균형 확인", List.of("part-CPU", "part-GPU"));
-        addToolInsight(items, toolByName, "price", budget > 0 && total > budget ? "예산 초과 확인" : "예산 범위 확인", List.of("constraint-budget", "constraint-total-price"));
+        // compatibility/size는 검사 결과의 issueCategories(실제 걸린 부품쌍)를 우선 사용한다 —
+        // 고정 목록은 쿨러 높이 문제에 GPU까지 노랗게 칠하는 식의 오귀속을 만든다.
+        addToolInsights(items, toolByName, byCategory, "compatibility", "호환성 확인",
+                toolIssueNodeIds(toolByName, "compatibility", List.of("part-CPU", "part-MOTHERBOARD", "part-RAM", "part-COOLER")));
+        addToolInsights(items, toolByName, byCategory, "power", "파워 여유 확인", List.of("part-GPU", "part-PSU"));
+        addToolInsights(items, toolByName, byCategory, "size", "장착 규격 확인",
+                toolIssueNodeIds(toolByName, "size", List.of("part-GPU", "part-CASE", "part-COOLER")));
+        addToolInsights(items, toolByName, byCategory, "performance", "성능 균형 확인", List.of("part-CPU", "part-GPU"));
+        addToolInsights(items, toolByName, byCategory, "price", budget > 0 && total > budget ? "예산 초과 확인" : "예산 범위 확인", List.of("constraint-budget", "constraint-total-price"));
         if (items.isEmpty() && !byCategory.isEmpty()) {
             items.add(MockData.map(
                     "id", "insight-ready",
@@ -412,7 +452,31 @@ public class BuildGraphService {
         return items;
     }
 
-    private static void addToolInsight(List<Map<String, Object>> insights, Map<String, Map<String, Object>> toolByName, String tool, String title, List<String> nodeIds) {
+    /** 검사 details의 issueCategories(실제 연루 부품)가 있으면 그 노드만, 없으면(정상 등) 기본 목록. */
+    private static List<String> toolIssueNodeIds(Map<String, Map<String, Object>> toolByName, String tool, List<String> fallback) {
+        Map<String, Object> details = objectMap(toolByName.getOrDefault(tool, Map.of()).get("details"));
+        List<String> categories = stringList(details.get("issueCategories"));
+        if (categories.isEmpty()) {
+            return fallback;
+        }
+        return categories.stream().map(category -> "part-" + category).toList();
+    }
+
+    /**
+     * 툴 결과를 인사이트로 바꾼다. 검사 details.issues(걸린 조건별 사유)가 있으면 사유별로 1개씩 만들어
+     * 문장과 연루 부품쌍을 1:1로 귀속한다 — 합집합 relatedNodeIds 하나에 summary 1문장을 얹으면
+     * 남의 부품 사유가 무관한 슬롯 팝오버에 붙는 오귀속이 생긴다. issues가 없는 툴(power·price 등)은
+     * 기존 단일 인사이트를 유지한다. 모든 인사이트에 tool 필드를 실어(신·구 경로 공히) 프론트가
+     * 같은 tool의 엣지 사유와 의미가 중복되는 문구를 억제할 수 있게 한다.
+     */
+    private static void addToolInsights(
+            List<Map<String, Object>> insights,
+            Map<String, Map<String, Object>> toolByName,
+            Map<String, ToolBuildPart> byCategory,
+            String tool,
+            String title,
+            List<String> fallbackNodeIds
+    ) {
         Map<String, Object> result = toolByName.get(tool);
         if (result == null) {
             return;
@@ -421,13 +485,37 @@ public class BuildGraphService {
         if ("PASS".equals(status) && insights.stream().anyMatch(insight -> !"PASS".equals(insight.get("status")))) {
             return;
         }
-        insights.add(MockData.map(
-                "id", "insight-" + tool,
-                "status", status,
-                "title", title,
-                "description", text(result.get("summary")),
-                "relatedNodeIds", nodeIds
-        ));
+        List<Map<String, Object>> issues = objectMaps(objectMap(result.get("details")).get("issues"));
+        if (issues.isEmpty()) {
+            insights.add(MockData.map(
+                    "id", "insight-" + tool,
+                    "tool", tool,
+                    "status", status,
+                    "title", title,
+                    "description", text(result.get("summary")),
+                    "relatedNodeIds", fallbackNodeIds
+            ));
+            return;
+        }
+        int index = 0;
+        for (Map<String, Object> issue : issues) {
+            index++;
+            String issueStatus = firstText(text(issue.get("status")), status).toUpperCase(Locale.ROOT);
+            // 사유에 연루된 부품 중 실제 장착된 노드만 귀속한다 — 없는 노드 id는 렌더 대상이 없다.
+            List<String> relatedNodeIds = stringList(issue.get("categories")).stream()
+                    .map(category -> category.toUpperCase(Locale.ROOT))
+                    .filter(byCategory::containsKey)
+                    .map(category -> "part-" + category)
+                    .toList();
+            insights.add(MockData.map(
+                    "id", "insight-" + tool + "-" + index,
+                    "tool", tool,
+                    "status", issueStatus,
+                    "title", title,
+                    "description", text(issue.get("message")),
+                    "relatedNodeIds", relatedNodeIds
+            ));
+        }
     }
 
     private static List<String> focusNodeIds(List<Map<String, Object>> edges, Map<String, Object> focus, List<Map<String, Object>> insights) {
@@ -447,7 +535,7 @@ public class BuildGraphService {
                 .orElse(List.of());
     }
 
-    private static String summary(String mode, Map<String, Object> focus, Map<String, Map<String, Object>> toolByName, Map<String, ToolBuildPart> byCategory, List<ToolBuildPart> parts) {
+    private static String summary(String mode, Map<String, Object> focus, Map<String, Map<String, Object>> toolByName, List<ToolBuildPart> parts, List<Map<String, Object>> edges) {
         String category = normalizeCategory(text(focus.get("category")));
         if ("PART_IMPACT".equals(mode) && category != null) {
             return category + " 선택으로 영향을 받는 부품과 제약을 확인했습니다.";
@@ -458,7 +546,16 @@ public class BuildGraphService {
         if (parts.isEmpty()) {
             return "부품을 담으면 관계 그래프가 자동으로 구성됩니다.";
         }
-        long warningCount = toolByName.values().stream().filter(result -> !"PASS".equals(status(result))).count();
+        // "확인이 필요한 관계 N개"의 N은 화면에 실제로 그려지는 문제(WARN/FAIL) 엣지 수다 —
+        // 비-PASS 툴 수로 세면 한 툴이 만든 FAIL 엣지 2개가 "1개"로 축소 전달된다.
+        long problemEdgeCount = edges.stream()
+                .map(edge -> firstText(text(edge.get("status")), "PASS"))
+                .filter(status -> "WARN".equals(status) || "FAIL".equals(status))
+                .count();
+        // 짝 부품이 없어 엣지로 그려지지 않은 툴 문제만 있는 경우가 '문제 없음'으로 읽히지 않게 폴백한다.
+        long warningCount = problemEdgeCount > 0
+                ? problemEdgeCount
+                : toolByName.values().stream().filter(result -> !"PASS".equals(status(result))).count();
         if (warningCount > 0) {
             return "추천 조합에서 확인이 필요한 관계 " + warningCount + "개를 표시했습니다.";
         }
@@ -513,7 +610,23 @@ public class BuildGraphService {
         return base + " 소켓이 일치합니다.";
     }
 
-    private static String memorySummary(Map<String, ToolBuildPart> byCategory, Map<String, Object> compatibilityDetails, String status) {
+    /** MOTHERBOARD-RAM 엣지 라벨 — 물리 문제(폼팩터/슬롯)가 규격보다 먼저, 미검사는 '규격 미확인'. */
+    private static String memoryLabel(boolean ramFormFactorBad, boolean ramSlotsExceeded, boolean memoryTypeUnknown) {
+        if (ramFormFactorBad) {
+            return "RAM 폼팩터";
+        }
+        if (ramSlotsExceeded) {
+            return "메모리 슬롯";
+        }
+        return memoryTypeUnknown ? "규격 미확인" : "DDR 규격";
+    }
+
+    private static String memorySummary(
+            Map<String, ToolBuildPart> byCategory,
+            Map<String, Object> compatibilityDetails,
+            String status,
+            boolean memoryTypeUnknown
+    ) {
         if (Boolean.FALSE.equals(booleanValue(compatibilityDetails.get("ramFormFactorMatched")))) {
             Object bad = compatibilityDetails.get("ramBadFormFactors");
             String badText = bad instanceof List<?> list && !list.isEmpty()
@@ -526,11 +639,23 @@ public class BuildGraphService {
             Object slots = compatibilityDetails.get("memorySlots");
             return "RAM 스틱 " + sticks + "개가 메인보드 메모리 슬롯 " + slots + "개를 초과합니다. 수량 또는 구성(단품/2개들이 킷)을 조정해 주세요.";
         }
-        String ramType = attr(byCategory.get("RAM"), "memoryType");
         String boardType = attr(byCategory.get("MOTHERBOARD"), "memoryType");
+        // 혼합 규격(DDR4+DDR5)은 byCategory의 첫 RAM만 보면 보드와 일치해 보일 수 있다 —
+        // 전 행 집계(ramMemoryTypes)로 실제 사유를 말한다(인사이트가 억제돼도 엣지 문구가 사실을 유지).
+        Object ramTypes = compatibilityDetails.get("ramMemoryTypes");
+        if ("FAIL".equals(status) && ramTypes instanceof List<?> types && types.size() > 1) {
+            String joined = String.join("·", types.stream().map(String::valueOf).toList());
+            return "RAM 규격 " + joined + " / 메인보드 지원 " + boardType
+                    + "입니다. 서로 다른 RAM 규격이 함께 담겨 있어 같은 보드에 장착할 수 없습니다.";
+        }
+        String ramType = attr(byCategory.get("RAM"), "memoryType");
         String base = "RAM " + ramType + " / 메인보드 지원 " + boardType + "입니다.";
         if ("FAIL".equals(status)) {
-            return base + " 메인보드 RAM 규격 확인이 필요합니다.";
+            return base + " 메모리 규격이 달라 장착할 수 없습니다.";
+        }
+        // 미검사(규격 정보 결측)를 "규격이 맞습니다"로 단정하지 않는다 — 결측은 결측이라고 말한다.
+        if (memoryTypeUnknown) {
+            return base + " 메모리 규격 정보가 없어 호환 검사를 못 했습니다.";
         }
         return base + " DDR 규격이 맞습니다.";
     }
@@ -602,13 +727,17 @@ public class BuildGraphService {
         // GPU 노드에 "권장 파워"로 표시되는 값(vendorRecommendedPsuW)을 기준으로 안내해 노드/엣지 숫자를 일치시킨다.
         // 벤더 권장값이 없을 때만 내부 요구 용량(requiredRatedCapacityW)으로 폴백한다.
         Integer recommended = numberValue(details.get("vendorRecommendedPsuW"));
-        if (recommended == null || recommended <= 0) {
+        boolean vendorRecommendationKnown = recommended != null && recommended > 0;
+        if (!vendorRecommendationKnown) {
             recommended = numberValue(details.get("requiredRatedCapacityW"));
         }
         Integer capacity = numberValue(details.get("psuRatedCapacityW"));
         Integer loadHeadroom = numberValue(details.get("ratedHeadroomW"));
         if (recommended != null && capacity != null) {
-            String base = "GPU 권장 파워 " + recommended + "W / 현재 파워 " + capacity + "W입니다.";
+            // 폴백한 내부 추정치(부하+120)에 'GPU 권장 파워' 라벨을 붙이지 않는다 —
+            // GPU가 없는 견적에 "GPU 권장 파워 331W"가 뜨는 오귀속을 막는다.
+            String base = (vendorRecommendationKnown ? "GPU 권장 파워 " : "필요 정격(추정) ")
+                    + recommended + "W / 현재 파워 " + capacity + "W입니다.";
             String room = loadHeadroom == null ? "" : " 지속 부하 대비 여유 " + Math.max(loadHeadroom, 0) + "W";
             if ("FAIL".equals(status)) {
                 return base + " PSU 정격 출력이 예상 부하에 못 미쳐 상위 용량이 필요합니다.";
@@ -618,6 +747,8 @@ public class BuildGraphService {
             }
             return base + room + "로 안정적입니다.";
         }
+        // PSU 용량 결측이면 capacity=null이라 여기로 온다 — 숫자를 지어내지 않고
+        // 툴 문구("파워 용량 정보가 없어 전력 검사를 못 했습니다" 등)를 그대로 쓴다.
         return toolSummary(toolByName, "power", "GPU 소비전력과 PSU 정격 출력을 함께 확인합니다.");
     }
 
@@ -686,6 +817,10 @@ public class BuildGraphService {
         if ("FAIL".equals(status)) {
             return "파워 부족";
         }
+        // 정격 용량이 결측(null)이면 여유를 계산할 수 없다 — 없는 데이터를 여유가 있는 것처럼 말하지 않는다.
+        if (details.containsKey("psuRatedCapacityW") && numberValue(details.get("psuRatedCapacityW")) == null) {
+            return "파워 용량 미확인";
+        }
         Integer headroom = powerHeadroom(details);
         return headroom == null ? "전력 여유" : "전력 여유 " + Math.max(headroom, 0) + "W";
     }
@@ -729,6 +864,12 @@ public class BuildGraphService {
         if (Boolean.TRUE.equals(booleanValue(details.get("m2SlotsChecked")))) {
             return Boolean.FALSE.equals(booleanValue(details.get("m2SlotsMatched"))) ? "FAIL" : "PASS";
         }
+        // M.2 저장장치가 0개면 검사할 것이 없는 정상 구성이다(SATA는 M.2 슬롯을 쓰지 않는다) —
+        // '미검사=WARN'을 그대로 내면 SATA만 담은 정상 견적이 유령 '간섭 주의'가 된다(툴은 PASS).
+        Integer m2StorageTotal = numberValue(details.get("m2StorageTotal"));
+        if (m2StorageTotal != null && m2StorageTotal == 0) {
+            return "PASS";
+        }
         return "WARN";
     }
 
@@ -736,23 +877,35 @@ public class BuildGraphService {
         if ("FAIL".equals(status) || exceeded) {
             return "M.2 슬롯 부족";
         }
-        if ("WARN".equals(status)) {
-            return "M.2 장착";
-        }
         Integer m2Slots = numberValue(details.get("m2Slots"));
         Integer used = numberValue(details.get("m2StorageTotal"));
+        // M.2 저장장치가 0개면 슬롯을 쓰지 않는 구성이다 — "M.2 0/2" 같은 무의미 카운트를 걸지 않는다.
+        if (used != null && used == 0) {
+            return "M.2 슬롯 미사용";
+        }
+        if ("WARN".equals(status)) {
+            return "M.2 슬롯 미확인";
+        }
         return m2Slots == null ? "M.2 장착" : "M.2 " + firstText(String.valueOf(used), "0") + "/" + m2Slots;
     }
 
     private static String storageSummary(Map<String, Object> details, String status) {
         Integer m2Slots = numberValue(details.get("m2Slots"));
         Integer used = numberValue(details.get("m2StorageTotal"));
+        // SATA 등 M.2 방식이 아닌 저장장치만 담긴 구성 — "M.2 SSD 0개 / 슬롯 N개" 같은 무의미 문구를 내지 않는다.
+        if (used != null && used == 0) {
+            return "선택한 저장장치는 M.2 슬롯을 사용하지 않습니다.";
+        }
         if (m2Slots != null && used != null) {
             String base = "M.2 SSD " + used + "개 / 메인보드 M.2 슬롯 " + m2Slots + "개입니다.";
             if ("FAIL".equals(status)) {
                 return base + " 장착 가능한 슬롯 수를 초과합니다.";
             }
             return base;
+        }
+        // M.2 저장장치는 있는데 보드 슬롯 데이터가 없어 검사를 생략한 경우 — 결측을 결측이라고 말한다.
+        if (used != null && used > 0 && m2Slots == null) {
+            return "메인보드 M.2 슬롯 정보가 없어 장착 검사를 못 했습니다.";
         }
         return "M.2 SSD 수가 메인보드 슬롯 안에 있는지 확인합니다.";
     }
@@ -935,15 +1088,39 @@ public class BuildGraphService {
     }
 
     private static String coolerDetail(ToolBuildPart part) {
+        // 수랭(AIO)의 heightMm는 라디에이터 두께(27~38mm)라 "높이 38mm"로 쓰면 오독된다 —
+        // 수랭은 라디에이터 크기를 말하고, 크기 결측이면 두께를 높이처럼 표기하지 않는다.
+        if (isLiquidCooler(part)) {
+            Integer radiatorSize = numberValue(part.attributes().get("radiatorSizeMm"));
+            if (radiatorSize != null && radiatorSize > 0) {
+                return "라디에이터 " + radiatorSize + "mm";
+            }
+            return coolerSocketSupportDetail(part);
+        }
         Integer height = firstAvailableNumber(part, "heightMm", "coolerHeightMm");
         if (height != null) {
             return "높이 " + height + "mm";
         }
+        return coolerSocketSupportDetail(part);
+    }
+
+    private static String coolerSocketSupportDetail(ToolBuildPart part) {
         Object support = part.attributes().get("socketSupport");
         if (support instanceof List<?> list && !list.isEmpty()) {
             return String.valueOf(list.get(0)) + " 지원";
         }
         return null;
+    }
+
+    /** 수랭(AIO) 판별 — LIQUID 외에 AIO/WATER/수랭 표기도 수랭으로 본다(ToolCheckService와 동일 규칙). */
+    private static boolean isLiquidCooler(ToolBuildPart part) {
+        String coolerType = attrValue(part, "coolerType");
+        if (coolerType == null) {
+            return false;
+        }
+        String normalized = coolerType.toUpperCase(Locale.ROOT);
+        return normalized.contains("LIQUID") || normalized.contains("AIO")
+                || normalized.contains("WATER") || normalized.contains("수랭");
     }
 
     private static String storageInterfaceDetail(ToolBuildPart part) {

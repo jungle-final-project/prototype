@@ -1,7 +1,7 @@
 package com.buildgraph.prototype.admin;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolSeed;
+import com.buildgraph.prototype.part.tool.ToolSeed;
 import java.util.List;
 import java.util.Map;
 

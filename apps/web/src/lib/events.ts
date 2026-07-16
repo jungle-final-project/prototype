@@ -11,12 +11,15 @@ export const PERF_COMPARE_REQUEST_EVENT = 'buildgraph.perfCompare.request';
 /**
  * 셀프견적 성능 패널의 "기존 조합 vs 변경 조합" 비교 대상.
  * FPS 비교는 CPU/GPU만 의미가 있다(벤치마크 근거가 있는 카테고리).
+ * linkedChanges: AI 연계 변경안(예: 새 GPU에 필요한 파워 교체)이 함께 바꾸는 부품 —
+ * 종합점수 고스트가 이걸 빼고 계산하면 기존 파워+새 GPU 조합이 전력 FAIL로 0점 처리된다.
  */
 export type PerfCompareTarget = {
   category: 'CPU' | 'GPU';
   partId: string;
   name: string;
   price: number;
+  linkedChanges?: Array<{ category: string; partId: string; name: string; price: number }>;
 };
 
 export type AiAssistantOpenDetail = {

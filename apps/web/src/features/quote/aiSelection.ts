@@ -51,6 +51,16 @@ export type AiRecommendedBuild = {
   toolResults?: AiToolResult[];
   warnings?: string[];
   confidence?: 'LOW' | 'MEDIUM' | 'HIGH';
+  /** 서버 응답 계약이 아닌, 자동 적용 카드의 변경 전후 표시를 위한 세션 로컬 snapshot. */
+  displayChangeReceipt?: {
+    beforeTotalPrice: number;
+    afterTotalPrice: number;
+    changes: Array<{
+      category: PartCategory;
+      beforeLabel: string;
+      afterLabel: string;
+    }>;
+  };
 };
 
 export type AiSelectedBuild = Omit<AiRecommendedBuild, 'label' | 'badges'> & {
@@ -280,12 +290,40 @@ export type AiQuickReplyCommand = {
   quantityDelta: 1;
 };
 
+export type AiDraftPerformanceSelection = {
+  gameLabel: string;
+  gameQuery: string;
+  resolutionLabel: string;
+  resolutionQuery: string;
+};
+
+export const DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION: Readonly<AiDraftPerformanceSelection> = {
+  gameLabel: '배그',
+  gameQuery: 'pubg',
+  resolutionLabel: '4K',
+  resolutionQuery: '4k'
+};
+
+export type AiDraftApplicationFeedback = {
+  id: string;
+  messageId: string;
+  draftFingerprint: string;
+  applicationKind: 'COMPLETE_BUILD' | 'PARTIAL_CHANGE';
+  /** 담기/수량 변경처럼 어떤 상품이 몇 개가 됐는지 영수증 첫 줄에 그대로 에코할 짧은 문구. */
+  changeNote?: string;
+  status: 'PENDING' | 'CONSUMED';
+  startedAt: string;
+  completedAt?: string;
+  performanceView?: AiDraftPerformanceSelection;
+};
+
 export type AiAssistantSession = {
   messages: AiChatMessage[];
   latestBuilds: AiRecommendedBuild[];
   savedBuildIds: Record<string, string>;
   latestGraphFocus?: BuildGraphFocus;
   latestActiveBuildId?: string;
+  draftApplicationFeedback?: AiDraftApplicationFeedback;
   updatedAt: string;
 };
 
@@ -354,6 +392,7 @@ export function emptyAssistantSession(): AiAssistantSession {
     savedBuildIds: {},
     latestGraphFocus: undefined,
     latestActiveBuildId: undefined,
+    draftApplicationFeedback: undefined,
     updatedAt: initialAssistantMessage.createdAt
   };
 }
@@ -449,6 +488,7 @@ export function readAssistantSession(ownerKey: string | null = getAiStorageOwner
       savedBuildIds: normalizeSavedBuildIds(parsed.savedBuildIds),
       latestGraphFocus: parsed.latestGraphFocus,
       latestActiveBuildId: parsed.latestActiveBuildId,
+      draftApplicationFeedback: normalizeDraftApplicationFeedback(parsed.draftApplicationFeedback),
       updatedAt: parsed.updatedAt ?? initialAssistantMessage.createdAt
     };
   } catch {
@@ -479,6 +519,7 @@ export function resetAssistantConversation(ownerKey: string | null = getAiStorag
     messages: [initialAssistantMessage],
     latestGraphFocus: undefined,
     latestActiveBuildId: undefined,
+    draftApplicationFeedback: undefined,
     updatedAt: new Date().toISOString()
   };
   saveAssistantSession(nextSession, ownerKey);
@@ -538,8 +579,42 @@ function normalizeAssistantSession(session: AiAssistantSession): AiAssistantSess
     latestBuilds: mergeAiBuildHistory(session.latestBuilds, []),
     savedBuildIds: normalizeSavedBuildIds(session.savedBuildIds),
     latestGraphFocus: session.latestGraphFocus,
-    latestActiveBuildId: session.latestActiveBuildId
+    latestActiveBuildId: session.latestActiveBuildId,
+    draftApplicationFeedback: normalizeDraftApplicationFeedback(session.draftApplicationFeedback)
   };
+}
+
+function normalizeDraftApplicationFeedback(value: unknown): AiDraftApplicationFeedback | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+  const messageId = typeof candidate.messageId === 'string' ? candidate.messageId.trim() : '';
+  const draftFingerprint = typeof candidate.draftFingerprint === 'string' ? candidate.draftFingerprint.trim() : '';
+  const applicationKind = candidate.applicationKind === 'COMPLETE_BUILD' || candidate.applicationKind === 'PARTIAL_CHANGE'
+    ? candidate.applicationKind
+    : null;
+  const status = candidate.status === 'PENDING' || candidate.status === 'CONSUMED' ? candidate.status : null;
+  const startedAt = typeof candidate.startedAt === 'string' ? candidate.startedAt.trim() : '';
+  const completedAt = typeof candidate.completedAt === 'string' && candidate.completedAt.trim()
+    ? candidate.completedAt.trim()
+    : undefined;
+  const changeNote = typeof candidate.changeNote === 'string' && candidate.changeNote.trim()
+    ? candidate.changeNote.trim()
+    : undefined;
+  const performanceView = normalizeDraftPerformanceSelection(candidate.performanceView);
+  if (!id || !messageId || !draftFingerprint || !applicationKind || !status || !startedAt) return undefined;
+  return { id, messageId, draftFingerprint, applicationKind, changeNote, status, startedAt, completedAt, performanceView };
+}
+
+function normalizeDraftPerformanceSelection(value: unknown): AiDraftPerformanceSelection | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const gameLabel = typeof candidate.gameLabel === 'string' ? candidate.gameLabel.trim() : '';
+  const gameQuery = typeof candidate.gameQuery === 'string' ? candidate.gameQuery.trim() : '';
+  const resolutionLabel = typeof candidate.resolutionLabel === 'string' ? candidate.resolutionLabel.trim() : '';
+  const resolutionQuery = typeof candidate.resolutionQuery === 'string' ? candidate.resolutionQuery.trim() : '';
+  if (!gameLabel || !gameQuery || !resolutionLabel || !resolutionQuery) return undefined;
+  return { gameLabel, gameQuery, resolutionLabel, resolutionQuery };
 }
 
 export function markAssistantBuildSaved(sourceBuildId: string, savedBuildId: string, ownerKey: string | null = getAiStorageOwnerKey()) {

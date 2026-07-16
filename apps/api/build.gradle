@@ -20,9 +20,19 @@ java {
     }
 }
 
+// Local bootRun only: an empty shell variable must not override application.yml's JDBC default.
+def localDatasourceUrl = providers.environmentVariable('SPRING_DATASOURCE_URL')
+        .map { value -> value.trim().isEmpty() ? 'jdbc:postgresql://localhost:55432/buildgraph' : value }
+        .orElse('jdbc:postgresql://localhost:55432/buildgraph')
+
+tasks.named('bootRun') {
+    environment 'SPRING_DATASOURCE_URL', localDatasourceUrl.get()
+}
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-amqp'
+    implementation 'org.springframework.boot:spring-boot-starter-cache'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-jdbc'
@@ -33,6 +43,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-websocket'
     implementation 'org.springframework.security:spring-security-crypto'
     implementation 'org.springframework.security:spring-security-oauth2-jose'
+    implementation 'com.github.ben-manes.caffeine:caffeine'
     implementation 'org.flywaydb:flyway-core'
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'org.postgresql:postgresql'
