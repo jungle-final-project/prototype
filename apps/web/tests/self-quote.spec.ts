@@ -853,6 +853,9 @@ test('spotlights only the focused 3D part from slot card hover without dimming t
   await expect(ramIso).toHaveAttribute('data-dimmed', 'false');
 });
 
+// 이 테스트는 tool 필드가 없는 구 계약 인사이트의 회귀 앵커도 겸한다 — 같은 부품쌍의 엣지 수치문과
+// 인사이트 문구가 "둘 다" 표기되는 기존 동작을 유지해야 한다(신규 계약의 중복 억제는 insight.tool이
+// 있을 때만 발동, id 패턴 추측으로 오억제하지 않는다).
 test('shows 3D problem markers, problem reasons, and overlay preference', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/build-graphs/resolve', async (route) => {
@@ -906,6 +909,191 @@ test('shows 3D problem markers, problem reasons, and overlay preference', async 
   await expect(page.getByRole('switch', { name: '보드 정보 표시' })).toHaveAttribute('aria-checked', 'false');
   await expect(page.getByTestId('slot-GPU')).not.toBeVisible();
   await expect(page.getByTestId('iso-part-GPU')).toBeVisible();
+});
+
+// QA: 서버 constraint 노드는 category가 고정이라(예: constraint-compatibility=MOTHERBOARD) 쿨러
+// 소켓/TDP 문제처럼 메인보드와 무관한 FAIL에서도 메인보드 슬롯에 사유 0개짜리 유령 '장착 불가'
+// 팝오버를 만들 수 있었다 — PART 노드만 슬롯 문제로 승격해야 한다(뱃지와 동일 규칙).
+test('does not raise a ghost problem popover from a CONSTRAINT node on the motherboard slot', async ({ page }) => {
+  await loginAsUser(page);
+  const base = buildGraphResponse();
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...base,
+        nodes: [
+          ...base.nodes.map((node) => ({ ...node, status: 'PASS' })),
+          {
+            id: 'constraint-compatibility',
+            type: 'CONSTRAINT',
+            category: 'MOTHERBOARD',
+            label: '호환 제약',
+            status: 'FAIL',
+            detail: '호환 검증 제약'
+          }
+        ],
+        edges: base.edges.map((edge) => ({ ...edge, status: 'PASS' })),
+        insights: [],
+        toolResults: []
+      })
+    });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  // 배치도에서 메인보드 클릭 → 문제 팝오버가 아니라 정상 관계 팝오버가 열린다(초록 뱃지와 모순 금지).
+  await page.getByTestId('slot-fused-area-MOTHERBOARD').click();
+  await expect(page.getByTestId('slot-relation-popover')).toBeVisible();
+  await expect(page.getByTestId('slot-problem-popover')).toHaveCount(0);
+  await expect(page.getByTestId('slot-relation-popover')).toContainText('호환 가능');
+  await page.getByTestId('slot-relation-popover').getByRole('button', { name: '관계 상태 닫기' }).click();
+
+  // 실장도 뱃지도 초록 유지 — 유령 FAIL 승격이 없어야 한다.
+  await page.getByRole('button', { name: '실장도 보기' }).click();
+  await expect(page.getByTestId('slot-MOTHERBOARD')).toHaveAttribute('data-status', 'PASS');
+});
+
+// QA B4(사용자 관찰 재현): 같은 tool 출처의 엣지 수치문("쿨러 높이 168mm/케이스 허용 165mm…")과
+// 인사이트 일반문("케이스 장착 한계를 초과해…")이 한 팝오버/배너에 병기되지 않는다.
+// 신규 계약(insight.tool)이 있을 때만 억제하며, 대응 엣지가 없는 다른 tool 인사이트는 그대로 남는다.
+test('suppresses same-tool insight wording when an edge reason already covers the same fact', async ({ page }) => {
+  await loginAsUser(page);
+  const edgeSummary = '쿨러 높이 168mm / 케이스 허용 165mm입니다. 쿨러 높이가 케이스 허용 높이를 초과합니다.';
+  const insightDescription = '케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다.';
+  const powerInsightDescription = '쿨러 전원 커넥터 구성을 확인해 주세요.';
+  const base = buildGraphResponse();
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...base,
+        nodes: base.nodes.map((node) => node.category === 'COOLER' || node.category === 'CASE'
+          ? { ...node, status: 'FAIL' }
+          : { ...node, status: 'PASS' }),
+        edges: [
+          {
+            id: 'edge-cooler-case-height',
+            source: 'part-COOLER',
+            target: 'part-CASE',
+            type: 'REQUIRES',
+            status: 'FAIL',
+            label: '높이 장착 불가',
+            summary: edgeSummary
+          }
+        ],
+        insights: [
+          {
+            id: 'insight-size-cooler-height',
+            status: 'FAIL',
+            title: '쿨러 장착 공간 부족',
+            description: insightDescription,
+            relatedNodeIds: ['part-COOLER', 'part-CASE'],
+            tool: 'size'
+          },
+          {
+            // 같은 부품에 걸렸지만 대응 엣지가 없는 다른 tool 인사이트 — 과억제되면 안 된다.
+            id: 'insight-power-cooler',
+            status: 'WARN',
+            title: '전원 구성 확인',
+            description: powerInsightDescription,
+            relatedNodeIds: ['part-COOLER'],
+            tool: 'power'
+          }
+        ],
+        toolResults: []
+      })
+    });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  // 팝오버: 수치가 있는 엣지 사유만 남고, 같은 size tool의 인사이트 일반문은 중복 표기하지 않는다.
+  await page.getByTestId('slot-fused-area-COOLER').click();
+  const popover = page.getByTestId('slot-problem-popover');
+  await expect(popover).toBeVisible();
+  await expect(popover).toContainText('장착 불가');
+  await expect(popover).toContainText(edgeSummary);
+  await expect(popover).not.toContainText(insightDescription);
+  await expect(popover).toContainText(powerInsightDescription);
+  await popover.getByRole('button', { name: '문제 사유 닫기' }).click();
+  await expect(popover).toHaveCount(0);
+
+  // 문제 배너에도 같은 원칙 — 엣지 행(수치문)과 power 인사이트 행만 남는다.
+  const banner = page.getByTestId('slot-board-problem-banner');
+  await expect(banner).toContainText('호환 불가 1건');
+  await expect(banner).toContainText('주의 필요 1건');
+  await banner.click();
+  const problemList = page.getByTestId('slot-board-problem-list');
+  await expect(problemList).toContainText(edgeSummary);
+  await expect(problemList).not.toContainText(insightDescription);
+  await expect(problemList).toContainText(powerInsightDescription);
+  await page.keyboard.press('Escape');
+
+  // 배치 관계도의 축약 라벨은 문구 추측이 아니라 tool 식별로 분류된다 — 쿨러 높이 문제는
+  // '길이 초과'가 아닌 '높이 초과'로 표기된다.
+  await page.getByTestId('relation-map-open').click();
+  await expect(page.getByTestId('relation-map-node-COOLER')).toContainText('높이 초과');
+});
+
+// QA: "파워 깊이 초과"는 치수 문제인데 '파워' 단어가 전력 정규식에 먼저 걸려 '전력 부족'으로
+// 오분류되던 건 — tool/edge 식별 기반 분류가 우선하며 깊이/높이/길이를 구분한다.
+test('classifies the PSU depth problem as a dimension label on the relation map', async ({ page }) => {
+  await loginAsUser(page);
+  const depthSummary = '파워 깊이 140mm / 케이스 허용 130mm입니다. 파워 깊이가 케이스 허용 길이를 초과합니다.';
+  const base = buildGraphResponse();
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...base,
+        nodes: base.nodes.map((node) => node.category === 'PSU' || node.category === 'CASE'
+          ? { ...node, status: 'FAIL' }
+          : { ...node, status: 'PASS' }),
+        edges: [
+          {
+            id: 'edge-psu-case-depth',
+            source: 'part-PSU',
+            target: 'part-CASE',
+            type: 'REQUIRES',
+            status: 'FAIL',
+            label: '깊이 장착 불가',
+            summary: depthSummary
+          }
+        ],
+        insights: [],
+        toolResults: []
+      })
+    });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByTestId('relation-map-open').click();
+
+  const psuNode = page.getByTestId('relation-map-node-PSU');
+  await expect(psuNode).toContainText('깊이 초과');
+  await expect(psuNode).not.toContainText('전력 부족');
 });
 
 // 배치도 클릭 분리: 장착 부품 = 관계/문제 설명 팝오버(검색 안 열림), 후보 패널은

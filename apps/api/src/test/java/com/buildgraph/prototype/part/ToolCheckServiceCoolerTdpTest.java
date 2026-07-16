@@ -45,8 +45,9 @@ class ToolCheckServiceCoolerTdpTest {
         Map<String, Object> result = compatibility(List.of(cpu(170), cooler(65)));
 
         assertThat(result.get("status")).isEqualTo("FAIL");
+        // 표기 교정: "쿨러 TDP (65W)이" → "쿨러 TDP 65W가" (공백 제거·조사 교정).
         assertThat(String.valueOf(result.get("summary")))
-                .contains("쿨러 TDP (65W)이 CPU TDP(170W)에 못 미쳐");
+                .contains("쿨러 TDP 65W가 CPU TDP 170W에 못 미쳐");
         assertThat(details(result).get("coolerTdpChecked")).isEqualTo(true);
         assertThat(details(result).get("coolerTdpMatched")).isEqualTo(false);
         assertThat(details(result).get("cpuTdpW")).isEqualTo(170);

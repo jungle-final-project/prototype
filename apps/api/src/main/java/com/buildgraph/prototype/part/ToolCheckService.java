@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -104,10 +105,37 @@ public class ToolCheckService {
     private Map<String, Object> compatibility(Map<String, ToolBuildPart> byCategory, List<ToolBuildPart> parts) {
         ToolBuildPart cpu = byCategory.get("CPU");
         ToolBuildPart motherboard = byCategory.get("MOTHERBOARD");
-        ToolBuildPart ram = byCategory.get("RAM");
         ToolBuildPart cooler = byCategory.get("COOLER");
         boolean socketMatched = same(stringAttr(cpu, "socket"), stringAttr(motherboard, "socket"));
-        boolean memoryMatched = same(firstText(stringAttr(ram, "memoryType"), "DDR5"), firstText(stringAttr(motherboard, "memoryType"), "DDR5"));
+        // 메모리 규격 — RAM 전 행을 순회한다(스틱 수 검사와 같은 원칙: byCategory는 카테고리당 1개로 접힌다).
+        // 결측이면 'DDR5' 같은 임의 기본값으로 비교하지 않는다 — 없는 데이터로 FAIL도, 근거 없는 PASS도 내지 않는다.
+        String boardMemoryType = stringAttr(motherboard, "memoryType");
+        LinkedHashSet<String> ramMemoryTypes = new LinkedHashSet<>();
+        boolean ramPresent = false;
+        boolean ramTypeMissing = false;
+        for (ToolBuildPart part : parts) {
+            if (!"RAM".equalsIgnoreCase(firstText(part.category(), ""))) {
+                continue;
+            }
+            ramPresent = true;
+            String memoryType = stringAttr(part, "memoryType");
+            if (memoryType == null) {
+                ramTypeMissing = true;
+            } else {
+                ramMemoryTypes.add(memoryType.toUpperCase(Locale.ROOT));
+            }
+        }
+        List<String> mismatchedRamTypes = boardMemoryType == null ? List.of() : ramMemoryTypes.stream()
+                .filter(type -> !type.equalsIgnoreCase(boardMemoryType))
+                .toList();
+        // RAM끼리 규격이 섞여도(DDR4+DDR5) 한 보드에 함께 장착할 수 없다 — 보드가 없어도 검출한다.
+        boolean memoryMixed = ramMemoryTypes.size() > 1;
+        boolean memoryMismatched = !mismatchedRamTypes.isEmpty();
+        boolean memoryMatched = !memoryMixed && !memoryMismatched;
+        boolean memoryTypeChecked = memoryMixed
+                || (ramPresent && !ramTypeMissing && motherboard != null && boardMemoryType != null);
+        // RAM·보드가 둘 다 담겼는데 어느 쪽이든 규격 정보가 없으면 '검사 못 함'을 명시한다(size의 결측 관례).
+        boolean memoryTypeMissing = ramPresent && motherboard != null && (ramTypeMissing || boardMemoryType == null);
         boolean coolerMatched = socketSupported(cooler, stringAttr(cpu, "socket"));
         // 쿨러 냉각 용량(TDP 대응) — 소켓이 맞아도 65W급 쿨러에 170W CPU면 조립은 돼도 냉각이 안 된다.
         // 양쪽 tdpW가 모두 있을 때만 검사한다(ramSlotsChecked 관례) — 없는 데이터로 FAIL을 내지 않는다.
@@ -163,7 +191,7 @@ public class ToolCheckService {
             issueCategories.add("CPU");
             issueCategories.add("MOTHERBOARD");
         }
-        if (!memoryMatched || !ramFormFactorMatched || !ramSlotsMatched) {
+        if (!memoryMatched || !ramFormFactorMatched || !ramSlotsMatched || memoryTypeMissing) {
             issueCategories.add("RAM");
             issueCategories.add("MOTHERBOARD");
         }
@@ -175,33 +203,80 @@ public class ToolCheckService {
             issueCategories.add("STORAGE");
             issueCategories.add("MOTHERBOARD");
         }
-        String summary = pass
-                ? coolerTdpMarginLow
-                        ? "쿨러 TDP 여유가 20% 미만이라 고부하 시 냉각 여유가 빠듯합니다."
-                        : "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다."
-                : !coolerTdpMatched
-                        ? "쿨러 TDP (" + coolerTdpW + "W)이 CPU TDP(" + cpuTdpW + "W)에 못 미쳐 냉각이 부족합니다"
-                        : !ramFormFactorMatched
-                                ? "데스크탑 보드에 장착할 수 없는 RAM (" + String.join(", ", ramBadFormFactors) + ")입니다"
-                                : !ramSlotsMatched
-                                        ? "RAM 스틱 수(" + ramSticksTotal + "개)가 메인보드 슬롯(" + memorySlots + "개)을 초과합니다"
-                                        : !m2SlotsMatched
-                                                ? "M.2 SSD 수(" + m2StorageTotal + "개)가 메인보드 M.2 슬롯(" + m2Slots + "개)을 초과합니다"
-                                                : !socketMatched
-                                                        ? "CPU 소켓(" + stringAttr(cpu, "socket") + ")과 메인보드 소켓(" + stringAttr(motherboard, "socket") + ")이 달라 장착할 수 없습니다"
-                                                        : !memoryMatched
-                                                                ? "RAM 규격(" + firstText(stringAttr(ram, "memoryType"), "DDR5") + ")과 메인보드 지원 메모리(" + firstText(stringAttr(motherboard, "memoryType"), "DDR5") + ")가 다릅니다"
-                                                                : "쿨러가 CPU 소켓(" + stringAttr(cpu, "socket") + ")을 지원하지 않습니다";
-        // status는 PASS/FAIL 2-상태를 유지한다 — TDP 마진 WARN을 툴 status로 올리면 compatibility를
+        // 걸린 조건별 사유(categories+message) — 그래프가 사유를 부품쌍별 1:1로 귀속할 수 있게 details.issues로 내린다.
+        // 우선순위: 물리 장착 불가(쿨러 소켓)가 냉각 용량(TDP)보다 먼저다 — 그래프 엣지와 우선순위를 통일한다.
+        List<Map<String, Object>> issues = new ArrayList<>();
+        List<String> failReasons = new ArrayList<>();
+        if (!coolerMatched) {
+            String message = "쿨러가 CPU 소켓(" + stringAttr(cpu, "socket") + ")을 지원하지 않습니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "COOLER", "CPU"));
+        }
+        if (!coolerTdpMatched) {
+            String message = "쿨러 TDP " + coolerTdpW + "W가 CPU TDP " + cpuTdpW + "W에 못 미쳐 냉각이 부족합니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "COOLER", "CPU"));
+        }
+        if (!ramFormFactorMatched) {
+            String message = ramBadFormFactors.stream()
+                    .map(ToolCheckService::ramFormFactorLabel)
+                    .distinct()
+                    .collect(Collectors.joining(", "))
+                    + " RAM이라 데스크탑 보드에 장착할 수 없습니다";
+            failReasons.add(message);
+            // RAM 폼팩터는 RAM 속성만 보는 검사라 사유 귀속도 RAM에만 건다(합집합 issueCategories는 하위호환 유지).
+            issues.add(issue("FAIL", message, "RAM"));
+        }
+        if (!ramSlotsMatched) {
+            String message = "RAM 스틱 수(" + ramSticksTotal + "개)가 메인보드 슬롯(" + memorySlots + "개)을 초과합니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "RAM", "MOTHERBOARD"));
+        }
+        if (!m2SlotsMatched) {
+            String message = "M.2 SSD 수(" + m2StorageTotal + "개)가 메인보드 M.2 슬롯(" + m2Slots + "개)을 초과합니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "STORAGE", "MOTHERBOARD"));
+        }
+        if (!socketMatched) {
+            String message = "CPU 소켓(" + stringAttr(cpu, "socket") + ")과 메인보드 소켓(" + stringAttr(motherboard, "socket") + ")이 달라 장착할 수 없습니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "CPU", "MOTHERBOARD"));
+        }
+        if (memoryMismatched) {
+            String message = "RAM 규격(" + String.join(", ", mismatchedRamTypes) + ")과 메인보드 지원 메모리(" + boardMemoryType + ")가 다릅니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "RAM", "MOTHERBOARD"));
+        } else if (memoryMixed) {
+            String message = "서로 다른 RAM 규격(" + String.join(", ", ramMemoryTypes) + ")이 함께 담겨 있어 같은 보드에 장착할 수 없습니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "RAM"));
+        }
+        List<String> warnReasons = new ArrayList<>();
+        if (memoryTypeMissing) {
+            String message = "메모리 규격 정보가 없어 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "RAM", "MOTHERBOARD"));
+        }
+        String summary = !pass
+                ? failReasons.get(0)
+                : !warnReasons.isEmpty()
+                        ? String.join(" · ", warnReasons)
+                        : coolerTdpMarginLow
+                                ? "쿨러 TDP 여유가 20% 미만이라 고부하 시 냉각 여유가 빠듯합니다."
+                                : "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다.";
+        // status는 PASS/FAIL 2-상태가 기본이다 — TDP 마진 WARN을 툴 status로 올리면 compatibility를
         // 구독하는 RAM/메인보드 후보 전체가 후보와 무관한 쿨러 마진으로 '간섭 주의'가 된다.
         // 마진 경고는 details(coolerTdpMarginLow)와 summary로 내리고, CPU-쿨러 엣지가 WARN을 그린다.
+        // 예외: 결측으로 검사를 생략한 경우만 WARN이다(size의 결측 관례와 동일) — 근거 없는 초록을 막는다.
         return tool("compatibility",
-                pass ? "PASS" : "FAIL",
+                !pass ? "FAIL" : !warnReasons.isEmpty() ? "WARN" : "PASS",
                 socketMatched && memoryMatched ? "HIGH" : "MEDIUM",
                 summary,
                 MockData.map(
                         "socketMatched", socketMatched,
                         "memoryTypeMatched", memoryMatched,
+                        "memoryTypeChecked", memoryTypeChecked,
+                        "ramMemoryTypes", ramMemoryTypes.isEmpty() ? null : List.copyOf(ramMemoryTypes),
                         "coolerSocketMatched", coolerMatched,
                         "cpuTdpW", cpuTdpW > 0 ? cpuTdpW : null,
                         "coolerTdpW", coolerTdpW > 0 ? coolerTdpW : null,
@@ -221,7 +296,26 @@ public class ToolCheckService {
                         "m2SlotsChecked", m2SlotsChecked,
                         "m2SlotsMatched", m2SlotsMatched,
                         // 문제에 실제로 연루된 부품쌍 — 그래프 인사이트가 무관 부품을 칠하지 않게 쓴다.
-                        "issueCategories", issueCategories.isEmpty() ? null : List.copyOf(issueCategories)));
+                        "issueCategories", issueCategories.isEmpty() ? null : List.copyOf(issueCategories),
+                        // 걸린 조건별 사유 — categories(PART 카테고리 대문자 배열)와 완성 문장 message의 쌍.
+                        "issues", issues.isEmpty() ? null : List.copyOf(issues)));
+    }
+
+    /** RAM 폼팩터 원어(SODIMM/RDIMM/REGISTERED)를 사용자 언어 라벨로 바꾼다. 모르는 표기는 원문 유지. */
+    private static String ramFormFactorLabel(String token) {
+        String normalized = firstText(token, "").toUpperCase(Locale.ROOT).replace("-", "").replace("_", "");
+        if (normalized.contains("SODIMM")) {
+            return "노트북용(SO-DIMM)";
+        }
+        if (normalized.contains("RDIMM") || normalized.contains("REGISTERED")) {
+            return "레지스터드(서버용)";
+        }
+        return firstText(token, "규격 미상");
+    }
+
+    /** details.issues 항목 — 걸린 조건 1건의 상태·연루 부품 카테고리·완성 문장 사유. */
+    private static Map<String, Object> issue(String status, String message, String... categories) {
+        return MockData.map("categories", List.of(categories), "message", message, "status", status);
     }
 
     /** 저장장치가 M.2 슬롯을 차지하는지 — 인터페이스/폼팩터가 M.2·NVMe면 M.2, SATA 2.5인치는 아니다. */
@@ -248,22 +342,79 @@ public class ToolCheckService {
         int psuCapacity = intAttr(psu, "capacityW", 0);
         int vendorRecommendedPsu = intAttr(gpu, "requiredSystemPowerW", 0);
         int requiredRatedCapacity = Math.max(vendorRecommendedPsu, estimatedWattage + 120);
+        // 소비전력 데이터가 없어 부하 합산에서 0으로 빠진 부품(현재 기본값 0은 GPU 계열뿐) —
+        // 숫자를 지어내지 않는 대신 신뢰도를 낮추고 문구에 명시한다. 판정 자체는 뒤집지 않는다.
+        List<String> wattageUnknownCategories = parts.stream()
+                .filter(part -> part != null && !"PSU".equals(part.category()))
+                .filter(part -> estimatedPartPowerDraw(part) <= 0)
+                .map(ToolBuildPart::category)
+                .distinct()
+                .toList();
+        String note = "capacityW는 정격 출력이며 PSU 자체 소비전력이나 피크 부하로 합산하지 않습니다.";
+        if (psu == null || psuCapacity <= 0) {
+            // 결측을 0W로 계산해 '현재 정격 0W' 같은 허구 숫자 확정문을 내지 않는다(size의 결측=null 관례).
+            // PSU 미장착 FAIL은 레거시 직접 호출 경로용이다 — 보드 경로는 ToolApplicabilityPolicy가 결과를 거른다.
+            Map<String, Object> details = MockData.map(
+                    "estimatedContinuousLoadW", estimatedWattage,
+                    "psuRatedCapacityW", null,
+                    "vendorRecommendedPsuW", vendorRecommendedPsu,
+                    "requiredRatedCapacityW", requiredRatedCapacity,
+                    "ratedHeadroomW", null,
+                    "ratedLoadPercent", null,
+                    "wattageUnknownCategories", wattageUnknownCategories.isEmpty() ? null : wattageUnknownCategories,
+                    "note", note);
+            if (psu == null) {
+                return tool("power", "FAIL", "MEDIUM",
+                        "파워(PSU)가 없어 시스템 전력을 공급할 수 없습니다", details);
+            }
+            return tool("power", "WARN", "MEDIUM",
+                    "파워 용량 정보가 없어 전력 검사를 못 했습니다", details);
+        }
         int headroom = psuCapacity - estimatedWattage;
-        int loadPercent = psuCapacity <= 0 ? 100 : (int) Math.round((estimatedWattage * 100.0) / psuCapacity);
+        int loadPercent = (int) Math.round((estimatedWattage * 100.0) / psuCapacity);
         // 그래프 GPU 노드에 "권장 파워"로 표시되는 값(requiredSystemPowerW)을 담은 PSU가 충족하면,
         // 내부 추정 기준(estimatedWattage+120)에 못 미쳐도 빨간 FAIL이 아니라 WARN으로 둔다.
         // 화면엔 "권장 750W"라 해놓고 750W PSU를 담았을 때 FAIL이 뜨는 모순을 막기 위함이다.
         boolean meetsVendorRecommendation = vendorRecommendedPsu > 0 && psuCapacity >= vendorRecommendedPsu;
         boolean pass = psuCapacity >= requiredRatedCapacity && loadPercent <= 85;
         boolean warn = psuCapacity >= estimatedWattage && (headroom >= 80 || meetsVendorRecommendation);
+        // 문구는 실제 걸린 조건만 말한다 — 벤더 권장 미달이 원인인데 "여유 210W로 빠듯" 같은 모순을 내지 않는다.
+        boolean vendorShortfall = vendorRecommendedPsu > 0 && psuCapacity < vendorRecommendedPsu;
+        boolean estimateShortfall = psuCapacity < estimatedWattage + 120 || loadPercent > 85;
+        String summary;
+        if (pass) {
+            summary = "PSU 정격 출력이 예상 지속 부하와 GPU 권장 정격 파워를 충족합니다.";
+        } else if (warn) {
+            List<String> reasons = new ArrayList<>();
+            if (vendorShortfall) {
+                reasons.add("GPU 권장 파워 " + vendorRecommendedPsu + "W에 못 미칩니다(현재 정격 " + psuCapacity + "W)");
+            }
+            if (estimateShortfall) {
+                reasons.add("PSU 정격 " + psuCapacity + "W가 예상 부하 " + estimatedWattage + "W 대비 여유 " + headroom + "W로 빠듯합니다");
+            }
+            summary = String.join(" · ", reasons);
+        } else {
+            List<String> reasons = new ArrayList<>();
+            if (headroom < 0) {
+                reasons.add("예상 부하 " + estimatedWattage + "W가 PSU 정격 " + psuCapacity + "W를 초과합니다(부족 " + (-headroom) + "W)");
+            } else {
+                reasons.add("PSU 정격 " + psuCapacity + "W가 예상 부하 " + estimatedWattage + "W 대비 여유 " + headroom + "W뿐이라 부족합니다");
+            }
+            if (vendorShortfall) {
+                reasons.add("GPU 권장 파워 " + vendorRecommendedPsu + "W에 못 미칩니다(현재 정격 " + psuCapacity + "W)");
+            }
+            summary = String.join(" · ", reasons);
+        }
+        if (!wattageUnknownCategories.isEmpty()) {
+            String base = summary.endsWith(".") ? summary.substring(0, summary.length() - 1) : summary;
+            summary = base + " · 일부 부품의 소비전력 정보가 없어 실제 부하는 더 높을 수 있습니다";
+        }
+        String confidence = !wattageUnknownCategories.isEmpty() ? "LOW"
+                : headroom >= 180 && loadPercent <= 80 ? "HIGH" : "MEDIUM";
         return tool("power",
                 pass ? "PASS" : warn ? "WARN" : "FAIL",
-                headroom >= 180 && loadPercent <= 80 ? "HIGH" : "MEDIUM",
-                pass
-                        ? "PSU 정격 출력이 예상 지속 부하와 GPU 권장 정격 파워를 충족합니다."
-                        : warn
-                                ? "PSU 정격 " + psuCapacity + "W가 예상 부하 " + estimatedWattage + "W 대비 여유 " + headroom + "W로 빠듯합니다"
-                                : "PSU 정격 출력이 예상 부하와 권장 파워에 못 미쳐 상위 용량이 필요합니다",
+                confidence,
+                summary,
                 MockData.map(
                         "estimatedContinuousLoadW", estimatedWattage,
                         "psuRatedCapacityW", psuCapacity,
@@ -271,7 +422,8 @@ public class ToolCheckService {
                         "requiredRatedCapacityW", requiredRatedCapacity,
                         "ratedHeadroomW", headroom,
                         "ratedLoadPercent", loadPercent,
-                        "note", "capacityW는 정격 출력이며 PSU 자체 소비전력이나 피크 부하로 합산하지 않습니다."
+                        "wattageUnknownCategories", wattageUnknownCategories.isEmpty() ? null : wattageUnknownCategories,
+                        "note", note
                 ));
     }
 
@@ -282,22 +434,24 @@ public class ToolCheckService {
         ToolBuildPart cooler = byCategory.get("COOLER");
         ToolBuildPart psu = byCategory.get("PSU");
         ToolBuildPart motherboard = byCategory.get("MOTHERBOARD");
-        int gpuLength = intAttr(gpu, "lengthMm", 0);
-        int maxGpuLength = intAttr(pcCase, "maxGpuLengthMm", 0);
-        int coolerHeight = intAttr(cooler, "heightMm", intAttr(cooler, "coolerHeightMm", 0));
+        // 소수 치수는 보수적 방향으로 정수화한다 — 부품 치수는 올림, 케이스 허용치는 내림.
+        // (357.6mm를 357로 내림하면 여유가 실제보다 커 보인다.)
+        int gpuLength = partDimensionMm(gpu, "lengthMm");
+        int maxGpuLength = caseLimitMm(pcCase, "maxGpuLengthMm");
+        int coolerHeight = partDimensionMm(cooler, "heightMm", "coolerHeightMm");
         // 케이스에 허용 높이 데이터가 없으면 검사를 생략한다 — 임의 기본값(과거 190)으로 '근거 있는 통과'처럼 보이게 하지 않는다.
-        int maxCoolerHeight = intAttr(pcCase, "maxCpuCoolerHeightMm", 0);
+        int maxCoolerHeight = caseLimitMm(pcCase, "maxCpuCoolerHeightMm");
         // 수랭(AIO)은 heightMm가 라디에이터 두께(27~38mm)라 공랭용 높이 검사가 무의미하다.
         // 대신 라디에이터 크기가 케이스 지원 목록(radiatorSupportMm 배열)에 포함되는지를 본다.
         String coolerType = stringAttr(cooler, "coolerType");
-        boolean aioCooler = coolerType != null && coolerType.toUpperCase(Locale.ROOT).contains("LIQUID");
-        int radiatorSizeMm = intAttr(cooler, "radiatorSizeMm", 0);
+        boolean aioCooler = isLiquidCoolerType(coolerType);
+        int radiatorSizeMm = partDimensionMm(cooler, "radiatorSizeMm");
         List<Integer> radiatorSupportMm = intListAttr(pcCase, "radiatorSupportMm");
         boolean radiatorChecked = aioCooler && radiatorSizeMm > 0 && pcCase != null;
         boolean radiatorSupportKnown = !radiatorSupportMm.isEmpty();
         boolean radiatorMatched = !radiatorChecked || !radiatorSupportKnown || radiatorSupportMm.contains(radiatorSizeMm);
-        int psuDepth = intAttr(psu, "depthMm", 0);
-        int maxPsuLength = intAttr(pcCase, "maxPsuLengthMm", 0);
+        int psuDepth = partDimensionMm(psu, "depthMm");
+        int maxPsuLength = caseLimitMm(pcCase, "maxPsuLengthMm");
         // 보드 폼팩터 vs 케이스 지원 규격(P1-1) — 케이스 값은 'EATX_ATX_MATX_ITX' 같은 지원 목록 문자열이라
         // 토큰 최대 랭크로 해석한다(작은 보드는 큰 케이스에 항상 장착 가능한 표준 홀 규격 위계).
         String boardFormFactor = stringAttr(motherboard, "formFactor");
@@ -322,90 +476,154 @@ public class ToolCheckService {
         // 견적이 WARN이 되면, size를 구독하는 쿨러/파워 후보 패널 전체가 무관한 사유로 '간섭 주의'가 된다.
         // 사유는 걸린 조건을 그대로 단정문으로 말한다 — "~하거나 ~해서 추가 확인 필요" 같은 뭉뚱그림은
         // 보드 팝오버(왜 문제인지)의 목적과 어긋난다(부연 설명은 'AI에게 설명' 몫).
+        List<String> failReasons = new ArrayList<>();
         List<String> warnReasons = new ArrayList<>();
+        // 걸린 조건별 사유(categories+message) — 그래프가 사유를 부품쌍별 1:1로 귀속할 수 있게 details.issues로 내린다.
+        List<Map<String, Object>> issues = new ArrayList<>();
         // 실제 걸린 부품쌍 — 인사이트/보드가 문제와 무관한 부품까지 노랗게 칠하지 않도록 details로 내린다.
         LinkedHashSet<String> issueCategories = new LinkedHashSet<>();
         if (gpuExceeded) {
+            String message = "GPU 길이(" + gpuLength + "mm)가 케이스 허용(" + maxGpuLength + "mm)을 초과합니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "GPU", "CASE"));
             issueCategories.add("GPU");
             issueCategories.add("CASE");
         }
-        if (coolerExceeded || radiatorExceeded) {
+        if (coolerExceeded) {
+            String message = "쿨러 높이(" + coolerHeight + "mm)가 케이스 허용(" + maxCoolerHeight + "mm)을 초과합니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "COOLER", "CASE"));
+            issueCategories.add("COOLER");
+            issueCategories.add("CASE");
+        }
+        if (radiatorExceeded) {
+            String message = "케이스가 라디에이터 " + radiatorSizeMm + "mm 장착을 지원하지 않습니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "COOLER", "CASE"));
             issueCategories.add("COOLER");
             issueCategories.add("CASE");
         }
         if (psuExceeded) {
+            String message = "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "PSU", "CASE"));
             issueCategories.add("PSU");
             issueCategories.add("CASE");
         }
         if (boardFormFactorExceeded) {
+            String message = "케이스가 " + formFactorLabel(boardFormFactorRank) + " 규격 메인보드 장착을 지원하지 않습니다(최대 " + formFactorLabel(caseMaxFormFactorRank) + ")";
+            failReasons.add(message);
+            issues.add(issue("FAIL", message, "MOTHERBOARD", "CASE"));
             issueCategories.add("MOTHERBOARD");
             issueCategories.add("CASE");
         }
         if (gpu != null && pcCase != null && !gpuKnown) {
-            warnReasons.add(gpuLength <= 0
+            String message = gpuLength <= 0
                     ? "GPU 길이 정보가 없어 케이스 장착 검사를 못 했습니다"
-                    : "케이스의 GPU 허용 길이 정보가 없어 장착 검사를 못 했습니다");
+                    : "케이스의 GPU 허용 길이 정보가 없어 장착 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "GPU", "CASE"));
             issueCategories.add("GPU");
             issueCategories.add("CASE");
         }
         if (cooler != null && pcCase != null && !aioCooler && !coolerKnown) {
-            warnReasons.add(coolerHeight <= 0
+            String message = coolerHeight <= 0
                     ? "쿨러 높이 정보가 없어 케이스 장착 검사를 못 했습니다"
-                    : "케이스의 쿨러 허용 높이 정보가 없어 장착 검사를 못 했습니다");
+                    : "케이스의 쿨러 허용 높이 정보가 없어 장착 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "COOLER", "CASE"));
             issueCategories.add("COOLER");
             issueCategories.add("CASE");
         }
         if (aioCooler && pcCase != null && (!radiatorChecked || !radiatorSupportKnown)) {
-            warnReasons.add(!radiatorChecked
+            String message = !radiatorChecked
                     ? "수랭 라디에이터 크기 정보가 없어 케이스 장착 검사를 못 했습니다"
-                    : "케이스의 라디에이터 지원 정보가 없어 장착 검사를 못 했습니다");
+                    : "케이스의 라디에이터 지원 정보가 없어 장착 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "COOLER", "CASE"));
             issueCategories.add("COOLER");
             issueCategories.add("CASE");
         }
         if (psu != null && pcCase != null && !psuKnown) {
-            warnReasons.add(psuDepth <= 0
+            String message = psuDepth <= 0
                     ? "파워 깊이 정보가 없어 케이스 장착 검사를 못 했습니다"
-                    : "케이스의 파워 허용 깊이 정보가 없어 장착 검사를 못 했습니다");
+                    : "케이스의 파워 허용 깊이 정보가 없어 장착 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "PSU", "CASE"));
             issueCategories.add("PSU");
             issueCategories.add("CASE");
         }
         if (motherboard != null && pcCase != null && !boardFormFactorChecked) {
-            warnReasons.add(boardFormFactorRank < 0
-                    ? "메인보드 규격 정보가 없어 케이스 장착 검사를 못 했습니다"
-                    : "케이스의 지원 보드 규격 정보가 없어 장착 검사를 못 했습니다");
+            // 값이 실재하는데 해석만 못 하는 경우(SSI-EEB 등)는 '정보가 없다'고 말하지 않는다 — 원문을 인용한다.
+            String message;
+            if (boardFormFactorRank < 0) {
+                message = boardFormFactor == null
+                        ? "메인보드 규격 정보가 없어 케이스 장착 검사를 못 했습니다"
+                        : "지원 여부를 판정할 수 없는 메인보드 규격(" + boardFormFactor + ")이라 케이스 장착 검사를 못 했습니다";
+            } else {
+                String caseFormFactor = stringAttr(pcCase, "formFactor");
+                message = caseFormFactor == null
+                        ? "케이스의 지원 보드 규격 정보가 없어 장착 검사를 못 했습니다"
+                        : "지원 여부를 판정할 수 없는 케이스 규격(" + caseFormFactor + ")이라 장착 검사를 못 했습니다";
+            }
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "MOTHERBOARD", "CASE"));
             issueCategories.add("MOTHERBOARD");
             issueCategories.add("CASE");
         }
         if (gpuKnown && BuildSizeFitPolicy.hasLowHeadroom(gpuHeadroom, BuildSizeFitPolicy.GPU_WARN_HEADROOM_MM)) {
-            warnReasons.add("케이스의 GPU 길이 여유가 " + gpuHeadroom + "mm뿐입니다");
+            String message = "케이스의 GPU 길이 여유가 " + gpuHeadroom + "mm뿐입니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "GPU", "CASE"));
             issueCategories.add("GPU");
             issueCategories.add("CASE");
         }
         // known 게이트 필수 — 수랭(AIO)은 coolerKnown=false라 headroom이 0으로 남는데,
         // 게이트 없이 0<5를 평가하면 라디에이터가 정확히 맞아도 영구 WARN이 된다.
         if (coolerKnown && BuildSizeFitPolicy.hasLowHeadroom(coolerHeadroom, BuildSizeFitPolicy.COOLER_WARN_HEADROOM_MM)) {
-            warnReasons.add("케이스의 쿨러 높이 여유가 " + coolerHeadroom + "mm뿐입니다");
+            String message = "케이스의 쿨러 높이 여유가 " + coolerHeadroom + "mm뿐입니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "COOLER", "CASE"));
             issueCategories.add("COOLER");
             issueCategories.add("CASE");
         }
         if (psuKnown && BuildSizeFitPolicy.hasLowHeadroom(psuHeadroom, BuildSizeFitPolicy.PSU_WARN_HEADROOM_MM)) {
-            warnReasons.add("케이스의 파워 깊이 여유가 " + psuHeadroom + "mm뿐입니다");
+            String message = "케이스의 파워 깊이 여유가 " + psuHeadroom + "mm뿐입니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "PSU", "CASE"));
             issueCategories.add("PSU");
             issueCategories.add("CASE");
         }
         boolean warn = !fail && !warnReasons.isEmpty();
+        // PASS 요약은 실제 검사한 항목만 말한다 — 검사 0건인데 전부 통과한 것처럼 단정하지 않는다.
+        List<String> checkedLabels = new ArrayList<>();
+        if (gpuKnown) {
+            checkedLabels.add("GPU 길이");
+        }
+        if (coolerKnown) {
+            checkedLabels.add("쿨러 높이");
+        }
+        if (radiatorChecked && radiatorSupportKnown) {
+            checkedLabels.add("라디에이터 크기");
+        }
+        if (psuKnown) {
+            checkedLabels.add("파워 깊이");
+        }
+        if (boardFormFactorChecked) {
+            checkedLabels.add("보드 규격");
+        }
+        String passSummary = checkedLabels.isEmpty()
+                ? "케이스 장착 검사를 수행할 부품 조합이 아직 없습니다."
+                : String.join(", ", checkedLabels)
+                        + subjectParticle(checkedLabels.get(checkedLabels.size() - 1))
+                        + " 케이스 제약 안에 있습니다.";
         return tool("size",
                 fail ? "FAIL" : warn ? "WARN" : "PASS",
                 fail ? "HIGH" : "MEDIUM",
-                fail ? radiatorExceeded
-                        ? "케이스가 라디에이터 " + radiatorSizeMm + "mm 장착을 지원하지 않습니다"
-                        : boardFormFactorExceeded
-                                ? "케이스가 " + formFactorLabel(boardFormFactorRank) + " 규격 메인보드 장착을 지원하지 않습니다(최대 " + formFactorLabel(caseMaxFormFactorRank) + ")"
-                                : psuExceeded
-                                        ? "파워 깊이(" + psuDepth + "mm)가 케이스 허용(" + maxPsuLength + "mm)을 초과합니다"
-                                        : "케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다."
+                // FAIL도 WARN처럼 걸린 조건 전부를 수치 문구로 join한다 — 정보 없는 일반문을 내지 않는다.
+                fail ? String.join(" · ", failReasons)
                         : warn ? String.join(" · ", warnReasons)
-                        : "GPU 길이, 쿨러 장착, 파워 깊이, 보드 규격이 케이스 제약 안에 있습니다.",
+                        : passSummary,
                 // 결측(0)은 null로 내린다 — 0을 그대로 실으면 엣지가 'max-0' 여유로 초록을 그려
                 // "근거 없는 통과"처럼 보인다(190 기본값 제거와 같은 원칙).
                 MockData.map(
@@ -428,8 +646,29 @@ public class ToolCheckService {
                         "boardFormFactorChecked", boardFormFactorChecked,
                         "boardFormFactorMatched", boardFormFactorMatched,
                         // 문제에 실제로 연루된 부품쌍 — 그래프 인사이트가 무관 부품을 칠하지 않게 쓴다.
-                        "issueCategories", issueCategories.isEmpty() ? null : List.copyOf(issueCategories)
+                        "issueCategories", issueCategories.isEmpty() ? null : List.copyOf(issueCategories),
+                        // 걸린 조건별 사유 — categories(PART 카테고리 대문자 배열)와 완성 문장 message의 쌍.
+                        "issues", issues.isEmpty() ? null : List.copyOf(issues)
                 ));
+    }
+
+    /** 수랭(AIO) 판별 — LIQUID 외에 AIO/WATER/수랭 표기도 수랭으로 본다(대소문자 무시). */
+    private static boolean isLiquidCoolerType(String coolerType) {
+        if (coolerType == null) {
+            return false;
+        }
+        String normalized = coolerType.toUpperCase(Locale.ROOT);
+        return normalized.contains("LIQUID") || normalized.contains("AIO")
+                || normalized.contains("WATER") || normalized.contains("수랭");
+    }
+
+    /** 한국어 주격 조사(이/가) — 받침 유무로 고른다(PASS 요약 동적 조립용). */
+    private static String subjectParticle(String word) {
+        char last = word.charAt(word.length() - 1);
+        if (last < 0xAC00 || last > 0xD7A3) {
+            return "이(가)";
+        }
+        return (last - 0xAC00) % 28 != 0 ? "이" : "가";
     }
 
     /**
@@ -524,11 +763,23 @@ public class ToolCheckService {
     /** Evaluates saved current prices against the selected budget. */
     private Map<String, Object> price(List<ToolBuildPart> parts, int budget, int currentTotalPrice) {
         int total = currentTotalPrice > 0 ? currentTotalPrice : total(parts);
-        return tool("price",
-                total <= budget ? "PASS" : total <= Math.round(budget * 1.08) ? "WARN" : "FAIL",
-                "HIGH",
-                total <= budget ? "저장된 현재가 기준 예산 안에 들어옵니다." : "저장된 현재가 기준 예산을 초과합니다",
+        int overBudget = total - budget;
+        String status = total <= budget ? "PASS" : total <= Math.round(budget * 1.08) ? "WARN" : "FAIL";
+        // 초과면 얼마나 초과인지 실값(예산·총액·차액)을 말한다 — WARN(8% 유예 이내)과 FAIL을 문구로 구분한다.
+        String summary = switch (status) {
+            case "PASS" -> "저장된 현재가 기준 예산 안에 들어옵니다.";
+            case "WARN" -> "저장된 현재가 기준 총액 " + won(total) + "원이 예산 " + won(budget) + "원을 "
+                    + won(overBudget) + "원 초과합니다(예산의 8% 이내)";
+            default -> "저장된 현재가 기준 총액 " + won(total) + "원이 예산 " + won(budget) + "원을 "
+                    + won(overBudget) + "원 초과합니다";
+        };
+        return tool("price", status, "HIGH", summary,
                 MockData.map("budget", budget, "totalPrice", total, "priceDiff", total - budget));
+    }
+
+    /** 원화 금액 표기 — 천 단위 구분자. */
+    private static String won(long amount) {
+        return String.format(Locale.ROOT, "%,d", amount);
     }
 
     /** Resolves buildId or partIds from a Tool API request. */
@@ -557,6 +808,8 @@ public class ToolCheckService {
 
     /** Loads build items as Tool-ready part DTOs. */
     private List<ToolBuildPart> partsByBuildId(String buildId) {
+        // build_items에는 quantity 컬럼이 없다(DB_SCHEMA §build_items — 수량은 price에 line total로만 반영).
+        // 그래서 이 경로는 1개분으로 계산된다(quantity null → 1). AI_BUILD·QUOTE_DRAFT 경로만 수량을 안다.
         return jdbcTemplate.queryForList("""
                         SELECT p.id AS internal_id,
                                p.public_id::text AS id,
@@ -807,7 +1060,9 @@ public class ToolCheckService {
                 DbValueMapper.string(row, "name"),
                 DbValueMapper.string(row, "manufacturer"),
                 DbValueMapper.integer(row, "price"),
-                objectMap(DbValueMapper.json(row, "attributes", Map.of()))
+                objectMap(DbValueMapper.json(row, "attributes", Map.of())),
+                // DB 경로들엔 quantity 컬럼이 없다(build_items 포함) — null → 1개로 계산된다.
+                DbValueMapper.integer(row, "quantity")
         );
     }
 
@@ -1099,13 +1354,12 @@ public class ToolCheckService {
         return left.equalsIgnoreCase(right);
     }
 
-    /** Reads a string attribute from a part. */
+    /** Reads a string attribute from a part — 앞뒤 공백을 제거하고 빈 문자열은 결측(null)으로 본다. */
     private static String stringAttr(ToolBuildPart part, String key) {
         if (part == null) {
             return null;
         }
-        Object value = part.attributes().get(key);
-        return value == null ? null : String.valueOf(value);
+        return text(part.attributes().get(key));
     }
 
     /** Reads a boolean attribute treating absent or non-true values as false. */
@@ -1217,7 +1471,7 @@ public class ToolCheckService {
         return parsed == null ? fallback : parsed;
     }
 
-    /** Parses an integer-like value. */
+    /** Parses an integer-like value — 비숫자 문자열("2개" 등)은 예외 대신 null(결측=검사 생략 관례). */
     private static Integer numberValue(Object value) {
         if (value instanceof Number number) {
             return number.intValue();
@@ -1226,10 +1480,14 @@ public class ToolCheckService {
         if (text == null) {
             return null;
         }
-        return Integer.valueOf(text.replace(",", ""));
+        try {
+            return Integer.valueOf(text.replace(",", ""));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
-    /** Parses decimal-like DB values for benchmark scores. */
+    /** Parses decimal-like DB values for benchmark scores — 비숫자 문자열은 null. */
     private static Double decimalValue(Object value) {
         if (value instanceof Number number) {
             return number.doubleValue();
@@ -1238,7 +1496,34 @@ public class ToolCheckService {
         if (text == null) {
             return null;
         }
-        return Double.valueOf(text.replace(",", ""));
+        try {
+            return Double.valueOf(text.replace(",", ""));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    /** 부품 치수(mm) 읽기 — 소수는 올림(ceil)해 여유가 실제보다 커 보이지 않게 한다. 첫 유효 키를 쓴다. */
+    private static int partDimensionMm(ToolBuildPart part, String... keys) {
+        if (part == null) {
+            return 0;
+        }
+        for (String key : keys) {
+            Double value = decimalValue(part.attributes().get(key));
+            if (value != null && value > 0) {
+                return (int) Math.ceil(value);
+            }
+        }
+        return 0;
+    }
+
+    /** 케이스 허용치(mm) 읽기 — 소수는 내림(floor)해 허용이 실제보다 커 보이지 않게 한다. */
+    private static int caseLimitMm(ToolBuildPart part, String key) {
+        if (part == null) {
+            return 0;
+        }
+        Double value = decimalValue(part.attributes().get(key));
+        return value == null || value <= 0 ? 0 : (int) Math.floor(value);
     }
 
     /** Reads match rank integers computed by SQL CASE expressions. */
