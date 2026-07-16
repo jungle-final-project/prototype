@@ -2,9 +2,9 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.BuildSizeFitPolicy;
-import com.buildgraph.prototype.part.ToolBuildPart;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.BuildSizeFitPolicy;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

@@ -46,6 +46,8 @@ docker compose up --build
 
 `.env`는 저장소에 커밋하지 않습니다. 처음 실행만 확인할 때는 `.env.example` 기본값만으로도 seed DB, 로그인, 부품 목록, 수동 견적, AS Chat 화면 진입이 동작합니다. 실제 외부 연동까지 확인할 팀원만 아래 값을 채웁니다.
 
+로컬 PostgreSQL 설치와의 5432 충돌을 피하기 위해 Docker PostgreSQL은 호스트 55432 포트를 사용합니다. 컨테이너 내부 포트는 기존과 동일한 5432이며, 배포 환경은 SPRING_DATASOURCE_URL을 명시하므로 영향을 받지 않습니다.
+
 | 환경변수 | 필수 여부 | 쓰는 곳 | 비고 |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | AS Chat/PC Agent AI 진단 실제 LLM 답변 테스트 시 필요 | `/support/ai-chat`, PCAgent AI 진단, Agent LLM mode, AS Chat benchmark | 없으면 AS Chat 답변 생성은 `428 PRECONDITION_REQUIRED`로 실패합니다. PCAgent AI 진단은 rule fallback 답변으로 계속 동작합니다. |

@@ -1,6 +1,6 @@
 package com.buildgraph.prototype.agent;
 
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import java.util.List;
 import org.springframework.transaction.annotation.Transactional;
 

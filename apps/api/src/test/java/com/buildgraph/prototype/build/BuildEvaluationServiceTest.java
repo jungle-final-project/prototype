@@ -9,7 +9,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -26,11 +26,11 @@ class BuildEvaluationServiceTest {
                 new BuildCompositeScoreService(),
                 new BuildScoreAdviceService()
         );
-        List<com.buildgraph.prototype.part.ToolBuildPart> parts = List.of(
-                new com.buildgraph.prototype.part.ToolBuildPart(
+        List<com.buildgraph.prototype.part.tool.ToolBuildPart> parts = List.of(
+                new com.buildgraph.prototype.part.tool.ToolBuildPart(
                         1L, "cpu-1", "CPU", "AMD Ryzen 7 9700X", "AMD", 500_000,
                         Map.of("cores", 8, "threads", 16), 1),
-                new com.buildgraph.prototype.part.ToolBuildPart(
+                new com.buildgraph.prototype.part.tool.ToolBuildPart(
                         2L, "gpu-1", "GPU", "RTX 5060", "NVIDIA", 500_000,
                         Map.of("gpuClass", "RTX_5060", "vramGb", 8), 1)
         );
@@ -69,8 +69,8 @@ class BuildEvaluationServiceTest {
                 )));
         when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
             List<?> parts = invocation.getArgument(0);
-            com.buildgraph.prototype.part.ToolBuildPart psu =
-                    (com.buildgraph.prototype.part.ToolBuildPart) parts.get(0);
+            com.buildgraph.prototype.part.tool.ToolBuildPart psu =
+                    (com.buildgraph.prototype.part.tool.ToolBuildPart) parts.get(0);
             assertThat(psu.attributes())
                     .containsEntry("capacityW", 1500)
                     .containsEntry("wattage", 1500);

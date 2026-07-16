@@ -1,7 +1,7 @@
 package com.buildgraph.prototype.recommendation;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.PartQueryService;
+import com.buildgraph.prototype.part.catalog.PartQueryService;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;

@@ -1,7 +1,7 @@
 package com.buildgraph.prototype.agent;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;

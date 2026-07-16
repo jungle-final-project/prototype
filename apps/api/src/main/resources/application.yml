@@ -4,8 +4,10 @@ server:
 spring:
   application:
     name: buildgraph-api
+  cache:
+    type: ${SPRING_CACHE_TYPE:none}
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/buildgraph}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/buildgraph}
     username: ${SPRING_DATASOURCE_USERNAME:buildgraph}
     password: ${SPRING_DATASOURCE_PASSWORD:buildgraph}
   sql:

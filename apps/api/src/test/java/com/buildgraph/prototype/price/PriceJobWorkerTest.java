@@ -9,8 +9,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-import com.buildgraph.prototype.part.DanawaPriceSnapshotService;
-import com.buildgraph.prototype.part.NaverShoppingOfferService;
+import com.buildgraph.prototype.part.price.DanawaPriceSnapshotService;
+import com.buildgraph.prototype.part.price.NaverShoppingOfferService;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
