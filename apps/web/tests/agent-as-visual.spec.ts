@@ -25,7 +25,20 @@ const beforeDecisionTicket = {
       { type: 'AS_RAG_MATCH', summary: 'GPU thermal throttling 신호가 감지됐습니다.' }
     ],
     rawSamples: [
-      { sampleId: 'sample-1', text: 'gpu temperature reached 95c' }
+      {
+        refId: 'sample-1',
+        schemaVersion: '1',
+        collectedAt: '2026-07-02T06:18:20Z',
+        agentId: 'agent-qa-001',
+        sequence: 42,
+        kind: 'SYSTEM_METRIC',
+        payload: {
+          gpuTemperatureC: 95,
+          message: 'gpu temperature reached 95c',
+          diagnosticContext: 'masked-context-'.repeat(24)
+        },
+        privacyFlags: { containsRawPath: false, masked: true }
+      }
     ]
   },
   supportRouting: {
@@ -87,13 +100,23 @@ const visitRecommendedTicket = {
   }
 };
 
+const noSampleTicket = {
+  ...beforeDecisionTicket,
+  id: 'qa-ticket-no-samples',
+  logSummary: {
+    ...beforeDecisionTicket.logSummary,
+    rawSamples: []
+  }
+};
+
 test('captures Agent AS demo UI evidence and verifies admin decision reflection', async ({ page }) => {
   const consoleErrors: string[] = [];
   const apiCalls: string[] = [];
   const tickets = new Map<string, MockTicket>([
     [beforeDecisionTicket.id, beforeDecisionTicket],
     [afterDecisionTicket.id, afterDecisionTicket],
-    [visitRecommendedTicket.id, visitRecommendedTicket]
+    [visitRecommendedTicket.id, visitRecommendedTicket],
+    [noSampleTicket.id, noSampleTicket]
   ]);
   let decisionPatchPayload: Record<string, unknown> | undefined;
   let remoteRequestPayload: Record<string, unknown> | undefined;
@@ -259,6 +282,47 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('GPU 온도 상승 신호');
   await expect(page.getByRole('main')).toContainText('GPU_THERMAL_SPIKE');
   await expect(page.getByRole('main')).toContainText('CHECK_GPU_DRIVER');
+
+  const ticketOverview = page.getByTestId('admin-as-ticket-overview');
+  const overviewLabels = await ticketOverview.locator('tbody > tr > td:first-child').allTextContents();
+  expect(overviewLabels.slice(0, 3)).toEqual(['상태', '에이전트 로그', '분석 상태']);
+  for (const removedLabel of [
+    '추천 근거 코드',
+    '원격 조치 후보',
+    '방문 판단 근거',
+    '차단 요인',
+    '원인 후보',
+    '업그레이드 후보',
+    '원격지원',
+    '방문지원'
+  ]) {
+    expect(overviewLabels).not.toContain(removedLabel);
+  }
+
+  const showAgentLogs = ticketOverview.getByRole('button', { name: '전송 로그 보기 (1건)', exact: true });
+  await expect(showAgentLogs).toHaveAttribute('aria-expanded', 'false');
+  await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toHaveCount(0);
+  await showAgentLogs.click();
+  await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toBeVisible();
+  await expect(ticketOverview).toContainText('개인정보가 마스킹된 핵심 로그 샘플이며 최대 20건까지 표시됩니다.');
+  await expect(ticketOverview).toContainText('SYSTEM_METRIC');
+  await expect(ticketOverview).toContainText('#42');
+  await expect(ticketOverview).toContainText('gpu temperature reached 95c');
+
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => (
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+    ))).toBe(true);
+  }
+
+  await ticketOverview.getByRole('button', { name: '전송 로그 닫기', exact: true }).click();
+  await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toHaveCount(0);
+
+  await page.goto('/admin/as-tickets/qa-ticket-no-samples');
+  await expect(page.getByTestId('admin-as-ticket-overview')).toContainText('업로드된 로그가 있으나 표시 가능한 샘플이 없습니다.');
+
+  await page.goto('/admin/as-tickets/qa-ticket-before');
   await page.getByLabel('검토 상태').selectOption('APPROVED');
   await page.getByLabel('지원 결정').selectOption('REMOTE_POSSIBLE');
   await page.getByLabel('위험도').selectOption('HIGH');
