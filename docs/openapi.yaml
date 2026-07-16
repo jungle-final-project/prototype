@@ -5837,7 +5837,11 @@ components:
         type:
           $ref: "#/components/schemas/BuildGraphEdgeType"
         status:
-          $ref: "#/components/schemas/ToolStatus"
+          type: string
+          enum: [PASS, WARN, FAIL]
+          description: >-
+            데이터 결측으로 검사하지 못한 관계(예: RAM/보드 memoryType 결측 시 edge-board-ram-memory)는
+            WARN으로 내리고 summary가 '검사를 못 했다'는 사실을 말한다 — 근거 없는 PASS(초록)를 만들지 않는다.
         label:
           type: string
         summary:
@@ -5845,9 +5849,20 @@ components:
     BuildGraphInsightDto:
       type: object
       required: [id, status, title, description, relatedNodeIds]
+      description: >-
+        검사 details.issues(걸린 조건별 사유)가 있으면 인사이트는 사유별로 1개씩 분리 생성된다
+        (id는 insight-{tool}-{n}). 이때 status는 해당 사유의 status, description은 사유 문장,
+        relatedNodeIds는 그 사유에 연루된 장착 노드만 담는다. issues가 없는 툴은 기존처럼
+        insight-{tool} 단일 인사이트(툴 summary + 대표 노드 목록)를 유지한다.
       properties:
         id:
           type: string
+        tool:
+          type: string
+          enum: [compatibility, power, size, performance, price]
+          description: >-
+            인사이트를 만든 검사 도구. 클라이언트는 같은 tool의 엣지 사유가 이미 표시된 카테고리에서
+            의미가 중복되는 인사이트 문구를 억제할 수 있다. tool이 없는 구 응답은 억제하지 않는다.
         status:
           $ref: "#/components/schemas/ToolStatus"
         title:
@@ -6053,6 +6068,10 @@ components:
         status:
           type: string
           enum: [PASS, WARN, FAIL]
+          description: >-
+            compatibility는 결측으로 검사를 생략한 항목이 있으면(예: 메모리 규격 정보 없음) WARN을 반환한다.
+            power는 PSU 용량 정보 결측 시 FAIL이 아니라 WARN("파워 용량 정보가 없어 전력 검사를 못 했습니다")이다 —
+            결측은 실패가 아니라 미검사로 다룬다.
         confidence:
           $ref: "#/components/schemas/Confidence"
         summary:
@@ -6060,6 +6079,14 @@ components:
         details:
           type: object
           additionalProperties: true
+          description: >-
+            도구별 검사 근거. compatibility/size는 걸린 조건별 사유 배열 issues([{categories: PART 카테고리
+            대문자 문자열 배열, message: 완성 문장, status: FAIL|WARN}])와 합집합 issueCategories를 함께 내린다.
+            compatibility는 memoryTypeChecked(메모리 규격 검사 수행 여부)와 ramMemoryTypes(담긴 RAM 규격 목록,
+            결측이면 null)를 포함하며, memoryTypeMatched는 미검사 시에도 true를 유지한다(미검사 표현은
+            memoryTypeChecked=false가 담당). power의 psuRatedCapacityW/ratedHeadroomW/ratedLoadPercent는
+            PSU 용량 결측 시 0이 아니라 null이고, wattageUnknownCategories는 소비전력 정보가 없어 부하 합산에서
+            빠진 부품 카테고리 목록(없으면 null)이다.
     WarningDto:
       type: object
       required: [code, message, severity]

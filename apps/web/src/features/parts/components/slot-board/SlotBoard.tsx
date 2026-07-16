@@ -1069,13 +1069,14 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
     status: string,
     text?: string,
     fallbackLabel?: string,
-    allowSameRankOverride = false
+    allowSameRankOverride = false,
+    tool?: BuildGraphFocus['tool']
   ) => {
     if (!category || !isProblemStatus(status)) {
       return;
     }
     const detail = text?.trim() || fallbackLabel || (status === 'FAIL' ? '조정 필요' : '주의 필요');
-    const label = compactRelationReasonLabel(detail, status, fallbackLabel);
+    const label = compactRelationReasonLabel(detail, status, fallbackLabel, tool);
     const current = reasons.get(category);
     if (
       !current ||
@@ -1088,7 +1089,7 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
 
   const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
   problemDetailsByCategory.forEach((detail, category) => {
-    addReason(category, detail.status, detail.reasons[0] ?? detail.title, detail.title, true);
+    addReason(category, detail.status, detail.reasons[0] ?? detail.title, detail.title, true, detail.tool);
   });
 
   if (reasons.size > 0) {
@@ -1103,7 +1104,9 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
     }
     const categories = relationMapToolCategories(result.tool);
     const fallbackLabel = relationMapToolReasonLabel(result.tool);
-    categories.forEach((category) => addReason(category, result.status, result.summary, fallbackLabel));
+    const normalizedTool = result.tool.toLowerCase();
+    const tool = isBuildGraphTool(normalizedTool) ? normalizedTool : undefined;
+    categories.forEach((category) => addReason(category, result.status, result.summary, fallbackLabel, false, tool));
   });
 
   return reasons;
@@ -1113,7 +1116,9 @@ function relationMapToolCategories(tool: string): PartCategory[] {
   const normalizedTool = tool.toLowerCase();
   if (normalizedTool === 'power') return ['CPU', 'GPU', 'PSU'];
   if (normalizedTool === 'size') return ['GPU', 'CASE', 'COOLER'];
-  if (normalizedTool === 'compatibility') return ['CPU', 'MOTHERBOARD', 'RAM', 'STORAGE'];
+  // compatibility 툴은 쿨러 검사(CPU 소켓 지원·TDP)도 포함한다 — edge-cpu-cooler-socket이
+  // compatibility로 매핑되는 것과 동일 근거. COOLER가 빠지면 쿨러 호환 문제가 오귀속된다.
+  if (normalizedTool === 'compatibility') return ['CPU', 'MOTHERBOARD', 'RAM', 'STORAGE', 'COOLER'];
   if (normalizedTool === 'performance') return ['CPU', 'GPU', 'RAM'];
   return [];
 }
@@ -1127,25 +1132,58 @@ function relationMapToolReasonLabel(tool: string) {
   return '확인 필요';
 }
 
-function compactRelationReasonLabel(text: string, status: SlotProblemStatus, fallbackLabel?: string) {
+function compactRelationReasonLabel(
+  text: string,
+  status: SlotProblemStatus,
+  fallbackLabel?: string,
+  tool?: BuildGraphFocus['tool']
+) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) {
     return fallbackLabel ?? (status === 'FAIL' ? '조정 필요' : '주의');
   }
-  if (/(전력|파워|정격|용량|W\b|와트)/i.test(normalized)) {
-    return status === 'WARN' && /(여유|빠듯|낮|확인)/.test(normalized) ? '전력 확인' : '전력 부족';
+  // tool/edge 식별이 있으면 문구 정규식 추측보다 우선한다 — "파워 깊이 초과"(치수 문제)가
+  // '파워' 단어 때문에 '전력 부족'으로 오분류되는 계열을 근본적으로 막는다.
+  if (tool === 'size') {
+    return compactDimensionReasonLabel(normalized, status);
   }
-  if (/(길이|케이스|장착|간섭|크기|높이|공간)/.test(normalized)) {
-    return /(초과|부족|불가|안\s*됨|어렵)/.test(normalized) || status === 'FAIL' ? '길이 초과' : '길이 확인';
+  if (tool === 'power') {
+    return compactPowerReasonLabel(normalized, status);
   }
+  if (tool === 'performance') {
+    return '성능 확인';
+  }
+  if (tool === 'price') {
+    return '예산 확인';
+  }
+  if (tool === 'compatibility') {
+    if (/(소켓|칩셋)/.test(normalized)) {
+      return status === 'FAIL' ? '소켓 불일치' : '소켓 확인';
+    }
+    if (/(메모리|램|RAM|DDR)/i.test(normalized)) {
+      return status === 'FAIL' ? '메모리 불일치' : '메모리 확인';
+    }
+    if (/(쿨러|발열|온도|냉각|TDP)/i.test(normalized)) {
+      return status === 'FAIL' ? '쿨링 부족' : '쿨링 확인';
+    }
+    return status === 'FAIL' ? '호환 불가' : '호환 확인';
+  }
+  // tool을 모르는 응답(구 계약·fallback)은 문구 기반 축약 유지 — 단, 구체 계열(소켓/메모리)을 먼저,
+  // 치수 계열을 전력·쿨링 계열보다 먼저 판별한다(정규식 순서 오분류 방지).
   if (/(소켓|칩셋)/.test(normalized)) {
     return status === 'FAIL' ? '소켓 불일치' : '소켓 확인';
   }
   if (/(메모리|램|RAM|DDR)/i.test(normalized)) {
     return status === 'FAIL' ? '메모리 불일치' : '메모리 확인';
   }
-  if (/(쿨러|발열|온도|냉각)/.test(normalized)) {
+  if (/(깊이|높이|길이|케이스|장착|간섭|크기|공간|규격)/.test(normalized)) {
+    return compactDimensionReasonLabel(normalized, status);
+  }
+  if (/(쿨러|발열|온도|냉각|TDP)/i.test(normalized)) {
     return status === 'FAIL' ? '쿨링 부족' : '쿨링 확인';
+  }
+  if (/(전력|파워|정격|용량|W\b|와트)/i.test(normalized)) {
+    return compactPowerReasonLabel(normalized, status);
   }
   if (/(성능|병목|프레임|FPS|점수)/i.test(normalized)) {
     return '성능 확인';
@@ -1158,6 +1196,24 @@ function compactRelationReasonLabel(text: string, status: SlotProblemStatus, fal
   }
   const compact = normalized.split(/[.:,·\-–—]/)[0]?.trim() || normalized;
   return compact.length > 8 ? `${compact.slice(0, 8)}…` : compact;
+}
+
+// 치수 계열 축약 라벨 — 깊이(파워)/높이(쿨러)/길이(GPU)를 구분하고, 폼팩터 계열은 '규격'으로 부른다.
+function compactDimensionReasonLabel(normalized: string, status: SlotProblemStatus) {
+  if (/(규격|폼\s*팩터)/i.test(normalized)) {
+    return status === 'FAIL' ? '규격 불일치' : '규격 확인';
+  }
+  const exceeded = status === 'FAIL' || /(초과|부족|불가|안\s*됨|어렵)/.test(normalized);
+  const axis = /깊이/.test(normalized) ? '깊이' : /높이/.test(normalized) ? '높이' : '길이';
+  return exceeded ? `${axis} 초과` : `${axis} 확인`;
+}
+
+function compactPowerReasonLabel(normalized: string, status: SlotProblemStatus) {
+  // 결측 WARN("파워 용량 정보가 없어 전력 검사를 못 했습니다")은 부족이 아니라 미확인이다.
+  if (/(정보가 없|못 했|미확인)/.test(normalized)) {
+    return '용량 미확인';
+  }
+  return status === 'WARN' && /(여유|빠듯|낮|확인)/.test(normalized) ? '전력 확인' : '전력 부족';
 }
 
 function isGenericRelationReasonLabel(label: string) {
@@ -3368,25 +3424,40 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
 
   graph.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
-    if (category && isProblemStatus(node.status)) {
+    // CONSTRAINT 노드는 category가 고정이라(예: constraint-compatibility=MOTHERBOARD) 무관한 슬롯에
+    // 사유 0개짜리 유령 '장착 불가' 팝오버를 만든다 — 뱃지(partStatusByCategory)와 동일하게
+    // PART 노드만 슬롯 상태로 승격한다(PART status는 엣지 최악치라 정보 손실 없음).
+    if (node.type === 'PART' && category && isProblemStatus(node.status)) {
       // Node detail is a neutral spec value; use relationship summaries as warning reasons.
       ensure(category, node.status, true);
     }
   });
 
+  // 카테고리별로 어떤 tool의 엣지 사유(수치문)가 이미 실렸는지 기록 —
+  // 같은 tool의 인사이트 일반문(같은 사실의 다른 표현) 중복 표기를 막는 근거.
+  const edgeReasonToolsByCategory = new Map<PartCategory, Set<NonNullable<BuildGraphFocus['tool']>>>();
   graph.edges.forEach((edge) => {
-    if (!isProblemStatus(edge.status)) {
+    const edgeStatus = edge.status;
+    if (!isProblemStatus(edgeStatus)) {
       return;
     }
     const sourceCategory = categoryByNodeId.get(edge.source);
     const targetCategory = categoryByNodeId.get(edge.target);
     const tool = toolForGraphEdge(edge.id);
-    if (sourceCategory) {
-      addReason(sourceCategory, edge.status, edge.summary || edge.label, false, tool);
-    }
-    if (targetCategory) {
-      addReason(targetCategory, edge.status, edge.summary || edge.label, false, tool);
-    }
+    const text = (edge.summary || edge.label)?.trim();
+    const pushEdgeReason = (category?: PartCategory) => {
+      if (!category) {
+        return;
+      }
+      addReason(category, edgeStatus, edge.summary || edge.label, false, tool);
+      if (tool && text) {
+        const tools = edgeReasonToolsByCategory.get(category) ?? new Set<NonNullable<BuildGraphFocus['tool']>>();
+        tools.add(tool);
+        edgeReasonToolsByCategory.set(category, tools);
+      }
+    };
+    pushEdgeReason(sourceCategory);
+    pushEdgeReason(targetCategory);
   });
 
   graph.insights.forEach((insight) => {
@@ -3394,11 +3465,19 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
       return;
     }
     const status = insight.status;
+    const tool = insightTool(insight);
     insight.relatedNodeIds.forEach((nodeId) => {
       const category = categoryByNodeId.get(nodeId);
-      if (category) {
-        addReason(category, status, insight.description || insight.title, false);
+      if (!category) {
+        return;
       }
+      // 신규 계약(insight.tool)에서 같은 tool의 엣지 유래 사유가 이미 있으면 같은 사실을
+      // 다른 문장으로 반복하는 인사이트 description은 생략한다.
+      // tool이 없는 구 응답은 기존 동작 유지(id 패턴 추측으로 오억제하지 않는다).
+      if (tool && edgeReasonToolsByCategory.get(category)?.has(tool)) {
+        return;
+      }
+      addReason(category, status, insight.description || insight.title, false, tool);
     });
   });
 
@@ -3459,18 +3538,35 @@ function slotBoardProblems(graph?: BuildGraphResolveResponse): SlotBoardBannerPr
   graph.toolResults.forEach((result) =>
     addProblem(result.status, result.summary, [], isBuildGraphTool(result.tool) ? result.tool : undefined)
   );
+  // 팝오버와 같은 원칙 — tool별로 엣지 유래 사유가 어느 카테고리에 실렸는지 기록해,
+  // 같은 tool·같은 연루 카테고리의 인사이트 일반문 행이 중복으로 뜨지 않게 한다.
+  const edgeToolCategories = new Map<NonNullable<BuildGraphFocus['tool']>, Set<PartCategory>>();
   graph.edges.forEach((edge) => {
-    addProblem(edge.status, edge.summary || edge.label, [
-      categoryByNodeId.get(edge.source),
-      categoryByNodeId.get(edge.target)
-    ], toolForGraphEdge(edge.id));
+    const edgeCategories = [categoryByNodeId.get(edge.source), categoryByNodeId.get(edge.target)];
+    addProblem(edge.status, edge.summary || edge.label, edgeCategories, toolForGraphEdge(edge.id));
+    const tool = toolForGraphEdge(edge.id);
+    const text = (edge.summary || edge.label)?.trim();
+    if (tool && text && isProblemStatus(edge.status)) {
+      const categories = edgeToolCategories.get(tool) ?? new Set<PartCategory>();
+      edgeCategories.forEach((category) => {
+        if (category) {
+          categories.add(category);
+        }
+      });
+      edgeToolCategories.set(tool, categories);
+    }
   });
   graph.insights.forEach((insight) => {
-    addProblem(
-      insight.status,
-      insight.description || insight.title,
-      insight.relatedNodeIds.map((nodeId) => categoryByNodeId.get(nodeId))
-    );
+    const categories = insight.relatedNodeIds.map((nodeId) => categoryByNodeId.get(nodeId));
+    const tool = insightTool(insight);
+    // 신규 계약(insight.tool)에서만 억제하고, tool 없는 구 응답은 기존 동작 유지.
+    if (tool && isProblemStatus(insight.status)) {
+      const suppressedCategories = edgeToolCategories.get(tool);
+      if (suppressedCategories && categories.some((category) => category && suppressedCategories.has(category))) {
+        return;
+      }
+    }
+    addProblem(insight.status, insight.description || insight.title, categories, tool);
   });
 
   if (problemsByMessage.size === 0 && detectedStatus) {
@@ -3500,6 +3596,15 @@ function toolForGraphEdge(edgeId: string): BuildGraphFocus['tool'] | undefined {
 
 function isBuildGraphTool(value: string | undefined): value is NonNullable<BuildGraphFocus['tool']> {
   return value === 'compatibility' || value === 'power' || value === 'size' || value === 'performance' || value === 'price';
+}
+
+// 신규 계약: 인사이트가 사유별로 분리되며 tool 필드(size/power/compatibility 등)가 붙는다.
+// 구 응답에는 없으므로 안전하게 선택 필드로 읽는다(타입 계약 확장 전 호환 접근).
+function insightTool(
+  insight: BuildGraphResolveResponse['insights'][number]
+): BuildGraphFocus['tool'] | undefined {
+  const tool = (insight as { tool?: unknown }).tool;
+  return typeof tool === 'string' && isBuildGraphTool(tool) ? tool : undefined;
 }
 
 function toolForCategory(category: PartCategory): BuildGraphFocus['tool'] {
@@ -3562,7 +3667,9 @@ function uniqueProblemReasons(reasons: SlotProblemReason[]) {
   const unique: string[] = [];
   const seen = new Set<string>();
   sorted.forEach((reason) => {
-    const key = reason.text.replace(/\s+/g, ' ').trim();
+    // 배너(slotBoardProblems)의 dedupe 키와 동일한 정규화(공백 정리 + 소문자화)로 비교한다 —
+    // 표시 원문은 유지하고 비교 키만 정규화한다.
+    const key = reason.text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
     if (!key || seen.has(key)) {
       return;
     }
