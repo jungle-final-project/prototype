@@ -566,6 +566,34 @@ class GreenWebAsgReleaseRolloutTest(unittest.TestCase):
         self.assertNotIn(OLD_API_IMAGE, user_data)
         self.assertNotIn(f":{IMAGE_TAG}", user_data)
 
+    def test_rendered_user_data_exports_readonly_bootstrap_environment(
+        self,
+    ) -> None:
+        result = self._run(apply=True)
+
+        self.assertEqual(0, result.returncode, result.stdout)
+        user_data = self._launch_template_user_data()
+        self.assertIn(
+            "export AWS_ACCOUNT_ID AWS_REGION AWS_STS_REGIONAL_ENDPOINTS",
+            user_data,
+        )
+        self.assertIn(
+            'export BUILDGRAPH_RELEASE_MANIFEST="${RELEASE_MANIFEST}"',
+            user_data,
+        )
+        self.assertNotIn(
+            'AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}" \\\n',
+            user_data,
+        )
+        self.assertNotIn(
+            'AWS_REGION="${AWS_REGION}" \\\n',
+            user_data,
+        )
+        self.assertIn(
+            '"${APP_ROOT}/tools/bootstrap_green_asg.sh"',
+            user_data,
+        )
+
     def test_xgb_uses_same_helper_and_preserves_api_release(self) -> None:
         result = self._run("xgb-reranker", apply=True)
 
