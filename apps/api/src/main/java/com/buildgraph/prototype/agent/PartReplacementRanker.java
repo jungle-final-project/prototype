@@ -1,7 +1,7 @@
 package com.buildgraph.prototype.agent;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.PartAliasReviewService;
+import com.buildgraph.prototype.part.catalog.PartAliasReviewService;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;

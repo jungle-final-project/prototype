@@ -1,0 +1,52 @@
+services:
+  api-cache-none:
+    build:
+      context: ./apps/api
+    container_name: buildgraph-api-cache-none
+    environment: &k6-api-environment
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/buildgraph
+      SPRING_DATASOURCE_USERNAME: buildgraph
+      SPRING_DATASOURCE_PASSWORD: buildgraph
+      SPRING_FLYWAY_IGNORE_MIGRATION_PATTERNS: "*:missing"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: buildgraph
+      SPRING_RABBITMQ_PASSWORD: buildgraph
+      SPRING_MAIL_HOST: mailpit
+      SPRING_MAIL_PORT: 1025
+      RAG_VECTOR_ENABLED: "false"
+      PART_PRICE_REFRESH_ENABLED: "false"
+      PART_DANAWA_REFRESH_ENABLED: "false"
+      PART_DANAWA_TREND_REFRESH_ENABLED: "false"
+      PART_MANUFACTURER_RELEASE_INTAKE_ENABLED: "false"
+      SPRING_CACHE_TYPE: none
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      mailpit:
+        condition: service_started
+    ports:
+      - "8081:8080"
+
+  api-cache-caffeine:
+    build:
+      context: ./apps/api
+    container_name: buildgraph-api-cache-caffeine
+    environment:
+      <<: *k6-api-environment
+      SPRING_CACHE_TYPE: caffeine
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      mailpit:
+        condition: service_started
+    ports:
+      - "8082:8080"

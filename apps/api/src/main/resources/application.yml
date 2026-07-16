@@ -23,11 +23,13 @@ server:
 spring:
   application:
     name: buildgraph-api
+  cache:
+    type: ${SPRING_CACHE_TYPE:caffeine}
   lifecycle:
     # graceful shutdown 단계별 최대 대기. compose stop_grace_period(40s)보다 작아야 안전하다.
     timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/buildgraph}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/buildgraph}
     username: ${SPRING_DATASOURCE_USERNAME:buildgraph}
     password: ${SPRING_DATASOURCE_PASSWORD:buildgraph}
     hikari:
