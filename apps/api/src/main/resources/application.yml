@@ -139,6 +139,18 @@ openai:
   reasoning-effort: ${OPENAI_REASONING_EFFORT:medium}
   embedding-model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
   embedding-dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:1536}
+  # LLM HTTP 타임아웃 — OpenAI가 느리거나 먹통이어도 요청 스레드가 무한정 묶이지 않게 한다.
+  connect-timeout-ms: ${OPENAI_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${OPENAI_READ_TIMEOUT_MS:20000}
+
+# LLM 호출 격벽(bulkhead): OpenAI 호출을 전용 스레드풀에서 실행하고 동시 실행 수를 상한으로 묶는다.
+# build-chat은 동기 컨트롤러라 LLM 대기가 Tomcat 스레드(max 150)를 붙잡는데, 상한(pool+queue)을 넘는
+# LLM 요청은 대기 없이 거절돼 결정론 폴백으로 강등된다 — LLM 폭주가 로그인 등 빠른 요청을 굶기지 않는다.
+llm:
+  bulkhead:
+    max-concurrency: ${LLM_BULKHEAD_MAX_CONCURRENCY:8}
+    queue-capacity: ${LLM_BULKHEAD_QUEUE_CAPACITY:8}
+    call-timeout-ms: ${LLM_BULKHEAD_CALL_TIMEOUT_MS:22000}
 
 rag:
   vector:
