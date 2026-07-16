@@ -26,6 +26,8 @@ import {
   type SlotEdgeConfig
 } from './slotBoardConfig';
 import { FusedPlateArt } from './FusedPlateArt';
+import { useBoardDrag, useIsDesktop } from './useBoardDrag';
+import { createPortal } from 'react-dom';
 import { HelpTip } from './HelpTip';
 import { withObjectParticle } from './koreanParticle';
 
@@ -265,6 +267,7 @@ export function SlotBoard({
             statusByCategory={statusByCategory}
             flashingCategories={flashingCategories}
             isClosing={isMotherboardClosing}
+            onExplainIssue={explainIssue}
           />
         ) : isRelationMapVisible ? (
           <RelationMapBoardBody
@@ -280,6 +283,7 @@ export function SlotBoard({
             flashingCategories={flashingCategories}
             problems={boardProblems}
             onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
+            onExplainIssue={explainIssue}
           />
         ) : (
           <FusedSlotBoardBody
@@ -298,6 +302,7 @@ export function SlotBoard({
             flashingCategories={flashingCategories}
             problems={showFusedProblemOverlay ? boardProblems : []}
             onProblemExplain={(problem) => explainIssue(undefined, problem.tool)}
+            onExplainIssue={explainIssue}
           />
         )}
         {bodyOverlay ? (
@@ -309,12 +314,8 @@ export function SlotBoard({
               onClick={onBodyOverlayDismiss}
               className="absolute inset-0 z-40 hidden cursor-default bg-transparent lg:block"
             />
-            <div
-              data-testid="slot-candidate-overlay-layer"
-              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))]"
-            >
-              <div className="pointer-events-auto h-full w-full">{bodyOverlay}</div>
-            </div>
+            {/* 패널 자신이 위치를 관리한다 — 모바일은 바텀시트(fixed), 데스크톱은 body 포탈로 떠서 드래그·리사이즈. */}
+            {bodyOverlay}
           </>
         ) : null}
       </div>
@@ -470,7 +471,8 @@ function FusedSlotBoardBody({
   statusByCategory,
   flashingCategories,
   problems,
-  onProblemExplain
+  onProblemExplain,
+  onExplainIssue
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -487,7 +489,18 @@ function FusedSlotBoardBody({
   flashingCategories: Set<PartCategory>;
   problems: SlotBoardBannerProblem[];
   onProblemExplain?: (problem: SlotBoardBannerProblem) => void;
+  onExplainIssue: (category?: PartCategory, tool?: BuildGraphFocus['tool']) => void;
 }) {
+  // 장착 부품 클릭 = 관계/문제 설명 팝오버, 빈 슬롯 클릭 = 후보 패널(담기 동선 유지).
+  const { openRelation, popover } = useSlotRelationPopover({
+    items,
+    graph,
+    selectedCategory,
+    onSlotSelect,
+    onExplainIssue,
+    placementVariant: 'overlay'
+  });
+  const filledCategories = new Set(items.map((item) => item.category));
   return (
     // 보드 본체 — 배치도(기본): 실사 배치판(FusedPlateArt) 위에 부품 오버레이가 겹쳐진다(데스크톱 전용).
     // 모바일은 실장도와 같은 세로 카드 목록으로 폴백한다.
@@ -507,6 +520,7 @@ function FusedSlotBoardBody({
         statusByCategory={statusByCategory}
         flashingCategories={flashingCategories}
         onSlotSelect={onSlotSelect}
+        onPartOpen={openRelation}
         onRemoveItem={onRemoveItem}
         onUpdateQuantity={onUpdateQuantity}
         isRemovePending={isRemovePending}
@@ -534,12 +548,13 @@ function FusedSlotBoardBody({
             isAiDimmed={aiFocusCategories.length > 0 && !aiFocusCategories.includes(slot.category)}
             isNext={aiFocusCategories.length === 0 && nextCategory === slot.category}
             isFlashing={flashingCategories.has(slot.category)}
-            onSelect={() => onSlotSelect(slot.category)}
+            onSelect={() => (filledCategories.has(slot.category) ? openRelation(slot.category) : onSlotSelect(slot.category))}
             onRemoveItem={onRemoveItem}
             isRemovePending={isRemovePending}
           />
         ))}
       </div>
+      {popover}
     </div>
   );
 }
@@ -604,7 +619,8 @@ function RelationMapBoardBody({
   statusByCategory,
   flashingCategories,
   problems,
-  onProblemExplain
+  onProblemExplain,
+  onExplainIssue
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -618,10 +634,20 @@ function RelationMapBoardBody({
   flashingCategories: Set<PartCategory>;
   problems: SlotBoardBannerProblem[];
   onProblemExplain?: (problem: SlotBoardBannerProblem) => void;
+  onExplainIssue: (category?: PartCategory, tool?: BuildGraphFocus['tool']) => void;
 }) {
   const issueFocusCategory = firstProblemCategory(graph) ?? firstFilledCategory(items) ?? null;
   const focusCategory = selectedCategory ?? issueFocusCategory ?? 'GPU';
   const reasonByCategory = relationMapReasonsByCategory(graph);
+  // 장착 부품 클릭 = 관계/문제 설명 팝오버, 빈 슬롯 클릭 = 후보 패널(담기 동선 유지).
+  const { openRelation, popover } = useSlotRelationPopover({
+    items,
+    graph,
+    selectedCategory,
+    onSlotSelect,
+    onExplainIssue,
+    placementVariant: 'overlay'
+  });
   const { frameRef, stageSize } = useRelationMapStageSize();
   const stageStyle: CSSProperties | undefined = stageSize
     ? { width: stageSize.width, height: stageSize.height }
@@ -673,7 +699,7 @@ function RelationMapBoardBody({
                 isAiSpotlighted={aiFocusCategories.includes(category)}
                 isAiDimmed={aiFocusCategories.length > 0 && !aiFocusCategories.includes(category)}
                 isFlashing={flashingCategories.has(category)}
-                onSelect={() => onSlotSelect(category)}
+                onSelect={() => (categoryItems.length > 0 ? openRelation(category) : onSlotSelect(category))}
                 onRemoveItem={onRemoveItem}
                 isRemovePending={isRemovePending}
               />
@@ -681,6 +707,7 @@ function RelationMapBoardBody({
           })}
         </div>
       </div>
+      {popover}
     </div>
   );
 }
@@ -770,7 +797,7 @@ function RelationMapNode({
     ? items.length > 1 ? `${primaryItem.name} 외 ${items.length - 1}개` : primaryItem.name
     : '부품 선택 필요';
   const fullNameTitle = filled ? items.map((item) => item.name).join('\n') : itemTitle;
-  const statusLabel = relationMapNodeStatusLabel(filled, isFocused, status, reason?.label);
+  const statusLabel = relationMapNodeStatusLabel(filled, status, reason?.label);
   const layoutVars: CSSProperties = {
     ['--rx' as string]: `${layout.x}%`,
     ['--ry' as string]: `${layout.y}%`,
@@ -789,29 +816,26 @@ function RelationMapNode({
       data-ai-dimmed={isAiDimmed ? 'true' : 'false'}
       style={layoutVars}
       className={`group absolute left-[var(--rx)] top-[var(--ry)] z-20 h-[var(--rh)] w-[var(--rw)] rounded-md border bg-white text-left shadow-sm transition ${
-        isFocused
-          ? 'border-2 border-brand-blue shadow-md ring-2 ring-blue-100'
-          : status === 'FAIL'
-            ? 'border-2 border-red-400'
-            : status === 'WARN'
-              ? 'border-2 border-amber-300'
-              : filled
-                ? 'border-slate-200 hover:border-brand-blue/70'
-                : isNext
-                  ? 'border-brand-blue/50 bg-blue-50/40'
-                  : 'border-slate-200'
+        status === 'FAIL'
+          ? 'border-2 border-red-400'
+          : status === 'WARN'
+            ? 'border-2 border-amber-300'
+            : filled
+              ? 'border-slate-200 hover:border-brand-blue/70'
+              : isNext
+                ? 'border-brand-blue/50 bg-blue-50/40'
+                : 'border-slate-200'
       } ${isAiDimmed ? 'opacity-40' : ''} ${isFlashing ? 'slot-attach-flash' : ''}`}
     >
-      {isFocused ? (
-        <span className="absolute -left-3 -top-3 z-30 grid h-7 w-7 place-items-center rounded-full bg-brand-blue text-[13px] font-black text-white shadow-sm">
-          {slotOrderNumber(slot.category)}
-        </span>
-      ) : status === 'FAIL' || status === 'WARN' ? (
+      {status === 'FAIL' || status === 'WARN' ? (
         <span className={`absolute -left-3 -top-3 z-30 grid h-7 w-7 place-items-center rounded-full text-[13px] font-black text-white shadow-sm ${
           status === 'FAIL' ? 'bg-red-500' : 'bg-amber-500'
         }`}>
           {slotOrderNumber(slot.category)}
         </span>
+      ) : null}
+      {isSelected ? (
+        <SelectedStateBadge className={`absolute -top-3 z-30 ${status === 'FAIL' || status === 'WARN' ? 'left-5' : '-left-2'}`} />
       ) : null}
       <button
         type="button"
@@ -842,15 +866,13 @@ function RelationMapNode({
             <span
               title={reason?.detail ?? statusLabel}
               className={`max-w-[58%] shrink-0 truncate rounded-full px-2 py-0.5 text-[10px] font-black leading-none ${
-                isFocused
-                  ? 'bg-blue-50 text-brand-blue'
-                  : status === 'FAIL'
-                    ? 'bg-red-50 text-red-600'
-                    : status === 'WARN'
-                      ? 'bg-amber-50 text-amber-700'
-                      : filled
-                        ? 'bg-slate-50 text-slate-500'
-                        : 'bg-white text-slate-400'
+                status === 'FAIL'
+                  ? 'bg-red-50 text-red-600'
+                  : status === 'WARN'
+                    ? 'bg-amber-50 text-amber-700'
+                    : filled
+                      ? 'bg-slate-50 text-slate-500'
+                      : 'bg-white text-slate-400'
               }`}
             >
               {statusLabel}
@@ -1021,12 +1043,19 @@ type RelationMapReason = {
   detail: string;
 };
 
-function relationMapNodeStatusLabel(filled: boolean, isFocused: boolean, status?: 'PASS' | 'WARN' | 'FAIL', reasonLabel?: string) {
-  if (isFocused) return '선택 부품';
+function relationMapNodeStatusLabel(filled: boolean, status?: 'PASS' | 'WARN' | 'FAIL', reasonLabel?: string) {
   if (status === 'FAIL') return reasonLabel ?? '조정 필요';
   if (status === 'WARN') return reasonLabel ?? '주의';
   if (filled) return '문제없음';
   return '연결 없음';
+}
+
+function SelectedStateBadge({ className = '' }: { className?: string }) {
+  return (
+    <span className={`pointer-events-none inline-flex h-5 items-center rounded-full bg-[#de6c2d] px-2 text-[10px] font-black leading-none text-white shadow-[0_8px_18px_rgba(222,108,45,0.24)] ${className}`}>
+      선택됨
+    </span>
+  );
 }
 
 function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
@@ -1040,13 +1069,14 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
     status: string,
     text?: string,
     fallbackLabel?: string,
-    allowSameRankOverride = false
+    allowSameRankOverride = false,
+    tool?: BuildGraphFocus['tool']
   ) => {
     if (!category || !isProblemStatus(status)) {
       return;
     }
     const detail = text?.trim() || fallbackLabel || (status === 'FAIL' ? '조정 필요' : '주의 필요');
-    const label = compactRelationReasonLabel(detail, status, fallbackLabel);
+    const label = compactRelationReasonLabel(detail, status, fallbackLabel, tool);
     const current = reasons.get(category);
     if (
       !current ||
@@ -1059,7 +1089,7 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
 
   const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
   problemDetailsByCategory.forEach((detail, category) => {
-    addReason(category, detail.status, detail.reasons[0] ?? detail.title, detail.title, true);
+    addReason(category, detail.status, detail.reasons[0] ?? detail.title, detail.title, true, detail.tool);
   });
 
   if (reasons.size > 0) {
@@ -1074,7 +1104,9 @@ function relationMapReasonsByCategory(graph?: BuildGraphResolveResponse) {
     }
     const categories = relationMapToolCategories(result.tool);
     const fallbackLabel = relationMapToolReasonLabel(result.tool);
-    categories.forEach((category) => addReason(category, result.status, result.summary, fallbackLabel));
+    const normalizedTool = result.tool.toLowerCase();
+    const tool = isBuildGraphTool(normalizedTool) ? normalizedTool : undefined;
+    categories.forEach((category) => addReason(category, result.status, result.summary, fallbackLabel, false, tool));
   });
 
   return reasons;
@@ -1084,7 +1116,9 @@ function relationMapToolCategories(tool: string): PartCategory[] {
   const normalizedTool = tool.toLowerCase();
   if (normalizedTool === 'power') return ['CPU', 'GPU', 'PSU'];
   if (normalizedTool === 'size') return ['GPU', 'CASE', 'COOLER'];
-  if (normalizedTool === 'compatibility') return ['CPU', 'MOTHERBOARD', 'RAM', 'STORAGE'];
+  // compatibility 툴은 쿨러 검사(CPU 소켓 지원·TDP)도 포함한다 — edge-cpu-cooler-socket이
+  // compatibility로 매핑되는 것과 동일 근거. COOLER가 빠지면 쿨러 호환 문제가 오귀속된다.
+  if (normalizedTool === 'compatibility') return ['CPU', 'MOTHERBOARD', 'RAM', 'STORAGE', 'COOLER'];
   if (normalizedTool === 'performance') return ['CPU', 'GPU', 'RAM'];
   return [];
 }
@@ -1098,25 +1132,58 @@ function relationMapToolReasonLabel(tool: string) {
   return '확인 필요';
 }
 
-function compactRelationReasonLabel(text: string, status: SlotProblemStatus, fallbackLabel?: string) {
+function compactRelationReasonLabel(
+  text: string,
+  status: SlotProblemStatus,
+  fallbackLabel?: string,
+  tool?: BuildGraphFocus['tool']
+) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) {
     return fallbackLabel ?? (status === 'FAIL' ? '조정 필요' : '주의');
   }
-  if (/(전력|파워|정격|용량|W\b|와트)/i.test(normalized)) {
-    return status === 'WARN' && /(여유|빠듯|낮|확인)/.test(normalized) ? '전력 확인' : '전력 부족';
+  // tool/edge 식별이 있으면 문구 정규식 추측보다 우선한다 — "파워 깊이 초과"(치수 문제)가
+  // '파워' 단어 때문에 '전력 부족'으로 오분류되는 계열을 근본적으로 막는다.
+  if (tool === 'size') {
+    return compactDimensionReasonLabel(normalized, status);
   }
-  if (/(길이|케이스|장착|간섭|크기|높이|공간)/.test(normalized)) {
-    return /(초과|부족|불가|안\s*됨|어렵)/.test(normalized) || status === 'FAIL' ? '길이 초과' : '길이 확인';
+  if (tool === 'power') {
+    return compactPowerReasonLabel(normalized, status);
   }
+  if (tool === 'performance') {
+    return '성능 확인';
+  }
+  if (tool === 'price') {
+    return '예산 확인';
+  }
+  if (tool === 'compatibility') {
+    if (/(소켓|칩셋)/.test(normalized)) {
+      return status === 'FAIL' ? '소켓 불일치' : '소켓 확인';
+    }
+    if (/(메모리|램|RAM|DDR)/i.test(normalized)) {
+      return status === 'FAIL' ? '메모리 불일치' : '메모리 확인';
+    }
+    if (/(쿨러|발열|온도|냉각|TDP)/i.test(normalized)) {
+      return status === 'FAIL' ? '쿨링 부족' : '쿨링 확인';
+    }
+    return status === 'FAIL' ? '호환 불가' : '호환 확인';
+  }
+  // tool을 모르는 응답(구 계약·fallback)은 문구 기반 축약 유지 — 단, 구체 계열(소켓/메모리)을 먼저,
+  // 치수 계열을 전력·쿨링 계열보다 먼저 판별한다(정규식 순서 오분류 방지).
   if (/(소켓|칩셋)/.test(normalized)) {
     return status === 'FAIL' ? '소켓 불일치' : '소켓 확인';
   }
   if (/(메모리|램|RAM|DDR)/i.test(normalized)) {
     return status === 'FAIL' ? '메모리 불일치' : '메모리 확인';
   }
-  if (/(쿨러|발열|온도|냉각)/.test(normalized)) {
+  if (/(깊이|높이|길이|케이스|장착|간섭|크기|공간|규격)/.test(normalized)) {
+    return compactDimensionReasonLabel(normalized, status);
+  }
+  if (/(쿨러|발열|온도|냉각|TDP)/i.test(normalized)) {
     return status === 'FAIL' ? '쿨링 부족' : '쿨링 확인';
+  }
+  if (/(전력|파워|정격|용량|W\b|와트)/i.test(normalized)) {
+    return compactPowerReasonLabel(normalized, status);
   }
   if (/(성능|병목|프레임|FPS|점수)/i.test(normalized)) {
     return '성능 확인';
@@ -1129,6 +1196,24 @@ function compactRelationReasonLabel(text: string, status: SlotProblemStatus, fal
   }
   const compact = normalized.split(/[.:,·\-–—]/)[0]?.trim() || normalized;
   return compact.length > 8 ? `${compact.slice(0, 8)}…` : compact;
+}
+
+// 치수 계열 축약 라벨 — 깊이(파워)/높이(쿨러)/길이(GPU)를 구분하고, 폼팩터 계열은 '규격'으로 부른다.
+function compactDimensionReasonLabel(normalized: string, status: SlotProblemStatus) {
+  if (/(규격|폼\s*팩터)/i.test(normalized)) {
+    return status === 'FAIL' ? '규격 불일치' : '규격 확인';
+  }
+  const exceeded = status === 'FAIL' || /(초과|부족|불가|안\s*됨|어렵)/.test(normalized);
+  const axis = /깊이/.test(normalized) ? '깊이' : /높이/.test(normalized) ? '높이' : '길이';
+  return exceeded ? `${axis} 초과` : `${axis} 확인`;
+}
+
+function compactPowerReasonLabel(normalized: string, status: SlotProblemStatus) {
+  // 결측 WARN("파워 용량 정보가 없어 전력 검사를 못 했습니다")은 부족이 아니라 미확인이다.
+  if (/(정보가 없|못 했|미확인)/.test(normalized)) {
+    return '용량 미확인';
+  }
+  return status === 'WARN' && /(여유|빠듯|낮|확인)/.test(normalized) ? '전력 확인' : '전력 부족';
 }
 
 function isGenericRelationReasonLabel(label: string) {
@@ -1392,7 +1477,8 @@ function MotherboardSlotBoardBody({
   graph,
   statusByCategory,
   flashingCategories,
-  isClosing
+  isClosing,
+  onExplainIssue
 }: {
   items: QuoteDraftItem[];
   selectedCategory: PartCategory | null;
@@ -1406,7 +1492,18 @@ function MotherboardSlotBoardBody({
   statusByCategory: Map<string, 'PASS' | 'WARN' | 'FAIL'>;
   flashingCategories: Set<PartCategory>;
   isClosing: boolean;
+  onExplainIssue: (category?: PartCategory, tool?: BuildGraphFocus['tool']) => void;
 }) {
+  // 장착 부품 클릭 = 관계/문제 설명 팝오버, 빈 슬롯 클릭 = 후보 패널(담기 동선 유지).
+  const { openRelation, popover } = useSlotRelationPopover({
+    items,
+    graph,
+    selectedCategory,
+    onSlotSelect,
+    onExplainIssue,
+    placementVariant: 'overlay'
+  });
+  const filledCategories = new Set(items.map((item) => item.category));
   return (
     // 보드 본체 — 실장도: 추상 메인보드 평면도의 실장 지점(소켓/DIMM/PCIe/M.2)에 부품이 꽂히고,
     // 보드에 안 꽂히는 부품은 케이스 좌상·파워 좌하·쿨러 상단(소켓 위)에 도킹된다.
@@ -1442,11 +1539,12 @@ function MotherboardSlotBoardBody({
           isAiDimmed={aiFocusCategories.length > 0 && !aiFocusCategories.includes(slot.category)}
           isNext={aiFocusCategories.length === 0 && nextCategory === slot.category}
           isFlashing={flashingCategories.has(slot.category)}
-          onSelect={() => onSlotSelect(slot.category)}
+          onSelect={() => (filledCategories.has(slot.category) ? openRelation(slot.category) : onSlotSelect(slot.category))}
           onRemoveItem={onRemoveItem}
           isRemovePending={isRemovePending}
         />
       ))}
+      {popover}
     </div>
   );
 }
@@ -1484,8 +1582,14 @@ function IsometricSlotBoardBody({
   connectorAnchors?: ConnectorAnchors;
   onExplainIssue: (category?: PartCategory, tool?: BuildGraphFocus['tool']) => void;
 }) {
-  const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
-  const [activeProblemCategory, setActiveProblemCategory] = useState<PartCategory | null>(null);
+  const { openRelation, problemDetailsByCategory, popover } = useSlotRelationPopover({
+    items,
+    graph,
+    selectedCategory,
+    onSlotSelect,
+    onExplainIssue,
+    placementVariant: 'iso'
+  });
   const [hoveredCategory, setHoveredCategory] = useState<PartCategory | null>(null);
   const aiFocusSet = new Set(aiFocusCategories);
   const hasAiFocus = aiFocusSet.size > 0;
@@ -1495,37 +1599,7 @@ function IsometricSlotBoardBody({
     : new Set<PartCategory>(fallbackFocusCategory ? [fallbackFocusCategory] : []);
   const isMotherboardSceneFocused = focusCategories.has('MOTHERBOARD');
   const celebrating = useCompletionCelebration(items, statusByCategory);
-  const activeProblem = activeProblemCategory ? problemDetailsByCategory.get(activeProblemCategory) : undefined;
-
-  useEffect(() => {
-    if (activeProblemCategory && !problemDetailsByCategory.has(activeProblemCategory)) {
-      setActiveProblemCategory(null);
-    }
-  }, [activeProblemCategory, problemDetailsByCategory]);
-
-  useEffect(() => {
-    if (!activeProblem) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setActiveProblemCategory(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeProblem]);
-
-  const openProblemDetail = (category: PartCategory) => {
-    if (problemDetailsByCategory.has(category)) {
-      setActiveProblemCategory(category);
-    }
-  };
-
-  const showReplacementCandidates = (category: PartCategory) => {
-    setActiveProblemCategory(null);
-    onSlotSelect(category);
-  };
+  const filledCategories = new Set(items.map((item) => item.category));
 
   return (
     <div
@@ -1567,8 +1641,8 @@ function IsometricSlotBoardBody({
         focusCategories={focusCategories}
         aiFocusCategories={aiFocusSet}
         onHoverChange={setHoveredCategory}
-        onSlotSelect={onSlotSelect}
-        onProblemOpen={openProblemDetail}
+        onSlotSelect={openRelation}
+        onProblemOpen={openRelation}
       />
       <IsoCardConnector
         selectedCategory={hasAiFocus ? null : selectedCategory}
@@ -1591,20 +1665,13 @@ function IsometricSlotBoardBody({
           isHovered={!hasAiFocus && hoveredCategory === slot.category}
           cardsVisible={overlaysVisible || aiFocusSet.has(slot.category)}
           onHoverChange={setHoveredCategory}
-          onSelect={() => onSlotSelect(slot.category)}
-          onProblemOpen={openProblemDetail}
+          onSelect={() => (filledCategories.has(slot.category) ? openRelation(slot.category) : onSlotSelect(slot.category))}
+          onProblemOpen={openRelation}
           onRemoveItem={onRemoveItem}
           isRemovePending={isRemovePending}
         />
       ))}
-      {activeProblem ? (
-        <SlotProblemPopover
-          detail={activeProblem}
-          onClose={() => setActiveProblemCategory(null)}
-          onShowCandidates={() => showReplacementCandidates(activeProblem.category)}
-          onExplain={() => onExplainIssue(activeProblem.category, activeProblem.tool ?? toolForCategory(activeProblem.category))}
-        />
-      ) : null}
+      {popover}
       {celebrating ? (
         <div
           data-testid="slot-board-celebration"
@@ -1686,17 +1753,15 @@ function IsometricSlotCard({
     ['--sw' as string]: `${layout.w}%`,
     ['--sh' as string]: `${layout.h}%`
   };
-  const borderClass = isSelected
-    ? 'border-2 border-brand-blue ring-2 ring-blue-100 shadow-lg'
-    : slotStatus === 'FAIL'
-      ? 'border-2 border-red-500 ring-2 ring-red-300'
-      : slotStatus === 'WARN'
-        ? 'border-2 border-amber-400 ring-2 ring-amber-300'
-        : filled
-          ? 'border-2 border-emerald-400 ring-2 ring-emerald-300 hover:border-emerald-500'
-          : isNext
-            ? 'border-2 border-brand-blue bg-blue-50/40 hover:border-blue-600'
-            : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
+  const borderClass = slotStatus === 'FAIL'
+    ? 'border-2 border-red-500 ring-2 ring-red-300'
+    : slotStatus === 'WARN'
+      ? 'border-2 border-amber-400 ring-2 ring-amber-300'
+      : filled
+        ? 'border-2 border-emerald-400 ring-2 ring-emerald-300 hover:border-emerald-500'
+        : isNext
+          ? 'border-2 border-brand-blue bg-blue-50/40 hover:border-blue-600'
+          : 'border border-dashed border-slate-300 bg-white/75 hover:border-brand-blue';
   const surfaceClass = filled
     ? slotStatus === 'FAIL'
       ? 'bg-red-100'
@@ -1728,7 +1793,7 @@ function IsometricSlotCard({
       className={`group relative z-20 rounded-lg p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${surfaceClass} ${borderClass} ${
         isFlashing ? 'slot-attach-flash' : ''
       } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''} ${
-        filled && !isSelected ? statusPulseClass(slotStatus) : ''
+        filled ? statusPulseClass(slotStatus) : ''
       } ${isHovered ? 'slot-card-hovered' : ''} ${cardsVisible ? '' : 'lg:hidden'}`}
     >
       <button
@@ -1740,6 +1805,7 @@ function IsometricSlotCard({
         onBlur={() => onHoverChange(null)}
         className="absolute inset-0 z-0 h-full w-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       />
+      {isSelected ? <SelectedStateBadge className="absolute -top-2 left-2 z-30" /> : null}
       {isAiSpotlighted && !filled ? (
         <span
           data-testid={`slot-ai-unmounted-${slot.category}`}
@@ -1966,6 +2032,7 @@ function IsoPart({
       <div className="iso-part-shadow absolute inset-x-[14%] bottom-[4%] h-[14%] rounded-[50%] bg-slate-900/20 blur-[5px]" />
       <img src={iso.src} alt="" className={`iso-part-img relative w-full iso-part-img--${iso.mount}`} />
       <span aria-hidden="true" className={`iso-part-impact iso-part-impact--${iso.mount}`} />
+      {isSelected ? <SelectedStateBadge className="absolute -left-2 -top-3 z-20" /> : null}
       {problemDetail ? (
         <button
           type="button"
@@ -2252,42 +2319,82 @@ function isoProblemMarkerPlacement(category: PartCategory) {
   return { name: 'default', className: 'absolute -top-1 right-[6%]' };
 }
 
+// 팝오버 초기 화면 좌표 — 보드 스테이지의 placement% 지점을 fixed 좌표로 환산(데스크톱 포탈용).
+// 포탈 덕에 overflow-hidden인 스테이지 밖(화면 어디로든)으로도 드래그할 수 있다.
+function popoverFixedPosition(category: PartCategory, variant: SlotRelationPopoverPlacementVariant) {
+  const placement = relationPopoverPlacement(category, variant);
+  if (typeof document === 'undefined') {
+    return { placement, left: 24, top: 96 };
+  }
+  const stage = document.querySelector('[data-testid="slot-board-body-stage"]')
+    ?? document.querySelector('[data-testid="slot-board"]');
+  const rect = stage?.getBoundingClientRect();
+  if (!rect) {
+    return { placement, left: 24, top: 96 };
+  }
+  return {
+    placement,
+    left: rect.left + (rect.width * placement.left) / 100,
+    top: rect.top + (rect.height * placement.top) / 100
+  };
+}
+
+// 데스크톱 팝오버 공통 스타일: 우하단 꼭지점 네이티브 리사이즈 + 내용 스크롤 + 크기 상하한.
+const POPOVER_DESKTOP_CLASS =
+  'z-[80] rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl ' +
+  '[resize:both] overflow-auto min-w-[240px] min-h-[150px] max-w-[90vw] max-h-[80vh]';
+const POPOVER_MOBILE_CLASS =
+  'relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg';
+
 function SlotProblemPopover({
   detail,
+  counterparts,
   onClose,
   onShowCandidates,
-  onExplain
+  onExplain,
+  placementVariant = 'iso'
 }: {
   detail: SlotProblemDetail;
+  // 문제에 함께 연루된 상대 부품 — 예: 쿨러 높이 문제는 쿨러 교체 또는 케이스 교체로 풀 수 있다.
+  counterparts: Array<{ category: PartCategory; label: string }>;
   onClose: () => void;
-  onShowCandidates: () => void;
+  onShowCandidates: (category: PartCategory) => void;
   onExplain: () => void;
+  placementVariant?: SlotRelationPopoverPlacementVariant;
 }) {
-  const placement = slotProblemPopoverPlacement(detail.category);
-  const vars: CSSProperties = {
-    ['--problem-x' as string]: `${placement.left}%`,
-    ['--problem-y' as string]: `${placement.top}%`,
-    ['--problem-width' as string]: placement.width
-  };
+  const isDesktop = useIsDesktop();
+  // 호출부에서 key=category로 리마운트되므로 초기 좌표는 마운트 시 1회 계산이면 충분하다.
+  const [position] = useState(() => popoverFixedPosition(detail.category, placementVariant));
+  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({ resetKey: detail.category });
+  const placement = position.placement;
+  const style: CSSProperties = isDesktop
+    ? { position: 'fixed', left: position.left, top: position.top, width: placement.width, ...dragStyle }
+    : {};
   const toneClass = detail.status === 'FAIL'
     ? 'border-red-200 bg-red-50 text-red-700'
     : 'border-amber-200 bg-amber-50 text-amber-700';
-  return (
+  const popover = (
     <section
+      ref={targetRef}
       data-testid="slot-problem-popover"
       data-placement={placement.name}
       role="dialog"
       aria-label={`${detail.categoryLabel} 문제 사유`}
-      style={vars}
-      className="relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg lg:absolute lg:left-[var(--problem-x)] lg:top-[var(--problem-y)] lg:mt-0 lg:w-[var(--problem-width)]"
+      style={style}
+      className={isDesktop ? POPOVER_DESKTOP_CLASS : POPOVER_MOBILE_CLASS}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div
+        data-testid="slot-problem-popover-handle"
+        title="드래그해서 옮기고, 더블클릭하면 원위치로 돌아옵니다"
+        onPointerDown={startDrag}
+        onDoubleClick={resetDrag}
+        className={`flex items-start justify-between gap-3 select-none lg:touch-none ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'}`}
+      >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${toneClass}`}>{detail.title}</span>
             <span className="text-[11px] font-black text-slate-500">{detail.categoryLabel}</span>
           </div>
-          <h3 className="mt-1 text-sm font-black text-commerce-ink">왜 안 맞는지 확인해 보세요</h3>
         </div>
         <button
           type="button"
@@ -2307,9 +2414,19 @@ function SlotProblemPopover({
       </ul>
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <ExplainIssueButton onClick={onExplain} />
+        {counterparts.map((counterpart) => (
+          <button
+            key={counterpart.category}
+            type="button"
+            onClick={() => onShowCandidates(counterpart.category)}
+            className="rounded border border-brand-blue bg-white px-3 py-2 text-[11px] font-black text-brand-blue transition hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+          >
+            {counterpart.label} 후보 보기
+          </button>
+        ))}
         <button
           type="button"
-          onClick={onShowCandidates}
+          onClick={() => onShowCandidates(detail.category)}
           className="rounded bg-brand-blue px-3 py-2 text-[11px] font-black text-white transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
         >
           교체 후보 보기
@@ -2317,6 +2434,7 @@ function SlotProblemPopover({
       </div>
     </section>
   );
+  return isDesktop ? createPortal(popover, document.body) : popover;
 }
 
 function slotProblemPopoverPlacement(category: PartCategory) {
@@ -2338,6 +2456,317 @@ function slotProblemPopoverPlacement(category: PartCategory) {
     top: clampNumber(iso.y + 1, 3, 70),
     width: '300px'
   };
+}
+
+// 팝오버 좌표 변형: 'iso'는 3D 아트 좌표 기반(기존), 그 외 보드 뷰는 아트 좌표가 없어 좌상단 고정 오버레이.
+type SlotRelationPopoverPlacementVariant = 'iso' | 'overlay';
+
+function relationPopoverPlacement(category: PartCategory, variant: SlotRelationPopoverPlacementVariant) {
+  if (variant === 'iso') {
+    return slotProblemPopoverPlacement(category);
+  }
+  return { name: 'overlay', left: 3, top: 5, width: '320px' };
+}
+
+// 부품이 현재 구성과 맺는 관계 한 줄 요약. 상태어는 전 화면 공통 사용자 언어(전문용어 미노출).
+type SlotRelationLine = {
+  key: string;
+  counterpartLabel: string;
+  status: 'PASS' | 'WARN' | 'FAIL' | 'PENDING';
+};
+
+const RELATION_LINE_TEXT: Record<SlotRelationLine['status'], string> = {
+  PASS: '호환 가능',
+  WARN: '간섭 주의',
+  FAIL: '장착 불가',
+  PENDING: '미장착 — 담으면 함께 검사됩니다'
+};
+
+const RELATION_LINE_DOT_CLASS: Record<SlotRelationLine['status'], string> = {
+  PASS: 'bg-emerald-500',
+  WARN: 'bg-amber-400',
+  FAIL: 'bg-red-500',
+  PENDING: 'bg-slate-300'
+};
+
+function relationLineStatusRank(status: SlotRelationLine['status']): number {
+  if (status === 'FAIL') return 3;
+  if (status === 'WARN') return 2;
+  if (status === 'PASS') return 1;
+  return 0;
+}
+
+/** 그래프 엣지에서 해당 카테고리가 연루된 관계를 상대 부품 기준으로 접는다(같은 상대 다중 엣지는 최악 상태). */
+function slotRelationLinesFor(
+  category: PartCategory,
+  graph: BuildGraphResolveResponse | undefined,
+  items: QuoteDraftItem[]
+): SlotRelationLine[] {
+  if (!graph) {
+    return [];
+  }
+  const categoryByNodeId = graphCategoryByNodeId(graph);
+  const filledCategories = new Set(items.map((item) => item.category));
+  const byCounterpart = new Map<PartCategory, SlotRelationLine['status']>();
+  graph.edges.forEach((edge) => {
+    const source = categoryByNodeId.get(edge.source);
+    const target = categoryByNodeId.get(edge.target);
+    const counterpart = source === category ? target : target === category ? source : undefined;
+    if (!counterpart || counterpart === category) {
+      return;
+    }
+    const status: SlotRelationLine['status'] = !filledCategories.has(counterpart)
+      ? 'PENDING'
+      : edge.status === 'FAIL' || edge.status === 'WARN' || edge.status === 'PASS'
+        ? edge.status
+        : 'PENDING';
+    const current = byCounterpart.get(counterpart);
+    if (!current || relationLineStatusRank(status) > relationLineStatusRank(current)) {
+      byCounterpart.set(counterpart, status);
+    }
+  });
+  return SLOT_CONFIGS
+    .filter((slot) => byCounterpart.has(slot.category))
+    .map((slot) => ({
+      key: slot.category,
+      counterpartLabel: slot.label,
+      status: byCounterpart.get(slot.category) as SlotRelationLine['status']
+    }));
+}
+
+/** 문제 없는 부품용 관계 요약 팝오버 — 초록 톤, 이 부품이 구성과 어떻게 맞물리는지 안내. */
+function SlotRelationOkPopover({
+  category,
+  categoryLabel,
+  relations,
+  onClose,
+  onShowCandidates,
+  placementVariant
+}: {
+  category: PartCategory;
+  categoryLabel: string;
+  relations: SlotRelationLine[];
+  onClose: () => void;
+  onShowCandidates: () => void;
+  placementVariant: SlotRelationPopoverPlacementVariant;
+}) {
+  const isDesktop = useIsDesktop();
+  // 호출부에서 key=category로 리마운트되므로 초기 좌표는 마운트 시 1회 계산이면 충분하다.
+  const [position] = useState(() => popoverFixedPosition(category, placementVariant));
+  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({ resetKey: category });
+  const placement = position.placement;
+  const style: CSSProperties = isDesktop
+    ? { position: 'fixed', left: position.left, top: position.top, width: placement.width, ...dragStyle }
+    : {};
+  const popover = (
+    <section
+      ref={targetRef}
+      data-testid="slot-relation-popover"
+      data-placement={placement.name}
+      role="dialog"
+      aria-label={`${categoryLabel} 관계 상태`}
+      style={style}
+      className={isDesktop ? POPOVER_DESKTOP_CLASS : POPOVER_MOBILE_CLASS}
+    >
+      <div
+        data-testid="slot-relation-popover-handle"
+        title="드래그해서 옮기고, 더블클릭하면 원위치로 돌아옵니다"
+        onPointerDown={startDrag}
+        onDoubleClick={resetDrag}
+        className={`flex items-start justify-between gap-3 select-none lg:touch-none ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'}`}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">호환 가능</span>
+            <span className="text-[11px] font-black text-slate-500">{categoryLabel}</span>
+          </div>
+          <h3 className="mt-1 text-sm font-black text-commerce-ink">현재 구성과의 관계</h3>
+        </div>
+        <button
+          type="button"
+          aria-label="관계 상태 닫기"
+          onClick={onClose}
+          className="shrink-0 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-black text-slate-500 transition hover:border-slate-300 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+        >
+          닫기
+        </button>
+      </div>
+      {relations.length > 0 ? (
+        <ul className="mt-2 space-y-1.5">
+          {relations.map((relation) => (
+            <li
+              key={relation.key}
+              className="flex items-center gap-2 break-keep rounded bg-slate-50 px-2 py-1.5 text-[11px] font-bold leading-5 text-slate-700"
+            >
+              <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${RELATION_LINE_DOT_CLASS[relation.status]}`} />
+              {relation.counterpartLabel} · {RELATION_LINE_TEXT[relation.status]}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 break-keep rounded bg-slate-50 px-2 py-1.5 text-[11px] font-bold leading-5 text-slate-700">
+          현재 구성과 문제없이 맞물립니다.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={onShowCandidates}
+          className="rounded bg-brand-blue px-3 py-2 text-[11px] font-black text-white transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+        >
+          다른 상품 보기
+        </button>
+      </div>
+    </section>
+  );
+  return isDesktop ? createPortal(popover, document.body) : popover;
+}
+
+/**
+ * 배치도 공용 "부품 관계 설명" 팝오버 훅 — 장착된 부품 클릭 시 문제면 사유(SlotProblemPopover),
+ * 정상이면 관계 요약(SlotRelationOkPopover)을 연다. 후보 패널(검색)은 빈 슬롯·체크리스트·
+ * 팝오버의 교체 버튼으로만 열린다. 보드 뷰마다 한 번씩 쓰며 상태는 뷰 로컬(한 번에 한 뷰만 렌더).
+ */
+function useSlotRelationPopover({
+  items,
+  graph,
+  selectedCategory,
+  onSlotSelect,
+  onExplainIssue,
+  placementVariant
+}: {
+  items: QuoteDraftItem[];
+  graph?: BuildGraphResolveResponse;
+  selectedCategory: PartCategory | null;
+  onSlotSelect: (category: PartCategory) => void;
+  onExplainIssue: (category?: PartCategory, tool?: BuildGraphFocus['tool']) => void;
+  placementVariant: SlotRelationPopoverPlacementVariant;
+}) {
+  const problemDetailsByCategory = slotProblemDetailsByCategory(graph);
+  const [activeCategory, setActiveCategory] = useState<PartCategory | null>(null);
+  const filledCategories = new Set(items.map((item) => item.category));
+  const isActiveFilled = activeCategory ? filledCategories.has(activeCategory) : false;
+
+  // 부품이 빠지면(제거/교체 진행) 설명 대상이 사라지므로 닫는다.
+  useEffect(() => {
+    if (activeCategory && !isActiveFilled) {
+      setActiveCategory(null);
+    }
+  }, [activeCategory, isActiveFilled]);
+
+  // 후보 패널이 다른 경로(체크리스트 등)로 열리면 겹침을 피해 닫는다.
+  useEffect(() => {
+    if (selectedCategory) {
+      setActiveCategory(null);
+    }
+  }, [selectedCategory]);
+
+  useEffect(() => {
+    if (!activeCategory) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveCategory(null);
+      }
+    };
+    // 바깥 클릭 닫기 — 다른 부품 클릭은 pointerdown이 먼저 닫고 이어지는 클릭이 새로 연다.
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-testid="slot-problem-popover"], [data-testid="slot-relation-popover"]')) {
+        return;
+      }
+      setActiveCategory(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [activeCategory]);
+
+  const openRelation = (category: PartCategory) => {
+    if (filledCategories.has(category)) {
+      // 토글 닫기는 두지 않는다 — 바깥클릭 닫기가 pointerdown에서 먼저 닫아버려
+      // 같은 부품 재클릭이 '닫힘→다시 열림'으로 뒤집히는 레이스가 생긴다.
+      setActiveCategory(category);
+    }
+  };
+
+  const showCandidates = (category: PartCategory) => {
+    setActiveCategory(null);
+    onSlotSelect(category);
+  };
+
+  const activeProblem = activeCategory ? problemDetailsByCategory.get(activeCategory) : undefined;
+  const activeSlot = activeCategory ? slotConfigFor(activeCategory) : undefined;
+  const popover = !activeCategory || !isActiveFilled ? null : activeProblem ? (
+    <SlotProblemPopover
+      key={activeProblem.category}
+      detail={activeProblem}
+      counterparts={problemCounterpartsFor(activeProblem.category, graph)}
+      placementVariant={placementVariant}
+      onClose={() => setActiveCategory(null)}
+      onShowCandidates={showCandidates}
+      onExplain={() => onExplainIssue(activeProblem.category, activeProblem.tool ?? toolForCategory(activeProblem.category))}
+    />
+  ) : (
+    <SlotRelationOkPopover
+      key={activeCategory}
+      category={activeCategory}
+      categoryLabel={activeSlot?.label ?? activeCategory}
+      relations={slotRelationLinesFor(activeCategory, graph, items)}
+      placementVariant={placementVariant}
+      onClose={() => setActiveCategory(null)}
+      onShowCandidates={() => showCandidates(activeCategory)}
+    />
+  );
+
+  return { openRelation, problemDetailsByCategory, popover };
+}
+
+/** 문제에 함께 연루된 상대 부품 — 문제 엣지의 반대편 + 문제 인사이트의 관련 부품(자기 제외). */
+function problemCounterpartsFor(
+  category: PartCategory,
+  graph: BuildGraphResolveResponse | undefined
+): Array<{ category: PartCategory; label: string }> {
+  if (!graph) {
+    return [];
+  }
+  const categoryByNodeId = graphCategoryByNodeId(graph);
+  const counterparts = new Set<PartCategory>();
+  graph.edges.forEach((edge) => {
+    if (!isProblemStatus(edge.status)) {
+      return;
+    }
+    const source = categoryByNodeId.get(edge.source);
+    const target = categoryByNodeId.get(edge.target);
+    if (source === category && target && target !== category) {
+      counterparts.add(target);
+    }
+    if (target === category && source && source !== category) {
+      counterparts.add(source);
+    }
+  });
+  graph.insights.forEach((insight) => {
+    if (!isProblemStatus(insight.status)) {
+      return;
+    }
+    const related = insight.relatedNodeIds
+      .map((nodeId) => categoryByNodeId.get(nodeId))
+      .filter((value): value is PartCategory => Boolean(value));
+    if (related.includes(category)) {
+      related.forEach((value) => {
+        if (value !== category) {
+          counterparts.add(value);
+        }
+      });
+    }
+  });
+  return SLOT_CONFIGS
+    .filter((slot) => counterparts.has(slot.category))
+    .map((slot) => ({ category: slot.category, label: slot.label }));
 }
 
 // 추상 메인보드 평면도 — 그래파이트 트레이 위의 실제 PCB처럼 어두운 기판 + 밝은 트레이스/소켓.
@@ -2437,9 +2866,7 @@ function MotherboardSlot({
     ['--plug-dx' as string]: `${(outwardX / outwardLength) * 26}px`,
     ['--plug-dy' as string]: `${(outwardY / outwardLength) * 26}px`
   };
-  const borderClass = isSelected
-    ? 'border-2 border-brand-blue ring-2 ring-blue-100 shadow-lg'
-    : slotStatus === 'FAIL'
+  const borderClass = slotStatus === 'FAIL'
       ? 'border-2 border-red-500 ring-2 ring-red-300'
       : slotStatus === 'WARN'
         ? 'border-2 border-amber-400 ring-2 ring-amber-300'
@@ -2482,7 +2909,7 @@ function MotherboardSlot({
       className={`group relative z-20 rounded-lg p-2 text-left transition backdrop-blur-[1px] lg:absolute lg:left-[var(--sx)] lg:top-[var(--sy)] lg:h-[var(--sh)] lg:w-[var(--sw)] ${surfaceClass} ${borderClass} ${
         isFlashing ? 'slot-attach-flash slot-plug-in' : ''
       } ${isNext && !isSelected ? 'slot-empty-pulse slot-hint-shimmer' : ''} ${
-        filled && !isSelected ? statusPulseClass(slotStatus) : ''
+        filled ? statusPulseClass(slotStatus) : ''
       }`}
     >
       <button
@@ -2492,6 +2919,7 @@ function MotherboardSlot({
         onClick={onSelect}
         className="absolute inset-0 z-0 h-full w-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
       />
+      {isSelected ? <SelectedStateBadge className="absolute -top-2 left-2 z-30" /> : null}
       {isAiSpotlighted && !filled ? (
         <span
           data-testid={`slot-ai-unmounted-${slot.category}`}
@@ -2995,25 +3423,40 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
 
   graph.nodes.forEach((node) => {
     const category = slotCategoryFromGraphCategory(node.category);
-    if (category && isProblemStatus(node.status)) {
+    // CONSTRAINT 노드는 category가 고정이라(예: constraint-compatibility=MOTHERBOARD) 무관한 슬롯에
+    // 사유 0개짜리 유령 '장착 불가' 팝오버를 만든다 — 뱃지(partStatusByCategory)와 동일하게
+    // PART 노드만 슬롯 상태로 승격한다(PART status는 엣지 최악치라 정보 손실 없음).
+    if (node.type === 'PART' && category && isProblemStatus(node.status)) {
       // Node detail is a neutral spec value; use relationship summaries as warning reasons.
       ensure(category, node.status, true);
     }
   });
 
+  // 카테고리별로 어떤 tool의 엣지 사유(수치문)가 이미 실렸는지 기록 —
+  // 같은 tool의 인사이트 일반문(같은 사실의 다른 표현) 중복 표기를 막는 근거.
+  const edgeReasonToolsByCategory = new Map<PartCategory, Set<NonNullable<BuildGraphFocus['tool']>>>();
   graph.edges.forEach((edge) => {
-    if (!isProblemStatus(edge.status)) {
+    const edgeStatus = edge.status;
+    if (!isProblemStatus(edgeStatus)) {
       return;
     }
     const sourceCategory = categoryByNodeId.get(edge.source);
     const targetCategory = categoryByNodeId.get(edge.target);
     const tool = toolForGraphEdge(edge.id);
-    if (sourceCategory) {
-      addReason(sourceCategory, edge.status, edge.summary || edge.label, false, tool);
-    }
-    if (targetCategory) {
-      addReason(targetCategory, edge.status, edge.summary || edge.label, false, tool);
-    }
+    const text = (edge.summary || edge.label)?.trim();
+    const pushEdgeReason = (category?: PartCategory) => {
+      if (!category) {
+        return;
+      }
+      addReason(category, edgeStatus, edge.summary || edge.label, false, tool);
+      if (tool && text) {
+        const tools = edgeReasonToolsByCategory.get(category) ?? new Set<NonNullable<BuildGraphFocus['tool']>>();
+        tools.add(tool);
+        edgeReasonToolsByCategory.set(category, tools);
+      }
+    };
+    pushEdgeReason(sourceCategory);
+    pushEdgeReason(targetCategory);
   });
 
   graph.insights.forEach((insight) => {
@@ -3021,11 +3464,19 @@ function slotProblemDetailsByCategory(graph?: BuildGraphResolveResponse) {
       return;
     }
     const status = insight.status;
+    const tool = insightTool(insight);
     insight.relatedNodeIds.forEach((nodeId) => {
       const category = categoryByNodeId.get(nodeId);
-      if (category) {
-        addReason(category, status, insight.description || insight.title, false);
+      if (!category) {
+        return;
       }
+      // 신규 계약(insight.tool)에서 같은 tool의 엣지 유래 사유가 이미 있으면 같은 사실을
+      // 다른 문장으로 반복하는 인사이트 description은 생략한다.
+      // tool이 없는 구 응답은 기존 동작 유지(id 패턴 추측으로 오억제하지 않는다).
+      if (tool && edgeReasonToolsByCategory.get(category)?.has(tool)) {
+        return;
+      }
+      addReason(category, status, insight.description || insight.title, false, tool);
     });
   });
 
@@ -3086,18 +3537,35 @@ function slotBoardProblems(graph?: BuildGraphResolveResponse): SlotBoardBannerPr
   graph.toolResults.forEach((result) =>
     addProblem(result.status, result.summary, [], isBuildGraphTool(result.tool) ? result.tool : undefined)
   );
+  // 팝오버와 같은 원칙 — tool별로 엣지 유래 사유가 어느 카테고리에 실렸는지 기록해,
+  // 같은 tool·같은 연루 카테고리의 인사이트 일반문 행이 중복으로 뜨지 않게 한다.
+  const edgeToolCategories = new Map<NonNullable<BuildGraphFocus['tool']>, Set<PartCategory>>();
   graph.edges.forEach((edge) => {
-    addProblem(edge.status, edge.summary || edge.label, [
-      categoryByNodeId.get(edge.source),
-      categoryByNodeId.get(edge.target)
-    ], toolForGraphEdge(edge.id));
+    const edgeCategories = [categoryByNodeId.get(edge.source), categoryByNodeId.get(edge.target)];
+    addProblem(edge.status, edge.summary || edge.label, edgeCategories, toolForGraphEdge(edge.id));
+    const tool = toolForGraphEdge(edge.id);
+    const text = (edge.summary || edge.label)?.trim();
+    if (tool && text && isProblemStatus(edge.status)) {
+      const categories = edgeToolCategories.get(tool) ?? new Set<PartCategory>();
+      edgeCategories.forEach((category) => {
+        if (category) {
+          categories.add(category);
+        }
+      });
+      edgeToolCategories.set(tool, categories);
+    }
   });
   graph.insights.forEach((insight) => {
-    addProblem(
-      insight.status,
-      insight.description || insight.title,
-      insight.relatedNodeIds.map((nodeId) => categoryByNodeId.get(nodeId))
-    );
+    const categories = insight.relatedNodeIds.map((nodeId) => categoryByNodeId.get(nodeId));
+    const tool = insightTool(insight);
+    // 신규 계약(insight.tool)에서만 억제하고, tool 없는 구 응답은 기존 동작 유지.
+    if (tool && isProblemStatus(insight.status)) {
+      const suppressedCategories = edgeToolCategories.get(tool);
+      if (suppressedCategories && categories.some((category) => category && suppressedCategories.has(category))) {
+        return;
+      }
+    }
+    addProblem(insight.status, insight.description || insight.title, categories, tool);
   });
 
   if (problemsByMessage.size === 0 && detectedStatus) {
@@ -3127,6 +3595,15 @@ function toolForGraphEdge(edgeId: string): BuildGraphFocus['tool'] | undefined {
 
 function isBuildGraphTool(value: string | undefined): value is NonNullable<BuildGraphFocus['tool']> {
   return value === 'compatibility' || value === 'power' || value === 'size' || value === 'performance' || value === 'price';
+}
+
+// 신규 계약: 인사이트가 사유별로 분리되며 tool 필드(size/power/compatibility 등)가 붙는다.
+// 구 응답에는 없으므로 안전하게 선택 필드로 읽는다(타입 계약 확장 전 호환 접근).
+function insightTool(
+  insight: BuildGraphResolveResponse['insights'][number]
+): BuildGraphFocus['tool'] | undefined {
+  const tool = (insight as { tool?: unknown }).tool;
+  return typeof tool === 'string' && isBuildGraphTool(tool) ? tool : undefined;
 }
 
 function toolForCategory(category: PartCategory): BuildGraphFocus['tool'] {
@@ -3189,7 +3666,9 @@ function uniqueProblemReasons(reasons: SlotProblemReason[]) {
   const unique: string[] = [];
   const seen = new Set<string>();
   sorted.forEach((reason) => {
-    const key = reason.text.replace(/\s+/g, ' ').trim();
+    // 배너(slotBoardProblems)의 dedupe 키와 동일한 정규화(공백 정리 + 소문자화)로 비교한다 —
+    // 표시 원문은 유지하고 비교 키만 정규화한다.
+    const key = reason.text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
     if (!key || seen.has(key)) {
       return;
     }

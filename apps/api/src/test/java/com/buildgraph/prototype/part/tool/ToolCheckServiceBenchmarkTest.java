@@ -145,7 +145,9 @@ class ToolCheckServiceBenchmarkTest {
         Map<String, Object> details = (Map<String, Object>) size.get("details");
 
         assertThat(size.get("status")).isEqualTo("FAIL");
-        assertThat(size.get("summary")).isEqualTo("케이스 장착 한계를 초과해 해당 조합은 장착할 수 없습니다.");
+        // FAIL 요약은 걸린 조건 전부의 수치 문구를 " · "로 join한다 — 정보 없는 일반문("케이스 장착 한계를 초과해…")을 내지 않는다.
+        assertThat(size.get("summary")).isEqualTo(
+                "GPU 길이(360mm)가 케이스 허용(330mm)을 초과합니다 · 쿨러 높이(170mm)가 케이스 허용(160mm)을 초과합니다");
         assertThat(details.get("gpuHeadroomMm")).isEqualTo(-30);
         assertThat(details.get("coolerHeadroomMm")).isEqualTo(-10);
     }

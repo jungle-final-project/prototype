@@ -197,6 +197,8 @@ public class UserQueryService {
         if (usedGoogleVerification) {
             googleOAuthRuntimeStore.consumeProfileVerificationToken(googleVerificationToken);
         }
+        // name은 requireUser 캐시(CurrentUser)에 포함된다 — TTL을 기다리지 않고 즉시 반영.
+        currentUserService.evictCachedUser(currentUser.id());
         return userMap(findByInternalId(currentUser.internalId()));
     }
 

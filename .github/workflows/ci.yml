@@ -118,7 +118,9 @@ jobs:
           python -m unittest \
             tools.test_validate_openapi \
             tools.test_validate_infrastructure_separation \
-            tools.test_validate_green_deployment
+            tools.test_validate_green_deployment \
+            tools.test_bootstrap_green_asg \
+            tools.test_prepare_green_asg_builder
 
   compose:
     name: compose

@@ -1,15 +1,44 @@
 server:
   port: 8080
+  # 배포 시 SIGTERM 후 진행 중 요청을 마치고 종료(요청 유실 방지). compose의 stop_grace_period와
+  # 함께 동작해야 하며, 그 값이 아래 timeout보다 커야 graceful이 SIGKILL로 잘리지 않는다.
+  shutdown: graceful
+  tomcat:
+    threads:
+      # HTTP worker 스레드. DB pool(Hikari)보다 많으면 DB 대기 요청이 JVM 안에서 큐잉된다.
+      # 단일 소형 EC2 시작값(부하테스트로 A/B). 스레드당 스택 ~1MB이므로 컨테이너 mem 예산과 함께 본다.
+      max: ${TOMCAT_THREADS_MAX:150}
+      min-spare: ${TOMCAT_THREADS_MIN_SPARE:20}
+    # worker가 모두 바쁠 때 OS 소켓 백로그 큐 길이. 초과 연결은 즉시 거절되어 빠른 실패를 유도한다.
+    accept-count: ${TOMCAT_ACCEPT_COUNT:100}
+    # nginx upstream keepalive(64 conn, 30s idle, 1000 req)와 정렬. Tomcat이 nginx보다 항상
+    # 나중에 닫도록 상한을 크게 둔다 — 같은 값(1000/30s)이면 양쪽이 동시에 닫는 경계에서
+    # 재사용 커넥션에 실린 비멱등 POST가 502가 되는 레이스가 생긴다.
+    max-keep-alive-requests: ${TOMCAT_MAX_KEEP_ALIVE_REQUESTS:10000}
+    keep-alive-timeout: ${TOMCAT_KEEP_ALIVE_TIMEOUT_MS:75000}
+    # tomcat.threads.busy 등 스레드풀 메트릭 노출(부하테스트 포화 지점 판별용).
+    mbeanregistry:
+      enabled: true
 
 spring:
   application:
     name: buildgraph-api
   cache:
     type: ${SPRING_CACHE_TYPE:none}
+  lifecycle:
+    # graceful shutdown 단계별 최대 대기. compose stop_grace_period(40s)보다 작아야 안전하다.
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/buildgraph}
     username: ${SPRING_DATASOURCE_USERNAME:buildgraph}
     password: ${SPRING_DATASOURCE_PASSWORD:buildgraph}
+    hikari:
+      # DB 커넥션 풀. 단일 API 인스턴스 × 15는 Postgres 기본 max_connections(100) 대비 여유.
+      # connection-timeout: 풀이 포화면 1.5초 내 커넥션을 못 받을 때 빠르게 실패(무한 대기 방지).
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:15}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:1500}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:800}
   sql:
     init:
       mode: never
@@ -48,7 +77,20 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # metrics는 무의존성(actuator 내장 micrometer) — nginx가 /actuator를 라우팅하지 않고
+        # api 포트는 미공개라 도커 네트워크 내부(수집기 docker exec)에서만 접근된다.
+        include: health,info,metrics
+  health:
+    mail:
+      # mail 인디케이터가 aggregate에 끼면 mailpit 없는 스택(api-only compose)에서 /actuator/health가
+      # 상시 503이 된다. 메일은 데모 부가 기능 — 헬스 판정에서 제외(운영 판정은 /api/health).
+      enabled: ${MANAGEMENT_HEALTH_MAIL_ENABLED:false}
+  metrics:
+    distribution:
+      percentiles:
+        # /actuator/metrics/http.server.requests에 p50/p95/p99 게이지 노출 — 부하테스트 중
+        # k6 측정치와 서버 내부 관측을 대조한다.
+        "[http.server.requests]": 0.5, 0.95, 0.99
 
 buildgraph:
   cors:
@@ -59,6 +101,10 @@ buildgraph:
       enabled: ${PAYMENT_MOCK_ENABLED:false}
       webhook-secret: ${PAYMENT_MOCK_WEBHOOK_SECRET:}
   auth:
+    # requireUser의 JWT subject→사용자 캐시 TTL(초). 0이면 캐시 끔(요청마다 users SELECT).
+    # role 변경·소프트 삭제 반영이 최대 이 시간만큼 늦을 수 있다 — 프로필 변경은 즉시 무효화된다.
+    user-cache:
+      ttl-seconds: ${AUTH_USER_CACHE_TTL_SECONDS:30}
     google:
       client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
       client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
@@ -201,6 +247,14 @@ ai:
       recent-message-limit: ${BUILD_CHAT_54_MINI_FAST_RECENT_MESSAGE_LIMIT:0}
 
 recommendation:
+  # 홈 응답(사용자 무관) 인메모리 캐시 TTL(초). 0이면 캐시 끔. 가격은 일일 갱신이라 수십 초 지연 무해.
+  home-cache:
+    ttl-seconds: ${HOME_CACHE_TTL_SECONDS:30}
+  # 인증 홈추천의 ACTIVE 후보 전수 스캔(3 LATERAL) row 캐시 TTL(초). 0이면 캐시 끔.
+  # 점수·순위·shadow 기록은 여전히 요청마다 계산된다 — DB 스캔만 재사용.
+  home-parts:
+    candidate-cache:
+      ttl-seconds: ${HOME_PARTS_CANDIDATE_CACHE_TTL_SECONDS:30}
   reranker:
     enabled: ${RECOMMENDATION_RERANKER_ENABLED:false}
     shadow-enabled: ${RECOMMENDATION_RERANKER_SHADOW_ENABLED:true}
@@ -227,6 +281,9 @@ recommendation:
     retrain-on-severe: ${RECOMMENDATION_DRIFT_RETRAIN_ON_SEVERE:false}
 
 part:
+  # 순수 카탈로그 조회(GET /api/parts, draft compatibility 제외) 인메모리 캐시 TTL(초). 0이면 캐시 끔.
+  query-cache:
+    ttl-seconds: ${PART_QUERY_CACHE_TTL_SECONDS:30}
   price-refresh:
     enabled: ${PART_PRICE_REFRESH_ENABLED:true}
     cron: "${PART_PRICE_REFRESH_CRON:0 0 4 * * *}"
