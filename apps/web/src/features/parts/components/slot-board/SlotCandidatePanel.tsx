@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Eye, Heart, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay';
 import { listParts } from '../../partsApi';
@@ -8,6 +8,7 @@ import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
+import { useBoardDrag } from './useBoardDrag';
 
 // CPU·GPU만 벤치마크 점수가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 버튼을 숨긴다.
 const PERF_COMPARABLE = new Set(['CPU', 'GPU']);
@@ -47,81 +48,12 @@ export function SlotCandidatePanel({
   const [hideFail, setHideFail] = useState(false);
   const [onlyWishlist, setOnlyWishlist] = useState(false);
   // 데스크톱 패널 드래그 이동(제언): 헤더가 핸들, 보드 영역 안으로 클램프. 모바일 바텀시트는 고정.
-  const panelRef = useRef<HTMLElement | null>(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragSessionRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    baseX: number;
-    baseY: number;
-    minDx: number;
-    maxDx: number;
-    minDy: number;
-    maxDy: number;
-  } | null>(null);
-
-  // 다른 슬롯으로 다시 열리면 위치 초기화 — 이전 위치가 새 문맥을 가리는 것 방지.
-  useEffect(() => {
-    setDragOffset({ x: 0, y: 0 });
-  }, [slot.category]);
-
-  const startPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    // 헤더 안의 컨트롤(정렬 select·닫기 버튼 등) 조작은 드래그로 삼키지 않는다.
-    if ((event.target as HTMLElement).closest('button, select, input, label, a')) {
-      return;
-    }
-    // 모바일 바텀시트(placement 무관 lg 미만)는 고정 — 데스크톱에서만 이동.
-    if (typeof window === 'undefined' || !window.matchMedia('(min-width: 1024px)').matches) {
-      return;
-    }
-    const panel = panelRef.current;
-    if (!panel) {
-      return;
-    }
-    // 오버레이 레이어는 보드 바디 div의 형제라 closest로는 못 찾는다 — 렌더 중인 보드는 항상 1개.
-    const board = panel.closest('[data-testid="slot-board"]')
-      ?? document.querySelector('[data-testid="slot-board"]');
-    const bounds = (board ?? document.body).getBoundingClientRect();
-    const rect = panel.getBoundingClientRect();
-    dragSessionRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      baseX: dragOffset.x,
-      baseY: dragOffset.y,
-      // 현재 위치 기준으로 보드 밖으로 못 나가는 이동 범위(보드 overflow에 잘려 사라지는 것 방지).
-      minDx: bounds.left - rect.left,
-      maxDx: bounds.right - rect.right,
-      minDy: bounds.top - rect.top,
-      maxDy: bounds.bottom - rect.bottom
-    };
-    setIsDragging(true);
-    event.preventDefault();
-    const handleMove = (move: globalThis.PointerEvent) => {
-      const session = dragSessionRef.current;
-      if (!session || move.pointerId !== session.pointerId) {
-        return;
-      }
-      const dx = Math.min(Math.max(move.clientX - session.startX, session.minDx), session.maxDx);
-      const dy = Math.min(Math.max(move.clientY - session.startY, session.minDy), session.maxDy);
-      setDragOffset({ x: session.baseX + dx, y: session.baseY + dy });
-    };
-    const handleUp = (up: globalThis.PointerEvent) => {
-      if (dragSessionRef.current && up.pointerId !== dragSessionRef.current.pointerId) {
-        return;
-      }
-      dragSessionRef.current = null;
-      setIsDragging(false);
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
-      window.removeEventListener('pointercancel', handleUp);
-    };
-    window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', handleUp);
-    window.addEventListener('pointercancel', handleUp);
-  };
+  const {
+    targetRef: panelRef,
+    dragStyle,
+    isDragging,
+    startDrag: startPanelDrag
+  } = useBoardDrag<HTMLElement>({ resetKey: slot.category });
   const [wishlist, setWishlist] = useState<Set<string>>(() => readWishlist());
   const [quickViewPart, setQuickViewPart] = useState<PartRow | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
@@ -277,7 +209,7 @@ export function SlotCandidatePanel({
         data-placement={placement}
         role="dialog"
         aria-label={`${slot.label} 부품 목록`}
-        style={dragOffset.x !== 0 || dragOffset.y !== 0 ? { transform: `translate(${dragOffset.x}px, ${dragOffset.y}px)` } : undefined}
+        style={dragStyle}
         className="panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:static lg:z-auto lg:h-full lg:max-h-none lg:min-h-0 lg:w-full lg:rounded-xl lg:border lg:border-commerce-line lg:shadow-xl"
       >
       <div

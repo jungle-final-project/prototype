@@ -1007,6 +1007,25 @@ test('candidate panel can be dragged by its header on desktop', async ({ page })
   // 헤더 안의 닫기 버튼은 드래그로 삼키지 않고 그대로 동작한다.
   await panel.getByRole('button', { name: '후보 패널 닫기' }).click();
   await expect(panel).toHaveCount(0);
+
+  // 관계/문제 설명 팝오버도 같은 방식으로 드래그된다.
+  await page.getByTestId('slot-fused-area-GPU').click();
+  const popover = page.getByTestId('slot-problem-popover');
+  await expect(popover).toBeVisible();
+  const popoverBefore = await popover.boundingBox();
+  const popoverHandle = await page.getByTestId('slot-problem-popover-handle').boundingBox();
+  expect(popoverHandle).not.toBeNull();
+  const hx = (popoverHandle?.x ?? 0) + (popoverHandle?.width ?? 0) / 2;
+  const hy = (popoverHandle?.y ?? 0) + 8;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(hx + 30, hy + 20, { steps: 4 });
+  await page.mouse.up();
+  const popoverAfter = await popover.boundingBox();
+  expect(Math.round((popoverAfter?.x ?? 0) - (popoverBefore?.x ?? 0))).toBe(30);
+  expect(Math.round((popoverAfter?.y ?? 0) - (popoverBefore?.y ?? 0))).toBe(20);
+  await popover.getByRole('button', { name: '문제 사유 닫기' }).click();
+  await expect(popover).toHaveCount(0);
 });
 
 test('draws a card-to-part elbow connector only for the selected card in 3D view', async ({ page }) => {

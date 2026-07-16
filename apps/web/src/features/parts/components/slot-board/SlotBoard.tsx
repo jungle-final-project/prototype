@@ -26,6 +26,7 @@ import {
   type SlotEdgeConfig
 } from './slotBoardConfig';
 import { FusedPlateArt } from './FusedPlateArt';
+import { useBoardDrag } from './useBoardDrag';
 import { HelpTip } from './HelpTip';
 import { withObjectParticle } from './koreanParticle';
 
@@ -2280,16 +2281,20 @@ function SlotProblemPopover({
   placementVariant?: SlotRelationPopoverPlacementVariant;
 }) {
   const placement = relationPopoverPlacement(detail.category, placementVariant);
+  // 팝오버도 후보 패널처럼 드래그로 옮길 수 있다(제언) — 헤더가 핸들, 보드 경계 클램프.
+  const { targetRef, dragStyle, isDragging, startDrag } = useBoardDrag<HTMLElement>({ resetKey: detail.category });
   const vars: CSSProperties = {
     ['--problem-x' as string]: `${placement.left}%`,
     ['--problem-y' as string]: `${placement.top}%`,
-    ['--problem-width' as string]: placement.width
+    ['--problem-width' as string]: placement.width,
+    ...dragStyle
   };
   const toneClass = detail.status === 'FAIL'
     ? 'border-red-200 bg-red-50 text-red-700'
     : 'border-amber-200 bg-amber-50 text-amber-700';
   return (
     <section
+      ref={targetRef}
       data-testid="slot-problem-popover"
       data-placement={placement.name}
       role="dialog"
@@ -2297,7 +2302,12 @@ function SlotProblemPopover({
       style={vars}
       className="relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg lg:absolute lg:left-[var(--problem-x)] lg:top-[var(--problem-y)] lg:mt-0 lg:w-[var(--problem-width)]"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div
+        data-testid="slot-problem-popover-handle"
+        title="드래그해서 옮길 수 있어요"
+        onPointerDown={startDrag}
+        className={`flex items-start justify-between gap-3 select-none lg:touch-none ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'}`}
+      >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${toneClass}`}>{detail.title}</span>
@@ -2449,13 +2459,17 @@ function SlotRelationOkPopover({
   placementVariant: SlotRelationPopoverPlacementVariant;
 }) {
   const placement = relationPopoverPlacement(category, placementVariant);
+  // 팝오버도 후보 패널처럼 드래그로 옮길 수 있다(제언) — 헤더가 핸들, 보드 경계 클램프.
+  const { targetRef, dragStyle, isDragging, startDrag } = useBoardDrag<HTMLElement>({ resetKey: category });
   const vars: CSSProperties = {
     ['--problem-x' as string]: `${placement.left}%`,
     ['--problem-y' as string]: `${placement.top}%`,
-    ['--problem-width' as string]: placement.width
+    ['--problem-width' as string]: placement.width,
+    ...dragStyle
   };
   return (
     <section
+      ref={targetRef}
       data-testid="slot-relation-popover"
       data-placement={placement.name}
       role="dialog"
@@ -2463,7 +2477,12 @@ function SlotRelationOkPopover({
       style={vars}
       className="relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg lg:absolute lg:left-[var(--problem-x)] lg:top-[var(--problem-y)] lg:mt-0 lg:w-[var(--problem-width)]"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div
+        data-testid="slot-relation-popover-handle"
+        title="드래그해서 옮길 수 있어요"
+        onPointerDown={startDrag}
+        className={`flex items-start justify-between gap-3 select-none lg:touch-none ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'}`}
+      >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">호환 가능</span>
