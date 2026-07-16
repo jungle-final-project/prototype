@@ -90,6 +90,28 @@ from initial_metrics import (
     MetricsSnapshot,
     MetricsStore,
 )
+from pc_agent_ui_rendering import (
+    AnimationCallbackController,
+    DeferredFluidWaveCache,
+    FLUID_WAVE_FRAME_COUNT,
+    FLUID_WAVE_SIZE,
+    FluidWaveDisplayState,
+    RetainedAssetCache,
+    SPINNER_FRAME_COUNT,
+    WindowVisibilityState,
+    fluid_wave_amplitude,
+    home_hardware_icon_cache_key,
+    render_fluid_wave_frame,
+    render_hardware_icon as render_pillow_hardware_icon,
+    render_home_hardware_icon as render_pillow_home_hardware_icon,
+    render_progress_ring as render_pillow_progress_ring,
+    render_rounded_surface,
+    render_status_dot,
+    render_status_icon as render_pillow_status_icon,
+    render_step_connector,
+    render_step_node,
+    render_summary_icon,
+)
 from windows_graphics_diagnostics import (
     NO_RESULTS as WINDOWS_NO_RESULTS,
     OK as WINDOWS_QUERY_OK,
@@ -114,11 +136,15 @@ except Exception:  # pragma: no cover - optional for prototype environments
 
 try:
     import pystray
-    from PIL import Image, ImageDraw
 except Exception:  # pragma: no cover - optional outside packaged Windows agent
     pystray = None
+
+try:
+    from PIL import Image, ImageDraw, ImageTk
+except Exception:  # pragma: no cover - Pillow is required by the packaged Windows agent
     Image = None
     ImageDraw = None
+    ImageTk = None
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_CONFIG_PATH = Path("agent-config.json")
@@ -165,6 +191,8 @@ BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
 DEFAULT_AGENT_VERSION = "0.1.18"
 DEFAULT_POLICY_VERSION = "policy-v1"
+
+
 STATUS_HOME_SIGNAL_LIMIT = 3
 LOG_TABLE_LIMIT = 500
 EVENT_PANEL_SIGNAL_LIMIT = 3
@@ -224,9 +252,7 @@ UI_BUTTON_HEIGHT = 54
 
 
 def usage_wave_target_amplitude(value: float | None, maximum: float = METRIC_WAVE_MAX_AMPLITUDE) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return 0.0
-    return max(0.0, min(100.0, float(value))) / 100.0 * maximum
+    return fluid_wave_amplitude(value, maximum)
 
 
 def smooth_wave_amplitude(current: float, target: float, factor: float = 0.12) -> float:
@@ -4255,9 +4281,12 @@ def hardware_sensor_snapshot(current: dict[str, Any], rows: Sequence[dict[str, A
     if gpu_fan.availability != SENSOR_COLLECTED and fan_rpm.availability == SENSOR_FAILED:
         gpu_fan = fan_rpm
 
-    disk_history = sensor_history(rows, *DISK_ACTIVE_FIELDS)
-    if not disk_history:
-        disk_history = sensor_history(rows, *DISK_USAGE_FIELDS)
+    disk_activity = sensor_reading(current, *DISK_ACTIVE_FIELDS)
+    disk_history = (
+        sensor_history(rows, *DISK_ACTIVE_FIELDS)
+        if disk_activity.availability == SENSOR_COLLECTED
+        else ()
+    )
     return HardwareSensorSnapshot(
         cpu_usage=sensor_reading(current, *CPU_USAGE_FIELDS),
         cpu_temp=sensor_reading(current, *CPU_TEMP_FIELDS),
@@ -4267,7 +4296,7 @@ def hardware_sensor_snapshot(current: dict[str, Any], rows: Sequence[dict[str, A
         memory_usage=sensor_reading(current, *MEMORY_USAGE_FIELDS),
         memory_used=sensor_reading(current, *MEMORY_USED_FIELDS),
         memory_total=sensor_reading(current, *MEMORY_TOTAL_FIELDS),
-        disk_activity=sensor_reading(current, *DISK_ACTIVE_FIELDS),
+        disk_activity=disk_activity,
         disk_usage=sensor_reading(current, *DISK_USAGE_FIELDS),
         disk_health=sensor_reading(current, *DISK_HEALTH_FIELDS),
         cpu_history=sensor_history(rows, *CPU_USAGE_FIELDS),
@@ -4308,6 +4337,7 @@ def metrics_snapshot_screen_input(
     gpu_fan = rpm
     if rpm.availability == SENSOR_UNSUPPORTED and percent.availability != SENSOR_UNSUPPORTED:
         gpu_fan = percent
+    disk_activity = metric_sensor_reading(metrics.latest("disk", "activity"))
     return SymptomScreenInput(
         snapshot=HardwareSensorSnapshot(
             cpu_usage=metric_sensor_reading(metrics.latest("cpu", "usage")),
@@ -4318,13 +4348,17 @@ def metrics_snapshot_screen_input(
             memory_usage=metric_sensor_reading(metrics.latest("ram", "usage")),
             memory_used=metric_sensor_reading(metrics.latest("ram", "used_bytes")),
             memory_total=metric_sensor_reading(metrics.latest("ram", "total_bytes")),
-            disk_activity=metric_sensor_reading(metrics.latest("disk", "activity")),
+            disk_activity=disk_activity,
             disk_usage=metric_sensor_reading(metrics.latest("disk", "usage")),
             disk_health=metric_sensor_reading(metrics.latest("disk", "smart")),
             cpu_history=metrics.history("cpu", "usage"),
             gpu_history=metrics.history("gpu", "usage"),
             memory_history=metrics.history("ram", "usage"),
-            disk_history=metrics.history("disk", "activity") or metrics.history("disk", "usage"),
+            disk_history=(
+                metrics.history("disk", "activity")
+                if disk_activity.availability == SENSOR_COLLECTED
+                else ()
+            ),
         ),
         symptom=(symptom or "").strip() or "웹에서 전달받은 증상 정보가 없습니다.",
         symptom_type=None,
@@ -4539,11 +4573,29 @@ def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScree
         snapshot.memory_usage,
         (snapshot.memory_used, snapshot.memory_total),
     )
-    disk_primary = snapshot.disk_activity if snapshot.disk_activity.availability == SENSOR_COLLECTED else snapshot.disk_usage
+    disk_storage_available = snapshot.disk_usage.availability == SENSOR_COLLECTED
+    disk_activity_available = snapshot.disk_activity.availability == SENSOR_COLLECTED
+    disk_primary = snapshot.disk_usage if disk_storage_available else snapshot.disk_activity
+    disk_label = "저장 공간" if disk_storage_available else "활성 시간"
     disk_status, disk_tone = component_status(disk_primary, (snapshot.disk_health,))
+    if disk_storage_available and disk_activity_available:
+        activity_status, activity_tone = component_status(snapshot.disk_activity)
+        tone_priority = {"default": 0, "warning": 1, "danger": 2}
+        if tone_priority.get(activity_tone, 0) > tone_priority.get(disk_tone, 0):
+            disk_status, disk_tone = activity_status, activity_tone
 
     memory_capacity = f"{memory_size_text(snapshot.memory_used)} / {memory_size_text(snapshot.memory_total)}"
-    disk_label = "활성 시간" if snapshot.disk_activity.availability == SENSOR_COLLECTED else "사용률"
+    disk_details = (
+        (
+            f"SMART {reading_text(snapshot.disk_health)}",
+            f"활성 시간 {reading_text(snapshot.disk_activity, '%')}",
+        )
+        if disk_storage_available
+        else (
+            f"SMART {reading_text(snapshot.disk_health)}",
+            f"저장 공간 {reading_text(snapshot.disk_usage, '%')}",
+        )
+    )
     widgets = (
         HardwareWidgetState(
             "cpu", "CPU", f"사용률 {reading_text(snapshot.cpu_usage, '%')}",
@@ -4562,7 +4614,7 @@ def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScree
         ),
         HardwareWidgetState(
             "disk", "디스크", f"{disk_label} {reading_text(disk_primary, '%')}",
-            (f"SMART {reading_text(snapshot.disk_health)}",), disk_status, disk_tone,
+            disk_details, disk_status, disk_tone,
             snapshot.disk_history, "disk" in suspected,
         ),
     )
@@ -5729,14 +5781,73 @@ def show_log_viewer(
         "ticketUrl": None,
     }
     image_refs: list[Any] = []
+    static_photo_cache = RetainedAssetCache()
+    progress_ring_photo_cache = RetainedAssetCache()
+    spinner_photo_cache: dict[tuple[int, str], list[Any]] = {}
+    callback_state: dict[str, Any] = {
+        "metricsAfterId": None,
+        "renderAfterId": None,
+        "visibilityAfterId": None,
+        "renderPending": False,
+        "uiActive": True,
+        "closed": False,
+    }
+    window_visibility = WindowVisibilityState()
     button_counter = {"value": 0}
     drag_origin = {"x": 0, "y": 0}
     wave_animation: dict[str, Any] = {
-        "phase": 0.0,
+        "frame": 0,
         "items": {},
-        "amplitudes": {component: 0.0 for component in ("cpu", "gpu", "ram", "disk")},
-        "targets": {component: 0.0 for component in ("cpu", "gpu", "ram", "disk")},
+        "states": {
+            component: FluidWaveDisplayState()
+            for component in ("cpu", "gpu", "ram", "disk")
+        },
+        "spinnerItems": [],
     }
+    animation_controller: AnimationCallbackController | None = None
+
+    def pillow_photo(image: Any) -> Any:
+        if ImageTk is None:
+            raise RuntimeError("Pillow ImageTk is required for the PC Agent UI")
+        return ImageTk.PhotoImage(image, master=root)
+
+    def cached_photo(key: tuple[Any, ...], renderer: Callable[[], Any]) -> Any:
+        return static_photo_cache.get(key, lambda: pillow_photo(renderer()))
+
+    fluid_wave_cache = DeferredFluidWaveCache(
+        root.after,
+        root.after_cancel,
+        render_fluid_wave_frame,
+        pillow_photo,
+        frame_count=FLUID_WAVE_FRAME_COUNT,
+        batch_size=2,
+        max_buckets=6,
+        delay_ms=1,
+    )
+
+    def static_fluid_wave_photo(bucket: int) -> Any:
+        return cached_photo(
+            ("fluid-wave-static", bucket),
+            lambda: render_fluid_wave_frame(bucket, 0),
+        )
+
+    def progress_ring_photo(progress: int) -> Any:
+        value = max(0, min(100, int(progress)))
+        return progress_ring_photo_cache.get(
+            ("progress-ring", value),
+            lambda: pillow_photo(render_pillow_progress_ring(value)),
+        )
+
+    def spinner_frames(size: int, color: str) -> list[Any]:
+        key = (size, color)
+        frames = spinner_photo_cache.get(key)
+        if frames is None:
+            frames = [
+                pillow_photo(render_pillow_status_icon("running", size, color, frame))
+                for frame in range(SPINNER_FRAME_COUNT)
+            ]
+            spinner_photo_cache[key] = frames
+        return frames
 
     def round_rect(
         x1: int,
@@ -5749,18 +5860,17 @@ def show_log_viewer(
         width: int = 1,
         tags: tuple[str, ...] | str = (),
     ) -> int:
-        points = [
-            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
-            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
-            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
-        ]
-        return canvas.create_polygon(
-            points,
-            smooth=True,
-            splinesteps=24,
-            fill=fill,
-            outline=outline,
-            width=width,
+        surface_width = max(1, int(round(x2 - x1)))
+        surface_height = max(1, int(round(y2 - y1)))
+        photo = cached_photo(
+            ("rounded", surface_width, surface_height, radius, fill, outline, width),
+            lambda: render_rounded_surface(surface_width, surface_height, radius, fill, outline, width),
+        )
+        return canvas.create_image(
+            round(x1),
+            round(y1),
+            image=photo,
+            anchor="nw",
             tags=tags,
         )
 
@@ -5826,10 +5936,12 @@ def show_log_viewer(
         )
 
     def draw_chat_icon(x: int, y: int, size: int = 22) -> None:
-        round_rect(x - size, y - int(size * 0.72), x + size, y + int(size * 0.60), 6, "#f4f4f4", "#333333", 2)
-        canvas.create_line(x - 8, y + int(size * 0.58), x - 13, y + int(size * 0.92), x - 2, y + int(size * 0.58), fill="#333333", width=2)
-        for dx in (-7, 0, 7):
-            canvas.create_oval(x + dx - 1, y - 1, x + dx + 1, y + 1, fill="#333333", outline="#333333")
+        display_size = size if size >= 24 else max(24, size * 2)
+        photo = cached_photo(
+            ("summary-icon", display_size),
+            lambda: render_summary_icon(display_size),
+        )
+        canvas.create_image(x, y, image=photo)
 
     def tone_color(tone: str) -> str:
         return {
@@ -5841,70 +5953,30 @@ def show_log_viewer(
 
     def draw_status_icon(x: int, y: int, tone: str, size: int = 14) -> None:
         color = tone_color(tone)
-        radius = max(5, size // 2)
         if tone == "running":
-            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, outline="#d9e7ff", width=2)
-            start = int((time.monotonic() * 240) % 360)
-            canvas.create_arc(
-                x - radius,
-                y - radius,
-                x + radius,
-                y + radius,
-                start=start,
-                extent=115,
-                style="arc",
-                outline=color,
-                width=2,
-            )
-        elif tone == "success":
-            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=color, outline=color, width=1)
-            draw_check(x, y, radius - 2, "#ffffff", 2)
-        elif tone == "warning":
-            canvas.create_polygon(
-                x,
-                y - radius,
-                x + radius,
-                y + radius,
-                x - radius,
-                y + radius,
-                fill="#ffffff",
-                outline=color,
-                width=2,
-            )
-            canvas.create_line(x, y - 3, x, y + 2, fill=color, width=2)
-            canvas.create_oval(x - 1, y + 5, x + 1, y + 7, fill=color, outline=color)
-        elif tone == "error":
-            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill="#ffffff", outline=color, width=2)
-            canvas.create_line(x - 3, y - 3, x + 3, y + 3, fill=color, width=2)
-            canvas.create_line(x + 3, y - 3, x - 3, y + 3, fill=color, width=2)
+            frames = spinner_frames(size, color)
+            item = canvas.create_image(x, y, image=frames[wave_animation["frame"] % len(frames)])
+            wave_animation["spinnerItems"].append((item, frames))
         else:
-            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill="#ffffff", outline=color, width=1)
-            canvas.create_line(x, y - 3, x, y, fill=color, width=1)
-            canvas.create_line(x, y, x + 3, y + 2, fill=color, width=1)
+            photo = cached_photo(
+                ("status", tone, size, color),
+                lambda: render_pillow_status_icon(tone, size, color),
+            )
+            canvas.create_image(x, y, image=photo)
 
     def draw_hardware_icon(x: int, y: int, component: str, color: str = "#555555") -> None:
-        if component == "cpu":
-            canvas.create_rectangle(x - 7, y - 7, x + 7, y + 7, outline=color, width=2)
-            canvas.create_rectangle(x - 3, y - 3, x + 3, y + 3, outline=color, width=1)
-            for offset in (-5, 0, 5):
-                canvas.create_line(x + offset, y - 10, x + offset, y - 7, fill=color, width=1)
-                canvas.create_line(x + offset, y + 7, x + offset, y + 10, fill=color, width=1)
-        elif component == "gpu":
-            canvas.create_rectangle(x - 10, y - 7, x + 10, y + 7, outline=color, width=2)
-            canvas.create_oval(x - 5, y - 5, x + 5, y + 5, outline=color, width=1)
-            canvas.create_line(x + 10, y - 3, x + 13, y - 3, fill=color, width=2)
-            canvas.create_line(x + 10, y + 3, x + 13, y + 3, fill=color, width=2)
-        elif component == "ram":
-            canvas.create_rectangle(x - 11, y - 6, x + 11, y + 6, outline=color, width=2)
-            for offset in (-7, -2, 3):
-                canvas.create_rectangle(x + offset, y - 3, x + offset + 3, y + 2, fill=color, outline=color)
-            canvas.create_line(x - 7, y + 7, x - 7, y + 9, fill=color, width=1)
-            canvas.create_line(x + 7, y + 7, x + 7, y + 9, fill=color, width=1)
-        else:
-            canvas.create_oval(x - 9, y - 8, x + 9, y - 2, outline=color, width=2)
-            canvas.create_line(x - 9, y - 5, x - 9, y + 7, fill=color, width=2)
-            canvas.create_line(x + 9, y - 5, x + 9, y + 7, fill=color, width=2)
-            canvas.create_arc(x - 9, y + 2, x + 9, y + 10, start=180, extent=180, style="arc", outline=color, width=2)
+        photo = cached_photo(
+            ("hardware", component, color, 30),
+            lambda: render_pillow_hardware_icon(component, 30, color),
+        )
+        canvas.create_image(x, y, image=photo)
+
+    def draw_home_hardware_icon(x: int, y: int, component: str, color: str = "#555555") -> None:
+        photo = cached_photo(
+            home_hardware_icon_cache_key(component, color, 30),
+            lambda: render_pillow_home_hardware_icon(component, 30, color),
+        )
+        canvas.create_image(x, y, image=photo)
 
     def draw_header() -> None:
         canvas.create_rectangle(0, 0, PC_AGENT_WINDOW_WIDTH, 56, fill="#ffffff", outline="")
@@ -5939,31 +6011,54 @@ def show_log_viewer(
         connection_state = connection_state_provider() if callable(connection_state_provider) else "IDLE"
         connected = connection_state in {"IDLE", "REQUEST_RECEIVED", "RUNNING", "COMPLETED"}
         round_rect(778, 68, 866, 102, 8, "#ffffff", "#d8d8d8")
-        canvas.create_oval(791, 81, 799, 89, fill=colors["green"] if connected else colors["subtle"], outline="")
+        connection_color = colors["green"] if connected else colors["subtle"]
+        connection_dot = cached_photo(
+            ("dot", 8, connection_color),
+            lambda: render_status_dot(8, connection_color),
+        )
+        canvas.create_image(795, 85, image=connection_dot)
         text(809, 85, "연결됨" if connected else "연결 끊김", 13, colors["text"], "regular", "w")
         measurement_label = "시연 데이터" if ui["demo"] else "실시간 측정"
         round_rect(878, 68, 970, 102, 8, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1)
         text(924, 85, measurement_label, 13, colors["text"], "regular", "center")
 
     def draw_step(number: int, x: int, label: str, style: str) -> None:
+        if style == "loading":
+            frames = [
+                cached_photo(
+                    ("step-node", style, 34, frame),
+                    lambda frame=frame: render_step_node(style, 34, frame),
+                )
+                for frame in range(SPINNER_FRAME_COUNT)
+            ]
+            item = canvas.create_image(x, 128, image=frames[wave_animation["frame"] % len(frames)])
+            wave_animation["spinnerItems"].append((item, frames))
+        else:
+            photo = cached_photo(
+                ("step-node", style, 34),
+                lambda: render_step_node(style, 34),
+            )
+            canvas.create_image(x, 128, image=photo)
+
         if style == "active" or style == "done-black":
-            canvas.create_oval(x - 16, 112, x + 16, 144, fill="#050505", outline="#050505", width=1)
             text(x, 128, str(number), 13, "#ffffff", "regular", "center")
             label_color = colors["text"]
         elif style == "done-check":
-            # 지나온 단계: 검은 원에 하얀 체크 — 이동해 간 원의 흔적임을 강조한다.
-            canvas.create_oval(x - 16, 112, x + 16, 144, fill="#050505", outline="#050505", width=1)
-            draw_check(x, 128, 10, "#ffffff", 2)
             label_color = colors["muted"]
         elif style == "loading":
-            canvas.create_oval(x - 16, 112, x + 16, 144, fill="#ffffff", outline="#d7dce0", width=1)
-            draw_status_icon(x, 128, "running", 20)
             label_color = colors["text"]
         else:
-            canvas.create_oval(x - 16, 112, x + 16, 144, fill="#ffffff", outline="#d7dce0", width=1)
             text(x, 128, str(number), 13, colors["subtle"], "regular", "center")
             label_color = colors["muted"]
         text(x, 157, label, 14, label_color, "regular", "center")
+
+    def draw_step_connector(x1: float, x2: float, color: str, thickness: int) -> None:
+        length = max(1, int(round(x2 - x1)))
+        photo = cached_photo(
+            ("step-connector", length, color, thickness),
+            lambda: render_step_connector(length, color, thickness),
+        )
+        canvas.create_image(round(x1), 126, image=photo, anchor="nw")
 
     STEP_X = (180, 500, 820)
     STEP_ANIM_SECONDS = 0.8
@@ -6008,9 +6103,9 @@ def show_log_viewer(
         segments = tuple((STEP_X[index] + 16, STEP_X[index + 1] - 16) for index in range(2))
         for segment_index, (seg_x1, seg_x2) in enumerate(segments):
             if segment_index < passed_index:
-                line(seg_x1, 128, seg_x2, 128, "#050505", 2)
+                draw_step_connector(seg_x1, seg_x2, "#050505", 2)
             else:
-                line(seg_x1, 128, seg_x2, 128, "#d9d9d9", 1)
+                draw_step_connector(seg_x1, seg_x2, "#d9d9d9", 1)
 
         draw_step(1, STEP_X[0], PC_AGENT_DIAGNOSIS_STEPS[0], styles[0])
         draw_step(2, STEP_X[1], PC_AGENT_DIAGNOSIS_STEPS[1], styles[1])
@@ -6024,17 +6119,12 @@ def show_log_viewer(
             seg_x1, seg_x2 = segments[anim["from"]]
             trail_end = max(seg_x1, min(seg_x2, moving_x))
             if trail_end > seg_x1:
-                line(seg_x1, 128, trail_end, 128, "#050505", 2)
-            canvas.create_oval(moving_x - 16, 112, moving_x + 16, 144, fill="#050505", outline="#050505", width=1)
-            if not ui.get("stepTickScheduled"):
-                ui["stepTickScheduled"] = True
-
-                def step_anim_tick() -> None:
-                    ui["stepTickScheduled"] = False
-                    if ui.get("stepAnim"):
-                        render()
-
-                root.after(30, step_anim_tick)
+                draw_step_connector(seg_x1, trail_end, "#050505", 2)
+            moving_photo = cached_photo(
+                ("step-node", "moving", 34),
+                lambda: render_step_node("moving", 34),
+            )
+            canvas.create_image(round(moving_x), 128, image=moving_photo)
 
     def draw_metric_wave(
         component: str,
@@ -6044,22 +6134,32 @@ def show_log_viewer(
         latest_value: float | None,
         color: str,
     ) -> None:
-        wave_animation["targets"][component] = usage_wave_target_amplitude(latest_value)
-        canvas.create_line(x, baseline_y, x + width, baseline_y, fill="#eeeeee", width=1)
-        item = canvas.create_line(
-            metric_wave_coordinates(
-                x,
-                baseline_y,
-                width,
-                wave_animation["amplitudes"][component],
-                wave_animation["phase"],
-            ),
-            fill=color,
-            width=2,
-            smooth=True,
-            splinesteps=12,
+        del color
+        state = wave_animation["states"][component]
+        state.set_measurement(latest_value)
+        if latest_value is None:
+            canvas.create_image(
+                round(x),
+                round(baseline_y - FLUID_WAVE_SIZE[1] / 2),
+                image=static_fluid_wave_photo(0),
+                anchor="nw",
+            )
+            return
+        bucket = state.bucket
+        frames = fluid_wave_cache.get(bucket)
+        fluid_wave_cache.request(bucket)
+        photo = (
+            frames[wave_animation["frame"] % len(frames)]
+            if frames
+            else static_fluid_wave_photo(bucket)
         )
-        wave_animation["items"][component] = (item, x, baseline_y, width)
+        item = canvas.create_image(
+            round(x),
+            round(baseline_y - FLUID_WAVE_SIZE[1] / 2),
+            image=photo,
+            anchor="nw",
+        )
+        wave_animation["items"][component] = item
 
     def draw_symptom() -> None:
         active_session = ui["diagnosisSession"]
@@ -6095,17 +6195,16 @@ def show_log_viewer(
             outline = tone_color or "#d9d9d9"
             round_rect(x, 184, x + 206, 364, 12, "#ffffff", outline, 1)
             text(x + 18, 201, card.title, 16, tone_color or colors["text"], "semibold", width=170)
-            draw_hardware_icon(x + 182, 202, component, tone_color or "#666666")
+            draw_home_hardware_icon(x + 182, 202, component, tone_color or "#666666")
             text(x + 18, 230, card.primary, 14, tone_color or colors["text"], "semibold", width=170)
             for detail_index, detail in enumerate(card.details[:2]):
                 text(x + 18, 257 + detail_index * 19, detail, 13, colors["muted"], width=170)
             text(x + 18, 302, f"상태 {card.status}", 13, tone_color or colors["muted"], "semibold")
             latest_value = float(card.history[-1]) if card.history else None
-            draw_metric_wave(component, x + 18, 345, 170, latest_value, tone_color or "#555555")
+            draw_metric_wave(component, x + 18, 335, 170, latest_value, tone_color or "#555555")
 
         round_rect(70, 384, 930, 624, 12, "#ffffff", "#dddddd", 1)
-        canvas.create_oval(90, 410, 132, 452, fill="#f4f4f4", outline="")
-        draw_chat_icon(111, 431, 9)
+        draw_chat_icon(111, 431, 42)
         text(153, 405, display.title, 16, colors["text"], "semibold", width=735)
         text(153, 438, display.description, 14, "#777777", "regular", width=735)
         text(153, 580, display.helper, 13, "#888888", "regular", width=735)
@@ -6122,23 +6221,7 @@ def show_log_viewer(
             text(500, 724, str(ui["status"]), 13, colors["red"], "regular", "center", width=760)
 
     def draw_progress_ring(x: int, y: int, progress: int) -> None:
-        radius = 42
-        canvas.create_oval(x - radius, y - radius, x + radius, y + radius, outline="#e8e8e8", width=6)
-        extent = -max(0, min(360, int(progress * 3.6)))
-        if progress >= 100:
-            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, outline="#111111", width=6)
-        elif extent:
-            canvas.create_arc(
-                x - radius,
-                y - radius,
-                x + radius,
-                y + radius,
-                start=90,
-                extent=extent,
-                style="arc",
-                outline="#111111",
-                width=6,
-            )
+        canvas.create_image(x, y, image=progress_ring_photo(progress))
 
     def draw_diagnosing() -> None:
         active_session = ui["diagnosisSession"]
@@ -6183,6 +6266,8 @@ def show_log_viewer(
 
             def ring_tick() -> None:
                 ui["ringTickScheduled"] = False
+                if animation_controller is not None and not animation_controller.visible:
+                    return
                 advance_at = ui.get("autoAdvanceAt")
                 if advance_at and time.monotonic() >= advance_at:
                     ui["autoAdvanceAt"] = None
@@ -6195,8 +6280,7 @@ def show_log_viewer(
             root.after(120, ring_tick)
 
         round_rect(70, 180, 930, 250, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
-        canvas.create_oval(88, 194, 130, 236, fill="#f4f4f4", outline="")
-        draw_chat_icon(109, 215, 9)
+        draw_chat_icon(109, 215, 42)
         text(148, 196, "전달받은 증상", 15, colors["text"], "semibold", width=735)
         text(148, 219, symptom, 14, "#777777", "regular", width=735)
         text(148, 239, scope_text, 13, "#888888", "regular", width=735)
@@ -6443,6 +6527,7 @@ def show_log_viewer(
             root.title(f"{DISPLAY_APP_NAME} · {state_title}")
 
         wave_animation["items"].clear()
+        wave_animation["spinnerItems"].clear()
         canvas.delete("all")
         button_counter["value"] = 0
         draw_header()
@@ -6841,24 +6926,87 @@ def show_log_viewer(
     def drag_window(event: tk.Event) -> None:
         root.geometry(f"+{event.x_root - drag_origin['x']}+{event.y_root - drag_origin['y']}")
 
+    def root_ui_active() -> bool:
+        try:
+            return window_visibility.ui_active(
+                root.state(),
+                bool(root.winfo_viewable()),
+                bool(root.winfo_ismapped()),
+            )
+        except tk.TclError:
+            return False
+
     def focus_window() -> None:
         try:
+            window_visibility.show()
             root.deiconify()
             root.state("normal")
             root.lift()
             root.attributes("-topmost", True)
             root.after(800, lambda: root.attributes("-topmost", False))
             root.focus_force()
+            resume_ui_animation("focus_request")
         except tk.TclError:
             return
 
+    def cleanup_ui_resources() -> None:
+        if callback_state["closed"]:
+            return
+        callback_state["closed"] = True
+        if animation_controller is not None:
+            try:
+                animation_controller.close()
+            except tk.TclError:
+                pass
+        for callback_key in ("metricsAfterId", "renderAfterId", "visibilityAfterId"):
+            after_id = callback_state.get(callback_key)
+            if after_id is not None:
+                try:
+                    root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+                callback_state[callback_key] = None
+        wave_animation["items"].clear()
+        wave_animation["spinnerItems"].clear()
+        fluid_wave_cache.close()
+        progress_ring_photo_cache.clear()
+        spinner_photo_cache.clear()
+        static_photo_cache.clear()
+        image_refs.clear()
+
+    def destroy_window() -> None:
+        cleanup_ui_resources()
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
+
     def close_window() -> None:
         if background_mode:
+            window_visibility.hide()
+            pause_ui_animation("user_close")
             root.withdraw()
         else:
-            root.destroy()
+            destroy_window()
 
     root.protocol("WM_DELETE_WINDOW", close_window)
+
+    def flush_pending_render() -> None:
+        callback_state["renderAfterId"] = None
+        if callback_state["closed"] or not callback_state["renderPending"] or not root_ui_active():
+            return
+        callback_state["renderPending"] = False
+        render()
+
+    def queue_ui_render() -> None:
+        callback_state["renderPending"] = True
+        if (
+            callback_state["closed"]
+            or not callback_state["uiActive"]
+            or callback_state["renderAfterId"] is not None
+        ):
+            return
+        callback_state["renderAfterId"] = root.after(0, flush_pending_render)
 
     def apply_diagnosis_session(session: DiagnosisSession | None) -> None:
         previous = ui.get("diagnosisSession")
@@ -6902,7 +7050,7 @@ def show_log_viewer(
         else:
             ui["demo"] = False
             ui["state"] = "SYMPTOM_CONFIRM"
-        render()
+        queue_ui_render()
 
     def request_focus() -> None:
         root.after(0, focus_window)
@@ -6911,42 +7059,123 @@ def show_log_viewer(
         root.after(0, lambda: apply_diagnosis_session(session))
 
     def request_metrics_refresh() -> None:
-        root.after(0, render)
+        queue_ui_render()
 
     def request_initial_metrics_complete() -> None:
-        root.after(0, render)
+        queue_ui_render()
 
     def request_destroy() -> None:
-        root.after(0, root.destroy)
+        root.after(0, destroy_window)
 
     canvas.bind("<ButtonPress-1>", lambda event: start_drag(event) if event.y <= 68 else None)
     canvas.bind("<B1-Motion>", lambda event: drag_window(event) if event.y <= 68 else None)
 
     def refresh_symptom_metrics() -> None:
-        if root.winfo_exists() and ui["state"] == "SYMPTOM_CONFIRM":
-            render()
-        if root.winfo_exists():
-            root.after(5000, refresh_symptom_metrics)
+        callback_state["metricsAfterId"] = None
+        try:
+            if callback_state["closed"] or not root_ui_active():
+                return
+            if ui["state"] == "SYMPTOM_CONFIRM":
+                render()
+            schedule_metrics_refresh()
+        except tk.TclError:
+            callback_state["metricsAfterId"] = None
 
-    def animate_metric_waves() -> None:
+    def schedule_metrics_refresh() -> None:
+        if (
+            callback_state["closed"]
+            or not root_ui_active()
+            or callback_state["metricsAfterId"] is not None
+        ):
+            return
+        callback_state["metricsAfterId"] = root.after(5000, refresh_symptom_metrics)
+
+    def animate_ui_frame() -> None:
         try:
             if not root.winfo_exists():
                 return
+            wave_animation["frame"] = (int(wave_animation["frame"]) + 1) % max(
+                FLUID_WAVE_FRAME_COUNT,
+                SPINNER_FRAME_COUNT,
+            )
+            if ui.get("stepAnim"):
+                render()
             if ui["state"] == "SYMPTOM_CONFIRM":
-                wave_animation["phase"] += 0.16
-                for component, layout in tuple(wave_animation["items"].items()):
-                    current = float(wave_animation["amplitudes"].get(component, 0.0))
-                    target = float(wave_animation["targets"].get(component, 0.0))
-                    current = smooth_wave_amplitude(current, target)
-                    wave_animation["amplitudes"][component] = current
-                    item, x, baseline_y, width = layout
-                    canvas.coords(
+                for component, item in tuple(wave_animation["items"].items()):
+                    state = wave_animation["states"][component]
+                    state.advance()
+                    bucket = state.bucket
+                    frames = fluid_wave_cache.get(bucket)
+                    if not frames:
+                        fluid_wave_cache.request(bucket)
+                        continue
+                    canvas.itemconfigure(
                         item,
-                        *metric_wave_coordinates(x, baseline_y, width, current, wave_animation["phase"]),
+                        image=frames[int(wave_animation["frame"]) % len(frames)],
                     )
-            root.after(METRIC_WAVE_FRAME_MS, animate_metric_waves)
+            for item, frames in tuple(wave_animation["spinnerItems"]):
+                canvas.itemconfigure(item, image=frames[int(wave_animation["frame"]) % len(frames)])
         except tk.TclError:
             return
+
+    animation_controller = AnimationCallbackController(
+        root.after,
+        root.after_cancel,
+        animate_ui_frame,
+        METRIC_WAVE_FRAME_MS,
+    )
+
+    def resume_ui_animation(reason: str = "window_visible") -> None:
+        if callback_state["closed"] or not root_ui_active():
+            return
+        callback_state["uiActive"] = True
+        animation_controller.resume()
+        fluid_wave_cache.resume()
+        schedule_metrics_refresh()
+        queue_ui_render()
+
+    def pause_ui_animation(reason: str = "window_hidden") -> None:
+        callback_state["uiActive"] = False
+        animation_controller.pause()
+        fluid_wave_cache.pause()
+        for callback_key in ("metricsAfterId", "renderAfterId"):
+            after_id = callback_state.get(callback_key)
+            if after_id is not None:
+                try:
+                    root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+                callback_state[callback_key] = None
+
+    def reconcile_window_visibility(reason: str) -> None:
+        callback_state["visibilityAfterId"] = None
+        if callback_state["closed"]:
+            return
+        if root_ui_active():
+            resume_ui_animation(reason)
+        else:
+            pause_ui_animation(reason)
+
+    def schedule_visibility_reconcile(reason: str) -> None:
+        if callback_state["closed"] or callback_state["visibilityAfterId"] is not None:
+            return
+        callback_state["visibilityAfterId"] = root.after_idle(
+            lambda: reconcile_window_visibility(reason)
+        )
+
+    def handle_root_map(event: Any) -> None:
+        if not WindowVisibilityState.is_root_event(getattr(event, "widget", None), root):
+            return
+        window_visibility.show()
+        schedule_visibility_reconcile("root_map")
+
+    def handle_root_unmap(event: Any) -> None:
+        if not WindowVisibilityState.is_root_event(getattr(event, "widget", None), root):
+            return
+        schedule_visibility_reconcile("root_unmap")
+
+    root.bind("<Map>", handle_root_map, add="+")
+    root.bind("<Unmap>", handle_root_unmap, add="+")
 
     render()
     if callable(on_window_ready):
@@ -6958,11 +7187,11 @@ def show_log_viewer(
             request_destroy,
         )
     root.after(0, auto_start_initial_metrics)
-    root.after(METRIC_WAVE_FRAME_MS, animate_metric_waves)
-    root.after(5000, refresh_symptom_metrics)
+    resume_ui_animation("initial_start")
     try:
         root.mainloop()
     finally:
+        cleanup_ui_resources()
         if callable(on_window_closed):
             on_window_closed()
         viewer_lock.release()

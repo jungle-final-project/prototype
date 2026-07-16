@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import inspect
 import json
 import os
 import tempfile
@@ -12,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import buildgraph_agent as agent
 from diagnosis_request_agent import DiagnosisRequest, DiagnosisSession
+from initial_metrics import ProviderSample
 
 
 def missing_gpu_counter() -> tuple[None, str]:
@@ -561,6 +563,143 @@ class AgentGoal1112Test(unittest.TestCase):
         ))
         self.assertEqual("danger", critical_screen.widgets[0].tone)
 
+    def test_disk_card_uses_activity_for_wave_and_labels_storage_separately(self) -> None:
+        first_payload = {
+            "cpuUsagePercent": 20.0,
+            "gpuUsagePercent": 30.0,
+            "memoryUsedPercent": 40.0,
+            "diskBusyEstimatePercent": 12.0,
+            "diskUsedPercent": 91.6,
+            "diskSmartStatus": "정상",
+        }
+        second_payload = dict(first_payload, diskBusyEstimatePercent=18.0)
+        first = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, first_payload)
+        second = agent.build_metric_snapshot(datetime.now(agent.KST), 1, agent.SYSTEM_METRIC_KIND, second_payload)
+
+        screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(second, [first, second]), "디스크 상태 확인", None
+        ))
+        disk = screen.widgets[3]
+
+        self.assertEqual("저장 공간 91.6%", disk.primary)
+        self.assertEqual("활성 시간 18%", disk.details[1])
+        self.assertEqual((12.0, 18.0), disk.history)
+        self.assertEqual("주의", disk.status)
+        self.assertEqual("warning", disk.tone)
+
+    def test_disk_card_reports_high_activity_without_relabeling_storage(self) -> None:
+        payload = {
+            "cpuUsagePercent": 20.0,
+            "gpuUsagePercent": 30.0,
+            "memoryUsedPercent": 40.0,
+            "diskBusyEstimatePercent": 92.0,
+            "diskUsedPercent": 35.0,
+            "diskSmartStatus": "정상",
+        }
+        row = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, payload)
+        disk = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(row, [row]), "디스크 상태 확인", None
+        )).widgets[3]
+
+        self.assertEqual("저장 공간 35%", disk.primary)
+        self.assertEqual("활성 시간 92%", disk.details[1])
+        self.assertEqual((92.0,), disk.history)
+        self.assertEqual("주의", disk.status)
+        self.assertEqual("warning", disk.tone)
+
+    def test_disk_card_distinguishes_zero_activity_from_missing_activity(self) -> None:
+        zero_payload = {
+            "cpuUsagePercent": 20.0,
+            "gpuUsagePercent": 30.0,
+            "memoryUsedPercent": 40.0,
+            "diskBusyEstimatePercent": 0.0,
+            "diskUsedPercent": 35.0,
+            "diskSmartStatus": "정상",
+        }
+        zero_row = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, zero_payload)
+        zero_disk = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(zero_row, [zero_row]), "디스크 상태 확인", None
+        )).widgets[3]
+
+        self.assertEqual("저장 공간 35%", zero_disk.primary)
+        self.assertEqual("활성 시간 0%", zero_disk.details[1])
+        self.assertEqual((0.0,), zero_disk.history)
+        self.assertGreater(agent.usage_wave_target_amplitude(0.0), 0.0)
+        self.assertLess(agent.usage_wave_target_amplitude(0.0), 1.0)
+
+        failed_payload = dict(zero_payload)
+        failed_payload.pop("diskBusyEstimatePercent")
+        failed_payload["unavailableReason"] = {"diskBusyEstimatePercent": "disk activity query failed"}
+        failed_row = agent.build_metric_snapshot(datetime.now(agent.KST), 1, agent.SYSTEM_METRIC_KIND, failed_payload)
+        failed_disk = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(failed_row, [failed_row]), "디스크 상태 확인", None
+        )).widgets[3]
+        self.assertEqual("활성 시간 확인 실패", failed_disk.details[1])
+        self.assertEqual((), failed_disk.history)
+        self.assertEqual("정상", failed_disk.status)
+
+    def test_disk_card_never_uses_storage_capacity_as_wave_input(self) -> None:
+        payload = {
+            "cpuUsagePercent": 20.0,
+            "gpuUsagePercent": 30.0,
+            "memoryUsedPercent": 40.0,
+            "diskUsedPercent": 91.6,
+            "diskSmartStatus": "정상",
+            "unavailableReason": {"diskBusyEstimatePercent": "disk busy counter unavailable"},
+        }
+        previous_payload = dict(payload)
+        previous_payload.pop("unavailableReason")
+        previous_payload["diskBusyEstimatePercent"] = 63.0
+        previous = agent.build_metric_snapshot(
+            datetime.now(agent.KST) - timedelta(seconds=5), 0, agent.SYSTEM_METRIC_KIND, previous_payload
+        )
+        row = agent.build_metric_snapshot(datetime.now(agent.KST), 1, agent.SYSTEM_METRIC_KIND, payload)
+
+        screen = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(row, [previous, row]), "디스크 상태 확인", None
+        ))
+        disk = screen.widgets[3]
+
+        self.assertEqual("저장 공간 91.6%", disk.primary)
+        self.assertEqual("활성 시간 센서 미지원", disk.details[1])
+        self.assertEqual((), disk.history)
+        self.assertEqual("주의", disk.status)
+        self.assertEqual("warning", disk.tone)
+
+        previous_readings = agent.MetricsNormalizer().normalize(
+            ProviderSample(previous_payload, (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(), "hardware")
+        )
+        current_readings = agent.MetricsNormalizer().normalize(
+            ProviderSample(payload, datetime.now(timezone.utc).isoformat(), "hardware")
+        )
+        metrics = agent.MetricsSnapshot(
+            "disk-storage-only",
+            "LIVE",
+            True,
+            (*previous_readings, *current_readings),
+        )
+        metrics_disk = agent.build_symptom_screen_state(
+            agent.metrics_snapshot_screen_input(metrics, "디스크 상태 확인", ("disk",))
+        ).widgets[3]
+        self.assertEqual("저장 공간 91.6%", metrics_disk.primary)
+        self.assertEqual((), metrics_disk.history)
+
+    def test_disk_storage_and_activity_fields_remain_available_to_metrics_and_logs(self) -> None:
+        payload = {
+            "diskBusyEstimatePercent": 7.5,
+            "diskUsedPercent": 62.5,
+            "diskSmartStatus": "정상",
+        }
+        row = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, payload)
+        readings = agent.MetricsNormalizer().normalize(
+            ProviderSample(payload, datetime.now(timezone.utc).isoformat(), "hardware")
+        )
+
+        self.assertEqual(7.5, row["diskBusyEstimatePercent"])
+        self.assertEqual(62.5, row["diskUsedPercent"])
+        self.assertEqual(7.5, next(item.value for item in readings if item.component == "disk" and item.metric_type == "activity"))
+        self.assertEqual(62.5, next(item.value for item in readings if item.component == "disk" and item.metric_type == "usage"))
+
     def test_symptom_screen_distinguishes_zero_fan_unsupported_and_failed_sensor(self) -> None:
         zero_fan_payload = {
             "cpuUsagePercent": 20.0,
@@ -725,7 +864,11 @@ class AgentGoal1112Test(unittest.TestCase):
 
     def test_metric_wave_uses_latest_real_usage_as_target_and_smooths_changes(self) -> None:
         self.assertEqual(0.0, agent.usage_wave_target_amplitude(None))
-        self.assertEqual(0.0, agent.usage_wave_target_amplitude(0.0))
+        self.assertEqual(0.65, agent.usage_wave_target_amplitude(0.0))
+        self.assertEqual(2.5, agent.usage_wave_target_amplitude(20.0))
+        self.assertEqual(7.0, agent.usage_wave_target_amplitude(50.0))
+        self.assertEqual(14.0, agent.usage_wave_target_amplitude(75.0))
+        self.assertEqual(22.0, agent.usage_wave_target_amplitude(92.0))
         self.assertEqual(agent.METRIC_WAVE_MAX_AMPLITUDE, agent.usage_wave_target_amplitude(100.0))
         self.assertEqual(agent.METRIC_WAVE_MAX_AMPLITUDE, agent.usage_wave_target_amplitude(140.0))
 
@@ -740,6 +883,26 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(12, len(coordinates))
         self.assertEqual(10.0, coordinates[0])
         self.assertEqual(110.0, coordinates[-2])
+
+    def test_log_viewer_defers_wave_bucket_generation_until_after_initial_render(self) -> None:
+        source = inspect.getsource(agent.show_log_viewer)
+
+        self.assertIn("DeferredFluidWaveCache(", source)
+        self.assertIn("if latest_value is None:", source)
+        self.assertIn("static_fluid_wave_photo(0)", source)
+        self.assertIn("fluid_wave_cache.request(bucket)", source)
+        self.assertIn("static_fluid_wave_photo(bucket)", source)
+        self.assertNotIn("build_fluid_wave_cache", source)
+
+    def test_log_viewer_filters_child_map_events_and_stops_ui_callbacks_while_hidden(self) -> None:
+        source = inspect.getsource(agent.show_log_viewer)
+
+        self.assertIn('root.bind("<Map>", handle_root_map', source)
+        self.assertIn('root.bind("<Unmap>", handle_root_unmap', source)
+        self.assertIn("WindowVisibilityState.is_root_event", source)
+        self.assertIn('pause_ui_animation("user_close")', source)
+        self.assertIn('(\"metricsAfterId\", \"renderAfterId\")', source)
+        self.assertIn("queue_ui_render()", source)
 
     def test_pretendard_is_the_first_ui_font_candidate(self) -> None:
         self.assertEqual("Pretendard", agent.UI_FONT_CANDIDATES[0])
@@ -1004,6 +1167,7 @@ class AgentGoal1112Test(unittest.TestCase):
         screen = agent.build_symptom_screen_state(agent.metrics_snapshot_screen_input(metrics, ""))
         cpu_card = screen.widgets[0]
         self.assertEqual("사용률 42%", cpu_card.primary)
+        self.assertEqual((42.0,), cpu_card.history)
         self.assertEqual(("온도 센서 미지원",), cpu_card.details)
 
     def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
