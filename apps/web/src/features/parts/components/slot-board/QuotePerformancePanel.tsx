@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, Sparkles } from 'lucide-react';
-import { PART_CATEGORY_LABELS, type BuildGraphResolveResponse, type PartCategory } from '../../../quote/aiSelection';
+import {
+  DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION,
+  PART_CATEGORY_LABELS,
+  type BuildGraphResolveResponse,
+  type PartCategory
+} from '../../../quote/aiSelection';
 import { CompositeScoreGauge } from '../../../quote/components/CompositeScoreGauge';
 import { openAiAssistant, type PerfCompareTarget } from '../../../../lib/events';
 import { checkBuildPerformance, resolveBuildGraph, type GameFpsEvidence } from '../../../quote/quoteApi';
@@ -23,6 +28,10 @@ const FPS_RESOLUTIONS = [
   { key: 'QHD', label: 'QHD', query: 'qhd' },
   { key: '4K', label: '4K', query: '4k' }
 ] as const;
+const DEFAULT_FPS_GAME = FPS_GAMES.find((game) => game.query === DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION.gameQuery) ?? FPS_GAMES[0];
+const DEFAULT_FPS_RESOLUTION = FPS_RESOLUTIONS.find(
+  (resolution) => resolution.query === DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION.resolutionQuery
+) ?? FPS_RESOLUTIONS[2];
 
 // FPS 수평 바 스케일 상한 — 일반적인 게이밍 모니터 주사율(165Hz) 기준.
 const FPS_CAP = 165;
@@ -33,6 +42,16 @@ const FPS_CAP = 165;
 // name/currentPrice는 교체 비교(가격·성능 향상)에만 쓰는 선택 필드다 — 없으면 비용 문구만 생략된다.
 // quantity는 종합점수 고스트 비교 resolve에만 쓰고 없으면 1로 본다.
 type PerfItem = { category: string; partId: string; name?: string; currentPrice?: number; quantity?: number };
+
+export type QuotePerformanceView = {
+  gameLabel: string;
+  gameQuery: string;
+  resolutionLabel: string;
+  resolutionQuery: string;
+  sourceFingerprint: string;
+  evidenceSettled: boolean;
+  avgFps?: number;
+};
 
 // 팀장 확정 설계(최종 개편): 헤더 한 줄 + 데이터 시각화 본문 + 하단 액션 줄.
 // 헤더 = 타이틀·적합 배지(왼쪽) + [CPU|GPU 토글 + 교체 후보 선택 ▾] 콤보(오른쪽 끝, 팝오버).
@@ -53,6 +72,7 @@ export function QuotePerformancePanel({
   isLoading = false,
   isError = false,
   onRetry,
+  onPerformanceViewChange,
   compact = false
 }: {
   graph?: BuildGraphResolveResponse;
@@ -65,6 +85,7 @@ export function QuotePerformancePanel({
   isLoading?: boolean;
   isError?: boolean;
   onRetry?: () => void;
+  onPerformanceViewChange?: (view: QuotePerformanceView) => void;
   compact?: boolean;
 }) {
   const compositeScore = graph?.compositeScore;
@@ -112,6 +133,7 @@ export function QuotePerformancePanel({
         onApplyComparison={onApplyComparison}
         checkoutActions={checkoutActions}
         scoreDelta={scoreDelta}
+        onPerformanceViewChange={onPerformanceViewChange}
         compact={compact}
       />
     </section>
@@ -193,6 +215,7 @@ function PerfPanelBody({
   onApplyComparison,
   checkoutActions,
   scoreDelta,
+  onPerformanceViewChange,
   compact
 }: {
   compositeScore: NonNullable<BuildGraphResolveResponse['compositeScore']>;
@@ -205,13 +228,14 @@ function PerfPanelBody({
   onApplyComparison?: (target: PerfCompareTarget) => Promise<unknown>;
   checkoutActions?: ReactNode;
   scoreDelta: number | null;
+  onPerformanceViewChange?: (view: QuotePerformanceView) => void;
   compact: boolean;
 }) {
   const queryClient = useQueryClient();
-  const [gameKey, setGameKey] = useState<string>(FPS_GAMES[0].key);
-  const [resKey, setResKey] = useState<string>('QHD');
-  const game = FPS_GAMES.find((g) => g.key === gameKey) ?? FPS_GAMES[0];
-  const resolution = FPS_RESOLUTIONS.find((r) => r.key === resKey) ?? FPS_RESOLUTIONS[1];
+  const [gameKey, setGameKey] = useState<string>(DEFAULT_FPS_GAME.key);
+  const [resKey, setResKey] = useState<string>(DEFAULT_FPS_RESOLUTION.key);
+  const game = FPS_GAMES.find((g) => g.key === gameKey) ?? DEFAULT_FPS_GAME;
+  const resolution = FPS_RESOLUTIONS.find((r) => r.key === resKey) ?? DEFAULT_FPS_RESOLUTION;
 
   const partIds = perfItems.map((item) => item.partId).filter(Boolean);
   const partKey = useMemo(() => [...partIds].sort().join(','), [partIds]);
@@ -224,7 +248,7 @@ function PerfPanelBody({
     : [];
   const compareKey = useMemo(() => [...comparePartIds].sort().join(','), [comparePartIds]);
 
-  const { data, isFetching, isError } = useQuery({
+  const { data, isFetching, isError, isPlaceholderData } = useQuery({
     queryKey: ['quote-fps', partKey, game.key, resolution.key],
     queryFn: () => checkBuildPerformance({ partIds, game: game.query, resolution: resolution.query }),
     enabled: hasGpu && partIds.length > 0,
@@ -275,6 +299,18 @@ function PerfPanelBody({
   const hasAvg = Number.isFinite(avg) && avg > 0;
   const low = Number(evidence?.onePercentLowFps);
   const hasLow = Number.isFinite(low) && low > 0;
+
+  useEffect(() => {
+    onPerformanceViewChange?.({
+      gameLabel: game.label,
+      gameQuery: game.query,
+      resolutionLabel: resolution.label,
+      resolutionQuery: resolution.query,
+      sourceFingerprint: partKey,
+      evidenceSettled: !isFetching && !isPlaceholderData,
+      avgFps: !isFetching && !isPlaceholderData && hasAvg ? Math.round(avg) : undefined
+    });
+  }, [avg, game.label, game.query, hasAvg, isFetching, isPlaceholderData, onPerformanceViewChange, partKey, resolution.label, resolution.query]);
 
   const compareEvidence: GameFpsEvidence | undefined = activeComparison
     ? pickEvidenceRow(compareQuery.data?.details?.gameFpsEvidence)

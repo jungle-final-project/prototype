@@ -133,6 +133,7 @@ public class BuildChatIntentRouter {
         if (normalized.isBlank()
                 || containsAny(normalized, "컴퓨터하나", "아무거나", "뭐사지")
                 || isMissingMonitorContext(normalized)
+                || standaloneContext(body) && isUseCaseOnlyDesire(normalized, message, category)
                 || isVaguePurchaseIntent(message, normalized, category)) {
             List<String> clarificationReasons = new ArrayList<>(List.of("LOW_INFORMATION"));
             // "해상도 좋은"처럼 해상도 언급만 있고 FHD/QHD/4K가 특정되지 않은 요청은 해상도 되묻기로 특화한다
@@ -261,6 +262,20 @@ public class BuildChatIntentRouter {
         return isRecommendationVerb(normalized)
                 || hasBuildNoun(normalized)
                 || isLowInfoPurchaseIntent(normalized);
+    }
+
+    private static boolean isUseCaseOnlyDesire(String normalized, String message, String category) {
+        if (category != null
+                || BuildChatService.parseBudgetWon(message) != null
+                || hasOpenBudgetSignal(normalized)
+                || !hasBuildUseCaseSignal(normalized)) {
+            return false;
+        }
+        // PC/견적 명사를 생략해도 "배그가 잘 돌아갔으면"처럼 사용 목적과 희망이 명확한 첫 문장은
+        // 범용 LLM으로 흘리지 않고 예산만 되묻는다. 공략·잡담을 잡지 않도록 희망/사용 표현을 함께 요구한다.
+        return containsAny(normalized,
+                "잘돌아", "원활하게", "쾌적하게", "돌리고싶", "하고싶", "즐기고싶",
+                "사용하고싶", "쓰고싶", "용으로쓸", "위주로쓸", "됐으면", "되었으면", "원해", "원하");
     }
 
     private static BuildChatIntentDecision unsupported(String category, String partQuery) {
@@ -456,6 +471,7 @@ public class BuildChatIntentRouter {
 
     private static boolean isBuildRecommend(String normalized, String message, String category) {
         Integer budget = BuildChatService.parseBudgetWon(message);
+        boolean minimumFeasibleBuild = BuildChatService.isMinimumFeasibleBuildRequest(message);
         boolean budgetWithCompositionConstraint = budget != null && hasBuildCompositionConstraint(normalized);
         boolean budgetWithUseCase = budget != null && hasBuildUseCaseSignal(normalized);
         boolean recommendVerb = isRecommendationVerb(normalized);
@@ -476,13 +492,13 @@ public class BuildChatIntentRouter {
         // 단, 예산 무관/끝판왕처럼 open budget을 명시한 경우는 즉시 추천한다.
         boolean specificPartSignal = hasSpecificPartSignal(message);
         boolean explicitRecommend = recommendVerb
-                && (budget != null || specificPartSignal || openBudget);
+                && (budget != null || specificPartSignal || openBudget || minimumFeasibleBuild);
         boolean budgetWithBuildNoun = budget != null && hasBuildNoun(normalized);
         boolean openBudgetWithBuildNoun = openBudget && hasBuildNoun(normalized);
         boolean openBudgetWithUseCase = openBudget && hasBuildUseCaseSignal(normalized);
         // "2500만원 잡았는데 뭐부터 넣어야 돼?" — 예산이 명확하면 모호한 의향도 견적 추천으로 흡수한다
         boolean budgetWithPurchaseIntent = budget != null && isLowInfoPurchaseIntent(normalized);
-        return explicitRecommend || budgetWithUseCase || budgetWithBuildNoun || openBudgetWithBuildNoun
+        return minimumFeasibleBuild || explicitRecommend || budgetWithUseCase || budgetWithBuildNoun || openBudgetWithBuildNoun
                 || openBudgetWithUseCase || openBudgetMultiPartRecommend
                 || budgetWithCompositionConstraint || budgetWithPurchaseIntent;
     }
@@ -558,7 +574,8 @@ public class BuildChatIntentRouter {
     private static boolean hasBuildUseCaseSignal(String normalized) {
         return containsAny(normalized,
                 "영상", "편집", "프리미어", "블렌더", "렌더", "렌더팜", "개발", "docker", "도커", "ide", "코딩",
-                "게임", "게이밍", "qhd", "fhd", "4k", "hz", "배그", "발로란트", "발로", "오버워치", "옵치",
+                "게임", "게이밍", "qhd", "fhd", "4k", "hz", "배그", "배틀그라운드", "battleground", "pubg",
+                "발로란트", "발로", "오버워치", "옵치",
                 "사이버펑크", "로스트아크", "디아블로", "몬헌", "몬스터헌터", "배틀필드", "스타크래프트", "스타2",
                 "롤", "리그오브레전드", "풀옵",
                 "ai", "cuda", "로컬ai", "학습", "저소음", "조용", "컴팩트", "사무", "문서작업", "엑셀",
@@ -613,6 +630,9 @@ public class BuildChatIntentRouter {
     }
 
     private static String budgetSignature(String message) {
+        if (BuildChatService.isMinimumFeasibleBuildRequest(message)) {
+            return "MINIMUM_FEASIBLE";
+        }
         BuildChatService.BudgetIntent budget = BuildChatService.budgetIntent(message);
         if (budget.budget() == null || budget.mode() == null) {
             return null;

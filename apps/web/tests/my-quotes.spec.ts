@@ -153,6 +153,15 @@ async function openMyQuotesAsUser(page: Page, assemblyItems: unknown[] = []) {
       })
     });
   });
+  // 전역 헤더가 로그인 직후 기사 프로필을 조회한다. 이 요청을 실제 API로 흘리면 테스트용 JWT의
+  // 401 처리 때문에 저장 견적 쿼리까지 취소될 수 있으므로 일반 사용자 상태를 명시한다.
+  await page.route('**/api/technician/profile', (route) => route.fulfill({ status: 204 }));
+  // 전역 AS 위젯의 상담방 조회도 동일하게 격리한다. 상담방 없음은 인증 실패가 아니라 정상 404다.
+  await page.route('**/api/support/chat-sessions/current**', (route) => route.fulfill({
+    status: 404,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: 'NOT_FOUND', message: '상담방 없음' })
+  }));
   await page.route('**/api/builds/history', async (route) => {
     await route.fulfill({
       status: 200,
