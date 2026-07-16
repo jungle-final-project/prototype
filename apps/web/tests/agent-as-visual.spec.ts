@@ -129,6 +129,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   let decisionPatchPayload: Record<string, unknown> | undefined;
   let remoteRequestPayload: Record<string, unknown> | undefined;
   let feedbackPayload: Record<string, unknown> | undefined;
+  let deletedTicketId: string | undefined;
 
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -205,6 +206,20 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.route(/\/api\/admin\/as-tickets\/[^/]+$/, async (route) => {
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());
+    if (route.request().method() === 'DELETE') {
+      deletedTicketId = ticketId;
+      tickets.delete(ticketId);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: ticketId,
+          deleted: true,
+          deletedAt: '2026-07-16T06:00:00Z'
+        })
+      });
+      return;
+    }
     if (route.request().method() === 'PATCH') {
       decisionPatchPayload = route.request().postDataJSON() as Record<string, unknown>;
       const current = tickets.get(ticketId) ?? beforeDecisionTicket;
@@ -369,10 +384,21 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('Remote support link sent.');
   await page.screenshot({ path: `${screenshotDir}/05-mobile-ticket.png`, fullPage: true });
 
+  await page.evaluate(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/admin/as-tickets');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'AS 티켓 qa-ticket-no-samples 삭제', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'AS 티켓 qa-ticket-no-samples 삭제', exact: true })).toHaveCount(0);
+  expect(deletedTicketId).toBe('qa-ticket-no-samples');
+
   expect(apiCalls).toEqual(expect.arrayContaining([
     'GET /api/as-tickets/qa-ticket-before',
     'GET /api/admin/as-tickets/qa-ticket-before',
-    'PATCH /api/admin/as-tickets/qa-ticket-before'
+    'PATCH /api/admin/as-tickets/qa-ticket-before',
+    'DELETE /api/admin/as-tickets/qa-ticket-no-samples'
   ]));
   expect(consoleErrors).toEqual([]);
 });

@@ -1,14 +1,24 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
 import { formatSeoulDateTime } from '../../../lib/dateTime';
-import { getAdminTickets } from '../adminApi';
+import { deleteAdminTicket, getAdminTickets } from '../adminApi';
 import type { AdminAsTicket } from '../adminApi';
 
 export function AdminTicketsPage() {
+  const queryClient = useQueryClient();
   const { data, isError, isLoading } = useQuery({
     queryKey: ['admin-as-tickets'],
     queryFn: getAdminTickets
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteAdminTicket,
+    onSuccess: async (_, ticketId) => {
+      queryClient.removeQueries({ queryKey: ['admin-as-ticket', ticketId] });
+      await queryClient.invalidateQueries({ queryKey: ['admin-as-tickets'] });
+    }
   });
 
   const tickets = data?.items ?? [];
@@ -21,7 +31,26 @@ export function AdminTicketsPage() {
     '증상': <Link className="font-bold text-slate-800 hover:text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{ticket.title ?? firstLine(ticket.symptom)}</Link>,
     '사용자': userLabel(ticket),
     '접수 시간': <span className="whitespace-nowrap">{formatDateTime(ticket.createdAt)}</span>,
-    '담당자': <span className="whitespace-nowrap">{ticket.assignedAdminId ? shortId(ticket.assignedAdminId) : '미배정'}</span>
+    '담당자': <span className="whitespace-nowrap">{ticket.assignedAdminId ? shortId(ticket.assignedAdminId) : '미배정'}</span>,
+    '관리': (
+      <button
+        type="button"
+        aria-label={`AS 티켓 ${ticket.id} 삭제`}
+        title="티켓 삭제"
+        disabled={deleteMutation.isPending}
+        onClick={() => {
+          const confirmed = window.confirm(
+            `AS 티켓 ${shortId(ticket.id)}을 삭제할까요? 연결된 상담방과 진행 중 지원은 종료되며 원본 로그와 감사 기록은 보존됩니다.`
+          );
+          if (confirmed) {
+            deleteMutation.mutate(ticket.id);
+          }
+        }}
+        className="inline-flex h-9 w-9 items-center justify-center rounded border border-red-200 text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Trash2 aria-hidden="true" size={16} />
+      </button>
+    )
   }));
 
   const selected = tickets[0];
@@ -33,15 +62,22 @@ export function AdminTicketsPage() {
           <Panel title="처리할 AS 티켓" subtitle="사용자 증상과 PCAgent 로그가 접수된 티켓을 확인합니다.">
             {isLoading ? <StateMessage type="info" title="AS 티켓 로딩 중" body="관리자 AS 티켓 목록을 불러오고 있습니다." /> : null}
             {isError ? <StateMessage type="warn" title="AS 티켓 조회 실패" body="AS 티켓 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." /> : null}
+            {deleteMutation.isError ? (
+              <StateMessage
+                type="warn"
+                title="AS 티켓 삭제 실패"
+                body={deleteMutation.error instanceof Error ? deleteMutation.error.message : 'AS 티켓을 삭제하지 못했습니다.'}
+              />
+            ) : null}
             {!isLoading && !isError && ticketRows.length === 0 ? (
               <StateMessage type="info" title="AS 티켓 없음" body="표시할 관리자 AS 티켓이 없습니다." />
             ) : null}
             {!isLoading && !isError && ticketRows.length > 0 ? (
               <DataTable
-                columns={['티켓', '상태', '검토', '결정', '추천 서비스', '증상', '사용자', '접수 시간', '담당자']}
+                columns={['티켓', '상태', '검토', '결정', '추천 서비스', '증상', '사용자', '접수 시간', '담당자', '관리']}
                 rows={ticketRows}
-                minWidth={1120}
-                nowrapColumns={['티켓', '상태', '검토', '결정', '추천 서비스', '접수 시간', '담당자']}
+                minWidth={1180}
+                nowrapColumns={['티켓', '상태', '검토', '결정', '추천 서비스', '접수 시간', '담당자', '관리']}
               />
             ) : null}
           </Panel>

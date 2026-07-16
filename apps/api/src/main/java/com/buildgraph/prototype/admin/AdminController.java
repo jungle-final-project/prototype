@@ -181,6 +181,21 @@ public class AdminController {
         return ticket;
     }
 
+    @DeleteMapping("/as-tickets/{id}")
+    Map<String, Object> deleteTicket(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        Map<String, Object> result = ticketQueryService.delete(id, admin);
+        String supportChatRoomId = stringOrNull(result.get("supportChatRoomId"));
+        if (supportChatRoomId != null) {
+            supportChatWebSocketHandler.broadcastRoomUpdate(supportChatRoomId);
+            adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(supportChatRoomId);
+        }
+        return result;
+    }
+
     @GetMapping("/price-jobs")
     Map<String, Object> priceJobs(@RequestHeader(value = "Authorization", required = false) String authorization) {
         currentUserService.requireAdmin(authorization);
