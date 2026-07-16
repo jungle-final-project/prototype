@@ -2,14 +2,18 @@
 
 이 문서는 BuildGraph Green API를 현재의 수동 EC2 한 대에서 Launch Template과 EC2 Auto Scaling Group으로 단계적으로 전환하는 작업 가이드다.
 
-이번 가이드의 핵심은 다음 두 단계를 분리하는 것이다.
+> 2026-07-17 운영 결정: WebSocket·PC Agent cross-instance 처리는 구현하지
+> 않는다. 따라서 Web ASG는 `Min 1 / Desired 1 / Max 1`을 유지하며,
+> 이 문서의 2단계 `Max 3` 내용은 실행 대상이 아닌 보류 기록으로만 남긴다.
+
+이번 가이드의 기존 단계 구분은 다음과 같다.
 
 ```text
 1단계: Min 1 / Desired 1 / Max 1
        자동 교체와 재현 가능한 부팅만 검증
 
 2단계: Min 1 / Desired 1 / Max 3
-       다중 인스턴스 안전 조건을 통과한 뒤 실제 scale-out 활성화
+       현재 운영 결정으로 미적용
 ```
 
 ASG를 만들었다는 사실만으로 애플리케이션이 수평 확장 가능한 것은 아니다. 현재 BuildGraph에는 JVM 메모리 기반 WebSocket 상태, EC2 로컬 Docker volume, 특정 EC2 ID를 대상으로 하는 배포 workflow가 남아 있다. 이 문제를 해결하지 않고 `Max`를 2 이상으로 올리면 HTTP 요청은 분산되더라도 WebSocket push, PC Agent 진단, 파일 조회, 모델 일관성, 배포 버전이 깨질 수 있다.
@@ -62,7 +66,7 @@ CloudFront
 - ASG가 종료된 인스턴스를 한 대로 복원하는지 확인한다.
 - 기존 수동 Green EC2를 즉시 삭제하지 않고 롤백 경로로 보존한다.
 
-### 1.3 2단계 완료 구조
+### 1.3 2단계 보류 구조
 
 ```text
 CloudFront
@@ -1098,25 +1102,81 @@ CPU target 숫자를 근거 없이 고정하지 않는다. CPU가 낮아도 DB c
 
 ## 17. Instance Refresh 배포
 
-다중 인스턴스 안전 조건이 완료된 뒤 새 버전을 배포할 때 사용한다.
+현재 BuildGraph는 WebSocket·PC Agent cross-instance 공유를 구현하지 않는다.
+Web ASG는 계속 `Min 1 / Desired 1 / Max 1`로 유지한다. 다만 배포 중
+`100/200` Instance Refresh로 구·신 인스턴스가 잠시 동시에 요청을 받는
+상태는 개발·데모 환경의 승인된 예외로 허용한다.
 
-1. API/XGB image를 immutable Git SHA tag로 publish한다.
-2. clean AMI 또는 bootstrap release manifest를 만든다.
-3. Launch Template 새 version을 생성한다.
-4. 새 version의 AMI, SG, IAM, image SHA, user data checksum을 검토한다.
-5. ASG가 새 특정 Launch Template version을 사용하도록 변경한다.
-6. Instance Refresh를 시작한다.
+### 17.1 Workflow 역할 분리
 
-가용성을 우선하고 일시적인 추가 EC2 비용을 허용한다면 다음 원칙을 사용한다.
+다음 두 workflow는 테스트와 immutable ECR image 발행까지만 수행한다.
+
+- `Publish Green API Image`
+- `Publish Green XGB Reranker Image`
+
+이 workflow는 다음 작업을 하지 않는다.
+
+- 고정 EC2 instance ID 사용
+- SSM `SendCommand`
+- 실행 중인 컨테이너 직접 교체
+- Launch Template 또는 ASG 변경
+
+실제 서버 교체는 수동 `Release Green Web ASG` workflow에서만 수행한다.
+수동 release workflow는 다음 값을 요구한다.
+
+| 입력 | 의미 |
+| --- | --- |
+| `service` | `api` 또는 `xgb-reranker` |
+| `git_sha` | 현재 `origin/main`의 정확한 40자리 SHA |
+| `image_tag` | `git_sha`와 동일한 immutable ECR tag |
+
+### 17.2 Release 순서
+
+1. 현재 `/api/health`, WebSocket, PC Agent 상태를 기록한다.
+2. CloudFront `/api/*`, `/ws/*`는 ALB origin을 계속 사용한다.
+3. `Release Green Web ASG`를 실행한다.
+4. 선택한 ECR SHA tag를 immutable digest URI로 변환한다.
+5. 기존 release manifest에서 반대편 API/XGB image와 Nginx digest를 보존한다.
+6. Secret이 없는 release manifest를 User data에 포함한 숫자형 Launch
+   Template version을 생성한다.
+7. 새 숫자 version을 `DesiredConfiguration`으로 지정해 Instance Refresh를
+   시작한다.
+8. 기존 Target과 신규 Target이 잠시 함께 등록되는 것을 관찰한다.
+9. Refresh 완료 후 신규 Target 한 대만 Healthy인지 확인한다.
+10. API smoke test를 수행한다.
+11. WebSocket과 PC Agent의 재연결·실시간 기능을 확인한다.
+
+Release helper는 다음 파일이다.
+
+```text
+tools/rollout_green_web_asg_release.sh
+```
+
+기본 실행은 읽기 전용이다. `--apply`를 지정한 경우에만 Launch Template과
+Instance Refresh를 변경한다.
+
+### 17.3 Instance Refresh 정책
+
+CloudFront 격리 없이 다음 값을 사용한다.
 
 ```text
 Minimum healthy percentage: 100
 Maximum healthy percentage: 200
 Skip matching: Enable
-Auto rollback: 검증된 CloudWatch Alarm 연결 후 Enable
+Auto rollback: Enable
+Launch Template: DesiredConfiguration의 특정 숫자 version
 ```
 
-Minimum healthy 100%는 새 인스턴스를 먼저 시작한 뒤 이전 인스턴스를 종료하는 방식이다. Desired가 1이면 일시적으로 두 대가 실행될 수 있다. 4번 하드 게이트 전에는 사용하지 않는다.
+Minimum healthy 100%는 새 인스턴스를 먼저 시작한 뒤 이전 인스턴스를
+종료한다. Desired가 1이어도 잠시 두 대가 실행되며 ALB가 두 Target에
+요청을 분산할 수 있다.
+
+이 시간의 HTTP 가용성은 유지하지만 다음 위험을 승인된 예외로 수용한다.
+
+- WebSocket 연결과 push가 서로 다른 인스턴스에 위치할 수 있음
+- PC Agent 연결과 진단 요청이 다른 인스턴스로 분리될 수 있음
+- 배포 전·후 API image가 짧은 시간 동시에 요청을 처리함
+- 클라이언트 재연결 또는 REST polling fallback이 필요할 수 있음
 
 Refresh 중 다음을 확인한다.
 
@@ -1128,7 +1188,27 @@ Refresh 중 다음을 확인한다.
 - RDS connection
 - ASG Activity와 Refresh percentage
 
-실패하면 refresh를 중단하고 이전 Launch Template version으로 rollback한다. 기존 AMI와 version을 삭제하지 않는다.
+진행 중인 Refresh가 실패하면 이전 숫자 Launch Template version으로
+rollback한다. Refresh가 이미 성공했지만 Target health 검증이 실패하면 이전
+version을 `DesiredConfiguration`으로 지정한 reverse Refresh를 새로 시작한다.
+기존 AMI와 이전 Launch Template version을 삭제하지 않는다.
+
+### 17.4 GitHub OIDC Role 권한
+
+ASG rollout에 필요한 추가 최소 권한은 다음 파일에 정의한다.
+
+```text
+infra/iam/buildgraph-demo-github-actions-green-asg-rollout-policy.json
+```
+
+정책 범위는 현재 Green Web Launch Template, ASG, Private App Subnet, ASG SG,
+검증 AMI와 runtime IAM Role로 제한한다. 다음 권한은 추가하지 않는다.
+
+- 고정 EC2 대상 SSM 배포
+- `autoscaling:UpdateAutoScalingGroup`
+- ASG·Launch Template 삭제
+- EC2 수동 종료
+- Secret value 조회
 
 ---
 
@@ -1345,7 +1425,10 @@ Secret value, WebSocket ticket, user data 원문은 기록하지 않는다.
 - [ ] 기존 수동 Green·EIP·EC2 origin 보존
 - [ ] replacement drill PASS
 
-### 단계 2 진입 전 — 애플리케이션 준비
+### 단계 2 진입 전 — 현재 미진행
+
+WebSocket·PC Agent cross-instance 처리를 구현하지 않기로 결정했으므로 아래
+항목과 `Max 3` 전환은 수행하지 않는다.
 
 - [ ] WebSocket cross-instance fan-out/session routing 완료
 - [ ] PC Agent cross-instance 진단 5초 계약 PASS
@@ -1358,7 +1441,7 @@ Secret value, WebSocket ticket, user data 원문은 기록하지 않는다.
 - [ ] Hikari × Max instance DB budget 확인
 - [ ] bootstrap test와 rollback test PASS
 
-### 단계 2 — 실제 scale-out
+### 단계 2 — 실제 scale-out 미적용
 
 - [ ] 2단계 진입 전 하드 게이트 전체 PASS
 - [ ] ALB origin 보호 후속 작업 완료 또는 승인된 예외 만료일 기록

@@ -20,6 +20,10 @@ DEPLOY_WORKFLOWS = (
     ROOT / ".github/workflows/deploy-api-green.yml",
     ROOT / ".github/workflows/deploy-xgb-green.yml",
 )
+PRIVATE_NETWORK_TEST_MODULES = (
+    "tools.test_provision_green_private_app_network",
+    "tools.test_migrate_green_web_asg_private",
+)
 
 AWS_ACCOUNT_ID = "443915990705"
 AWS_REGION = "ap-northeast-2"
@@ -96,6 +100,14 @@ class GreenAsgBootstrapContractTest(unittest.TestCase):
                 "BUILDGRAPH_SCHEDULING_ENABLED"
             ),
         )
+        for service_name in ("api", "xgb-reranker"):
+            with self.subTest(service=service_name):
+                self.assertEqual(
+                    "${AWS_STS_REGIONAL_ENDPOINTS:-regional}",
+                    services[service_name]
+                    .get("environment", {})
+                    .get("AWS_STS_REGIONAL_ENDPOINTS"),
+                )
 
     def test_bootstrap_has_secret_safe_idempotent_runtime_contract(self) -> None:
         script = BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
@@ -105,6 +117,7 @@ class GreenAsgBootstrapContractTest(unittest.TestCase):
             "umask 077",
             "flock",
             "sts get-caller-identity",
+            "AWS_STS_REGIONAL_ENDPOINTS",
             "secretsmanager get-secret-value",
             "ecr get-login-password",
             "config --quiet",
@@ -129,6 +142,11 @@ class GreenAsgBootstrapContractTest(unittest.TestCase):
                     "tools.test_bootstrap_green_asg",
                     workflow.read_text(encoding="utf-8"),
                 )
+                for module_name in PRIVATE_NETWORK_TEST_MODULES:
+                    self.assertIn(
+                        module_name,
+                        workflow.read_text(encoding="utf-8"),
+                    )
 
 
 class GreenAsgBootstrapExecutionTest(unittest.TestCase):
@@ -221,6 +239,8 @@ class GreenAsgBootstrapExecutionTest(unittest.TestCase):
             #!/usr/bin/env bash
             set -euo pipefail
 
+            printf 'aws-sts-endpoints=%s\n' \
+              "${AWS_STS_REGIONAL_ENDPOINTS:-unset}" >>"$FAKE_TRACE_FILE"
             case "${1:-}:${2:-}" in
               sts:get-caller-identity)
                 printf '%s\n' "$FAKE_AWS_ACCOUNT_ID"
@@ -424,6 +444,7 @@ class GreenAsgBootstrapExecutionTest(unittest.TestCase):
             {
                 "NGINX_IMAGE_URI": NGINX_IMAGE,
                 "BUILDGRAPH_SCHEDULING_ENABLED": "false",
+                "AWS_STS_REGIONAL_ENDPOINTS": "regional",
             },
             parse_dotenv(asg_runtime_env),
         )
@@ -432,6 +453,7 @@ class GreenAsgBootstrapExecutionTest(unittest.TestCase):
 
         trace = self.trace_file.read_text(encoding="utf-8")
         for marker in (
+            "aws-sts-endpoints=regional",
             "aws:secretsmanager:get-secret-value",
             "docker:login",
             "docker:compose:config",
@@ -443,6 +465,25 @@ class GreenAsgBootstrapExecutionTest(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, trace)
+
+    def test_regional_sts_setting_is_not_loaded_from_runtime_secret(self) -> None:
+        result = self._run_bootstrap(
+            FAKE_SECRET_CONTENT="\n".join(
+                [
+                    "SPRING_DATASOURCE_URL=jdbc:postgresql://db/buildgraph",
+                    "SPRING_DATASOURCE_USERNAME=buildgraph",
+                    f"SPRING_DATASOURCE_PASSWORD={TEST_SECRET}",
+                ]
+            )
+        )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            "regional",
+            parse_dotenv(self.runtime_dir / "asg-runtime.env")[
+                "AWS_STS_REGIONAL_ENDPOINTS"
+            ],
+        )
 
     def test_second_run_is_idempotent(self) -> None:
         first = self._run_bootstrap()

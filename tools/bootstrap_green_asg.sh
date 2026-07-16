@@ -5,6 +5,7 @@ umask 077
 
 readonly AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 readonly AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-443915990705}"
+readonly AWS_STS_REGIONAL_ENDPOINTS="regional"
 readonly ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 readonly API_REPOSITORY="buildgraph-demo-api-green"
 readonly XGB_REPOSITORY="buildgraph-demo-xgb-reranker-green"
@@ -23,6 +24,8 @@ readonly COMPOSE_PROJECT_NAME="buildgraph-green"
 readonly HEALTH_URL="${BUILDGRAPH_HEALTH_URL:-http://127.0.0.1/api/health}"
 readonly HEALTH_MAX_ATTEMPTS="${BUILDGRAPH_HEALTH_MAX_ATTEMPTS:-60}"
 readonly HEALTH_RETRY_SECONDS="${BUILDGRAPH_HEALTH_RETRY_SECONDS:-5}"
+
+export AWS_STS_REGIONAL_ENDPOINTS
 
 CURRENT_STEP="initialization"
 TEMP_DIR=""
@@ -253,7 +256,8 @@ printf '%s\n' \
   "XGB_IMAGE_URI=$XGB_IMAGE_URI" >"$IMAGE_CANDIDATE"
 printf '%s\n' \
   "NGINX_IMAGE_URI=$NGINX_IMAGE_URI" \
-  "BUILDGRAPH_SCHEDULING_ENABLED=false" >"$ASG_RUNTIME_CANDIDATE"
+  "BUILDGRAPH_SCHEDULING_ENABLED=false" \
+  "AWS_STS_REGIONAL_ENDPOINTS=$AWS_STS_REGIONAL_ENDPOINTS" >"$ASG_RUNTIME_CANDIDATE"
 chmod 600 "$IMAGE_CANDIDATE" "$ASG_RUNTIME_CANDIDATE"
 
 CURRENT_STEP="install-runtime-files"

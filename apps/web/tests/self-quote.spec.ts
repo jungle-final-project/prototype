@@ -1190,9 +1190,13 @@ test('candidate panel can be dragged by its header on desktop', async ({ page })
   await page.mouse.move(startX + 24, startY + 8, { steps: 4 });
   await page.mouse.up();
 
-  const after = await panel.boundingBox();
-  expect(Math.round((after?.x ?? 0) - (before?.x ?? 0))).toBe(24);
-  expect(Math.round((after?.y ?? 0) - (before?.y ?? 0))).toBe(8);
+  await expect.poll(async () => {
+    const after = await panel.boundingBox();
+    return {
+      x: Math.round((after?.x ?? 0) - (before?.x ?? 0)),
+      y: Math.round((after?.y ?? 0) - (before?.y ?? 0))
+    };
+  }).toEqual({ x: 24, y: 8 });
 
   // 우하단 꼭지점을 잡아당기면 크기가 커진다(네이티브 리사이즈).
   const beforeResize = await panel.boundingBox();
@@ -1610,6 +1614,67 @@ test('overlays photo candidates on the board body without resizing the compatibi
   await dismissLayer.click({ position: { x: Math.max(1, (dismissBox?.width ?? 2) - 8), y: Math.max(1, (dismissBox?.height ?? 2) / 2) } });
   await expect(panel).toHaveCount(0);
   await expect(page).toHaveURL('/self-quote');
+});
+
+test('keeps desktop candidate results scrollable and compact at a 150 percent zoom-sized viewport', async ({ page }) => {
+  // 2048x1152 화면을 Chrome 150%로 보는 상황과 비슷한 CSS viewport다.
+  // 너비는 데스크톱 breakpoint를 유지하지만 세로 작업 공간이 줄어드는 회귀를 재현한다.
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await loginAsUser(page);
+
+  const currentCpu = draftItem('cpu-zoom-current', 'CPU', '현재 장착된 CPU', 499000);
+  const zoomDraft = {
+    ...emptyDraft,
+    id: 'draft-zoom-candidate-panel',
+    items: [currentCpu],
+    totalPrice: currentCpu.lineTotal,
+    itemCount: 1
+  };
+  const cpuCandidates = Array.from({ length: 8 }, (_, index) =>
+    candidatePart(`cpu-zoom-${index + 1}`, 'CPU', `확대 환경 CPU 후보 ${index + 1}`, {
+      price: 250000 + index * 30000
+    })
+  );
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(zoomDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: cpuCandidates, page: 0, size: 20, total: cpuCandidates.length })
+    });
+  });
+
+  await page.goto('/self-quote?category=CPU');
+
+  const panel = page.getByTestId('slot-candidate-panel');
+  const candidateList = panel.getByTestId('slot-candidate-list');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveCSS('position', 'fixed');
+  await expect(panel.getByTestId('candidate-panel-description')).toBeHidden();
+  await expect(panel.getByTestId('slot-candidate-panel-handle')).toHaveCSS('padding-top', '8px');
+  await expect(panel.getByTestId('candidate-panel-search')).toHaveCSS('padding-top', '6px');
+  await expect(panel.getByTestId('candidate-panel-filters')).toHaveCSS('padding-top', '6px');
+  await expect(panel.getByTestId('candidate-panel-selected')).toHaveCSS('padding-top', '6px');
+
+  const metrics = await candidateList.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollbarGutter: style.scrollbarGutter,
+      scrollbarWidth: style.scrollbarWidth
+    };
+  });
+  expect(metrics.clientHeight).toBeGreaterThanOrEqual(120);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  expect(metrics.scrollbarGutter).toContain('stable');
+  expect(metrics.scrollbarWidth).not.toBe('none');
+
+  await candidateList.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect(panel.getByText('확대 환경 CPU 후보 8')).toBeVisible();
 });
 
 test('blocks purchase when a tool check fails without a matching edge', async ({ page }) => {
