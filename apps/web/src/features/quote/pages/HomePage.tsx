@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -29,12 +29,11 @@ import {
 import { partImageUrl } from '../../parts/partDisplay';
 import {
   applyAiBuildToQuoteDraft,
+  getHome,
   getPublicHome,
-  listHomeRecommendedParts,
-  listParts,
   recordRecommendationEvent
 } from '../../parts/partsApi';
-import type { HomeRecommendedPart, PartPage } from '../../parts/types';
+import type { HomeRecommendedPart } from '../../parts/types';
 import { type PartCategory } from '../aiSelection';
 import {
   HomeFeaturedBuildPreview,
@@ -164,21 +163,19 @@ export function HomePage() {
     staleTime: 60_000
   });
 
-  const categoryPartQueries = useQueries({
-    queries: PART_CATEGORIES.map((category) => ({
-      queryKey: ['parts', 'modern-home-curated', category.value],
-      queryFn: () => listParts({ category: category.value, status: 'ACTIVE', page: 0, size: 4, sort: 'price_desc' as const }),
-      staleTime: 60_000,
-      enabled: isAuthenticated
-    }))
+  const homeQuery = useQuery({
+    queryKey: ['home', 'authenticated'],
+    queryFn: getHome,
+    enabled: isAuthenticated,
+    staleTime: 60_000
   });
+
+  const homeData = isAuthenticated ? homeQuery.data : publicHomeQuery.data;
 
   const curatedPreviewItems = useMemo<HomeFeaturedBuildPreviewItem[]>(() => (
     CURATED_BUILD_TEMPLATES.map((template, buildIndex) => {
-      const buildParts = PART_CATEGORIES.map((category, categoryIndex) => {
-        const page = categoryPartQueries[categoryIndex]?.data as PartPage | undefined;
-        const publicCandidates = publicHomeQuery.data?.categoryParts[category.value] ?? [];
-        const candidates = isAuthenticated ? (page?.items ?? []) : publicCandidates;
+      const buildParts = PART_CATEGORIES.map((category) => {
+        const candidates = homeData?.categoryParts[category.value] ?? [];
         const part = candidates[buildIndex] ?? candidates[0];
         if (!part) return null;
         return {
@@ -205,7 +202,7 @@ export function HomePage() {
           : null
       };
     })
-  ), [categoryPartQueries, isAuthenticated, publicHomeQuery.data]);
+  ), [homeData]);
 
   const selectedCuratedBuild = selectedCuratedBuildId
     ? curatedPreviewItems.find((item) => item.build.id === selectedCuratedBuildId) ?? null
@@ -433,7 +430,12 @@ export function HomePage() {
           </div>
         </section>
 
-          <PopularPartsSection isAuthenticated={isAuthenticated} publicItems={publicHomeQuery.data?.recommendedParts.items ?? []} publicLoading={publicHomeQuery.isLoading} publicError={publicHomeQuery.isError} />
+          <PopularPartsSection
+            isAuthenticated={isAuthenticated}
+            items={homeData?.recommendedParts.items ?? []}
+            loading={isAuthenticated ? homeQuery.isLoading : publicHomeQuery.isLoading}
+            error={isAuthenticated ? homeQuery.isError : publicHomeQuery.isError}
+          />
         </div>
       </main>
       {showHomeChoicePrompt ? (
@@ -650,27 +652,18 @@ function HomeAiFlowChoiceDialog({
 
 type PopularPartsSectionProps = {
   isAuthenticated: boolean;
-  publicItems: HomeRecommendedPart[];
-  publicLoading: boolean;
-  publicError: boolean;
+  items: HomeRecommendedPart[];
+  loading: boolean;
+  error: boolean;
 };
 
-function PopularPartsSection({ isAuthenticated, publicItems, publicLoading, publicError }: PopularPartsSectionProps) {
+function PopularPartsSection({ isAuthenticated, items, loading, error }: PopularPartsSectionProps) {
   const impressedIdsRef = useRef(new Set<string>());
-  const partsQuery = useQuery({
-    queryKey: ['recommendations', 'modern-home-parts', 5],
-    queryFn: () => listHomeRecommendedParts(5),
-    enabled: isAuthenticated,
-    staleTime: 60_000
-  });
-  const sourceItems = isAuthenticated ? (partsQuery.data?.items ?? []) : publicItems;
-  const visibleParts = sourceItems.slice(0, 5);
-  const isLoading = isAuthenticated ? partsQuery.isLoading : publicLoading;
-  const isError = isAuthenticated ? partsQuery.isError : publicError;
+  const visibleParts = items.slice(0, 5);
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    for (const item of (partsQuery.data?.items ?? []).slice(0, 5)) {
+    for (const item of items.slice(0, 5)) {
       if (impressedIdsRef.current.has(item.recommendationId)) continue;
       impressedIdsRef.current.add(item.recommendationId);
       void recordRecommendationEvent({
@@ -683,7 +676,7 @@ function PopularPartsSection({ isAuthenticated, publicItems, publicLoading, publ
         idempotencyKey: `home-impression-${item.recommendationId}`
       }).catch(() => undefined);
     }
-  }, [isAuthenticated, partsQuery.data]);
+  }, [isAuthenticated, items]);
 
   return (
     <section data-testid="home-parts-section" className="mt-16" aria-labelledby="popular-parts-title">
@@ -699,14 +692,14 @@ function PopularPartsSection({ isAuthenticated, publicItems, publicLoading, publ
         </Link>
       </div>
 
-      {isLoading ? (
+      {loading ? (
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5" aria-label="추천 부품 불러오는 중">
           {Array.from({ length: 5 }, (_, index) => (
             <div key={index} className="aspect-square animate-pulse rounded-[18px] bg-slate-200" />
           ))}
         </div>
       ) : null}
-      {isError ? (
+      {error ? (
         <div role="alert" className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
           인기 부품을 불러오지 못했습니다. 전체 부품에서 다시 확인해 주세요.
         </div>

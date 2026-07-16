@@ -32,6 +32,10 @@ export function getPublicHome() {
   return api<PublicHomeResponse>('/api/public/home');
 }
 
+export function getHome() {
+  return api<PublicHomeResponse>('/api/home');
+}
+
 export function recordRecommendationEvent(payload: RecommendationEventRequest) {
   return api('/api/recommendation-events', {
     method: 'POST',

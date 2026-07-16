@@ -45,7 +45,7 @@ export function loginForVu(vu) {
 }
 
 export function commonTags(phase, extra = {}) {
-  return { flow: 'self-quote', variant: __ENV.K6_VARIANT || 'baseline', phase, ...extra };
+  return { flow: __ENV.K6_FLOW || 'self-quote', variant: __ENV.K6_VARIANT || 'baseline', phase, ...extra };
 }
 
 export function requestTimeout() {
