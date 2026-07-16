@@ -1910,7 +1910,12 @@ function CompactBuildCard({
       category: changed.category as 'CPU' | 'GPU',
       partId: changed.partId,
       name: changed.name,
-      price: changed.price
+      price: changed.price,
+      // 연계 변경(예: 새 GPU에 필요한 파워)도 함께 실어야 종합점수 고스트가
+      // "기존 파워+새 GPU"라는 실제로는 제안되지 않은 조합을 0점으로 그리지 않는다.
+      linkedChanges: changedItems
+        .filter((item) => item !== changed && item.partId)
+        .map((item) => ({ category: item.category, partId: item.partId, name: item.name, price: item.price }))
     });
   }, [build.id, isEditPreview, changedItems]);
   const primaryItems = isEditPreview && changedItems.length > 0 ? changedItems : build.items.slice(0, 5);
