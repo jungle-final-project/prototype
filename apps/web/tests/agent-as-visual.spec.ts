@@ -222,6 +222,36 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.goto('/admin/as-tickets');
   await expect(page.getByRole('main')).toContainText('추천 서비스');
   await expect(page.getByRole('main')).toContainText('방문지원 신청');
+
+  for (const column of ['상태', '검토', '결정', '추천 서비스']) {
+    await expect(page.getByRole('columnheader', { name: column, exact: true })).toHaveCSS('white-space', 'nowrap');
+  }
+
+  const nowrapValues = [
+    page.getByTitle('OPEN').first(),
+    page.getByTitle('REQUIRED').first(),
+    page.getByTitle('VISIT_REQUIRED').first(),
+    page.getByText('방문지원 신청', { exact: true }).first()
+  ];
+  for (const value of nowrapValues) {
+    await expect(value).toHaveCSS('white-space', 'nowrap');
+    expect(await value.evaluate((element) => (
+      element.scrollWidth <= element.clientWidth + 1
+      && element.scrollHeight <= element.clientHeight + 1
+    ))).toBe(true);
+  }
+
+  const ticketListPanel = page.getByTestId('admin-as-ticket-list-panel');
+  const ticketSummaryPanel = page.getByTestId('admin-as-ticket-summary-panel');
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    const listBox = await ticketListPanel.boundingBox();
+    const summaryBox = await ticketSummaryPanel.boundingBox();
+    expect(listBox).not.toBeNull();
+    expect(summaryBox).not.toBeNull();
+    expect(summaryBox!.y).toBeGreaterThan(listBox!.y + listBox!.height);
+  }
+
   await page.goto('/admin/as-tickets/qa-ticket-before');
   await expect(page.getByRole('main')).toContainText('지원 결정 저장');
   await expect(page.getByRole('main')).toContainText('추천 서비스');
