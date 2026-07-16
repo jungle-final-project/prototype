@@ -578,10 +578,15 @@ class GreenWebAsgPrivateMigrationTest(unittest.TestCase):
                        and (.[0].Groups | type == "array" and length == 1)
                        and (.[0].SubnetId | type == "string" and length > 0)' \
                       "$network_interfaces_file" >/dev/null
-                    network_mode="$(
-                      stat -f '%Lp' "$network_interfaces_file" 2>/dev/null ||
-                        stat -c '%a' "$network_interfaces_file"
-                    )"
+                    if network_mode="$(
+                      stat -c '%a' "$network_interfaces_file" 2>/dev/null
+                    )"; then
+                      :
+                    else
+                      network_mode="$(
+                        stat -f '%Lp' "$network_interfaces_file"
+                      )"
+                    fi
                     client_token="$(argument_value --client-token "$@")"
                     printf 'run-network-interfaces:%s:%s:%s\n' \
                       "$client_token" \
