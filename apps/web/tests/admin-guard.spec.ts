@@ -17,6 +17,55 @@ const adminRoutes = [
   '/admin/as-tickets/AS-1031'
 ];
 
+function adminDashboardResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    agentRunning: 1,
+    openTickets: 3,
+    priceJobsRunning: 0,
+    todayRevenue: 4_814_790,
+    weekRevenue: 12_530_200,
+    revenueTrend: [
+      { date: '2026-07-12', label: '07/12', revenue: 180_000 },
+      { date: '2026-07-13', label: '07/13', revenue: 0 },
+      { date: '2026-07-14', label: '07/14', revenue: 4_814_790 }
+    ],
+    orderStatus: [
+      { status: 'PENDING', label: '처리 대기', count: 2 },
+      { status: 'IN_PROGRESS', label: '진행 중', count: 1 },
+      { status: 'COMPLETED', label: '완료', count: 4 },
+      { status: 'CANCELLED', label: '취소', count: 0 }
+    ],
+    degraded: false,
+    generatedAt: '2026-06-29T10:50:00Z',
+    ...overrides
+  };
+}
+
+function adminAssemblyRequestsResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    items: [
+      {
+        id: 'asm-request-001',
+        requestNo: 'ASM-20260716-0001',
+        status: 'REQUESTED',
+        serviceType: 'FULL_SERVICE',
+        region: '서울',
+        preferredDate: '2026-07-18',
+        deliveryMethod: 'DELIVERY',
+        estimatedPartsPrice: 4_719_790,
+        finalPrice: 4_814_790,
+        itemCount: 8,
+        createdAt: '2026-07-16T09:30:00Z',
+        updatedAt: '2026-07-16T09:30:00Z'
+      }
+    ],
+    page: 0,
+    size: 5,
+    total: 1,
+    ...overrides
+  };
+}
+
 async function mockRecommendationModelSummary(page: Page) {
   await page.route('**/api/admin/recommendation-models/summary', async (route) => {
     await route.fulfill({
@@ -888,13 +937,14 @@ test('renders all admin shell navigation entries for ADMIN role', async ({ page 
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        agentRunning: 1,
-        openTickets: 3,
-        priceJobsRunning: 0,
-        degraded: false,
-        generatedAt: '2026-06-29T10:50:00Z'
-      })
+      body: JSON.stringify(adminDashboardResponse())
+    });
+  });
+  await page.route('**/api/admin/assembly-requests**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(adminAssemblyRequestsResponse())
     });
   });
   await page.route('**/api/admin/audit-logs/recent', async (route) => {
@@ -1092,87 +1142,51 @@ test('renders admin dashboard with ADMIN role and dashboard API response', async
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        agentRunning: 1,
-        openTickets: 3,
-        priceJobsRunning: 0,
-        degraded: false,
-        generatedAt: '2026-06-29T10:50:00Z'
-      })
+      body: JSON.stringify(adminDashboardResponse())
     });
   });
-  let auditLogCalls = 0;
-  let auditLogAuthorization: string | undefined;
-  await page.route('**/api/admin/audit-logs/recent', async (route) => {
-    auditLogCalls += 1;
-    auditLogAuthorization = route.request().headers().authorization;
+  let assemblyRequestsCalls = 0;
+  let assemblyRequestsAuthorization: string | undefined;
+  await page.route('**/api/admin/assembly-requests**', async (route) => {
+    assemblyRequestsCalls += 1;
+    assemblyRequestsAuthorization = route.request().headers().authorization;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        items: [
-          {
-            action: 'AS_TICKET_UPDATED',
-            targetType: 'as_tickets',
-            targetId: '4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a',
-            metadata: { beforeStatus: 'OPEN', afterStatus: 'IN_PROGRESS' },
-            createdAt: '2026-06-29T10:45:00Z'
-          }
-        ]
-      })
+      body: JSON.stringify(adminAssemblyRequestsResponse())
     });
   });
-  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
   await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
   await expect(page.locator('main')).toContainText('진행 중 Agent');
   await expect(page.locator('main')).toContainText('미해결 AS');
-  await expect(page.locator('main')).toContainText('실행 중 가격 작업');
-  await expect(page.locator('main')).toContainText('운영 상태');
+  await expect(page.locator('main')).toContainText('오늘 매출');
+  await expect(page.locator('main')).toContainText('이번 주 매출');
+  await expect(page.locator('main')).toContainText('₩4,814,790');
+  await expect(page.locator('main')).toContainText('₩12,530,200');
   await expect(page.locator('main')).toContainText('1건');
   await expect(page.locator('main')).toContainText('3건');
-  await expect(page.locator('main')).toContainText('0건');
-  await expect(page.locator('main')).toContainText('정상');
-  await expect(page.locator('main')).toContainText('2026-06-29T10:50:00Z');
-  await expect(page.locator('main')).toContainText('최근 Agent 세션 요약');
-  await expect(page.locator('main')).toContainText('운영 작업');
-  await expect(page.locator('main')).toContainText('관리자 할 일');
-  await expect(page.locator('main')).toContainText('최근 관리자 작업');
-  await expect(page.locator('main')).toContainText('AI 추천 모델 상태');
-  await expect(page.locator('main')).toContainText('xgb-20260703100000');
-  await expect(page.locator('main')).toContainText('20%');
-  await expect(page.locator('main')).toContainText('RTX 5090 추천 후보');
-  await expect(page.getByRole('button', { name: '추천 강화' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '추천 낮춤' })).toBeVisible();
-  await expect(page.locator('main')).toContainText('XGBoost 학습 운영');
-  await expect(page.locator('main')).toContainText('eligible events');
-  await expect(page.locator('main')).toContainText('untrained eligible events');
-  await page.getByRole('button', { name: '데이터셋' }).click();
-  await expect(page.locator('main')).toContainText('홈 추천부품 학습 데이터셋');
-  await expect(page.getByRole('button', { name: '현재 HOME/AS 피드백으로 데이터셋 생성' })).toBeVisible();
-  await page.getByRole('button', { name: '학습 Job' }).click();
-  await expect(page.locator('main')).toContainText('학습 데이터 부족');
-  await page.getByRole('button', { name: '모델 버전' }).click();
-  await expect(page.getByRole('button', { name: '활성화' })).toBeVisible();
-  await expect(page.locator('main')).toContainText('AS_TICKET_UPDATED');
-  await expect(page.locator('main')).toContainText('as_tickets');
-  await expect(page.locator('main')).toContainText('4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a');
-  await expect(page.locator('main')).toContainText('2026-06-29T10:45:00Z');
-  await expect(page.locator('main')).toContainText('가격 작업');
-  await expect(page.locator('main')).toContainText('Mailpit');
-  await expect(page.locator('main')).toContainText('Mock Worker');
-  await expect(page.locator('main')).toContainText('k6 Smoke');
-  await expect(page.locator('main')).toContainText('부품/가격');
-  await expect(page.locator('main')).toContainText('Agent/RAG');
-  await expect(page.locator('main')).toContainText('AS 티켓');
+  await expect(page.locator('main')).toContainText('매출 추이');
+  await expect(page.locator('main')).toContainText('최근 7일 결제 완료 금액');
+  await expect(page.locator('main')).toContainText('주문 현황');
+  await expect(page.locator('main')).toContainText('처리 대기');
+  await expect(page.locator('main')).toContainText('완료');
+  await expect(page.locator('main')).toContainText('빠른 작업');
+  await expect(page.locator('main')).toContainText('조립 요청 관리');
+  await expect(page.locator('main')).toContainText('기사/제안 운영');
+  await expect(page.locator('main')).toContainText('부품/가격 관리');
+  await expect(page.locator('main')).toContainText('AS 티켓 확인');
+  await expect(page.locator('main')).toContainText('최근 조립 요청');
+  await expect(page.locator('main')).toContainText('ASM-20260716-0001');
+  await expect(page.locator('main')).toContainText('서울 · 2026-07-18');
   await expect(page.locator('main')).not.toContainText('undefined');
   expect(authMeAuthorization).toBe('Bearer jwt-admin-token');
   expect(dashboardCalls).toBe(1);
   expect(dashboardAuthorization).toBe('Bearer jwt-admin-token');
-  expect(auditLogCalls).toBe(1);
-  expect(auditLogAuthorization).toBe('Bearer jwt-admin-token');
+  expect(assemblyRequestsCalls).toBe(1);
+  expect(assemblyRequestsAuthorization).toBe('Bearer jwt-admin-token');
 });
 
 test('shows degraded alert on admin dashboard when dashboard API reports degraded', async ({ page }) => {
@@ -1190,23 +1204,24 @@ test('shows degraded alert on admin dashboard when dashboard API reports degrade
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
+      body: JSON.stringify(adminDashboardResponse({
         agentRunning: 4,
         openTickets: 7,
         priceJobsRunning: 2,
+        todayRevenue: 1_250_000,
+        weekRevenue: 6_400_000,
         degraded: true,
         generatedAt: '2026-06-29T11:05:00Z'
-      })
+      }))
     });
   });
-  await page.route('**/api/admin/audit-logs/recent', async (route) => {
+  await page.route('**/api/admin/assembly-requests**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ items: [] })
+      body: JSON.stringify(adminAssemblyRequestsResponse({ items: [], total: 0 }))
     });
   });
-  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
@@ -1214,12 +1229,16 @@ test('shows degraded alert on admin dashboard when dashboard API reports degrade
   await expect(page.locator('main')).toContainText('일부 운영 지표가 주의 상태입니다.');
   await expect(page.locator('main')).toContainText('4건');
   await expect(page.locator('main')).toContainText('7건');
-  await expect(page.locator('main')).toContainText('2건');
-  await expect(page.locator('main')).toContainText('주의');
+  await expect(page.locator('main')).toContainText('오늘 매출');
+  await expect(page.locator('main')).toContainText('₩1,250,000');
+  await expect(page.locator('main')).toContainText('이번 주 매출');
+  await expect(page.locator('main')).toContainText('₩6,400,000');
+  await expect(page.locator('main')).toContainText('가격 작업 실행 중');
+  await expect(page.locator('main')).toContainText('조립 요청 없음');
   await expect(page.locator('main')).not.toContainText('undefined');
 });
 
-test('keeps admin dashboard usable when audit logs API fails', async ({ page }) => {
+test('keeps admin dashboard usable when recent assembly request API fails', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
@@ -1234,30 +1253,24 @@ test('keeps admin dashboard usable when audit logs API fails', async ({ page }) 
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        agentRunning: 1,
-        openTickets: 3,
-        priceJobsRunning: 0,
-        degraded: false,
-        generatedAt: '2026-06-29T10:50:00Z'
-      })
+      body: JSON.stringify(adminDashboardResponse())
     });
   });
-  await page.route('**/api/admin/audit-logs/recent', async (route) => {
+  await page.route('**/api/admin/assembly-requests**', async (route) => {
     await route.fulfill({
       status: 500,
       contentType: 'application/json',
-      body: JSON.stringify({ code: 'INTERNAL_ERROR', message: '감사 로그 조회 실패' })
+      body: JSON.stringify({ code: 'INTERNAL_ERROR', message: '조립 요청 조회 실패' })
     });
   });
-  await mockRecommendationModelSummary(page);
 
   await page.goto('/admin');
 
   await expect(page.locator('main')).toContainText('진행 중 Agent');
   await expect(page.locator('main')).toContainText('1건');
-  await expect(page.locator('main')).toContainText('감사 로그 조회 실패');
-  await expect(page.locator('main')).toContainText('최근 관리자 작업을 불러오지 못했습니다.');
+  await expect(page.locator('main')).toContainText('오늘 매출');
+  await expect(page.locator('main')).toContainText('조립 요청 조회 실패');
+  await expect(page.locator('main')).toContainText('최근 조립 요청을 불러오지 못했습니다.');
   await expect(page.locator('main')).not.toContainText('undefined');
 });
 
@@ -1282,16 +1295,16 @@ test('shows admin dashboard loading state while dashboard API is pending', async
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        agentRunning: 1,
-        openTickets: 3,
-        priceJobsRunning: 0,
-        degraded: false,
-        generatedAt: '2026-06-29T10:50:00Z'
-      })
+      body: JSON.stringify(adminDashboardResponse())
     });
   });
-  await mockRecommendationModelSummary(page);
+  await page.route('**/api/admin/assembly-requests**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(adminAssemblyRequestsResponse())
+    });
+  });
 
   await page.goto('/admin');
 
