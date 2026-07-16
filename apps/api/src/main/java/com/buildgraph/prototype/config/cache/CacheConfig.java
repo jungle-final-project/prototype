@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
 public class CacheConfig {
 
     @Bean
-    @ConditionalOnProperty(name = "spring.cache.type", havingValue = "caffeine")
+    @ConditionalOnProperty(name = "spring.cache.type", havingValue = "caffeine", matchIfMissing = true)
     public CaffeineCacheManager caffeineCacheManager() {
         CaffeineCacheManager manager = new CaffeineCacheManager();
         manager.setCaffeine(caffeineCacheBuilder());
@@ -25,16 +25,16 @@ public class CacheConfig {
 
     /* 원본과 같은 기준으로 캐시 생명은 10분, 최대 저장 크기는 1,000개로 둔다. */
     @Bean
-    @ConditionalOnProperty(name = "spring.cache.type", havingValue = "caffeine")
+    @ConditionalOnProperty(name = "spring.cache.type", havingValue = "caffeine", matchIfMissing = true)
     public Caffeine<Object, Object> caffeineCacheBuilder() {
         return Caffeine.newBuilder()
                 .expireAfterWrite(10, TimeUnit.MINUTES)
                 .maximumSize(1_000);
     }
 
-    /* 캐시 비교 테스트와 기본 실행에서는 같은 조회 코드를 타되 저장만 수행하지 않는다. */
+    /* k6 non-cache 비교에서는 같은 조회 코드를 타되 저장만 수행하지 않는다. */
     @Bean
-    @ConditionalOnProperty(name = "spring.cache.type", havingValue = "none", matchIfMissing = true)
+    @ConditionalOnProperty(name = "spring.cache.type", havingValue = "none")
     public CacheManager noOpCacheManager() {
         return new NoOpCacheManager();
     }
