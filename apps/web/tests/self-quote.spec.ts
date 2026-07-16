@@ -934,6 +934,21 @@ test('placement board part click explains relations instead of opening the candi
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
   await expect(page).toHaveURL('/self-quote');
 
+  // 팝오버 밖(보드 헤더 여백)을 클릭하면 닫힌다 — 검색 패널은 열리지 않는다.
+  await page.getByTestId('slot-board-widget').click({ position: { x: 8, y: 8 } });
+  await expect(problemPopover).toHaveCount(0);
+  await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+
+  // 문제에 연루된 상대 부품 바로가기 — GPU 전력 문제에서 파워 후보로 곧장 넘어갈 수 있다.
+  await page.getByTestId('slot-fused-area-GPU').click();
+  await expect(problemPopover).toBeVisible();
+  await problemPopover.getByRole('button', { name: '파워 후보 보기' }).click();
+  await expect(problemPopover).toHaveCount(0);
+  await expect(page).toHaveURL('/self-quote?category=PSU');
+  await expect(page.getByTestId('slot-candidate-panel').getByRole('heading', { name: '파워 부품 목록' })).toBeVisible();
+  await page.getByTestId('slot-candidate-panel').getByRole('button', { name: '후보 패널 닫기' }).click();
+  await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+
   // 정상 부품 클릭 → 초록 관계 요약 팝오버(그래프에 연루 관계가 없으면 기본 안내).
   await page.getByTestId('slot-fused-area-CPU').click();
   const relationPopover = page.getByTestId('slot-relation-popover');
@@ -954,7 +969,8 @@ test('placement board part click explains relations instead of opening the candi
   await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
 });
 
-// 후보 패널(데스크톱)은 헤더를 잡고 드래그해 옮길 수 있다(제언). 보드 밖으로는 못 나간다.
+// 후보 패널(데스크톱)은 헤더를 잡고 드래그해 옮길 수 있고(보드 밖 허용, 화면 이탈만 방지),
+// 꼭지점 리사이즈·더블클릭 원위치를 지원한다.
 test('candidate panel can be dragged by its header on desktop', async ({ page }) => {
   await loginAsUser(page);
   await page.route('**/api/build-graphs/resolve', async (route) => {
@@ -991,18 +1007,40 @@ test('candidate panel can be dragged by its header on desktop', async ({ page })
   const after = await panel.boundingBox();
   expect(Math.round((after?.x ?? 0) - (before?.x ?? 0))).toBe(24);
   expect(Math.round((after?.y ?? 0) - (before?.y ?? 0))).toBe(8);
-  // 과감히 밖으로 끌어도 보드 경계 안에서 멈춘다(클램프).
+
+  // 우하단 꼭지점을 잡아당기면 크기가 커진다(네이티브 리사이즈).
+  const beforeResize = await panel.boundingBox();
+  const cornerX = (beforeResize?.x ?? 0) + (beforeResize?.width ?? 0) - 5;
+  const cornerY = (beforeResize?.y ?? 0) + (beforeResize?.height ?? 0) - 5;
+  await page.mouse.move(cornerX, cornerY);
+  await page.mouse.down();
+  await page.mouse.move(cornerX + 60, cornerY + 40, { steps: 4 });
+  await page.mouse.up();
+  const afterResize = await panel.boundingBox();
+  expect((afterResize?.width ?? 0) - (beforeResize?.width ?? 0)).toBeGreaterThan(40);
+  expect((afterResize?.height ?? 0) - (beforeResize?.height ?? 0)).toBeGreaterThan(20);
+
+  // 보드 밖으로 끌어도 따라간다 — 대신 화면(뷰포트) 밖으로 완전히 사라지지는 않는다.
   await page.mouse.move(startX + 24, startY + 8);
   await page.mouse.down();
-  await page.mouse.move(startX + 600, startY + 600, { steps: 4 });
+  await page.mouse.move(startX + 3000, startY + 3000, { steps: 6 });
   await page.mouse.up();
-  const clamped = await page.evaluate(() => {
+  const escaped = await page.evaluate(() => {
     const b = document.querySelector('[data-testid="slot-board"]')!.getBoundingClientRect();
     const p = document.querySelector('[data-testid="slot-candidate-panel"]')!.getBoundingClientRect();
-    return { right: b.right - p.right, bottom: b.bottom - p.bottom };
+    return { boardBottom: b.bottom, top: p.top, left: p.left, bottom: p.bottom, vw: window.innerWidth, vh: window.innerHeight };
   });
-  expect(clamped.bottom).toBeGreaterThanOrEqual(0);
-  expect(clamped.right).toBeGreaterThanOrEqual(0);
+  expect(escaped.bottom).toBeGreaterThan(escaped.boardBottom);
+  expect(escaped.top).toBeGreaterThanOrEqual(0);
+  expect(escaped.top).toBeLessThanOrEqual(escaped.vh - 48 + 1);
+  expect(escaped.left).toBeLessThanOrEqual(escaped.vw - 48 + 1);
+
+  // 핸들 더블클릭 = 원위치·원크기 복귀 (클램프 후 핸들 중앙이 화면 밖일 수 있어 좌상단 지점을 찍는다).
+  await handle.dblclick({ position: { x: 10, y: 10 } });
+  const resetBox = await panel.boundingBox();
+  expect(Math.abs((resetBox?.x ?? 0) - (before?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((resetBox?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((resetBox?.width ?? 0) - (before?.width ?? 0))).toBeLessThanOrEqual(1);
 
   // 헤더 안의 닫기 버튼은 드래그로 삼키지 않고 그대로 동작한다.
   await panel.getByRole('button', { name: '후보 패널 닫기' }).click();

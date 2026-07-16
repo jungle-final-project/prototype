@@ -26,7 +26,8 @@ import {
   type SlotEdgeConfig
 } from './slotBoardConfig';
 import { FusedPlateArt } from './FusedPlateArt';
-import { useBoardDrag } from './useBoardDrag';
+import { useBoardDrag, useIsDesktop } from './useBoardDrag';
+import { createPortal } from 'react-dom';
 import { HelpTip } from './HelpTip';
 import { withObjectParticle } from './koreanParticle';
 
@@ -313,13 +314,8 @@ export function SlotBoard({
               onClick={onBodyOverlayDismiss}
               className="absolute inset-0 z-40 hidden cursor-default bg-transparent lg:block"
             />
-            <div
-              data-testid="slot-candidate-overlay-layer"
-              className="pointer-events-none absolute inset-y-0 left-0 z-50 w-full lg:w-[min(100%,clamp(360px,52%,520px))] lg:p-3"
-            >
-              {/* 여백(p-3) 안에서 패널이 떠 보이게 — 하단이 보드 절단면이 아니라 패널 자신의 모서리로 끝난다. */}
-              <div className="pointer-events-auto h-full w-full">{bodyOverlay}</div>
-            </div>
+            {/* 패널 자신이 위치를 관리한다 — 모바일은 바텀시트(fixed), 데스크톱은 body 포탈로 떠서 드래그·리사이즈. */}
+            {bodyOverlay}
           </>
         ) : null}
       </div>
@@ -2267,45 +2263,75 @@ function isoProblemMarkerPlacement(category: PartCategory) {
   return { name: 'default', className: 'absolute -top-1 right-[6%]' };
 }
 
+// 팝오버 초기 화면 좌표 — 보드 스테이지의 placement% 지점을 fixed 좌표로 환산(데스크톱 포탈용).
+// 포탈 덕에 overflow-hidden인 스테이지 밖(화면 어디로든)으로도 드래그할 수 있다.
+function popoverFixedPosition(category: PartCategory, variant: SlotRelationPopoverPlacementVariant) {
+  const placement = relationPopoverPlacement(category, variant);
+  if (typeof document === 'undefined') {
+    return { placement, left: 24, top: 96 };
+  }
+  const stage = document.querySelector('[data-testid="slot-board-body-stage"]')
+    ?? document.querySelector('[data-testid="slot-board"]');
+  const rect = stage?.getBoundingClientRect();
+  if (!rect) {
+    return { placement, left: 24, top: 96 };
+  }
+  return {
+    placement,
+    left: rect.left + (rect.width * placement.left) / 100,
+    top: rect.top + (rect.height * placement.top) / 100
+  };
+}
+
+// 데스크톱 팝오버 공통 스타일: 우하단 꼭지점 네이티브 리사이즈 + 내용 스크롤 + 크기 상하한.
+const POPOVER_DESKTOP_CLASS =
+  'z-[80] rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl ' +
+  '[resize:both] overflow-auto min-w-[240px] min-h-[150px] max-w-[90vw] max-h-[80vh]';
+const POPOVER_MOBILE_CLASS =
+  'relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg';
+
 function SlotProblemPopover({
   detail,
+  counterparts,
   onClose,
   onShowCandidates,
   onExplain,
   placementVariant = 'iso'
 }: {
   detail: SlotProblemDetail;
+  // 문제에 함께 연루된 상대 부품 — 예: 쿨러 높이 문제는 쿨러 교체 또는 케이스 교체로 풀 수 있다.
+  counterparts: Array<{ category: PartCategory; label: string }>;
   onClose: () => void;
-  onShowCandidates: () => void;
+  onShowCandidates: (category: PartCategory) => void;
   onExplain: () => void;
   placementVariant?: SlotRelationPopoverPlacementVariant;
 }) {
-  const placement = relationPopoverPlacement(detail.category, placementVariant);
-  // 팝오버도 후보 패널처럼 드래그로 옮길 수 있다(제언) — 헤더가 핸들, 보드 경계 클램프.
-  const { targetRef, dragStyle, isDragging, startDrag } = useBoardDrag<HTMLElement>({ resetKey: detail.category });
-  const vars: CSSProperties = {
-    ['--problem-x' as string]: `${placement.left}%`,
-    ['--problem-y' as string]: `${placement.top}%`,
-    ['--problem-width' as string]: placement.width,
-    ...dragStyle
-  };
+  const isDesktop = useIsDesktop();
+  // 호출부에서 key=category로 리마운트되므로 초기 좌표는 마운트 시 1회 계산이면 충분하다.
+  const [position] = useState(() => popoverFixedPosition(detail.category, placementVariant));
+  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({ resetKey: detail.category });
+  const placement = position.placement;
+  const style: CSSProperties = isDesktop
+    ? { position: 'fixed', left: position.left, top: position.top, width: placement.width, ...dragStyle }
+    : {};
   const toneClass = detail.status === 'FAIL'
     ? 'border-red-200 bg-red-50 text-red-700'
     : 'border-amber-200 bg-amber-50 text-amber-700';
-  return (
+  const popover = (
     <section
       ref={targetRef}
       data-testid="slot-problem-popover"
       data-placement={placement.name}
       role="dialog"
       aria-label={`${detail.categoryLabel} 문제 사유`}
-      style={vars}
-      className="relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg lg:absolute lg:left-[var(--problem-x)] lg:top-[var(--problem-y)] lg:mt-0 lg:w-[var(--problem-width)]"
+      style={style}
+      className={isDesktop ? POPOVER_DESKTOP_CLASS : POPOVER_MOBILE_CLASS}
     >
       <div
         data-testid="slot-problem-popover-handle"
-        title="드래그해서 옮길 수 있어요"
+        title="드래그해서 옮기고, 더블클릭하면 원위치로 돌아옵니다"
         onPointerDown={startDrag}
+        onDoubleClick={resetDrag}
         className={`flex items-start justify-between gap-3 select-none lg:touch-none ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'}`}
       >
         <div className="min-w-0">
@@ -2333,9 +2359,19 @@ function SlotProblemPopover({
       </ul>
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <ExplainIssueButton onClick={onExplain} />
+        {counterparts.map((counterpart) => (
+          <button
+            key={counterpart.category}
+            type="button"
+            onClick={() => onShowCandidates(counterpart.category)}
+            className="rounded border border-brand-blue bg-white px-3 py-2 text-[11px] font-black text-brand-blue transition hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
+          >
+            {counterpart.label} 후보 보기
+          </button>
+        ))}
         <button
           type="button"
-          onClick={onShowCandidates}
+          onClick={() => onShowCandidates(detail.category)}
           className="rounded bg-brand-blue px-3 py-2 text-[11px] font-black text-white transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
         >
           교체 후보 보기
@@ -2343,6 +2379,7 @@ function SlotProblemPopover({
       </div>
     </section>
   );
+  return isDesktop ? createPortal(popover, document.body) : popover;
 }
 
 function slotProblemPopoverPlacement(category: PartCategory) {
@@ -2458,29 +2495,29 @@ function SlotRelationOkPopover({
   onShowCandidates: () => void;
   placementVariant: SlotRelationPopoverPlacementVariant;
 }) {
-  const placement = relationPopoverPlacement(category, placementVariant);
-  // 팝오버도 후보 패널처럼 드래그로 옮길 수 있다(제언) — 헤더가 핸들, 보드 경계 클램프.
-  const { targetRef, dragStyle, isDragging, startDrag } = useBoardDrag<HTMLElement>({ resetKey: category });
-  const vars: CSSProperties = {
-    ['--problem-x' as string]: `${placement.left}%`,
-    ['--problem-y' as string]: `${placement.top}%`,
-    ['--problem-width' as string]: placement.width,
-    ...dragStyle
-  };
-  return (
+  const isDesktop = useIsDesktop();
+  // 호출부에서 key=category로 리마운트되므로 초기 좌표는 마운트 시 1회 계산이면 충분하다.
+  const [position] = useState(() => popoverFixedPosition(category, placementVariant));
+  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({ resetKey: category });
+  const placement = position.placement;
+  const style: CSSProperties = isDesktop
+    ? { position: 'fixed', left: position.left, top: position.top, width: placement.width, ...dragStyle }
+    : {};
+  const popover = (
     <section
       ref={targetRef}
       data-testid="slot-relation-popover"
       data-placement={placement.name}
       role="dialog"
       aria-label={`${categoryLabel} 관계 상태`}
-      style={vars}
-      className="relative z-40 mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg lg:absolute lg:left-[var(--problem-x)] lg:top-[var(--problem-y)] lg:mt-0 lg:w-[var(--problem-width)]"
+      style={style}
+      className={isDesktop ? POPOVER_DESKTOP_CLASS : POPOVER_MOBILE_CLASS}
     >
       <div
         data-testid="slot-relation-popover-handle"
-        title="드래그해서 옮길 수 있어요"
+        title="드래그해서 옮기고, 더블클릭하면 원위치로 돌아옵니다"
         onPointerDown={startDrag}
+        onDoubleClick={resetDrag}
         className={`flex items-start justify-between gap-3 select-none lg:touch-none ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'}`}
       >
         <div className="min-w-0">
@@ -2527,6 +2564,7 @@ function SlotRelationOkPopover({
       </div>
     </section>
   );
+  return isDesktop ? createPortal(popover, document.body) : popover;
 }
 
 /**
@@ -2577,13 +2615,27 @@ function useSlotRelationPopover({
         setActiveCategory(null);
       }
     };
+    // 바깥 클릭 닫기 — 다른 부품 클릭은 pointerdown이 먼저 닫고 이어지는 클릭이 새로 연다.
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-testid="slot-problem-popover"], [data-testid="slot-relation-popover"]')) {
+        return;
+      }
+      setActiveCategory(null);
+    };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
   }, [activeCategory]);
 
   const openRelation = (category: PartCategory) => {
     if (filledCategories.has(category)) {
-      setActiveCategory((current) => (current === category ? null : category));
+      // 토글 닫기는 두지 않는다 — 바깥클릭 닫기가 pointerdown에서 먼저 닫아버려
+      // 같은 부품 재클릭이 '닫힘→다시 열림'으로 뒤집히는 레이스가 생긴다.
+      setActiveCategory(category);
     }
   };
 
@@ -2596,14 +2648,17 @@ function useSlotRelationPopover({
   const activeSlot = activeCategory ? slotConfigFor(activeCategory) : undefined;
   const popover = !activeCategory || !isActiveFilled ? null : activeProblem ? (
     <SlotProblemPopover
+      key={activeProblem.category}
       detail={activeProblem}
+      counterparts={problemCounterpartsFor(activeProblem.category, graph)}
       placementVariant={placementVariant}
       onClose={() => setActiveCategory(null)}
-      onShowCandidates={() => showCandidates(activeProblem.category)}
+      onShowCandidates={showCandidates}
       onExplain={() => onExplainIssue(activeProblem.category, activeProblem.tool ?? toolForCategory(activeProblem.category))}
     />
   ) : (
     <SlotRelationOkPopover
+      key={activeCategory}
       category={activeCategory}
       categoryLabel={activeSlot?.label ?? activeCategory}
       relations={slotRelationLinesFor(activeCategory, graph, items)}
@@ -2614,6 +2669,49 @@ function useSlotRelationPopover({
   );
 
   return { openRelation, problemDetailsByCategory, popover };
+}
+
+/** 문제에 함께 연루된 상대 부품 — 문제 엣지의 반대편 + 문제 인사이트의 관련 부품(자기 제외). */
+function problemCounterpartsFor(
+  category: PartCategory,
+  graph: BuildGraphResolveResponse | undefined
+): Array<{ category: PartCategory; label: string }> {
+  if (!graph) {
+    return [];
+  }
+  const categoryByNodeId = graphCategoryByNodeId(graph);
+  const counterparts = new Set<PartCategory>();
+  graph.edges.forEach((edge) => {
+    if (!isProblemStatus(edge.status)) {
+      return;
+    }
+    const source = categoryByNodeId.get(edge.source);
+    const target = categoryByNodeId.get(edge.target);
+    if (source === category && target && target !== category) {
+      counterparts.add(target);
+    }
+    if (target === category && source && source !== category) {
+      counterparts.add(source);
+    }
+  });
+  graph.insights.forEach((insight) => {
+    if (!isProblemStatus(insight.status)) {
+      return;
+    }
+    const related = insight.relatedNodeIds
+      .map((nodeId) => categoryByNodeId.get(nodeId))
+      .filter((value): value is PartCategory => Boolean(value));
+    if (related.includes(category)) {
+      related.forEach((value) => {
+        if (value !== category) {
+          counterparts.add(value);
+        }
+      });
+    }
+  });
+  return SLOT_CONFIGS
+    .filter((slot) => counterparts.has(slot.category))
+    .map((slot) => ({ category: slot.category, label: slot.label }));
 }
 
 // 추상 메인보드 평면도 — 그래파이트 트레이 위의 실제 PCB처럼 어두운 기판 + 밝은 트레이스/소켓.
