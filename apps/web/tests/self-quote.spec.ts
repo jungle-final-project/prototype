@@ -1190,9 +1190,13 @@ test('candidate panel can be dragged by its header on desktop', async ({ page })
   await page.mouse.move(startX + 24, startY + 8, { steps: 4 });
   await page.mouse.up();
 
-  const after = await panel.boundingBox();
-  expect(Math.round((after?.x ?? 0) - (before?.x ?? 0))).toBe(24);
-  expect(Math.round((after?.y ?? 0) - (before?.y ?? 0))).toBe(8);
+  await expect.poll(async () => {
+    const after = await panel.boundingBox();
+    return {
+      x: Math.round((after?.x ?? 0) - (before?.x ?? 0)),
+      y: Math.round((after?.y ?? 0) - (before?.y ?? 0))
+    };
+  }).toEqual({ x: 24, y: 8 });
 
   // 우하단 꼭지점을 잡아당기면 크기가 커진다(네이티브 리사이즈).
   const beforeResize = await panel.boundingBox();
