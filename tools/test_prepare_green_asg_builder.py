@@ -71,6 +71,7 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
                 "FAKE_ACCOUNT": "443915990705",
                 "FAKE_ARCH": "x86_64",
                 "FAKE_REGION": "ap-northeast-2",
+                "FAKE_SSM_AGENT_VERSION_OUTPUT": "SSM Agent version: 3.3.40.0",
                 "FAKE_TRACE_FILE": str(self.trace_file),
             }
         )
@@ -173,8 +174,28 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
             exit 0
             """,
         )
-        for command_name in ("dpkg", "dpkg-query", "jq", "runuser", "systemctl", "usermod"):
+        self._write_executable(
+            "amazon-ssm-agent",
+            """
+            [[ "${1:-}" == "-version" ]] || exit 95
+            printf '%s\n' "$FAKE_SSM_AGENT_VERSION_OUTPUT"
+            """,
+        )
+        for command_name in ("dpkg", "dpkg-query", "jq", "runuser", "usermod"):
             self._write_executable(command_name, "exit 0\n")
+        self._write_executable(
+            "systemctl",
+            """
+            case "$*" in
+              "is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service"|"is-active --quiet amazon-ssm-agent")
+                exit 0
+                ;;
+              *)
+                exit 0
+                ;;
+            esac
+            """,
+        )
 
     def _write_executable(self, name: str, body: str) -> None:
         path = self.fake_bin / name
@@ -256,6 +277,38 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
         second = self._run()
         self.assertEqual(0, first.returncode, first.stdout)
         self.assertEqual(0, second.returncode, second.stdout)
+
+    def test_accepts_minimum_ssm_agent_version(self) -> None:
+        result = self._run(
+            FAKE_SSM_AGENT_VERSION_OUTPUT="SSM Agent version: 3.3.40.0"
+        )
+
+        self.assertEqual(0, result.returncode, result.stdout)
+
+    def test_accepts_newer_ssm_agent_version(self) -> None:
+        result = self._run(
+            FAKE_SSM_AGENT_VERSION_OUTPUT=(
+                "amazon-ssm-agent version 3.3.3050.0 (linux amd64)"
+            )
+        )
+
+        self.assertEqual(0, result.returncode, result.stdout)
+
+    def test_rejects_ssm_agent_below_minimum_version(self) -> None:
+        result = self._run(
+            FAKE_SSM_AGENT_VERSION_OUTPUT="SSM Agent version: 3.3.39.999"
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("3.3.40.0 or newer", result.stdout)
+
+    def test_rejects_unparseable_ssm_agent_version(self) -> None:
+        result = self._run(
+            FAKE_SSM_AGENT_VERSION_OUTPUT="Amazon SSM Agent version unknown"
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("could not be parsed", result.stdout)
 
     def test_rejects_invalid_git_sha(self) -> None:
         result = self._run("not-a-commit")

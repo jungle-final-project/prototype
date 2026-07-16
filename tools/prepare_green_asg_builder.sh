@@ -22,6 +22,7 @@ readonly AWS_CREDENTIALS_APP="${BUILDGRAPH_AWS_CREDENTIALS_APP:-/home/ubuntu/.aw
 readonly CLOUDWATCH_CONFIG="${BUILDGRAPH_CLOUDWATCH_CONFIG:-/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json}"
 readonly ALLOW_NON_ROOT_FOR_TESTS="${BUILDGRAPH_ALLOW_NON_ROOT_FOR_TESTS:-false}"
 readonly SKIP_INSTALL_FOR_TESTS="${BUILDGRAPH_BUILDER_SKIP_INSTALL_FOR_TESTS:-false}"
+readonly MINIMUM_SSM_AGENT_VERSION="3.3.40.0"
 
 CURRENT_STEP="initialization"
 TEMP_DIR=""
@@ -175,10 +176,78 @@ EOF
   systemctl disable --now amazon-cloudwatch-agent >/dev/null 2>&1 || true
 }
 
+extract_ssm_agent_version() {
+  local version_output="$1"
+
+  if [[ "$version_output" =~ ([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    printf '%s.%s.%s.%s' \
+      "${BASH_REMATCH[1]}" \
+      "${BASH_REMATCH[2]}" \
+      "${BASH_REMATCH[3]}" \
+      "${BASH_REMATCH[4]}"
+    return 0
+  fi
+  return 1
+}
+
+version_is_at_least() {
+  local actual_version="$1"
+  local minimum_version="$2"
+  local index
+  local -a actual_parts minimum_parts
+
+  IFS='.' read -r -a actual_parts <<<"$actual_version"
+  IFS='.' read -r -a minimum_parts <<<"$minimum_version"
+  [[ "${#actual_parts[@]}" -eq 4 && "${#minimum_parts[@]}" -eq 4 ]] || return 1
+
+  for index in 0 1 2 3; do
+    [[ "${actual_parts[$index]}" =~ ^[0-9]+$ ]] || return 1
+    [[ "${minimum_parts[$index]}" =~ ^[0-9]+$ ]] || return 1
+    if ((10#${actual_parts[$index]} > 10#${minimum_parts[$index]})); then
+      return 0
+    fi
+    if ((10#${actual_parts[$index]} < 10#${minimum_parts[$index]})); then
+      return 1
+    fi
+  done
+  return 0
+}
+
+resolve_ssm_agent_binary() {
+  local candidate
+
+  if command -v amazon-ssm-agent >/dev/null 2>&1; then
+    command -v amazon-ssm-agent
+    return 0
+  fi
+  for candidate in \
+    /snap/amazon-ssm-agent/current/amazon-ssm-agent \
+    /usr/bin/amazon-ssm-agent \
+    /usr/local/bin/amazon-ssm-agent; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 verify_ssm_agent() {
-  systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service && return 0
-  systemctl is-active --quiet amazon-ssm-agent && return 0
-  die "Amazon SSM Agent must be active before preparing the builder"
+  local agent_binary version_output actual_version
+
+  if ! systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service &&
+    ! systemctl is-active --quiet amazon-ssm-agent; then
+    die "Amazon SSM Agent must be active before preparing the builder"
+  fi
+
+  agent_binary="$(resolve_ssm_agent_binary)" ||
+    die "Amazon SSM Agent binary is missing"
+  version_output="$("$agent_binary" -version 2>&1)" ||
+    die "Amazon SSM Agent version command failed"
+  actual_version="$(extract_ssm_agent_version "$version_output")" ||
+    die "Amazon SSM Agent version could not be parsed"
+  version_is_at_least "$actual_version" "$MINIMUM_SSM_AGENT_VERSION" ||
+    die "Amazon SSM Agent must be $MINIMUM_SSM_AGENT_VERSION or newer"
 }
 
 prepare_repository() {
@@ -251,8 +320,8 @@ rm -f "$SUCCESS_MARKER"
 CURRENT_STEP="install-dependencies"
 if [[ "$SKIP_INSTALL_FOR_TESTS" != "true" ]]; then
   install_builder_dependencies
-  verify_ssm_agent
 fi
+verify_ssm_agent
 
 for command_name in aws curl docker git; do
   require_command "$command_name"
