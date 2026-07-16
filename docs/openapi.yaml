@@ -3881,6 +3881,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: 관리자 AS 티켓 삭제
+      description: 티켓을 soft delete하고 연결된 active 상담/지원 상태를 종료한다. 원본 로그, 요약, 학습 이력은 보존하며 관리자 감사 로그를 남긴다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 삭제 처리 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, deleted, deletedAt]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  deleted:
+                    type: boolean
+                    enum: [true]
+                  deletedAt:
+                    type: string
+                    format: date-time
+                  supportChatRoomId:
+                    type: string
+                    format: uuid
+                    nullable: true
+        "404":
+          description: 존재하지 않거나 이미 삭제된 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   securitySchemes:
     bearerAuth:

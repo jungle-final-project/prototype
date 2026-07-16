@@ -1732,6 +1732,13 @@ Index:
 - index: `as_tickets.created_at`
 - index: `as_tickets.deleted_at`
 
+운영 규칙:
+
+- 관리자 티켓 삭제는 물리 삭제가 아니라 `deleted_at`을 기록하는 soft delete다.
+- 삭제된 티켓의 active 상담방과 AS AI 세션은 `ARCHIVED`, 진행 중 원격·방문지원은 `CANCELLED`로 종료한다.
+- 연결된 `agent_log_uploads`, `agent_log_summaries`, 추천 학습 이벤트와 관리자 감사 이력은 삭제하지 않는다.
+- 삭제 작업은 `admin_audit_logs.action=AS_TICKET_DELETED`로 기록한다.
+
 ### as_chat_sessions
 
 목적: AS 티켓 1건에 대해 사용자가 AI 챗봇 상담을 이어갈 수 있는 active 대화 세션을 저장한다.

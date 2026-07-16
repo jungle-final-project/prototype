@@ -405,4 +405,26 @@ class AdminControllerTest {
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
         verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
     }
+
+    @Test
+    void deleteAsTicketSoftDeletesAndBroadcastsSupportChatRemovalForAdminToken() throws Exception {
+        when(ticketQueryService.delete("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "id", "ticket-public-id",
+                "deleted", true,
+                "deletedAt", "2026-07-16T06:00:00Z",
+                "supportChatRoomId", "00000000-0000-4000-8000-000000009001"
+        ));
+
+        mockMvc.perform(delete("/api/admin/as-tickets/ticket-public-id")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("ticket-public-id"))
+                .andExpect(jsonPath("$.deleted").value(true))
+                .andExpect(jsonPath("$.deletedAt").value("2026-07-16T06:00:00Z"));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(ticketQueryService).delete("ticket-public-id", ADMIN);
+        verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
+    }
 }
