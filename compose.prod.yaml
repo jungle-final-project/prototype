@@ -4,13 +4,38 @@ services:
       context: ./infra/docker/postgres
     image: buildgraph-postgres
     restart: unless-stopped
+    # 순정 기본값(shared_buffers 128MB, work_mem 4MB)은 컨테이너 메모리 예산을 전혀 모른다.
+    # ~4GB 호스트에서 postgres 몫(~900MB) 기준 시작값 — 부하테스트 전후 pg_stat_statements로 재조정.
+    # shared_preload_libraries 반영에는 재시작이 필요하고, 기존 볼륨에는 CREATE EXTENSION을
+    # 한 번 수동 실행해야 한다: docker exec <pg> psql -U buildgraph -d buildgraph -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements;'
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - log_min_duration_statement=250
+    # 기본 /dev/shm 64MB는 병렬 쿼리/정렬에서 부족할 수 있다.
+    shm_size: 256mb
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-buildgraph}
       POSTGRES_USER: ${POSTGRES_USER:-buildgraph}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    # 액세스/앱 로그가 soak 테스트에서 디스크를 채우지 않게 로테이션.
     logging: &log-rotation
       driver: json-file
       options:
@@ -77,6 +102,11 @@ services:
     build:
       context: ./apps/api
     restart: unless-stopped
+    # JVM MaxRAMPercentage=70(Dockerfile)의 분모. 이 한도가 있어야 heap이 유계가 되고 호스트 OOM을 막는다.
+    # ~4GB 호스트에서 7컨테이너 예산 배분 시작값(문서 8.4). 실서버 RSS 확인 후 API_MEM_LIMIT로 조정 가능.
+    mem_limit: ${API_MEM_LIMIT:-1280m}
+    # graceful shutdown이 SIGKILL로 잘리지 않도록 application.yml의 종료 timeout(30s)보다 크게 둔다.
+    stop_grace_period: 40s
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-buildgraph}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-buildgraph}
@@ -221,6 +251,10 @@ services:
       PART_MANUFACTURER_RELEASE_INTAKE_ZONE: ${PART_MANUFACTURER_RELEASE_INTAKE_ZONE:-Asia/Seoul}
       PART_MANUFACTURER_RELEASE_INTAKE_USER_AGENT: ${PART_MANUFACTURER_RELEASE_INTAKE_USER_AGENT:-BuildGraphBot/0.1}
       SCHEDULING_POOL_SIZE: ${SCHEDULING_POOL_SIZE:-4}
+      PART_QUERY_CACHE_TTL_SECONDS: ${PART_QUERY_CACHE_TTL_SECONDS:-30}
+      HOME_CACHE_TTL_SECONDS: ${HOME_CACHE_TTL_SECONDS:-30}
+      HOME_PARTS_CANDIDATE_CACHE_TTL_SECONDS: ${HOME_PARTS_CANDIDATE_CACHE_TTL_SECONDS:-30}
+      AUTH_USER_CACHE_TTL_SECONDS: ${AUTH_USER_CACHE_TTL_SECONDS:-30}
       # 부하테스트 창에서 @Scheduled 잡 일괄 동결용(false로 내리면 전 스케줄러 off).
       BUILDGRAPH_SCHEDULING_ENABLED: ${BUILDGRAPH_SCHEDULING_ENABLED:-true}
     logging: *log-rotation
@@ -245,6 +279,15 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    # nginx worker_rlimit_nofile 16384(이미지에 COPY된 nginx.conf)가 실제로 먹히도록 FD 상한을 올린다.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # spike 순간 연결 폭주 대비: listen backlog=4096(conf)이 커널 상한에 잘리지 않게.
+    sysctls:
+      net.core.somaxconn: 4096
+    # 액세스 로그(요청당 1행)가 soak에서 디스크를 채우지 않게 로테이션.
     logging: *log-rotation
     depends_on:
       - api
