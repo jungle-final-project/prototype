@@ -387,6 +387,13 @@ export type AdminTicketsResponse = {
   items: AdminAsTicket[];
 };
 
+export type AdminAsTicketDeleteResponse = {
+  id: string;
+  deleted: boolean;
+  deletedAt: string;
+  supportChatRoomId?: string | null;
+};
+
 export type AdminAsTicketUpdateRequest = {
   status?: AsTicketStatus;
   assignedAdminId?: string | null;
@@ -1024,6 +1031,12 @@ export function updateAdminTicket(ticketId: string, payload: AdminAsTicketUpdate
   return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload)
+  });
+}
+
+export function deleteAdminTicket(ticketId: string) {
+  return api<AdminAsTicketDeleteResponse>(`/api/admin/as-tickets/${ticketId}`, {
+    method: 'DELETE'
   });
 }
 
