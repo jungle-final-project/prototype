@@ -355,7 +355,6 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
   await page.route('**/api/parts**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
   });
-
   await page.goto('/self-quote');
 
   await expect(page.getByRole('heading', { name: '셀프 견적 · 구성 관계도' })).toHaveCount(0);
@@ -392,7 +391,6 @@ test('keeps self quote and the primary navigation inside a mobile viewport', asy
   await page.route('**/api/parts**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
   });
-
   await page.goto('/self-quote');
 
   await expect(page.getByTestId('quote-checklist')).toBeVisible();
@@ -2501,12 +2499,14 @@ test('shows game FPS reference in the performance panel with game and resolution
     if (!scoreBox || !checklistBox) return Number.POSITIVE_INFINITY;
     return Math.abs((scoreBox.x + scoreBox.width) - (checklistBox.x + checklistBox.width));
   }).toBeLessThanOrEqual(1);
-  // 기본: 배그 · QHD → 130fps, '매우 부드러움', 프리셋 한글화, 하위 1% 평균(1% low).
-  await expect(fps.getByTestId('fps-avg')).toHaveText('130 FPS');
-
-  // 해상도 4K 전환 → 55fps, '무난'.
-  await fps.getByTestId('fps-res-4K').click();
+  // 발표 기본: 배그 · 4K → 55fps. 첫 진입부터 4K 선택이 활성화돼야 한다.
+  await expect(fps.getByTestId('fps-res-4K')).toHaveAttribute('aria-pressed', 'true');
   await expect(fps.getByTestId('fps-avg')).toHaveText('55 FPS');
+
+  // 사용자가 QHD로 전환하면 해당 근거로 다시 조회한다.
+  await fps.getByTestId('fps-res-QHD').click();
+  await expect(fps.getByTestId('fps-res-QHD')).toHaveAttribute('aria-pressed', 'true');
+  await expect(fps.getByTestId('fps-avg')).toHaveText('130 FPS');
 
   // 게임 발로란트 전환(컴팩트 칩 버튼) → 240fps.
   await fps.getByTestId('fps-game-valorant').click();
@@ -2541,12 +2541,13 @@ test('switches the game with compact chips next to the composite gauge', async (
   await page.route('**/api/tools/performance/check', async (route) => {
     const body = JSON.parse(route.request().postData() ?? '{}');
     const game = String(body?.context?.game ?? '');
+    const resolution = String(body?.context?.resolution ?? '');
     const gameFpsEvidence = game.includes('lost')
       ? []
       : [{
           gameTitle: game,
           gameKey: game,
-          resolution: 'QHD',
+          resolution: resolution === '4k' ? '4K' : resolution === 'fhd' ? 'FHD' : 'QHD',
           graphicsPreset: 'PC_BUILDS_MEDIUM',
           avgFps: game.includes('valorant') ? 240 : game.includes('cyberpunk') ? 48 : 130,
           onePercentLowFps: 90,
@@ -2582,8 +2583,8 @@ test('switches the game with compact chips next to the composite gauge', async (
   await fps.getByTestId('fps-game-lost-ark').click();
   await expect(fps).toContainText('참고 자료 없음');
 
-  // 해상도 토글은 그대로 유지된다.
-  await expect(fps.getByTestId('fps-res-QHD')).toHaveAttribute('aria-pressed', 'true');
+  // 게임을 바꿔도 발표 기본 해상도 4K 선택은 유지된다.
+  await expect(fps.getByTestId('fps-res-4K')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('picks a replacement candidate in the performance panel, compares, and applies the replacement', async ({ page }) => {
@@ -4868,6 +4869,28 @@ test('applies a recent AI recommendation from the assistant without rendering du
   const applyRequests: Array<{ buildId: string; itemCount: number }> = [];
   let compareDraftItems = [draftItem('part-gpu-current', 'GPU', '현재 장착 GPU', 1140000)];
 
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'ISSUE_PATH', summary: '현재 견적 평가', nodes: [], edges: [], focusNodeIds: [], insights: [],
+        compositeScore: { score: 734, maxScore: 1000, grade: 'B', label: '균형형', summary: '균형 잡힌 구성', components: [], caps: [] },
+        toolResults: [{ tool: 'compatibility', status: 'PASS', confidence: 'HIGH', summary: '호환성 통과' }]
+      })
+    });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '공개 FPS 참고값',
+        details: { gameFpsEvidence: [{ gameTitle: '배틀그라운드', gameKey: 'pubg', resolution: '4K', avgFps: 55 }] }
+      })
+    });
+  });
+
   await page.route('**/api/quote-drafts/current**', async (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() === 'PUT' && url.pathname.endsWith('/apply-ai-build')) {
@@ -4908,6 +4931,7 @@ test('applies a recent AI recommendation from the assistant without rendering du
   await expect.poll(() => applyRequests).toEqual([{ buildId: 'ai-budget', itemCount: 2 }]);
   await expect(page.getByTestId('checklist-GPU')).toContainText('가성비 GPU');
   await expect(page.getByTestId('checklist-CPU')).toContainText('가성비 CPU');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('완성 견적이 담겼습니다. 현재 종합 점수는 734점이며, 배그 4K 예상 성능은 평균 55FPS입니다.');
   await expect(page.getByTestId('ai-selected-build-panel')).toHaveCount(0);
 });
 
@@ -4983,6 +5007,45 @@ test('applies the single immediately preceding AI build from an explicit natural
   await page.route('**/api/parts**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
   });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'ISSUE_PATH',
+        summary: '현재 견적 평가',
+        nodes: [],
+        edges: [],
+        focusNodeIds: [],
+        insights: [],
+        compositeScore: {
+          score: 736,
+          maxScore: 1000,
+          grade: 'B',
+          label: '균형형',
+          summary: '균형 잡힌 구성입니다.',
+          components: [],
+          caps: []
+        },
+        toolResults: [{ tool: 'compatibility', status: 'PASS', confidence: 'HIGH', summary: '호환성 통과' }]
+      })
+    });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance',
+        status: 'PASS',
+        confidence: 'HIGH',
+        summary: '공개 FPS 참고값',
+        details: {
+          gameFpsEvidence: [{ gameTitle: '배틀그라운드', gameKey: 'pubg', resolution: '4K', avgFps: 70 }]
+        }
+      })
+    });
+  });
   await page.route('**/api/ai/build-chat', async (route) => {
     buildChatCalls += 1;
     await route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
@@ -4994,9 +5057,334 @@ test('applies the single immediately preceding AI build from an explicit natural
 
   await expect.poll(() => applyRequests).toEqual([{ buildId: 'ai-draft-rebuild-natural-apply', itemCount: 2 }]);
   expect(buildChatCalls).toBe(0);
-  await expect(page.getByTestId('ai-chat-messages')).toContainText('변경안이 현재 견적에 적용되었습니다');
-  await expect(page.getByTestId('ai-chat-messages')).toContainText('1,800,000원');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('완성 견적이 담겼습니다');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('현재 종합 점수는 736점');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('배그 4K 예상 성능은 평균 70FPS');
   await expect(page.getByTestId('checklist-GPU')).toContainText('자연어 적용 GPU');
+});
+
+for (const verifiedCaseAutoApply of [
+  {
+    title: 'auto-applies a single server-verified case repair when the current draft has a blocking size failure',
+    prompt: '호환되는 케이스로 바꿔줘',
+    badge: 'AUTO_APPLY_VERIFIED_REPAIR'
+  },
+  {
+    title: 'auto-applies the single verified top case when measurable fit headroom improves',
+    prompt: '현재 부품이 여유 있게 들어가는 케이스 추천해줘',
+    badge: 'AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT'
+  }
+] as const) {
+test(verifiedCaseAutoApply.title, async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'user-test',
+      email: 'user@example.com',
+      name: 'Demo User',
+      role: 'USER'
+    }));
+  });
+  const failingItems = [
+    draftItem('part-long-gpu', 'GPU', '긴 그래픽카드', 900000, 1, { lengthMm: 350 }),
+    draftItem('part-small-case', 'CASE', '장착 불가 케이스', 90000, 1, { maxGpuLengthMm: 300 })
+  ];
+  let currentDraft = {
+    ...emptyDraft,
+    items: failingItems,
+    totalPrice: 990000,
+    itemCount: 2
+  };
+  let applyCalls = 0;
+  let buildChatCalls = 0;
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'PUT' && url.pathname.endsWith('/apply-ai-build')) {
+      applyCalls += 1;
+      const body = JSON.parse(route.request().postData() ?? '{}') as {
+        items: Array<{ partId: string; category: string; quantity: number }>;
+      };
+      const appliedItems = body.items.map((item) => draftItem(
+        item.partId,
+        item.category,
+        item.partId === 'part-compatible-case' ? '호환 케이스' : '긴 그래픽카드',
+        item.partId === 'part-compatible-case' ? 120000 : 900000,
+        item.quantity,
+        item.partId === 'part-compatible-case' ? { maxGpuLengthMm: 420 } : { lengthMm: 350 }
+      ));
+      currentDraft = {
+        ...emptyDraft,
+        items: appliedItems,
+        totalPrice: 1020000,
+        itemCount: 2
+      };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...buildGraphResponse(),
+        compositeScore: compositeScoreFixture(741, '균형형'),
+        toolResults: [{ tool: 'size', status: 'PASS', confidence: 'HIGH', summary: '장착 가능' }]
+      })
+    });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance',
+        status: 'PASS',
+        confidence: 'HIGH',
+        summary: '공개 FPS 참고값',
+        details: { gameFpsEvidence: [{ gameTitle: '배틀그라운드', gameKey: 'pubg', resolution: '4K', avgFps: 64 }] }
+      })
+    });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    buildChatCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'PART',
+        message: '현재 장착 문제를 해소하는 검증된 단일 복구안으로 자동 반영합니다.',
+        warnings: [],
+        quickReplies: [],
+        builds: [{
+          id: 'ai-auto-case-repair',
+          tier: 'draft-edit',
+          label: '변경 미리보기',
+          title: '변경 적용 미리보기',
+          summary: '현재 장착 문제를 해소하고 자동 검증을 통과한 단일 복구안입니다.',
+          totalPrice: 1020000,
+          badges: ['DRAFT_EDIT_PREVIEW', verifiedCaseAutoApply.badge],
+          budgetWon: 1020000,
+          budgetLabel: '102만원',
+          tierLabel: '변경 미리보기',
+          appliedPartCategories: ['CASE'],
+          items: [
+            { partId: 'part-long-gpu', category: 'GPU', name: '긴 그래픽카드', manufacturer: '테스트제조사', quantity: 1, price: 900000, note: '' },
+            { partId: 'part-compatible-case', category: 'CASE', name: '호환 케이스', manufacturer: '테스트제조사', quantity: 1, price: 120000, note: '' }
+          ],
+          toolResults: [{ tool: 'size', status: 'PASS', confidence: 'HIGH', summary: '장착 가능' }]
+        }]
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.evaluate(() => {
+    const snapshots: string[] = [];
+    const messages = document.querySelector('[data-testid="ai-chat-messages"]');
+    if (messages) {
+      const record = () => snapshots.push(messages.textContent ?? '');
+      new MutationObserver(record).observe(messages, { childList: true, subtree: true, characterData: true });
+      record();
+    }
+    (window as typeof window & { __aiChatTextSnapshots?: string[] }).__aiChatTextSnapshots = snapshots;
+  });
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill(verifiedCaseAutoApply.prompt);
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await expect.poll(() => applyCalls).toBe(1);
+  expect(buildChatCalls).toBe(1);
+  const changeCard = page.getByTestId('ai-auto-applied-change');
+  await expect(changeCard).toContainText('변경 전후');
+  await expect(changeCard.getByTestId('ai-change-before')).toHaveText('장착 불가 케이스');
+  await expect(changeCard.getByTestId('ai-change-after')).toHaveText('호환 케이스');
+  await expect(changeCard.getByTestId('ai-price-before')).toHaveText('990,000원');
+  await expect(changeCard.getByTestId('ai-price-after')).toHaveText('1,020,000원');
+  await expect(page.getByTestId('ai-build-card').getByRole('button', { name: '이 조합으로 셀프 견적 보기' })).toHaveCount(0);
+  await expect(page.getByTestId('checklist-CASE')).toContainText('호환 케이스');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('요청한 변경이 반영되었습니다');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('현재 종합 점수는 741점');
+  const feedbackMessage = page.getByTestId('ai-chat-message-assistant').last();
+  await expect(feedbackMessage).toContainText('상단에서 종합 점수와 게임별 예상 성능을 확인해 보세요.');
+  await expect(feedbackMessage.getByTestId('ai-message-sentence')).toHaveCount(3);
+  const snapshots = await page.evaluate(() => (
+    (window as typeof window & { __aiChatTextSnapshots?: string[] }).__aiChatTextSnapshots ?? []
+  ));
+  expect(snapshots.some((text) => (
+    text.includes('요청한 변경이 반영되었습니다')
+    && !text.includes('상단에서 종합 점수와 게임별 예상 성능을 확인해 보세요.')
+  ))).toBe(true);
+});
+}
+
+test('resumes a pending AI application receipt after reload and reports score without inventing FPS', async ({ page }) => {
+  const items = [
+    draftItem('part-feedback-cpu', 'CPU', '피드백 CPU', 500000),
+    draftItem('part-feedback-gpu', 'GPU', '피드백 GPU', 900000)
+  ];
+  const currentDraft = {
+    ...emptyDraft,
+    items,
+    totalPrice: 1400000,
+    itemCount: 2
+  };
+  await page.addInitScript(({ draft }) => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-feedback-resume', email: 'resume@example.com', name: 'Resume User', role: 'USER' }));
+    const startedAt = new Date().toISOString();
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-feedback-resume', JSON.stringify({
+      messages: [{
+        id: 'feedback-message-resume',
+        role: 'assistant',
+        text: '견적 반영이 완료되었습니다. 종합 점수와 게임 성능을 확인하고 있습니다.',
+        createdAt: startedAt,
+        kind: 'part'
+      }],
+      latestBuilds: [],
+      savedBuildIds: {},
+      draftApplicationFeedback: {
+        id: 'feedback-resume',
+        messageId: 'feedback-message-resume',
+        draftFingerprint: draft.items.map((item: { category: string; partId: string; quantity: number }) => `${item.category}:${item.partId}:${item.quantity}`).sort().join('|'),
+        applicationKind: 'COMPLETE_BUILD',
+        status: 'PENDING',
+        startedAt,
+        performanceView: {
+          gameLabel: '발로란트',
+          gameQuery: 'valorant',
+          resolutionLabel: 'FHD',
+          resolutionQuery: 'fhd'
+        }
+      },
+      updatedAt: startedAt
+    }));
+    sessionStorage.setItem('buildgraph.ai.performance-view:user-feedback-resume', JSON.stringify({
+      gameLabel: '발로란트',
+      gameQuery: 'valorant',
+      resolutionLabel: 'FHD',
+      resolutionQuery: 'fhd',
+      sourceFingerprint: 'old-cpu,old-gpu',
+      evidenceSettled: false,
+      avgFps: 999,
+      updatedAt: startedAt
+    }));
+  }, { draft: currentDraft });
+  const performanceContexts: Array<{ game?: string; resolution?: string }> = [];
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'user-feedback-resume', email: 'resume@example.com', name: 'Resume User', role: 'USER' }) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'ISSUE_PATH', summary: '현재 견적 평가', nodes: [], edges: [], focusNodeIds: [], insights: [],
+        compositeScore: { score: 812, maxScore: 1000, grade: 'A', label: '고성능', summary: '고성능 구성', components: [], caps: [] },
+        toolResults: [{ tool: 'compatibility', status: 'PASS', confidence: 'HIGH', summary: '호환성 통과' }]
+      })
+    });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    const payload = JSON.parse(route.request().postData() ?? '{}') as { context?: { game?: string; resolution?: string } };
+    performanceContexts.push(payload.context ?? {});
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ tool: 'performance', status: 'WARN', confidence: 'LOW', summary: 'FPS 근거 없음', details: { gameFpsEvidence: [] } })
+    });
+  });
+
+  await page.goto('/self-quote');
+  const messages = page.getByTestId('ai-chat-messages');
+  await expect(messages).toContainText('완성 견적이 담겼습니다');
+  await expect(messages).toContainText('현재 종합 점수는 812점');
+  await expect(messages).toContainText('발로란트 FHD FPS 근거가 없어');
+  await expect(messages).toContainText('FPS 근거가 없어 수치를 임의로 표시하지 않았습니다');
+  await expect(messages).not.toContainText('평균 0FPS');
+  await expect(messages).not.toContainText('999FPS');
+  await expect.poll(() => performanceContexts.some((context) => context.game === 'valorant' && context.resolution === 'fhd')).toBe(true);
+  await expect(messages.getByText(/완성 견적이 담겼습니다/)).toHaveCount(1);
+
+  await page.reload();
+  await expect(page.getByTestId('ai-chat-messages').getByText(/완성 견적이 담겼습니다/)).toHaveCount(1);
+});
+
+test('prioritizes a zero-score Tool failure over available FPS after an AI change', async ({ page }) => {
+  const items = [
+    draftItem('part-feedback-fail-cpu', 'CPU', '실패 CPU', 500000),
+    draftItem('part-feedback-fail-gpu', 'GPU', '실패 GPU', 1200000),
+    draftItem('part-feedback-fail-case', 'CASE', '작은 케이스', 100000)
+  ];
+  const currentDraft = {
+    ...emptyDraft,
+    items,
+    totalPrice: 1800000,
+    itemCount: 3
+  };
+  await page.addInitScript(({ draft }) => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-feedback-fail', email: 'fail@example.com', name: 'Fail User', role: 'USER' }));
+    const startedAt = new Date().toISOString();
+    sessionStorage.setItem('buildgraph.ai.assistantSession:user-feedback-fail', JSON.stringify({
+      messages: [{
+        id: 'feedback-message-fail',
+        role: 'assistant',
+        text: '견적 반영이 완료되었습니다. 종합 점수와 게임 성능을 확인하고 있습니다.',
+        createdAt: startedAt,
+        kind: 'part'
+      }],
+      latestBuilds: [],
+      savedBuildIds: {},
+      draftApplicationFeedback: {
+        id: 'feedback-fail',
+        messageId: 'feedback-message-fail',
+        draftFingerprint: draft.items.map((item: { category: string; partId: string; quantity: number }) => `${item.category}:${item.partId}:${item.quantity}`).sort().join('|'),
+        applicationKind: 'PARTIAL_CHANGE',
+        status: 'PENDING',
+        startedAt
+      },
+      updatedAt: startedAt
+    }));
+  }, { draft: currentDraft });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'user-feedback-fail', email: 'fail@example.com', name: 'Fail User', role: 'USER' }) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'ISSUE_PATH', summary: '장착 실패', nodes: [], edges: [], focusNodeIds: [], insights: [],
+        compositeScore: { score: 0, maxScore: 1000, grade: 'F', label: '장착 불가', summary: '케이스 장착 불가', components: [], caps: [] },
+        toolResults: [{ tool: 'size', status: 'FAIL', confidence: 'HIGH', summary: 'GPU 길이가 케이스 허용 길이를 초과합니다.' }]
+      })
+    });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '공개 FPS 참고값',
+        details: { gameFpsEvidence: [{ gameTitle: '배틀그라운드', gameKey: 'pubg', resolution: '4K', avgFps: 120 }] }
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  const messages = page.getByTestId('ai-chat-messages');
+  await expect(messages).toContainText('종합 점수는 0점입니다');
+  await expect(messages).toContainText('상단 경고를 먼저 확인해 주세요');
+  await expect(messages).not.toContainText('240FPS');
 });
 
 test('does not apply an older build when the immediately preceding assistant turn has no build', async ({ page }) => {
