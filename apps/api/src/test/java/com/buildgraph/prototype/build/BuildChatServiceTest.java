@@ -1092,6 +1092,121 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void minimumCostCompletionRequestKeepsDraftPartsAndFillsRemainingCategories() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "나머지는 최소 비용으로 채워줘",
+                "currentQuoteDraft", Map.of(
+                        "id", "demo-draft",
+                        "items", List.of(
+                                Map.of("partId", "existing-cpu", "category", "CPU",
+                                        "name", "기존 CPU", "quantity", 1, "price", 300_000),
+                                Map.of("partId", "existing-gpu", "category", "GPU",
+                                        "name", "기존 GPU", "quantity", 1, "price", 700_000)),
+                        "totalPrice", 1_000_000)));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("message").toString())
+                .contains("담긴 부품은 유지")
+                .doesNotContain("최소 완성가");
+        assertThat(response.get("builds")).asList().isNotEmpty().allSatisfy(value -> {
+            Map<?, ?> build = (Map<?, ?>) value;
+            assertThat(build.get("badges")).asList().contains("DRAFT_COMPLETION");
+            assertThat(build.get("items")).asList().hasSize(8);
+            assertThat(build.get("items")).asList().anySatisfy(item ->
+                    assertThat((Map<String, Object>) item).containsEntry("partId", "existing-cpu"));
+            assertThat(build.get("items")).asList().anySatisfy(item ->
+                    assertThat((Map<String, Object>) item).containsEntry("partId", "existing-gpu"));
+        });
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void minimumBudgetDraftCompletionRequestKeepsDraftInsteadOfRebuildingThreeMinimumBuilds() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "최소 예산으로 이 견적 완성해줘",
+                "currentQuoteDraft", Map.of(
+                        "id", "demo-draft",
+                        "items", List.of(
+                                Map.of("partId", "existing-cpu", "category", "CPU",
+                                        "name", "기존 CPU", "quantity", 1, "price", 300_000),
+                                Map.of("partId", "existing-gpu", "category", "GPU",
+                                        "name", "기존 GPU", "quantity", 1, "price", 700_000)),
+                        "totalPrice", 1_000_000)));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("message").toString())
+                .contains("담긴 부품은 유지")
+                .doesNotContain("최소 완성가");
+        assertThat(response.get("builds")).asList().isNotEmpty().allSatisfy(value -> {
+            Map<?, ?> build = (Map<?, ?>) value;
+            assertThat(build.get("badges")).asList().contains("DRAFT_COMPLETION");
+            assertThat(build.get("items")).asList().anySatisfy(item ->
+                    assertThat((Map<String, Object>) item).containsEntry("partId", "existing-gpu"));
+        });
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void minimumRequestWithoutCompletionMarkerStillRebuildsThreeMinimumBuildsOverDraft() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "최소 견적으로 맞춰줘.",
+                "currentQuoteDraft", Map.of(
+                        "id", "demo-draft",
+                        "items", List.of(Map.of("partId", "existing-gpu", "category", "GPU",
+                                "name", "기존 고가 GPU", "quantity", 1, "price", 9_000_000)),
+                        "totalPrice", 9_000_000)));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("builds")).asList().hasSize(3);
+        assertThat(response.get("message").toString()).contains("최소").contains("3개");
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void completionMarkerWithEmptyDraftStillReturnsMinimumBuilds() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        stubDensePartCatalog(jdbcTemplate);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate, toolCheckService, aiChatEngine, BuildChatCacheService.disabled());
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "나머지는 최소 비용으로 채워줘",
+                "currentQuoteDraft", Map.of("id", "empty-draft", "items", List.of(), "totalPrice", 0)));
+
+        assertThat(response).containsEntry("answerType", "BUDGET");
+        assertThat(response.get("builds")).asList().hasSize(3);
+        assertThat(response.get("message").toString()).contains("최소").contains("3개");
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
     void targetStableFpsRequestReturnsOneToolVerifiedGpuPreview() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         doAnswer(invocation -> {
@@ -1200,6 +1315,128 @@ class BuildChatServiceTest {
         });
         assertThat(response.get("message").toString()).contains("평균 약 140FPS");
         assertThat(response.get("quickReplies")).asList().contains("이 변경안 적용해줘");
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void mixedTargetFpsRequestRespectsNamedGpuModelInsteadOfCheapestQualifier() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts") && sql.contains("category = ?")) {
+                return List.of(
+                        partRow("gpu-5070", "GPU", "RTX 5070 Demo", 900_000,
+                                Map.of("gpuClass", "RTX_5070", "hardwareClass", "RTX_5070"), 80),
+                        partRow("gpu-5090", "GPU", "RTX 5090 Demo", 3_500_000,
+                                Map.of("gpuClass", "RTX_5090", "hardwareClass", "RTX_5090"), 99));
+            }
+            if (sql.contains("FROM game_fps_benchmarks")) {
+                String gpuClass = invocation.getArgument(2, String.class);
+                int avgFps = switch (gpuClass) {
+                    case "RTX_5090" -> 200;
+                    case "RTX_5070" -> 150;
+                    default -> 110;
+                };
+                return List.of(Map.of(
+                        "game_title", "PlayerUnknown's Battlegrounds",
+                        "game_key", "pubg",
+                        "resolution", "QHD",
+                        "graphics_preset", "MEDIUM",
+                        "avg_fps", avgFps,
+                        "source_name", "PC-Builds FPS calculator",
+                        "confidence", "MEDIUM",
+                        "metadata", Map.of("gpuClass", gpuClass)
+                ));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "RTX 5090으로 바꿔줘. 배그 QHD에서 평균 140FPS 이상은 나와야 해",
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("cpu-current", "CPU", "Ryzen 7", 1, Map.of("cpuClass", "RYZEN_7_9700X")),
+                        draftItem("gpu-current", "GPU", "RTX 5060", 1, Map.of("gpuClass", "RTX_5060")),
+                        draftItem("case-current", "CASE", "Demo Case", 1, Map.of("maxGpuLengthMm", 420)),
+                        draftItem("psu-current", "PSU", "Demo PSU", 1, Map.of("capacityW", 1500))
+                ))
+        ));
+
+        assertThat(response).containsEntry("answerType", "PART");
+        assertThat(response.get("builds")).as("response: %s", response).asList().singleElement().satisfies(value -> {
+            Map<?, ?> build = (Map<?, ?>) value;
+            assertThat(build.get("badges")).asList().contains("DRAFT_EDIT_PREVIEW");
+            assertThat(build.get("items")).asList().anySatisfy(item ->
+                    assertThat((Map<String, Object>) item).containsEntry("partId", "gpu-5090"));
+            assertThat(build.get("items")).asList().noneSatisfy(item ->
+                    assertThat((Map<String, Object>) item).containsEntry("partId", "gpu-5070"));
+        });
+        assertThat(response.get("message").toString()).contains("평균 약 200FPS");
+        assertThat(response.get("quickReplies")).asList().contains("이 변경안 적용해줘");
+        verifyNoInteractions(aiChatEngine, cacheService);
+    }
+
+    @Test
+    void mixedTargetFpsRequestReportsNamedModelShortfallInsteadOfSilentSwap() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts") && sql.contains("category = ?")) {
+                return List.of(
+                        partRow("gpu-5070", "GPU", "RTX 5070 Demo", 900_000,
+                                Map.of("gpuClass", "RTX_5070", "hardwareClass", "RTX_5070"), 80),
+                        partRow("gpu-5090", "GPU", "RTX 5090 Demo", 3_500_000,
+                                Map.of("gpuClass", "RTX_5090", "hardwareClass", "RTX_5090"), 99));
+            }
+            if (sql.contains("FROM game_fps_benchmarks")) {
+                String gpuClass = invocation.getArgument(2, String.class);
+                int avgFps = switch (gpuClass) {
+                    case "RTX_5090" -> 120;
+                    case "RTX_5070" -> 150;
+                    default -> 100;
+                };
+                return List.of(Map.of(
+                        "game_title", "PlayerUnknown's Battlegrounds",
+                        "game_key", "pubg",
+                        "resolution", "QHD",
+                        "graphics_preset", "MEDIUM",
+                        "avg_fps", avgFps,
+                        "source_name", "PC-Builds FPS calculator",
+                        "confidence", "MEDIUM",
+                        "metadata", Map.of("gpuClass", gpuClass)
+                ));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "RTX 5090으로 바꿔줘. 배그 QHD에서 평균 140FPS 이상은 나와야 해",
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("cpu-current", "CPU", "Ryzen 7", 1, Map.of("cpuClass", "RYZEN_7_9700X")),
+                        draftItem("gpu-current", "GPU", "RTX 5060", 1, Map.of("gpuClass", "RTX_5060")),
+                        draftItem("case-current", "CASE", "Demo Case", 1, Map.of("maxGpuLengthMm", 420)),
+                        draftItem("psu-current", "PSU", "Demo PSU", 1, Map.of("capacityW", 1500))
+                ))
+        ));
+
+        assertThat(response).containsEntry("answerType", "GENERAL");
+        assertThat(response.get("builds")).as("response: %s", response).asList().isEmpty();
+        assertThat(response.get("message").toString())
+                .contains("RTX 5090")
+                .contains("약 120FPS")
+                .contains("140FPS에 못 미칩니다")
+                .contains("바꾸지 않았습니다");
+        assertThat(response.get("quickReplies")).asList()
+                .contains("배틀그라운드 QHD에서 평균 140FPS 이상 나오는 GPU로 바꿔줘");
         verifyNoInteractions(aiChatEngine, cacheService);
     }
 
@@ -3493,13 +3730,16 @@ class BuildChatServiceTest {
         assertThat(response.get("message").toString())
                 .contains("통풍 부족으로 감점된 상태가 아닙니다")
                 .contains("파워", "0mm")
-                .contains("실제로 높아지고", "검증된 1위 케이스로 지금 견적에 자동 반영")
+                .contains("실제로 높아지고", "아래 미리보기 카드에서 적용할 수 있습니다")
+                .doesNotContain("자동 반영")
                 .doesNotContain("장착 수치가 같은 H9 파생 모델");
-        assertThat(response.get("quickReplies")).asList().isEmpty();
+        assertThat(response.get("quickReplies")).asList()
+                .contains("이 변경안 적용해줘", "현재 견적 그대로 둘게");
         assertThat(response.get("builds")).asList().singleElement().satisfies(value -> {
             Map<?, ?> build = (Map<?, ?>) value;
             assertThat(build.get("badges")).asList()
-                    .contains("DRAFT_EDIT_PREVIEW", "AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT");
+                    .contains("DRAFT_EDIT_PREVIEW")
+                    .doesNotContain("AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT", "AUTO_APPLY_VERIFIED_REPAIR");
             assertThat(build.get("appliedPartCategories")).asList().containsExactly("CASE");
             assertThat(build.get("items")).asList().anySatisfy(item ->
                     assertThat((Map<String, Object>) item).containsEntry("partId", "case-roomy"));
@@ -3573,13 +3813,16 @@ class BuildChatServiceTest {
         assertThat(response.get("message")).asString()
                 .contains("확인 가능한 장착 여유가 넓은", "나빠지는 후보는 제외")
                 .contains("모든 장착 여유가 넓은 케이스")
-                .contains("검증된 1위 케이스로 지금 견적에 자동 반영")
+                .contains("아래 미리보기 카드에서 적용할 수 있습니다")
+                .doesNotContain("자동 반영")
                 .doesNotContain("치수가 같은 케이스", "GPU만 넓고 쿨러가 좁은 케이스");
-        assertThat(response.get("quickReplies")).asList().isEmpty();
+        assertThat(response.get("quickReplies")).asList()
+                .contains("이 변경안 적용해줘", "현재 견적 그대로 둘게");
         assertThat(response.get("builds")).asList().singleElement().satisfies(value -> {
             Map<?, ?> build = (Map<?, ?>) value;
             assertThat(build.get("badges")).asList()
-                    .contains("DRAFT_EDIT_PREVIEW", "AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT");
+                    .contains("DRAFT_EDIT_PREVIEW")
+                    .doesNotContain("AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT", "AUTO_APPLY_VERIFIED_REPAIR");
             assertThat(build.get("appliedPartCategories")).asList().containsExactly("CASE");
             assertThat(build.get("items")).asList().anySatisfy(item ->
                     assertThat((Map<String, Object>) item).containsEntry("partId", "case-better"));

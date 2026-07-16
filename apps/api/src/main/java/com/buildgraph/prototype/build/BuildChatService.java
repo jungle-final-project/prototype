@@ -1212,6 +1212,16 @@ public class BuildChatService {
                 "가장싼구성", "제일싼구성", "가능한최저예산", "최소예산으로", "최저예산으로");
     }
 
+    // 담긴 부품을 유지·완성하려는 의도 마커 — draftCompletionFastResponse 트리거(채워/완성/나머지/마저)와
+    // 유지 의도 표현(이 견적/지금 견적/담긴/그대로/유지)을 함께 본다. normalizeCommand가 공백을 제거하므로
+    // "이 견적"도 "이견적"으로 비교된다.
+    static boolean hasDraftCompletionIntentMarker(String message) {
+        String normalized = normalizeCommand(message);
+        return containsAnyNormalized(normalized,
+                "나머지", "마저", "채워", "채우", "완성",
+                "이견적", "지금견적", "담긴", "그대로", "유지");
+    }
+
     private static boolean isStandaloneBuildRecommend(String message, Map<String, Object> request, BudgetIntent rawBudgetIntent) {
         // 견적 초안 존재 여부는 map이 비었는지가 아니라 items가 있는지로 판정해야 함(빈 items 배열을 "초안 있음"으로 오인 방지)
         if (!objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
@@ -3520,7 +3530,7 @@ public class BuildChatService {
             String evidenceLabel = airflowRequested
                     ? "통풍 근거가 있고 현재 케이스보다 확인 가능한 장착 여유가 넓은"
                     : "현재 케이스보다 확인 가능한 장착 여유가 넓은";
-            return applyVerifiedCaseImprovementAutoApply(
+            return applyVerifiedCaseImprovementPreview(
                     response,
                     body,
                     topFit.part(),
@@ -3581,7 +3591,7 @@ public class BuildChatService {
             return true;
         }
 
-        return applyVerifiedCaseImprovementAutoApply(
+        return applyVerifiedCaseImprovementPreview(
                 response,
                 body,
                 top.part(),
@@ -3591,7 +3601,7 @@ public class BuildChatService {
         );
     }
 
-    private boolean applyVerifiedCaseImprovementAutoApply(
+    private boolean applyVerifiedCaseImprovementPreview(
             Map<String, Object> targetResponse,
             Map<String, Object> body,
             PartCandidate replacement,
@@ -3600,6 +3610,9 @@ public class BuildChatService {
         // 추천 문장 자체는 일반 미리보기 경로에서 후보 탐색으로 간주되어 차단된다. 여기서는 이미
         // 현재 draft 전체에 후보를 가상 적용해 1위를 확정했으므로, exact 선택과 같은 내부 body로만
         // 변환해 검증된 변경 카드를 만든다. 공개 사용자 원문이나 대화 문맥은 바꾸지 않는다.
+        // '추천' 문형은 적용 동의가 아니다 — size FAIL을 해소하는 서버 검증 단일 복구안
+        // (AUTO_APPLY_VERIFIED_REPAIR)만 명령형 요청을 적용 동의로 보고, 개선 추천은 1위 후보
+        // 큐레이션을 유지하되 미리보기 카드 + "이 변경안 적용해줘" 확인 뒤에만 반영한다.
         Map<String, Object> verifiedSelectionBody = new LinkedHashMap<>(body);
         verifiedSelectionBody.put("message", replacement.name() + " 견적에 담아줘");
         Optional<Map<String, Object>> generated = directReplacementPreview(
@@ -3616,15 +3629,8 @@ public class BuildChatService {
             return false;
         }
         Map<String, Object> verifiedImprovement = new LinkedHashMap<>(previews.get(0));
-        List<String> badges = new ArrayList<>(stringList(verifiedImprovement.get("badges")));
-        badges.add("AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT");
-        verifiedImprovement.put("badges", distinct(badges));
-        verifiedImprovement.put("summary", "현재 케이스보다 장착 여유가 개선되고 전체 자동 검증을 통과한 1위 변경안입니다. 지금 견적에 자동으로 반영합니다.");
+        verifiedImprovement.put("summary", "현재 케이스보다 장착 여유가 개선되고 전체 자동 검증을 통과한 1위 변경안입니다. 카드의 적용 버튼을 눌러야 실제 견적에 반영됩니다.");
         response.put("builds", List.of(verifiedImprovement));
-        response.put("message", text(response.get("message"))
-                .replace("아래 미리보기 카드에서 적용할 수 있습니다.",
-                        "검증된 1위 케이스로 지금 견적에 자동 반영합니다."));
-        response.put("quickReplies", List.of());
         targetResponse.clear();
         targetResponse.putAll(response);
         return true;
@@ -4290,8 +4296,15 @@ public class BuildChatService {
             return Optional.empty();
         }
 
+        // 혼합문 지명 존중: "RTX 5090으로 바꿔줘. 배그 QHD 140FPS는 나와야 해"처럼 목표 FPS와
+        // 지명 모델이 함께 오면 지명 모델을 후보 필터로 존중한다. 지명 모델이 근거상 목표에 못
+        // 미치면 조용히 다른 모델로 바꾸지 않고 정직하게 안내한다(아래 selectedPart == null 분기).
+        String namedGpuClass = targetGpuClass(message);
+        boolean namedDifferentFromCurrent = namedGpuClass != null
+                && !namedGpuClass.equals(hardwareClass(currentGpu));
+
         FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, message, gameKey, resolution, stableTarget);
-        if (currentEvidence != null && currentEvidence.value() >= targetFps) {
+        if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= targetFps) {
             Map<String, Object> alreadyMet = fastResponse(
                     "GENERAL",
                     currentGpu.name() + "은(는) " + currentEvidence.metricLabel() + " 기준 약 "
@@ -4317,6 +4330,11 @@ public class BuildChatService {
             }
             String candidateClass = hardwareClass(candidate);
             if (candidateClass == null) {
+                continue;
+            }
+            // 지명 모델이 있으면 그 모델(hardware class)만 후보로 본다 — 최저가 충족 후보로
+            // 대체하지 않는다.
+            if (namedGpuClass != null && !namedGpuClass.equals(candidateClass)) {
                 continue;
             }
             FpsTargetEvidence evidence = evidenceByGpuClass.computeIfAbsent(
@@ -4372,6 +4390,37 @@ public class BuildChatService {
                 );
                 blocked.put("quickReplies", blockingRepairQuickReplies(blockingTool));
                 return Optional.of(blocked);
+            }
+            if (namedGpuClass != null) {
+                // 지명 모델이 목표에 못 미치거나 근거가 없으면 임의 모델로 바꾸지 않고 사실대로
+                // 안내한다. 대안은 지명 없이 목표 FPS를 충족하는 후보 탐색 칩으로 제시한다.
+                String namedLabel = namedGpuClass.replace("RTX_", "RTX ").replace('_', ' ');
+                FpsTargetEvidence namedEvidence = evidenceByGpuClass
+                        .getOrDefault(namedGpuClass, Optional.empty())
+                        .orElse(null);
+                Map<String, Object> namedResponse;
+                if (namedEvidence != null && namedEvidence.value() < targetFps) {
+                    namedResponse = fastResponse(
+                            "GENERAL",
+                            "지정하신 " + namedLabel + "은(는) " + gameDisplayName(gameKey) + " " + resolution + " "
+                                    + namedEvidence.metricLabel() + " 약 " + formatFps(namedEvidence.value())
+                                    + "FPS로 확인되어 목표 " + targetFps + "FPS에 못 미칩니다. "
+                                    + "지정 모델을 임의로 다른 모델로 바꾸지 않았습니다.",
+                            List.of()
+                    );
+                } else {
+                    namedResponse = fastResponse(
+                            "GENERAL",
+                            "지정하신 " + namedLabel + "의 " + gameDisplayName(gameKey) + " " + resolution
+                                    + " FPS 근거를 현재 판매 중인 부품에서 확인하지 못해 목표 " + targetFps
+                                    + "FPS 충족 여부를 검증할 수 없습니다. 임의로 다른 모델을 고르지 않았습니다.",
+                            List.of("PART_CONSTRAINT_NOT_FOUND")
+                    );
+                }
+                namedResponse.put("quickReplies", List.of(
+                        gameDisplayName(gameKey) + " " + resolution + "에서 " + targetPhrase + " 나오는 GPU로 바꿔줘",
+                        namedLabel + "(으)로 그대로 바꿔줘"));
+                return Optional.of(namedResponse);
             }
             Map<String, Object> unavailable = fastResponse(
                     "GENERAL",
@@ -5565,6 +5614,15 @@ public class BuildChatService {
             String message
     ) {
         if (!isMinimumFeasibleBuildRequest(message)) {
+            return Optional.empty();
+        }
+        // 완성-의도 veto: "나머지는 최소 비용으로 채워줘"처럼 담긴 부품을 유지한 채 견적을
+        // 완성하려는 요청은 최소 3안 전량 재계산으로 가로채지 않는다. 이 게이트를 건너뛰면
+        // 아래 draftCompletionFastResponse(담긴 부품 고정 + 빈 카테고리 채움)가 받는다.
+        // 드래프트가 비어 있으면 유지할 부품이 없으므로 완성 마커가 있어도 최소 3안을 만든다.
+        // "최소 견적으로 맞춰줘"는 완성 마커가 없어 드래프트가 있어도 기존대로 최소 3안(데모 보존).
+        if (hasDraftCompletionIntentMarker(message)
+                && !objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty()) {
             return Optional.empty();
         }
         Optional<GreedyBuild> minimum = minimumFeasibleCompleteBuild();

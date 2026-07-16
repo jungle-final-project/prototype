@@ -91,11 +91,10 @@ function resolveNaturalApplyBuild(session: AiAssistantSession): NaturalApplyReso
   return { status: 'READY', build };
 }
 
+// 서버가 자동 반영을 보장하는 badge는 size FAIL 복구(AUTO_APPLY_VERIFIED_REPAIR)뿐이다.
+// 케이스 '추천'(여유 개선)은 미리보기+적용 확인 계약이라 badge 없이 일반 카드로 내려온다.
 function isVerifiedAutoApplyBuild(build: AiRecommendedBuild) {
-  return build.badges.some((badge) => (
-    badge === 'AUTO_APPLY_VERIFIED_REPAIR'
-    || badge === 'AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT'
-  ));
+  return build.badges.includes('AUTO_APPLY_VERIFIED_REPAIR');
 }
 
 function withAutoApplyChangeReceipt(build: AiRecommendedBuild, draft: QuoteDraft): AiRecommendedBuild {
@@ -708,7 +707,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
       startAiDraftApplicationFeedback({
         draft: updatedDraft,
-        applicationKind: 'PARTIAL_CHANGE'
+        applicationKind: 'PARTIAL_CHANGE',
+        changeNote: `${command.partName} 추가됨 · 현재 수량 ${nextQuantity}개`
       });
 
       // 직접 선택한 다중 상품은 저장을 막지 않는다. 다만 이후 graph 검사에서 FAIL이면 채팅에도

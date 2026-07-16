@@ -309,6 +309,8 @@ export type AiDraftApplicationFeedback = {
   messageId: string;
   draftFingerprint: string;
   applicationKind: 'COMPLETE_BUILD' | 'PARTIAL_CHANGE';
+  /** 담기/수량 변경처럼 어떤 상품이 몇 개가 됐는지 영수증 첫 줄에 그대로 에코할 짧은 문구. */
+  changeNote?: string;
   status: 'PENDING' | 'CONSUMED';
   startedAt: string;
   completedAt?: string;
@@ -596,9 +598,12 @@ function normalizeDraftApplicationFeedback(value: unknown): AiDraftApplicationFe
   const completedAt = typeof candidate.completedAt === 'string' && candidate.completedAt.trim()
     ? candidate.completedAt.trim()
     : undefined;
+  const changeNote = typeof candidate.changeNote === 'string' && candidate.changeNote.trim()
+    ? candidate.changeNote.trim()
+    : undefined;
   const performanceView = normalizeDraftPerformanceSelection(candidate.performanceView);
   if (!id || !messageId || !draftFingerprint || !applicationKind || !status || !startedAt) return undefined;
-  return { id, messageId, draftFingerprint, applicationKind, status, startedAt, completedAt, performanceView };
+  return { id, messageId, draftFingerprint, applicationKind, changeNote, status, startedAt, completedAt, performanceView };
 }
 
 function normalizeDraftPerformanceSelection(value: unknown): AiDraftPerformanceSelection | undefined {
