@@ -13,6 +13,8 @@ readonly FILE_OWNER="${BUILDGRAPH_FILE_OWNER:-ubuntu:ubuntu}"
 readonly STATE_DIR="${BUILDGRAPH_BUILDER_STATE_DIR:-/var/lib/buildgraph}"
 readonly SUCCESS_MARKER="$STATE_DIR/builder-prepared"
 readonly OS_RELEASE_FILE="${BUILDGRAPH_OS_RELEASE_FILE:-/etc/os-release}"
+readonly APT_SOURCES_LIST="${BUILDGRAPH_APT_SOURCES_LIST:-/etc/apt/sources.list}"
+readonly UBUNTU_SOURCES="${BUILDGRAPH_UBUNTU_SOURCES:-/etc/apt/sources.list.d/ubuntu.sources}"
 readonly GREEN_IMAGE_MANIFEST="${BUILDGRAPH_GREEN_IMAGE_MANIFEST:-/opt/buildgraph/green-images.env}"
 readonly ASG_RUNTIME_ENV="${BUILDGRAPH_ASG_RUNTIME_ENV:-/opt/buildgraph/asg-runtime.env}"
 readonly AWS_CREDENTIALS_ROOT="${BUILDGRAPH_AWS_CREDENTIALS_ROOT:-/root/.aws/credentials}"
@@ -80,17 +82,21 @@ run_git() {
 }
 
 configure_ubuntu_https_sources() {
-  local source_file
+  local source_file candidate
+  local source_index=0
   local source_files=(
-    /etc/apt/sources.list
-    /etc/apt/sources.list.d/ubuntu.sources
+    "$APT_SOURCES_LIST"
+    "$UBUNTU_SOURCES"
   )
 
   for source_file in "${source_files[@]}"; do
     [[ -f "$source_file" ]] || continue
-    sed -i -E \
+    source_index=$((source_index + 1))
+    candidate="$TEMP_DIR/apt-source-$source_index"
+    sed -E \
       's#http://([A-Za-z0-9.-]*ubuntu\.com)#https://\1#g' \
-      "$source_file"
+      "$source_file" >"$candidate"
+    install -m 0644 "$candidate" "$source_file"
   done
 }
 

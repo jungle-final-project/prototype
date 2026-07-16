@@ -28,12 +28,22 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
         self.fake_bin = self.temp_root / "bin"
         self.state_dir = self.temp_root / "state"
         self.os_release = self.temp_root / "os-release"
+        self.apt_sources_list = self.temp_root / "sources.list"
+        self.ubuntu_sources = self.temp_root / "ubuntu.sources"
         self.trace_file = self.temp_root / "trace.log"
         self.fake_bin.mkdir()
         self.state_dir.mkdir()
         self._create_source_repository()
         self._install_fake_commands()
         self._write_os_release("ubuntu", "24.04")
+        self.apt_sources_list.write_text(
+            "deb http://archive.ubuntu.com/ubuntu noble main\n",
+            encoding="utf-8",
+        )
+        self.ubuntu_sources.write_text(
+            "URIs: http://ap-northeast-2.ec2.archive.ubuntu.com/ubuntu\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -51,6 +61,8 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
                 "BUILDGRAPH_BUILDER_STATE_DIR": str(self.state_dir),
                 "BUILDGRAPH_FILE_OWNER": f"{os.getuid()}:{os.getgid()}",
                 "BUILDGRAPH_OS_RELEASE_FILE": str(self.os_release),
+                "BUILDGRAPH_APT_SOURCES_LIST": str(self.apt_sources_list),
+                "BUILDGRAPH_UBUNTU_SOURCES": str(self.ubuntu_sources),
                 "BUILDGRAPH_REPOSITORY_URL": str(self.source_repo),
                 "BUILDGRAPH_GREEN_IMAGE_MANIFEST": str(self.temp_root / "green-images.env"),
                 "BUILDGRAPH_ASG_RUNTIME_ENV": str(self.temp_root / "asg-runtime.env"),
@@ -252,6 +264,14 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
         )
         self.assertEqual(42, result.returncode, result.stdout)
         self.assertFalse((self.state_dir / "builder-prepared").exists())
+        self.assertIn(
+            "https://archive.ubuntu.com",
+            self.apt_sources_list.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "https://ap-northeast-2.ec2.archive.ubuntu.com",
+            self.ubuntu_sources.read_text(encoding="utf-8"),
+        )
 
     def test_rejects_existing_secret_artifact(self) -> None:
         self.app_root.mkdir()
