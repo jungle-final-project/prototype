@@ -111,6 +111,9 @@ install_builder_dependencies() {
     git \
     jq \
     unzip
+  for command_name in curl git jq unzip; do
+    require_command "$command_name"
+  done
 
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
@@ -226,7 +229,7 @@ for command_name in date dirname id mkdir mktemp mv rm uname; do
   require_command "$command_name"
 done
 if [[ "$SKIP_INSTALL_FOR_TESTS" != "true" ]]; then
-  for command_name in apt-get chmod chown dpkg dpkg-query grep install jq runuser sed systemctl tee unzip usermod; do
+  for command_name in apt-get chmod chown dpkg dpkg-query grep install runuser sed systemctl tee usermod; do
     require_command "$command_name"
   done
 fi

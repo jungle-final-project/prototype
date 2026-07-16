@@ -208,6 +208,32 @@ class GreenAsgBuilderPreparationTest(unittest.TestCase):
         self.assertNotIn("set -x", script)
         self.assertIn("amazon-ssm-agent", script)
 
+    def test_apt_packages_are_required_only_after_installation(self) -> None:
+        script = PREPARE_SCRIPT.read_text(encoding="utf-8")
+        preinstall_start = script.index(
+            "for command_name in apt-get chmod chown dpkg dpkg-query"
+        )
+        preinstall_end = script.index(
+            'CURRENT_STEP="verify-platform"',
+            preinstall_start,
+        )
+        preinstall_requirements = script[preinstall_start:preinstall_end]
+        self.assertNotRegex(preinstall_requirements, r"\b(?:jq|unzip)\b")
+
+        install_start = script.index("install_builder_dependencies()")
+        install_end = script.index("verify_ssm_agent()", install_start)
+        install_function = script[install_start:install_end]
+        postinstall_guard = "for command_name in curl git jq unzip"
+        self.assertIn(postinstall_guard, install_function)
+        self.assertLess(
+            install_function.index("apt-get install -y"),
+            install_function.index(postinstall_guard),
+        )
+        self.assertLess(
+            install_function.index(postinstall_guard),
+            install_function.index('unzip -q "$TEMP_DIR/awscliv2.zip"'),
+        )
+
     def test_prepares_exact_commit_without_runtime_artifacts(self) -> None:
         result = self._run()
         self.assertEqual(0, result.returncode, result.stdout)
