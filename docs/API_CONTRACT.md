@@ -689,6 +689,7 @@ Support Chat Rooms 규칙:
 | `GET` | `/api/admin/as-tickets` | ADMIN | 4번 | `?page=0&size=20` | `{ "items": [{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "userId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "assignedAdminId": null, "createdAt": "2026-06-29T10:42:00Z" }], "page": 0, "size": 20, "total": 1 }` | `as_tickets` |
 | `GET` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "OPEN", "symptom": "화면이 멈춤", "logUploadId": "1b363bcb-42be-4428-b625-54a6b267d66f", "assignedAdminId": null, "causeCandidates": [], "upgradeCandidates": [], "adminNote": null }` | `as_tickets`, `agent_log_uploads` |
 | `PATCH` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | `{ "status": "IN_PROGRESS", "assignedAdminId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "adminNote": "확인 중" }` | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "status": "IN_PROGRESS", "assignedAdminId": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "adminNote": "확인 중", "resolvedAt": null, "updatedAt": "2026-06-29T10:45:00Z" }` | `as_tickets`, `users`, `admin_audit_logs` |
+| `DELETE` | `/api/admin/as-tickets/{id}` | ADMIN | 4번 | - | `{ "id": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "deleted": true, "deletedAt": "2026-07-16T06:00:00Z", "supportChatRoomId": "7c2f8f17-8f18-4d10-bcd1-9d20d1c71a01" }` | `as_tickets.deleted_at` soft delete, 연결된 active `support_chat_rooms`/`as_chat_sessions` archive, 원격·방문지원 cancel, `admin_audit_logs` 기록. 원본 로그와 학습 이력은 보존 |
 
 `POST /api/agent-logs/upload` multipart fields:
 
@@ -738,7 +739,7 @@ PC Agent 등록/인증 규칙:
 
 | Method | Path | Auth | Owner | Request 예시 | Response 예시 | 관련 DB table |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/dashboard` | ADMIN | 5번 | - | `{ "agentRunning": 1, "openTickets": 3, "priceJobsRunning": 0, "degraded": false, "generatedAt": "2026-06-29T10:50:00Z" }` | `agent_sessions`, `as_tickets`, `price_jobs` |
+| `GET` | `/api/admin/dashboard` | ADMIN | 5번 | - | `{ "agentRunning": 1, "openTickets": 3, "priceJobsRunning": 0, "todayRevenue": 27800, "weekRevenue": 230100, "revenueTrend": [{ "date": "2026-07-16", "label": "07/16", "revenue": 27800 }], "orderStatus": [{ "status": "PENDING", "label": "처리대기", "count": 1 }], "degraded": false, "generatedAt": "2026-06-29T10:50:00Z" }` | `agent_sessions`, `as_tickets`, `price_jobs`, `assembly_payments`, `assembly_requests` |
 | `GET` | `/api/admin/audit-logs/recent` | ADMIN | 5번 | - | `{ "items": [{ "action": "AS_TICKET_UPDATED", "targetType": "as_tickets", "targetId": "4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a", "metadata": { "beforeStatus": "OPEN", "afterStatus": "IN_PROGRESS" }, "createdAt": "2026-06-29T10:45:00Z" }] }` | `admin_audit_logs` |
 | `GET` | `/api/admin/pipeline-job-runs` | ADMIN | 5번 | `?limit=30` | `{ "items": [{ "id": "5a3f...", "jobName": "DANAWA_SNAPSHOT_REFRESH", "triggerType": "SCHEDULED", "status": "SUCCEEDED", "resultSummary": { "attempted": 7 }, "errorSummary": null, "startedAt": "2026-07-03T04:00:00Z", "finishedAt": "2026-07-03T04:01:10Z", "durationMs": 70000 }], "total": 1 }` | `pipeline_job_runs` |
 | `GET` | `/api/health` | no | 5번 | - | `200 { "status": "UP", "database": "UP" }`, DB 연결 실패 시 `503 { "status": "DOWN" }` | runtime |
@@ -1002,8 +1003,18 @@ PC Agent 앱이 직접 호출하는 정식 업로드 경로는 `POST /api/agent/
 | `AdminDashboardDto` | `agentRunning` | `number` | no | `1` |
 | `AdminDashboardDto` | `openTickets` | `number` | no | `3` |
 | `AdminDashboardDto` | `priceJobsRunning` | `number` | no | `0` |
+| `AdminDashboardDto` | `todayRevenue` | `number` | no | `27800` |
+| `AdminDashboardDto` | `weekRevenue` | `number` | no | `230100` |
+| `AdminDashboardDto` | `revenueTrend` | `AdminRevenueTrendPointDto[]` | no | `[{ "date": "2026-07-16", "label": "07/16", "revenue": 27800 }]` |
+| `AdminDashboardDto` | `orderStatus` | `AdminOrderStatusDto[]` | no | `[{ "status": "PENDING", "label": "처리대기", "count": 1 }]` |
 | `AdminDashboardDto` | `degraded` | `boolean` | no | `false` |
 | `AdminDashboardDto` | `generatedAt` | `string` | yes | `2026-06-29T10:50:00Z` |
+| `AdminRevenueTrendPointDto` | `date` | `string` | no | `2026-07-16` |
+| `AdminRevenueTrendPointDto` | `label` | `string` | no | `07/16` |
+| `AdminRevenueTrendPointDto` | `revenue` | `number` | no | `27800` |
+| `AdminOrderStatusDto` | `status` | `string` | no | `PENDING` |
+| `AdminOrderStatusDto` | `label` | `string` | no | `처리대기` |
+| `AdminOrderStatusDto` | `count` | `number` | no | `1` |
 | `AuditLogDto` | `action` | `string` | no | `AS_TICKET_UPDATED` |
 | `AuditLogDto` | `targetType` | `string` | no | `as_tickets` |
 | `AuditLogDto` | `targetId` | `string` | yes | `4aef8ef7-1dc7-45d1-bfc2-bb0cfdaf7f8a` |

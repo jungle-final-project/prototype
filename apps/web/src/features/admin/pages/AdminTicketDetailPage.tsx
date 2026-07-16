@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
@@ -140,10 +141,16 @@ export function AdminTicketDetailPage() {
   return (
     <AdminShell title="AS 티켓 상세">
       <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
-        <Panel title="AS 티켓 확인" subtitle={ticket.id}>
-          <DataTable columns={['항목', '내용']} rows={ticketDetailRows(ticket)} />
-          <Link className="mt-5 inline-block text-sm font-bold text-brand-blue" to="/admin/as-tickets">목록으로 돌아가기</Link>
-        </Panel>
+        <div data-testid="admin-as-ticket-overview">
+          <Panel title="AS 티켓 확인" subtitle={ticket.id}>
+            <DataTable
+              columns={['항목', '내용']}
+              rows={ticketDetailRows(ticket)}
+              nowrapColumns={['항목']}
+            />
+            <Link className="mt-5 inline-block text-sm font-bold text-brand-blue" to="/admin/as-tickets">목록으로 돌아가기</Link>
+          </Panel>
+        </div>
 
         <Panel title="지원 결정 저장" subtitle="처리 상태, 담당자, 검토 상태, 지원 결정을 저장합니다.">
           <form onSubmit={submit} className="space-y-4">
@@ -366,6 +373,7 @@ export function AdminTicketDetailPage() {
 function ticketDetailRows(ticket: AdminAsTicket) {
   return [
     { '항목': '상태', '내용': <StatusBadge status={ticket.status} /> },
+    { '항목': '에이전트 로그', '내용': <AgentLogSamplesToggle ticket={ticket} /> },
     { '항목': '분석 상태', '내용': ticket.analysisStatus ?? '-' },
     { '항목': '검토 상태', '내용': ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
     { '항목': '지원 결정', '내용': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
@@ -378,20 +386,114 @@ function ticketDetailRows(ticket: AdminAsTicket) {
     { '항목': '상세 설명', '내용': ticket.description ?? ticket.detailDescription ?? ticket.symptom },
     { '항목': '사용자', '내용': ticket.userEmail ?? ticket.userName ?? ticket.userId ?? '-' },
     { '항목': '문제 발생 구간', '내용': incidentWindowSummary(ticket) },
-    { '항목': '로그', '내용': logSummary(ticket) },
-    { '항목': '추천 근거 코드', '내용': routingListText(ticket, 'reasonCodes') },
-    { '항목': '원격 조치 후보', '내용': routingListText(ticket, 'remoteActions') },
-    { '항목': '방문 판단 근거', '내용': routingListText(ticket, 'visitReasons') },
-    { '항목': '차단 요인', '내용': routingListText(ticket, 'blockingFactors') },
-    { '항목': '원인 후보', '내용': formatCandidates(ticket.causeCandidates) },
-    { '항목': '업그레이드 후보', '내용': formatCandidates(ticket.upgradeCandidates) },
-    { '항목': '원격지원', '내용': remoteSupport(ticket) },
-    { '항목': '방문지원', '내용': visitSupport(ticket) },
     { '항목': '담당자', '내용': ticket.assignedAdminId ?? '미배정' },
     { '항목': '관리자 메모', '내용': ticket.adminNote ?? '-' },
     { '항목': '생성일', '내용': formatDateTime(ticket.createdAt) },
     { '항목': '해결일', '내용': formatDateTime(ticket.resolvedAt) }
   ];
+}
+
+function AgentLogSamplesToggle({ ticket }: { ticket: AdminAsTicket }) {
+  const [expanded, setExpanded] = useState(false);
+  const samples = agentLogSamples(ticket);
+
+  if (samples.length === 0) {
+    return (
+      <span className="text-sm text-slate-500">
+        {ticket.logUploadId
+          ? '업로드된 로그가 있으나 표시 가능한 샘플이 없습니다.'
+          : '연결된 에이전트 로그가 없습니다.'}
+      </span>
+    );
+  }
+
+  const panelId = `agent-log-samples-${ticket.id}`;
+  return (
+    <div className="min-w-0 max-w-full">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        onClick={() => setExpanded((current) => !current)}
+        className="inline-flex items-center gap-1.5 rounded border border-brand-blue px-3 py-2 text-xs font-black text-brand-blue transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-200"
+      >
+        {expanded ? '전송 로그 닫기' : `전송 로그 보기 (${samples.length}건)`}
+        <ChevronDown aria-hidden="true" className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+
+      {expanded ? (
+        <div id={panelId} data-testid="agent-log-samples-panel" className="mt-3 max-h-[360px] max-w-full overflow-auto rounded border border-slate-700 bg-slate-950 p-3 text-slate-100">
+          <p className="mb-3 text-xs font-semibold leading-5 text-slate-300">
+            개인정보가 마스킹된 핵심 로그 샘플이며 최대 20건까지 표시됩니다.
+          </p>
+          <div className="space-y-3">
+            {samples.map((sample, index) => (
+              <article key={agentLogSampleKey(sample, index)} className="min-w-max rounded border border-slate-700 bg-slate-900 p-3">
+                <div className="text-xs font-black text-blue-200">{agentLogSampleHeader(sample)}</div>
+                <pre className="mt-2 whitespace-pre text-xs leading-5 text-slate-100">{agentLogSampleBody(sample)}</pre>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function agentLogSamples(ticket: AdminAsTicket) {
+  const summary = objectValue(ticket.logSummary);
+  const rawSamples = summary?.rawSamples;
+  if (!Array.isArray(rawSamples)) {
+    return [];
+  }
+  return rawSamples
+    .map(objectValue)
+    .filter((sample): sample is Record<string, unknown> => sample !== null)
+    .slice(0, 20);
+}
+
+function agentLogSampleKey(sample: Record<string, unknown>, index: number) {
+  return textValue(sample.refId) ?? textValue(sample.sampleId) ?? `${textValue(sample.sequence) ?? 'sample'}-${index}`;
+}
+
+function agentLogSampleHeader(sample: Record<string, unknown>) {
+  const legacyPayload = parsedAgentLogSampleText(sample);
+  const collectedAt = textValue(sample.collectedAt)
+    ?? textValue(legacyPayload?.collectedAt)
+    ?? textValue(legacyPayload?.capturedAt);
+  const sequence = textValue(sample.sequence) ?? textValue(legacyPayload?.sequence);
+  return [
+    collectedAt ? formatDateTime(collectedAt) : '수집 시각 미상',
+    textValue(sample.kind) ?? textValue(legacyPayload?.kind) ?? textValue(legacyPayload?.event) ?? '종류 미상',
+    sequence ? `#${sequence}` : '순번 미상'
+  ].join(' · ');
+}
+
+function agentLogSampleBody(sample: Record<string, unknown>) {
+  if (sample.payload !== undefined) {
+    return prettyJson(sample.payload);
+  }
+  return prettyJson(parsedAgentLogSampleText(sample) ?? sample);
+}
+
+function parsedAgentLogSampleText(sample: Record<string, unknown>) {
+  const text = textValue(sample.text);
+  if (!text) {
+    return null;
+  }
+  try {
+    return objectValue(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+function prettyJson(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function logSummary(ticket: AdminAsTicket) {
@@ -478,15 +580,6 @@ function routingConfidence(ticket: AdminAsTicket) {
   return confidence ? <StatusBadge status={confidence} /> : '-';
 }
 
-function routingListText(ticket: AdminAsTicket, key: string) {
-  const value = objectValue(ticket.supportRouting)?.[key];
-  if (Array.isArray(value)) {
-    const items = value.map((item) => textValue(item)).filter(Boolean);
-    return items.length > 0 ? items.join(' / ') : '-';
-  }
-  return textValue(value) || '-';
-}
-
 function incidentWindowSummary(ticket: AdminAsTicket) {
   const logSummaryValue = objectValue(ticket.logSummary);
   const window = objectValue(ticket.incidentWindow) ?? objectValue(logSummaryValue?.incidentWindow);
@@ -498,30 +591,6 @@ function incidentWindowSummary(ticket: AdminAsTicket) {
   const symptomType = textValue(window.symptomType);
   const range = startedAt || endedAt ? `${formatDateTime(startedAt)} ~ ${formatDateTime(endedAt)}` : '-';
   return symptomType ? `${range} / ${symptomType}` : range;
-}
-
-function remoteSupport(ticket: AdminAsTicket) {
-  if (!ticket.remoteSupportLink && !ticket.remoteSupportStatus) {
-    return '-';
-  }
-  return `${ticket.remoteSupportStatus ?? 'LINK_SENT'} ${ticket.remoteSupportLink ?? ''}`.trim();
-}
-
-function visitSupport(ticket: AdminAsTicket) {
-  if (!ticket.visitSupportRequired) {
-    return '-';
-  }
-  return `${ticket.visitSupportStatus ?? 'REQUESTED'} ${ticket.visitPreferredDate ?? ''} ${visitSlotLabel(ticket.visitTimeSlot)}`.trim();
-}
-
-function formatCandidates(candidates: Record<string, unknown>[]) {
-  if (!candidates.length) {
-    return '-';
-  }
-  return candidates.map((candidate) => {
-    const summary = candidate.summary ?? candidate.reason ?? candidate.name ?? candidate.title;
-    return summary == null ? JSON.stringify(candidate) : String(summary);
-  }).join(' / ');
 }
 
 function firstLine(value: string) {
@@ -558,17 +627,4 @@ function compactJson(value?: Record<string, unknown> | null) {
     return '-';
   }
   return JSON.stringify(value);
-}
-
-function visitSlotLabel(value?: string | null) {
-  if (value === 'MORNING') {
-    return '오전';
-  }
-  if (value === 'AFTERNOON') {
-    return '오후';
-  }
-  if (value === 'EVENING') {
-    return '저녁';
-  }
-  return value ?? '';
 }

@@ -118,6 +118,19 @@ class AdminControllerTest {
                 "agentRunning", 1,
                 "openTickets", 3,
                 "priceJobsRunning", 0,
+                "todayRevenue", 27800L,
+                "weekRevenue", 230100L,
+                "revenueTrend", List.of(
+                        Map.of("date", "2026-07-14", "label", "07/14", "revenue", 230100L),
+                        Map.of("date", "2026-07-15", "label", "07/15", "revenue", 0L),
+                        Map.of("date", "2026-07-16", "label", "07/16", "revenue", 27800L)
+                ),
+                "orderStatus", List.of(
+                        Map.of("status", "PENDING", "label", "처리대기", "count", 1L),
+                        Map.of("status", "IN_PROGRESS", "label", "진행중", "count", 2L),
+                        Map.of("status", "COMPLETED", "label", "완료", "count", 8L),
+                        Map.of("status", "CANCELLED", "label", "취소", "count", 0L)
+                ),
                 "degraded", false,
                 "generatedAt", "2026-06-29T10:50:00Z"
         ));
@@ -128,6 +141,12 @@ class AdminControllerTest {
                 .andExpect(jsonPath("$.agentRunning").value(1))
                 .andExpect(jsonPath("$.openTickets").value(3))
                 .andExpect(jsonPath("$.priceJobsRunning").value(0))
+                .andExpect(jsonPath("$.todayRevenue").value(27800))
+                .andExpect(jsonPath("$.weekRevenue").value(230100))
+                .andExpect(jsonPath("$.revenueTrend[0].label").value("07/14"))
+                .andExpect(jsonPath("$.revenueTrend[0].revenue").value(230100))
+                .andExpect(jsonPath("$.orderStatus[0].label").value("처리대기"))
+                .andExpect(jsonPath("$.orderStatus[0].count").value(1))
                 .andExpect(jsonPath("$.degraded").value(false))
                 .andExpect(jsonPath("$.generatedAt").value("2026-06-29T10:50:00Z"));
 
@@ -383,6 +402,28 @@ class AdminControllerTest {
                 .andExpect(jsonPath("$.supportChatRoomId").value("00000000-0000-4000-8000-000000009001"));
 
         verify(ticketQueryService).update("ticket-public-id", Map.of("status", "CLOSED"), ADMIN);
+        verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
+        verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
+    }
+
+    @Test
+    void deleteAsTicketSoftDeletesAndBroadcastsSupportChatRemovalForAdminToken() throws Exception {
+        when(ticketQueryService.delete("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "id", "ticket-public-id",
+                "deleted", true,
+                "deletedAt", "2026-07-16T06:00:00Z",
+                "supportChatRoomId", "00000000-0000-4000-8000-000000009001"
+        ));
+
+        mockMvc.perform(delete("/api/admin/as-tickets/ticket-public-id")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("ticket-public-id"))
+                .andExpect(jsonPath("$.deleted").value(true))
+                .andExpect(jsonPath("$.deletedAt").value("2026-07-16T06:00:00Z"));
+
+        verify(currentUserService).requireAdmin(ADMIN_TOKEN);
+        verify(ticketQueryService).delete("ticket-public-id", ADMIN);
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
         verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
     }

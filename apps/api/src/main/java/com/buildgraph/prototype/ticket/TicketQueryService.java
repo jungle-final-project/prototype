@@ -232,6 +232,111 @@ public class TicketQueryService {
         return ticket(id);
     }
 
+    @Transactional
+    public Map<String, Object> delete(String id, CurrentUserService.CurrentUser admin) {
+        if (admin == null) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
+        }
+        Map<String, Object> current = jdbcTemplate.queryForList("""
+                        SELECT t.id AS internal_id,
+                               t.public_id::text AS id,
+                               t.status,
+                               (
+                                 SELECT r.public_id::text
+                                 FROM support_chat_rooms r
+                                 WHERE r.as_ticket_id = t.id
+                                   AND r.deleted_at IS NULL
+                                 ORDER BY r.created_at DESC, r.id DESC
+                                 LIMIT 1
+                               ) AS support_chat_room_id
+                        FROM as_tickets t
+                        WHERE t.public_id = ?::uuid
+                          AND t.deleted_at IS NULL
+                        FOR UPDATE
+                        """, id)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+
+        Long ticketInternalId = longValue(current, "internal_id");
+        jdbcTemplate.update("""
+                UPDATE support_chat_rooms
+                SET status = 'ARCHIVED',
+                    updated_at = now()
+                WHERE as_ticket_id = ?
+                  AND status = 'ACTIVE'
+                  AND deleted_at IS NULL
+                """, ticketInternalId);
+        jdbcTemplate.update("""
+                UPDATE as_chat_sessions
+                SET status = 'ARCHIVED',
+                    updated_at = now()
+                WHERE as_ticket_id = ?
+                  AND status = 'ACTIVE'
+                  AND deleted_at IS NULL
+                """, ticketInternalId);
+        jdbcTemplate.update("""
+                UPDATE remote_support_sessions
+                SET status = 'CANCELLED',
+                    ended_at = COALESCE(ended_at, now()),
+                    ended_reason = COALESCE(ended_reason, 'AS_TICKET_DELETED')
+                WHERE as_ticket_id = ?
+                  AND status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                """, ticketInternalId);
+        jdbcTemplate.update("""
+                UPDATE visit_support_reservations
+                SET status = 'CANCELLED',
+                    updated_at = now()
+                WHERE as_ticket_id = ?
+                  AND status IN ('REQUESTED', 'SCHEDULED', 'RESCHEDULE_REQUESTED', 'VISIT_IN_PROGRESS')
+                """, ticketInternalId);
+
+        Map<String, Object> deleted = jdbcTemplate.queryForList("""
+                        UPDATE as_tickets
+                        SET deleted_at = now(),
+                            updated_at = now()
+                        WHERE id = ?
+                          AND deleted_at IS NULL
+                        RETURNING public_id::text AS id,
+                                  deleted_at::text AS deleted_at
+                        """, ticketInternalId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+
+        jdbcTemplate.update("""
+                INSERT INTO admin_audit_logs (
+                  actor_user_id,
+                  action,
+                  target_type,
+                  target_id,
+                  metadata
+                )
+                VALUES (
+                  ?,
+                  'AS_TICKET_DELETED',
+                  'as_tickets',
+                  ?,
+                  jsonb_build_object(
+                    'previousStatus', CAST(? AS text),
+                    'softDelete', true,
+                    'relatedSupportClosed', true
+                  )
+                )
+                """,
+                admin.internalId(),
+                id,
+                DbValueMapper.string(current, "status")
+        );
+
+        return MockData.map(
+                "id", DbValueMapper.string(deleted, "id"),
+                "deleted", true,
+                "deletedAt", DbValueMapper.string(deleted, "deleted_at"),
+                "supportChatRoomId", DbValueMapper.string(current, "support_chat_room_id")
+        );
+    }
+
     public Map<String, Object> ticket(String id, CurrentUserService.CurrentUser user) {
         if (user == null) {
             return ticket(id);

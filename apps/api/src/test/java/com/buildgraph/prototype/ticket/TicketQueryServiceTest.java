@@ -39,6 +39,49 @@ class TicketQueryServiceTest {
     );
 
     @Test
+    void deleteSoftDeletesTicketClosesRelatedSupportAndWritesAuditLog() {
+        when(jdbcTemplate.queryForList(contains("FOR UPDATE"), eq("ticket-public-id")))
+                .thenReturn(List.of(MockData.map(
+                        "internal_id", 100L,
+                        "id", "ticket-public-id",
+                        "status", "IN_PROGRESS",
+                        "support_chat_room_id", "room-public-id"
+                )));
+        when(jdbcTemplate.queryForList(contains("UPDATE as_tickets"), eq(100L)))
+                .thenReturn(List.of(MockData.map(
+                        "id", "ticket-public-id",
+                        "deleted_at", "2026-07-16T06:00:00Z"
+                )));
+
+        Map<String, Object> response = service.delete("ticket-public-id", admin);
+
+        assertThat(response).containsEntry("id", "ticket-public-id");
+        assertThat(response).containsEntry("deleted", true);
+        assertThat(response).containsEntry("deletedAt", "2026-07-16T06:00:00Z");
+        assertThat(response).containsEntry("supportChatRoomId", "room-public-id");
+        verify(jdbcTemplate).update(contains("UPDATE support_chat_rooms"), eq(100L));
+        verify(jdbcTemplate).update(contains("UPDATE as_chat_sessions"), eq(100L));
+        verify(jdbcTemplate).update(contains("UPDATE remote_support_sessions"), eq(100L));
+        verify(jdbcTemplate).update(contains("UPDATE visit_support_reservations"), eq(100L));
+        verify(jdbcTemplate).update(
+                argThat(sql -> sql.contains("AS_TICKET_DELETED") && sql.contains("softDelete")),
+                eq(1L),
+                eq("ticket-public-id"),
+                eq("IN_PROGRESS")
+        );
+    }
+
+    @Test
+    void deleteRejectsMissingOrAlreadyDeletedTicket() {
+        when(jdbcTemplate.queryForList(contains("FOR UPDATE"), eq("missing-ticket")))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.delete("missing-ticket", admin))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(exception -> assertThatStatus((ResponseStatusException) exception, HttpStatus.NOT_FOUND));
+    }
+
+    @Test
     void userTicketLookupRestrictsTicketByOwner() {
         when(jdbcTemplate.queryForList(contains("SELECT t.public_id::text AS id"), eq("ticket-public-id"), eq(20L)))
                 .thenReturn(List.of(MockData.map(
