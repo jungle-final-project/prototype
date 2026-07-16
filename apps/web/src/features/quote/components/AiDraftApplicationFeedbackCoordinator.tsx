@@ -64,11 +64,14 @@ export function rememberAiDraftPerformanceView(view: AiDraftPerformanceView) {
 export function startAiDraftApplicationFeedback({
   draft,
   applicationKind,
-  activeBuildId
+  activeBuildId,
+  changeNote
 }: {
   draft: QuoteDraft;
   applicationKind: AiDraftApplicationFeedback['applicationKind'];
   activeBuildId?: string;
+  /** 담기/수량 변경처럼 어떤 상품이 몇 개가 됐는지 영수증 첫 줄에 그대로 남길 짧은 문구. */
+  changeNote?: string;
 }) {
   const ownerKey = getAiStorageOwnerKey();
   if (!ownerKey) return undefined;
@@ -84,6 +87,7 @@ export function startAiDraftApplicationFeedback({
     messageId: createAiMessageId('draft-feedback-status'),
     draftFingerprint: quoteDraftFingerprint(draft),
     applicationKind,
+    changeNote: changeNote?.trim() || undefined,
     status: 'PENDING',
     startedAt,
     performanceView: readAiDraftPerformanceView()
@@ -94,7 +98,7 @@ export function startAiDraftApplicationFeedback({
     messages: [...messages, {
       id: feedback.messageId,
       role: 'assistant',
-      text: '견적 반영이 완료되었습니다. 종합 점수와 게임 성능을 확인하고 있습니다.',
+      text: withChangeNote(feedback.changeNote, '견적 반영이 완료되었습니다. 종합 점수와 게임 성능을 확인하고 있습니다.'),
       createdAt: startedAt,
       kind: 'part'
     }],
@@ -204,7 +208,7 @@ function completeFeedback(feedback: AiDraftApplicationFeedback, analysis: Applic
   if (!pending || pending.id !== feedback.id || pending.status !== 'PENDING') return;
 
   const completedAt = new Date().toISOString();
-  const text = feedbackText(feedback.applicationKind, analysis);
+  const text = withChangeNote(feedback.changeNote, feedbackText(feedback.applicationKind, analysis));
   saveAssistantSession({
     ...session,
     messages: session.messages.map((message) => message.id === feedback.messageId
@@ -217,6 +221,12 @@ function completeFeedback(feedback: AiDraftApplicationFeedback, analysis: Applic
     },
     updatedAt: completedAt
   }, ownerKey);
+}
+
+// 담기/수량 변경 에코("삼성 990 PRO 추가됨 · 현재 수량 2개")를 영수증 첫 줄로 보존한다.
+// 점수/FPS 분석 결과가 어느 분기로 끝나든(성공·0점·근거 없음·STALE) 상품·수량 정보는 사라지지 않는다.
+function withChangeNote(changeNote: string | undefined, text: string) {
+  return changeNote ? `${changeNote}\n${text}` : text;
 }
 
 function feedbackText(

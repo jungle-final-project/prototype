@@ -2880,6 +2880,130 @@ test('overlays a composite ghost arc from the swapped-combo resolve with divergi
   await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
 });
 
+// AI 연계 변경안(GPU+파워)의 고스트 비교는 제안된 조합 그대로 계산해야 한다 —
+// 파워를 빼고 "기존 파워+새 GPU"로 계산하면 전력 FAIL로 0점 고스트가 그려지는 버그가 있었다.
+test('composite ghost for an AI linked GPU+PSU preview swaps both parts instead of scoring a zero mismatch combo', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({ id: 'user-linked-ghost', email: 'user@example.com', name: 'Demo User', role: 'USER' }));
+  });
+  const draft = {
+    ...emptyDraft,
+    items: [
+      draftItem('part-perf-cpu', 'CPU', '라이젠 9600X', 300000),
+      draftItem('part-perf-gpu', 'GPU', 'RTX 5060', 500000),
+      draftItem('part-psu-600', 'PSU', '600W 파워', 70000)
+    ],
+    totalPrice: 870000,
+    itemCount: 3
+  };
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+  });
+  const ghostResolveRequests: Array<Record<string, unknown>> = [];
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    const isGhost = body?.source === 'AI_BUILD';
+    if (isGhost) ghostResolveRequests.push(body);
+    const items = (body?.items ?? []) as Array<{ partId?: string }>;
+    const hasNewGpu = items.some((item) => item.partId === 'cand-gpu-5080');
+    const hasNewPsu = items.some((item) => item.partId === 'cand-psu-850');
+    // 버그 시그니처: 새 GPU + 기존 파워 조합이 오면 전력 FAIL 0점을 돌려준다.
+    const score = !isGhost ? 734 : hasNewGpu && hasNewPsu ? 745 : 0;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...buildGraphResponse(),
+        compositeScore: compositeScoreFixture(score, isGhost ? '연계형' : '기본형')
+      })
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}');
+    const partIds: string[] = Array.isArray(body?.partIds) ? body.partIds : [];
+    const isChangedBuild = partIds.includes('cand-gpu-5080');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance', status: 'PASS', confidence: 'HIGH', summary: '',
+        details: {
+          gameFpsEvidence: [{
+            gameTitle: '배틀그라운드', gameKey: 'pubg', resolution: '4K', graphicsPreset: 'PC_BUILDS_MEDIUM',
+            avgFps: isChangedBuild ? 127 : 74, onePercentLowFps: isChangedBuild ? 98 : 55,
+            sourceName: 'PC-Builds FPS calculator', confidence: 'MEDIUM',
+            match: { evidenceExactness: 'GPU_CLASS_REFERENCE', gameMatched: true, resolutionMatched: true }
+          }]
+        }
+      })
+    });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'PART',
+        message: '현재 파워만으로는 전력 검증을 통과하지 못해, 필요한 파워까지 함께 바꾸는 변경안을 준비했습니다.',
+        warnings: [],
+        quickReplies: [],
+        builds: [{
+          id: 'ai-linked-gpu-psu',
+          tier: 'draft-edit',
+          label: '변경 미리보기',
+          title: '변경 적용 미리보기',
+          summary: '목표 FPS 근거와 전력 검증을 통과한 GPU+파워 연계 변경안입니다.',
+          totalPrice: 2500000,
+          badges: ['DRAFT_EDIT_PREVIEW'],
+          budgetWon: 2500000,
+          budgetLabel: '250만원',
+          tierLabel: '변경 미리보기',
+          appliedPartCategories: ['GPU', 'PSU'],
+          items: [
+            { partId: 'part-perf-cpu', category: 'CPU', name: '라이젠 9600X', manufacturer: '테스트제조사', quantity: 1, price: 300000, note: '' },
+            { partId: 'cand-gpu-5080', category: 'GPU', name: 'RTX 5080', manufacturer: '테스트제조사', quantity: 1, price: 2078000, note: '' },
+            { partId: 'cand-psu-850', category: 'PSU', name: '850W 파워', manufacturer: '테스트제조사', quantity: 1, price: 122000, note: '' }
+          ],
+          evidenceIds: []
+        }],
+        evidenceIds: []
+      })
+    });
+  });
+
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(String(error)));
+  await page.goto('/self-quote');
+  const panel = page.getByTestId('quote-performance-panel');
+  await expect(panel.getByTestId('quote-composite-score')).toContainText('734');
+
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('배그에서 4K 120FPS 이상 나오는 GPU로 변경해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('파워까지 함께 바꾸는', { timeout: 10000 });
+  expect(pageErrors, pageErrors.join('\n')).toHaveLength(0);
+
+  // 미리보기 카드가 그려지면 성능 패널 비교가 켜지고, 고스트는 연계 파워까지 치환한 조합으로 계산돼 0점이 아니다.
+  await expect(panel.getByTestId('quote-composite-ghost-gauge')).toBeVisible();
+  await expect(panel.getByTestId('quote-composite-ghost-base')).toHaveText('734');
+  await expect(panel.getByTestId('quote-composite-compare-score')).toHaveText('745');
+  expect(ghostResolveRequests.length).toBeGreaterThanOrEqual(1);
+  const lastGhost = ghostResolveRequests[ghostResolveRequests.length - 1];
+  expect(lastGhost.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ partId: 'cand-gpu-5080', category: 'GPU' }),
+    expect.objectContaining({ partId: 'cand-psu-850', category: 'PSU' })
+  ]));
+  // 버그 시그니처 조합(새 GPU+기존 파워)으로 나간 고스트 요청이 없어야 한다.
+  const mismatchGhost = ghostResolveRequests.find((request) => {
+    const items = (request.items ?? []) as Array<{ partId?: string }>;
+    return items.some((item) => item.partId === 'cand-gpu-5080') && items.some((item) => item.partId === 'part-psu-600');
+  });
+  expect(mismatchGhost).toBeUndefined();
+});
+
 test('drives the candidate popover: open, dismiss without picking, pick WARN, and clear', async ({ page }) => {
   await loginAsUser(page);
   const draft = {
@@ -5063,19 +5187,7 @@ test('applies the single immediately preceding AI build from an explicit natural
   await expect(page.getByTestId('checklist-GPU')).toContainText('자연어 적용 GPU');
 });
 
-for (const verifiedCaseAutoApply of [
-  {
-    title: 'auto-applies a single server-verified case repair when the current draft has a blocking size failure',
-    prompt: '호환되는 케이스로 바꿔줘',
-    badge: 'AUTO_APPLY_VERIFIED_REPAIR'
-  },
-  {
-    title: 'auto-applies the single verified top case when measurable fit headroom improves',
-    prompt: '현재 부품이 여유 있게 들어가는 케이스 추천해줘',
-    badge: 'AUTO_APPLY_VERIFIED_CASE_IMPROVEMENT'
-  }
-] as const) {
-test(verifiedCaseAutoApply.title, async ({ page }) => {
+test('auto-applies a single server-verified case repair when the current draft has a blocking size failure', async ({ page }) => {
   await loginAsUser(page);
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.authUser', JSON.stringify({
@@ -5166,7 +5278,7 @@ test(verifiedCaseAutoApply.title, async ({ page }) => {
           title: '변경 적용 미리보기',
           summary: '현재 장착 문제를 해소하고 자동 검증을 통과한 단일 복구안입니다.',
           totalPrice: 1020000,
-          badges: ['DRAFT_EDIT_PREVIEW', verifiedCaseAutoApply.badge],
+          badges: ['DRAFT_EDIT_PREVIEW', 'AUTO_APPLY_VERIFIED_REPAIR'],
           budgetWon: 1020000,
           budgetLabel: '102만원',
           tierLabel: '변경 미리보기',
@@ -5192,7 +5304,7 @@ test(verifiedCaseAutoApply.title, async ({ page }) => {
     }
     (window as typeof window & { __aiChatTextSnapshots?: string[] }).__aiChatTextSnapshots = snapshots;
   });
-  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill(verifiedCaseAutoApply.prompt);
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('호환되는 케이스로 바꿔줘');
   await page.getByRole('button', { name: '질문 보내기' }).click();
 
   await expect.poll(() => applyCalls).toBe(1);
@@ -5218,7 +5330,137 @@ test(verifiedCaseAutoApply.title, async ({ page }) => {
     && !text.includes('상단에서 종합 점수와 게임별 예상 성능을 확인해 보세요.')
   ))).toBe(true);
 });
-}
+
+// 케이스 '추천'(장착 여유 개선)은 자동 적용 계약이 아니다: 서버는 자동 반영 badge 없이 미리보기
+// 카드만 내려주고, 사용자가 카드의 적용 버튼으로 확인해야 견적이 변경된다. size FAIL 복구
+// (AUTO_APPLY_VERIFIED_REPAIR)의 자동 반영과 구분되는 흐름이다.
+test('shows the verified top case improvement as a preview and applies it only after user confirmation', async ({ page }) => {
+  await loginAsUser(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'user-test',
+      email: 'user@example.com',
+      name: 'Demo User',
+      role: 'USER'
+    }));
+  });
+  const currentItems = [
+    draftItem('part-long-gpu', 'GPU', '긴 그래픽카드', 900000, 1, { lengthMm: 350 }),
+    draftItem('part-tight-case', 'CASE', '빠듯한 케이스', 90000, 1, { maxGpuLengthMm: 360 })
+  ];
+  let currentDraft = {
+    ...emptyDraft,
+    items: currentItems,
+    totalPrice: 990000,
+    itemCount: 2
+  };
+  let applyCalls = 0;
+  let buildChatCalls = 0;
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'PUT' && url.pathname.endsWith('/apply-ai-build')) {
+      applyCalls += 1;
+      const body = JSON.parse(route.request().postData() ?? '{}') as {
+        items: Array<{ partId: string; category: string; quantity: number }>;
+      };
+      const appliedItems = body.items.map((item) => draftItem(
+        item.partId,
+        item.category,
+        item.partId === 'part-roomy-case' ? '여유 케이스' : '긴 그래픽카드',
+        item.partId === 'part-roomy-case' ? 120000 : 900000,
+        item.quantity,
+        item.partId === 'part-roomy-case' ? { maxGpuLengthMm: 420 } : { lengthMm: 350 }
+      ));
+      currentDraft = {
+        ...emptyDraft,
+        items: appliedItems,
+        totalPrice: 1020000,
+        itemCount: 2
+      };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(currentDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...buildGraphResponse(),
+        compositeScore: compositeScoreFixture(741, '균형형'),
+        toolResults: [{ tool: 'size', status: 'PASS', confidence: 'HIGH', summary: '장착 가능' }]
+      })
+    });
+  });
+  await page.route('**/api/tools/performance/check', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tool: 'performance',
+        status: 'PASS',
+        confidence: 'HIGH',
+        summary: '공개 FPS 참고값',
+        details: { gameFpsEvidence: [{ gameTitle: '배틀그라운드', gameKey: 'pubg', resolution: '4K', avgFps: 64 }] }
+      })
+    });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    buildChatCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'PART',
+        message: '장착 여유가 개선되고 자동 검증을 통과한 1위 케이스는 여유 케이스입니다. 아래 미리보기 카드에서 적용할 수 있습니다.',
+        warnings: [],
+        quickReplies: [],
+        builds: [{
+          id: 'ai-case-improvement-preview',
+          tier: 'draft-edit',
+          label: '변경 미리보기',
+          title: '변경 적용 미리보기',
+          summary: '현재 케이스보다 장착 여유가 개선된 1위 변경안입니다.',
+          totalPrice: 1020000,
+          badges: ['DRAFT_EDIT_PREVIEW'],
+          budgetWon: 1020000,
+          budgetLabel: '102만원',
+          tierLabel: '변경 미리보기',
+          appliedPartCategories: ['CASE'],
+          items: [
+            { partId: 'part-long-gpu', category: 'GPU', name: '긴 그래픽카드', manufacturer: '테스트제조사', quantity: 1, price: 900000, note: '' },
+            { partId: 'part-roomy-case', category: 'CASE', name: '여유 케이스', manufacturer: '테스트제조사', quantity: 1, price: 120000, note: '' }
+          ],
+          toolResults: [{ tool: 'size', status: 'PASS', confidence: 'HIGH', summary: '장착 가능' }]
+        }]
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('현재 부품이 여유 있게 들어가는 케이스 추천해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  // 미리보기 단계: 적용 버튼이 있는 일반 미리보기 카드만 보이고, 자동 반영 UI·apply 호출은 없다.
+  const applyButton = page.getByTestId('ai-build-card').getByRole('button', { name: '이 조합으로 셀프 견적 보기' });
+  await expect(applyButton).toBeVisible();
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('아래 미리보기 카드에서 적용할 수 있습니다.');
+  await expect(page.getByTestId('ai-auto-apply-status')).toHaveCount(0);
+  await expect(page.getByTestId('ai-auto-applied-change')).toHaveCount(0);
+  expect(applyCalls).toBe(0);
+  await expect(page.getByTestId('checklist-CASE')).toContainText('빠듯한 케이스');
+
+  // 사용자가 적용 버튼으로 확인해야만 견적이 바뀐다.
+  await applyButton.click();
+  await expect.poll(() => applyCalls).toBe(1);
+  expect(buildChatCalls).toBe(1);
+  await expect(page.getByTestId('checklist-CASE')).toContainText('여유 케이스');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('요청한 변경이 반영되었습니다');
+  await expect(page.getByTestId('ai-chat-messages')).toContainText('현재 종합 점수는 741점');
+});
 
 test('resumes a pending AI application receipt after reload and reports score without inventing FPS', async ({ page }) => {
   const items = [

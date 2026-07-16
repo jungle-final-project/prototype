@@ -243,8 +243,22 @@ function PerfPanelBody({
   // 비교 대상이 현재 견적과 어긋나면(같은 부품이거나 기존 부품이 없음) 비교를 그리지 않는다 — 상위에서 해제하지만 이중 안전망.
   const currentPart = comparison ? perfItems.find((item) => item.category === comparison.category) : undefined;
   const activeComparison = comparison && currentPart && currentPart.partId !== comparison.partId ? comparison : null;
+  // 연계 변경(예: GPU와 함께 바뀌는 파워)을 카테고리→새 partId 맵으로 — 변경 조합은 제안된 조합 그대로 계산해야 한다.
+  const linkedByCategory = useMemo(() => {
+    const map = new Map<string, { partId: string; quantity: number }>();
+    (activeComparison?.linkedChanges ?? []).forEach((change) => {
+      if (change.partId && change.category !== activeComparison?.category) {
+        map.set(change.category, { partId: change.partId, quantity: 1 });
+      }
+    });
+    return map;
+  }, [activeComparison]);
   const comparePartIds = activeComparison
-    ? perfItems.map((item) => (item.category === activeComparison.category ? activeComparison.partId : item.partId)).filter(Boolean)
+    ? perfItems
+        .map((item) => (item.category === activeComparison.category
+          ? activeComparison.partId
+          : linkedByCategory.get(item.category)?.partId ?? item.partId))
+        .filter(Boolean)
     : [];
   const compareKey = useMemo(() => [...comparePartIds].sort().join(','), [comparePartIds]);
 
@@ -264,16 +278,19 @@ function PerfPanelBody({
     staleTime: 5 * 60 * 1000
   });
 
-  // 종합점수 고스트 비교 — 현재 드래프트 items에서 비교 카테고리 partId만 후보로 치환한 조합을
-  // 기존 resolve 계약(source=AI_BUILD + items, SelfQuotePage·홈이 쓰는 것과 동일)으로 조회해 compositeScore만 쓴다.
+  // 종합점수 고스트 비교 — 현재 드래프트 items에서 비교 카테고리와 연계 변경(파워 등) partId를
+  // 제안된 조합 그대로 치환해 기존 resolve 계약(source=AI_BUILD + items)으로 compositeScore만 쓴다.
+  // 연계 변경을 빼면 "기존 파워+새 GPU" 같은 미제안 조합이 전력 FAIL로 0점 고스트를 그린다.
   // 로딩 중엔 단일값을 유지하고, 실패하거나 compositeScore가 없으면 조용히 단일값으로 폴백한다(비교 강제 금지).
   const ghostItems = activeComparison
     ? allItems
         .filter((item) => Boolean(item.partId) && isPartCategory(item.category))
         .map((item) => ({
-          partId: item.category === activeComparison.category ? activeComparison.partId : item.partId,
+          partId: item.category === activeComparison.category
+            ? activeComparison.partId
+            : linkedByCategory.get(item.category)?.partId ?? item.partId,
           category: item.category as PartCategory,
-          quantity: item.quantity ?? 1
+          quantity: linkedByCategory.has(item.category) ? 1 : item.quantity ?? 1
         }))
     : [];
   const ghostKey = ghostItems.map((item) => `${item.category}:${item.partId}x${item.quantity}`).sort().join(',');

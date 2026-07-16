@@ -1515,6 +1515,8 @@ test('adds a selected RAM recommendation directly and leaves a compatibility not
 
   await expect.poll(() => putBodies).toEqual([{ quantity: 3 }]);
   const messages = page.getByTestId('ai-chat-messages');
+  // 담기 확인문은 점수 영수증으로 대체돼도 "어떤 상품이 몇 개가 됐는지"를 첫 줄에 그대로 남긴다.
+  await expect(messages).toContainText('RAM 후보 A 추가됨 · 현재 수량 3개');
   await expect(messages).toContainText('변경은 반영됐지만 호환성 또는 장착 문제로 종합 점수는 0점입니다.');
   await expect(messages).toContainText('현재 견적에 호환성 확인이 필요한 항목이 있습니다.');
   // 추천 칩은 LLM으로 다시 보내지 않고 기존 quote draft item API만 호출한다.
