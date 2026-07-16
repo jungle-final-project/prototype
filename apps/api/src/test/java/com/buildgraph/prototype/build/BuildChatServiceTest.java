@@ -256,6 +256,30 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void caseRecommendationContextDoesNotCaptureANewStutterSymptom() {
+        // 제보 재현: 케이스 개선 미리보기 직후 "게임이 자꾸 끊켜"(표기 변형) 같은 고장 증상을 치면
+        // 원문("케이스 추천해줘")과 합성돼 케이스 교체안이 반복 제시되는 핑퐁이 생겼다.
+        // 증상 호소는 새 AS 진단 대화로 시작해야 한다.
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                mock(AiChatEngine.class),
+                BuildChatCacheService.disabled()
+        );
+
+        for (String symptom : List.of("게임이 자꾸 끊켜", "화면이 자꾸 끊킴")) {
+            Map<String, Object> response = service.chat(Map.of(
+                    "message", symptom,
+                    "clarificationContext", Map.of("originalMessage", "현재 부품이 여유 있게 들어가는 케이스 추천해줘")
+            ));
+
+            assertThat(response.get("supportGuidance")).as(symptom).isNotNull();
+            assertThat(response.get("builds")).as(symptom).asList().isEmpty();
+            assertThat(String.valueOf(response.get("message"))).as(symptom).doesNotContain("케이스 변경안");
+        }
+    }
+
+    @Test
     void simulationContextDoesNotCaptureANewSupportSymptom() {
         BuildChatService service = new BuildChatService(
                 mock(JdbcTemplate.class),
