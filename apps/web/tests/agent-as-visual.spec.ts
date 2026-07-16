@@ -38,6 +38,14 @@ const beforeDecisionTicket = {
           diagnosticContext: 'masked-context-'.repeat(24)
         },
         privacyFlags: { containsRawPath: false, masked: true }
+      },
+      {
+        sampleId: 'legacy-sample-2',
+        text: JSON.stringify({
+          capturedAt: '2026-07-02T06:19:20Z',
+          event: 'frame_drop',
+          fpsAvg: 47
+        })
       }
     ]
   },
@@ -286,6 +294,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   const ticketOverview = page.getByTestId('admin-as-ticket-overview');
   const overviewLabels = await ticketOverview.locator('tbody > tr > td:first-child').allTextContents();
   expect(overviewLabels.slice(0, 3)).toEqual(['상태', '에이전트 로그', '분석 상태']);
+  await expect(ticketOverview.locator('tbody > tr:first-child > td:first-child')).toHaveCSS('white-space', 'nowrap');
   for (const removedLabel of [
     '추천 근거 코드',
     '원격 조치 후보',
@@ -299,7 +308,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     expect(overviewLabels).not.toContain(removedLabel);
   }
 
-  const showAgentLogs = ticketOverview.getByRole('button', { name: '전송 로그 보기 (1건)', exact: true });
+  const showAgentLogs = ticketOverview.getByRole('button', { name: '전송 로그 보기 (2건)', exact: true });
   await expect(showAgentLogs).toHaveAttribute('aria-expanded', 'false');
   await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toHaveCount(0);
   await showAgentLogs.click();
@@ -308,6 +317,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(ticketOverview).toContainText('SYSTEM_METRIC');
   await expect(ticketOverview).toContainText('#42');
   await expect(ticketOverview).toContainText('gpu temperature reached 95c');
+  await expect(ticketOverview).toContainText('frame_drop');
 
   for (const width of [1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });

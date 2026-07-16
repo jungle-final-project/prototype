@@ -143,7 +143,11 @@ export function AdminTicketDetailPage() {
       <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
         <div data-testid="admin-as-ticket-overview">
           <Panel title="AS 티켓 확인" subtitle={ticket.id}>
-            <DataTable columns={['항목', '내용']} rows={ticketDetailRows(ticket)} />
+            <DataTable
+              columns={['항목', '내용']}
+              rows={ticketDetailRows(ticket)}
+              nowrapColumns={['항목']}
+            />
             <Link className="mt-5 inline-block text-sm font-bold text-brand-blue" to="/admin/as-tickets">목록으로 돌아가기</Link>
           </Panel>
         </div>
@@ -453,11 +457,14 @@ function agentLogSampleKey(sample: Record<string, unknown>, index: number) {
 }
 
 function agentLogSampleHeader(sample: Record<string, unknown>) {
-  const collectedAt = textValue(sample.collectedAt);
-  const sequence = textValue(sample.sequence);
+  const legacyPayload = parsedAgentLogSampleText(sample);
+  const collectedAt = textValue(sample.collectedAt)
+    ?? textValue(legacyPayload?.collectedAt)
+    ?? textValue(legacyPayload?.capturedAt);
+  const sequence = textValue(sample.sequence) ?? textValue(legacyPayload?.sequence);
   return [
     collectedAt ? formatDateTime(collectedAt) : '수집 시각 미상',
-    textValue(sample.kind) ?? '종류 미상',
+    textValue(sample.kind) ?? textValue(legacyPayload?.kind) ?? textValue(legacyPayload?.event) ?? '종류 미상',
     sequence ? `#${sequence}` : '순번 미상'
   ].join(' · ');
 }
@@ -466,7 +473,19 @@ function agentLogSampleBody(sample: Record<string, unknown>) {
   if (sample.payload !== undefined) {
     return prettyJson(sample.payload);
   }
-  return textValue(sample.text) ?? prettyJson(sample);
+  return prettyJson(parsedAgentLogSampleText(sample) ?? sample);
+}
+
+function parsedAgentLogSampleText(sample: Record<string, unknown>) {
+  const text = textValue(sample.text);
+  if (!text) {
+    return null;
+  }
+  try {
+    return objectValue(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 function prettyJson(value: unknown) {
