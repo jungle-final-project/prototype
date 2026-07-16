@@ -17,6 +17,7 @@ readonly STATE_DIR="${BUILDGRAPH_ASG_STATE_DIR:-/var/lib/buildgraph}"
 readonly LOCK_FILE="${BUILDGRAPH_ASG_LOCK_FILE:-$STATE_DIR/asg-bootstrap.lock}"
 readonly SUCCESS_MARKER="$STATE_DIR/asg-bootstrap-success"
 readonly SECRET_ID="${GREEN_API_SECRET_ID:-buildgraph/demo-green/api-env}"
+readonly APP_USER="${BUILDGRAPH_APP_USER:-ubuntu}"
 readonly FILE_OWNER="${BUILDGRAPH_FILE_OWNER:-ubuntu:ubuntu}"
 readonly COMPOSE_PROJECT_NAME="buildgraph-green"
 readonly HEALTH_URL="${BUILDGRAPH_HEALTH_URL:-http://127.0.0.1/api/health}"
@@ -55,6 +56,10 @@ trap handle_error ERR
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"
+}
+
+run_git() {
+  runuser -u "$APP_USER" -- git "$@"
 }
 
 read_manifest_value() {
@@ -172,7 +177,7 @@ if [[ "$(id -u)" -ne 0 && "${BUILDGRAPH_ALLOW_NON_ROOT_FOR_TESTS:-false}" != "tr
   die "bootstrap must run as root"
 fi
 
-for command_name in aws chown chmod cp curl docker env flock git grep mkdir mktemp mv sed systemctl; do
+for command_name in aws chown chmod cp curl docker env flock git grep mkdir mktemp mv runuser sed systemctl; do
   require_command "$command_name"
 done
 
@@ -225,7 +230,7 @@ validate_ecr_digest_image "$API_IMAGE_URI" "$API_REPOSITORY"
 validate_ecr_digest_image "$XGB_IMAGE_URI" "$XGB_REPOSITORY"
 validate_nginx_digest_image "$NGINX_IMAGE_URI"
 
-readonly GIT_SHA="$(git -C "$APP_ROOT" rev-parse HEAD)"
+readonly GIT_SHA="$(run_git -C "$APP_ROOT" rev-parse HEAD)"
 [[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]] || die "application Git SHA is invalid"
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/buildgraph-asg-bootstrap.XXXXXX")"

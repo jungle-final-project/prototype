@@ -353,6 +353,18 @@ class GreenAsgBootstrapExecutionTest(unittest.TestCase):
             """,
         )
         self._write_executable(
+            "runuser",
+            r"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [[ "${1:-}" == "-u" && "${3:-}" == "--" ]] || exit 64
+            app_user="$2"
+            shift 3
+            printf 'runuser:%s:%s\n' "$app_user" "$*" >>"$FAKE_TRACE_FILE"
+            exec "$@"
+            """,
+        )
+        self._write_executable(
             "systemctl",
             r"""
             #!/usr/bin/env bash
@@ -448,6 +460,14 @@ class GreenAsgBootstrapExecutionTest(unittest.TestCase):
         )
         self.assertEqual(first_asg, (self.runtime_dir / "asg-runtime.env").read_bytes())
         self.assertNotIn(TEST_SECRET, second.stdout + second.stderr)
+
+    def test_reads_git_sha_as_application_user(self) -> None:
+        result = self._run_bootstrap()
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        trace = self.trace_file.read_text(encoding="utf-8")
+        self.assertIn("runuser:ubuntu:git -C", trace)
+        self.assertIn("rev-parse HEAD", trace)
 
     def test_wrong_account_fails_before_secret_lookup(self) -> None:
         result = self._run_bootstrap(FAKE_AWS_ACCOUNT_ID="000000000000")
