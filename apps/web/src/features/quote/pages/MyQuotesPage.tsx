@@ -3,9 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Check, ClipboardList, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, Trophy, X } from 'lucide-react';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
-import { applyAiBuildToQuoteDraft } from '../../parts/partsApi';
+import { applyAiBuildToQuoteDraft, getPart } from '../../parts/partsApi';
 import { listAssemblyRequests } from '../../parts/assemblyApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
+import type { PartRow } from '../../parts/types';
 import type { BuildCompositeScore, PartCategory } from '../aiSelection';
 import { BuildDependencyGraph } from '../components/BuildDependencyGraph';
 import { checkBuildPerformance, createQuotePriceAlert, deleteBuild, getBuildHistory, getPriceAlerts, renameBuild, resolveBuildGraph, type GameFpsEvidence, type PriceAlert } from '../quoteApi';
@@ -773,8 +774,8 @@ function SavedBuildComparisonResult({ columnA, columnB }: { columnA: ComparisonC
 
       <ScorePolicyNote columnA={columnA} columnB={columnB} />
 
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="hidden grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] items-center border-b border-slate-200 bg-slate-50 px-4 py-2 text-center text-[11px] font-black text-slate-500 md:grid">
+      <div className="overflow-visible rounded-lg border border-slate-200 bg-white">
+        <div className="hidden grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] items-center rounded-t-lg border-b border-slate-200 bg-slate-50 px-4 py-2 text-center text-[11px] font-black text-slate-500 md:grid">
           <span>A 견적</span>
           <span>A 지표</span>
           <span>부품</span>
@@ -1047,19 +1048,90 @@ function PartSummary({ category, items, meta, side }: { category: string; items:
   const positionClass = isLeft
     ? 'col-start-1 text-right md:col-start-1'
     : 'col-start-3 text-left md:col-start-5';
-  if (items.length === 0) {
+  const primary = items[0];
+  const inlineImageUrl = buildItemImageUrl(primary);
+  const partImageQuery = useQuery({
+    queryKey: ['quote-compare-part-image', primary?.partId],
+    queryFn: () => getPart(primary!.partId!),
+    enabled: Boolean(primary?.partId && !inlineImageUrl),
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false
+  });
+  if (!primary) {
     return <div className={`${positionClass} row-start-1 text-sm font-black text-slate-500`}>미포함</div>;
   }
-  const [primary, ...rest] = items;
+  const [, ...rest] = items;
   const totalPrice = items.reduce((sum, item) => sum + (item.price ?? 0), 0);
+  const imageUrl = inlineImageUrl ?? partRowImageUrl(partImageQuery.data);
+  const fullName = items.map((item) => item.name).join(', ');
+  const metaText = meta.slice(0, 2).join(' · ');
   return (
     <div className={`${positionClass} row-start-1 min-w-0`}>
-      <div className={`${category === 'CASE' ? 'line-clamp-2' : 'truncate'} text-sm font-black leading-5 text-commerce-ink`} title={items.map((item) => item.name).join(', ')}>
-        {primary.name}{rest.length > 0 ? ` 외 ${rest.length}` : ''}
+      <div className={`flex min-w-0 items-center gap-2 ${isLeft ? 'justify-end' : 'justify-start'}`}>
+        {isLeft ? <PartThumbnail key={imageUrl ?? 'A-empty'} imageUrl={imageUrl} name={primary.name} /> : null}
+        <div className="min-w-0 flex-1">
+          <HoverRevealText
+            text={`${primary.name}${rest.length > 0 ? ` 외 ${rest.length}` : ''}`}
+            fullText={fullName}
+            align={isLeft ? 'right' : 'left'}
+            className={`${category === 'CASE' ? 'line-clamp-2' : 'truncate'} text-sm font-black leading-5 text-commerce-ink`}
+          />
+          <div className="mt-px text-sm font-bold text-slate-500">{totalPrice.toLocaleString('ko-KR')}원</div>
+          {meta.length > 0 ? (
+            <HoverRevealText text={metaText} fullText={metaText} align={isLeft ? 'right' : 'left'} className="mt-0.5 truncate text-xs font-semibold leading-4 text-slate-400" />
+          ) : null}
+        </div>
+        {!isLeft ? <PartThumbnail key={imageUrl ?? 'B-empty'} imageUrl={imageUrl} name={primary.name} /> : null}
       </div>
-      <div className="mt-px text-sm font-bold text-slate-500">{totalPrice.toLocaleString('ko-KR')}원</div>
-      {meta.length > 0 ? <div className="mt-0.5 truncate text-xs font-semibold leading-4 text-slate-400" title={meta.slice(0, 2).join(' · ')}>{meta.slice(0, 2).join(' · ')}</div> : null}
     </div>
+  );
+}
+
+function buildItemImageUrl(item?: BuildItem) {
+  const itemWithOffer = item as (BuildItem & { externalOffer?: { imageUrl?: unknown } | null }) | undefined;
+  return validImageUrl(itemWithOffer?.externalOffer?.imageUrl) ?? validImageUrl(item?.attributes?.imageUrl);
+}
+
+function partRowImageUrl(part?: PartRow) {
+  return validImageUrl(part?.externalOffer?.imageUrl) ?? validImageUrl(part?.attributes?.imageUrl);
+}
+
+function validImageUrl(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function PartThumbnail({ imageUrl, name }: { imageUrl: string | null; name: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!imageUrl || failed) return null;
+  return (
+    <span className="hidden h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-white p-1 shadow-sm lg:flex">
+      <img src={imageUrl} alt={`${name} 제품 이미지`} className="h-full w-full object-contain" loading="lazy" onError={() => setFailed(true)} />
+    </span>
+  );
+}
+
+function HoverRevealText({
+  text,
+  fullText,
+  align,
+  className
+}: {
+  text: string;
+  fullText: string;
+  align: 'left' | 'right';
+  className: string;
+}) {
+  return (
+    <span tabIndex={0} aria-label={fullText} className="group relative block min-w-0 outline-none">
+      <span className={`block min-w-0 ${className}`}>{text}</span>
+      <span
+        role="tooltip"
+        className={`pointer-events-none invisible absolute bottom-full z-30 mb-2 w-max max-w-[min(360px,80vw)] rounded-md bg-slate-900 px-3 py-2 text-left text-xs font-semibold leading-5 text-white opacity-0 shadow-xl transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 ${align === 'right' ? 'right-0' : 'left-0'}`}
+      >
+        {fullText}
+      </span>
+    </span>
   );
 }
 
@@ -1097,9 +1169,15 @@ function MetricBar({ category, metric, side, hasPart, samePart }: { category: st
 function SpecificationMetric({ category, values, side, hasPart }: { category: string; values: string[]; side: 'A' | 'B'; hasPart: boolean }) {
   if (!hasPart) return <div className="text-center text-xs font-bold text-slate-500">미포함</div>;
   if (values.length === 0) return null;
+  const text = values.slice(0, 3).join(' · ');
   return (
-    <div data-testid={`quote-compare-spec-${category}-${side}`} className={`${category === 'CASE' ? 'line-clamp-2' : 'truncate'} text-xs font-bold leading-4 text-slate-500 ${side === 'A' ? 'text-right' : 'text-left'}`} title={values.slice(0, 3).join(' · ')}>
-      {values.slice(0, 3).join(' · ')}
+    <div data-testid={`quote-compare-spec-${category}-${side}`} className="min-w-0">
+      <HoverRevealText
+        text={text}
+        fullText={text}
+        align={side === 'A' ? 'right' : 'left'}
+        className={`${category === 'CASE' ? 'line-clamp-2' : 'truncate'} text-xs font-bold leading-4 text-slate-500 ${side === 'A' ? 'text-right' : 'text-left'}`}
+      />
     </div>
   );
 }
