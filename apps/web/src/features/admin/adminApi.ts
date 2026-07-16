@@ -4,6 +4,18 @@ export type AdminDashboard = {
   agentRunning: number;
   openTickets: number;
   priceJobsRunning: number;
+  todayRevenue: number;
+  weekRevenue: number;
+  revenueTrend: Array<{
+    date: string;
+    label: string;
+    revenue: number;
+  }>;
+  orderStatus: Array<{
+    status: string;
+    label: string;
+    count: number;
+  }>;
   degraded: boolean;
   generatedAt?: string;
 };
