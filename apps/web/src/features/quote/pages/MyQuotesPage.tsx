@@ -853,16 +853,18 @@ function RecommendationSummaryCard({ columnA, columnB }: { columnA: ComparisonCo
 }
 
 function PriceDifferenceCard({ columnA, columnB }: { columnA: ComparisonColumn; columnB: ComparisonColumn }) {
-  const signedDifference = columnA.build.totalPrice - columnB.build.totalPrice;
+  const recommendation = comparisonRecommendation(columnA, columnB);
+  const aToBPriceDifference = columnA.build.totalPrice - columnB.build.totalPrice;
+  const signedDifference = recommendation.winner === 'A' ? aToBPriceDifference : -aToBPriceDifference;
   const cheaper = columnA.build.totalPrice === columnB.build.totalPrice ? null : columnA.build.totalPrice < columnB.build.totalPrice ? 'A' : 'B';
-  const PriceTrendIcon = columnA.build.totalPrice <= columnB.build.totalPrice ? ArrowDown : ArrowUp;
+  const PriceTrendIcon = signedDifference <= 0 ? ArrowDown : ArrowUp;
   return (
     <article className="flex min-h-[164px] flex-col rounded-lg border border-slate-200 bg-white px-4 py-4 text-center shadow-sm">
       <h3 className="text-sm font-black text-commerce-ink">가격 차이</h3>
       <div className="mt-2 flex flex-1 items-center justify-center gap-3">
         <PriceTrendIcon aria-hidden="true" className="animate-bounce text-slate-500" size={28} strokeWidth={3} />
         <div>
-          <p title="A 견적 - B 견적" className="text-xl font-black tracking-tight text-commerce-ink"><span className="text-red-600">{formatSignedDifference(signedDifference)}</span>원</p>
+          <p title={`${recommendation.winner} 추천 견적 - 상대 견적`} className="text-xl font-black tracking-tight text-commerce-ink"><span className="text-red-600">{formatSignedDifference(signedDifference)}</span>원</p>
           <p data-testid="quote-compare-price-delta" className="mt-1 text-sm font-black text-commerce-ink">{cheaper ? `${cheaper}가 더 저렴` : '가격 동일'}</p>
         </div>
       </div>
@@ -872,6 +874,10 @@ function PriceDifferenceCard({ columnA, columnB }: { columnA: ComparisonColumn; 
 
 function ScoreDifferenceCard({ columnA, columnB }: { columnA: ComparisonColumn; columnB: ComparisonColumn }) {
   const score = scoreDifference(columnA, columnB);
+  const recommendation = comparisonRecommendation(columnA, columnB);
+  const recommendedScoreDifference = score
+    ? recommendation.winner === 'A' ? score.signedDifference : -score.signedDifference
+    : 0;
   const maxScore = Math.max(columnA.compositeScore?.maxScore ?? 0, columnB.compositeScore?.maxScore ?? 0);
   const differenceRatio = score && maxScore > 0 ? score.difference / maxScore : 0;
   const gaugeZone = scoreGaugeZone(differenceRatio);
@@ -882,7 +888,7 @@ function ScoreDifferenceCard({ columnA, columnB }: { columnA: ComparisonColumn; 
         <AnimatedScoreGauge differenceRatio={differenceRatio} zone={gaugeZone} />
         {score ? (
           <div>
-            <p title="A 견적 - B 견적" className="text-xl font-black tracking-tight text-commerce-ink"><span data-testid="quote-compare-score-value" className={scoreGaugeValueClass(gaugeZone)}>{formatSignedDifference(score.signedDifference)}</span>점</p>
+            <p title={`${recommendation.winner} 추천 견적 - 상대 견적`} className="text-xl font-black tracking-tight text-commerce-ink"><span data-testid="quote-compare-score-value" className={scoreGaugeValueClass(gaugeZone)}>{formatSignedDifference(recommendedScoreDifference)}</span>점</p>
             <p data-testid="quote-compare-score-delta" className="mt-1 text-sm font-black text-slate-600">{score.similar ? '사실상 유사' : `${score.winner}가 더 높음`}</p>
           </div>
         ) : (
