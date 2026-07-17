@@ -12,7 +12,8 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -22,10 +23,18 @@ public class QuoteDraftQueryService {
 
     private final JdbcTemplate jdbcTemplate;
     private final CurrentUserService currentUserService;
+    // @Transactional이 응답 read-back(3-way JOIN)까지 감싸 커밋 전 락·커넥션을 오래 잡았다(idle-in-transaction 본류).
+    // 쓰기 구간만 짧게 감싸 즉시 커밋하기 위해 프로그래매틱 트랜잭션을 쓴다.
+    private final TransactionTemplate transactionTemplate;
 
-    public QuoteDraftQueryService(JdbcTemplate jdbcTemplate, CurrentUserService currentUserService) {
+    public QuoteDraftQueryService(
+            JdbcTemplate jdbcTemplate,
+            CurrentUserService currentUserService,
+            PlatformTransactionManager transactionManager
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.currentUserService = currentUserService;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     public Map<String, Object> current(String authorization) {
@@ -37,56 +46,61 @@ public class QuoteDraftQueryService {
         return draftMap(draft);
     }
 
-    @Transactional
     public Map<String, Object> putItem(String authorization, String partId, Map<String, Object> request) {
         Long userId = currentUserId(authorization);
         Map<String, Object> part = part(partId);
         String category = DbValueMapper.string(part, "category");
         int quantity = quantity(request.get("quantity"), category);
-        Map<String, Object> draft = activeDraft(userId);
-        Long draftId = draft == null ? createDraft(userId) : longValue(draft, "internal_id");
-        upsertDraftItem(draftId, part, quantity);
+        transactionTemplate.executeWithoutResult(status -> {
+            Long draftId = ensureActiveDraftId(userId);
+            upsertDraftItem(draftId, part, quantity);
+        });
+        // read-back은 커밋 후 트랜잭션 밖에서 — 응답 조립이 락 보유 시간을 늘리지 않게 한다.
         return draftMap(activeDraft(userId));
     }
 
-    @Transactional
     public Map<String, Object> applyAiBuild(String authorization, Map<String, Object> request) {
         Long userId = currentUserId(authorization);
         if (!"REPLACE".equals(text(request.get("conflictPolicy")))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "conflictPolicy는 REPLACE만 지원합니다.");
         }
+        // 부품 해석·검증은 트랜잭션 진입 전에 끝낸다 — 실패해도 드래프트는 건드리지 않는다(기존 의미 유지).
         List<ResolvedAiItem> items = resolveAiItems(request.get("items"));
-        Map<String, Object> draft = activeDraft(userId);
-        Long draftId = draft == null ? createDraft(userId) : longValue(draft, "internal_id");
-        jdbcTemplate.update("""
-                UPDATE quote_draft_items
-                SET deleted_at = now(),
-                    updated_at = now()
-                WHERE quote_draft_id = ?
-                  AND deleted_at IS NULL
-                """, draftId);
-        for (ResolvedAiItem item : items) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Long draftId = ensureActiveDraftId(userId);
             jdbcTemplate.update("""
+                    UPDATE quote_draft_items
+                    SET deleted_at = now(),
+                        updated_at = now()
+                    WHERE quote_draft_id = ?
+                      AND deleted_at IS NULL
+                    """, draftId);
+            // 카테고리 수만큼 왕복하던 INSERT를 배치 1회로 — 쓰기 트랜잭션 보유 시간을 줄인다.
+            jdbcTemplate.batchUpdate("""
                     INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    draftId,
-                    longValue(item.part(), "internal_id"),
-                    item.category(),
-                    item.quantity(),
-                    DbValueMapper.integer(item.part(), "price"));
-        }
-        jdbcTemplate.update("UPDATE quote_drafts SET updated_at = now() WHERE id = ?", draftId);
+                    items.stream()
+                            .map(item -> new Object[]{
+                                    draftId,
+                                    longValue(item.part(), "internal_id"),
+                                    item.category(),
+                                    item.quantity(),
+                                    DbValueMapper.integer(item.part(), "price")
+                            })
+                            .toList());
+            jdbcTemplate.update("UPDATE quote_drafts SET updated_at = now() WHERE id = ?", draftId);
+        });
         return draftMap(activeDraft(userId));
     }
 
-    @Transactional
     public Map<String, Object> patchItem(String authorization, String partId, Map<String, Object> request) {
         Long userId = currentUserId(authorization);
         Map<String, Object> draft = requireActiveDraft(userId);
         // 담긴 뒤 단종/비활성된 부품도 수량 변경·정리는 가능해야 한다 — 상태 무관 조회(신규 담기만 ACTIVE 요구).
         Map<String, Object> part = partAnyStatus(partId);
         int quantity = quantity(request.get("quantity"), DbValueMapper.string(part, "category"));
+        // 쓰기가 단일 UPDATE라 그 자체로 원자적 — 트랜잭션 없이 자동 커밋(드래프트 touch 안 함, 기존 유지).
         int updated = jdbcTemplate.update("""
                 UPDATE quote_draft_items
                 SET quantity = ?,
@@ -101,7 +115,6 @@ public class QuoteDraftQueryService {
         return draftMap(activeDraft(userId));
     }
 
-    @Transactional
     public Map<String, Object> deleteItem(String authorization, String partId) {
         Long userId = currentUserId(authorization);
         Map<String, Object> draft = activeDraft(userId);
@@ -110,6 +123,7 @@ public class QuoteDraftQueryService {
         }
         // 삭제는 부품의 판매 상태와 무관해야 한다 — 비활성 부품이 견적에 남아 지울 수 없는 잠금 방지.
         Map<String, Object> part = partAnyStatus(partId);
+        // 쓰기가 단일 UPDATE(soft-delete)라 그 자체로 원자적 — 트랜잭션 없이 자동 커밋(드래프트 touch 안 함, 기존 유지).
         jdbcTemplate.update("""
                 UPDATE quote_draft_items
                 SET deleted_at = now(),
@@ -153,12 +167,24 @@ public class QuoteDraftQueryService {
         return draft;
     }
 
-    private Long createDraft(Long userId) {
-        return jdbcTemplate.queryForObject("""
+    // 동시 첫 담기 2건이 둘 다 INSERT로 가면 부분 유니크(ux_quote_drafts_active_user) 23505로 500이 났다.
+    // ON CONFLICT DO NOTHING 후 재조회로 승자 드래프트에 합류한다. conflict target의 WHERE는
+    // V28 부분 인덱스 술어와 정확히 일치해야 arbiter로 추론된다.
+    private Long ensureActiveDraftId(Long userId) {
+        Map<String, Object> draft = activeDraft(userId);
+        if (draft != null) {
+            return longValue(draft, "internal_id");
+        }
+        List<Long> created = jdbcTemplate.queryForList("""
                 INSERT INTO quote_drafts (user_id, name, status)
                 VALUES (?, '셀프 견적', 'ACTIVE')
+                ON CONFLICT (user_id) WHERE status = 'ACTIVE' AND deleted_at IS NULL DO NOTHING
                 RETURNING id
                 """, Long.class, userId);
+        if (!created.isEmpty()) {
+            return created.get(0);
+        }
+        return longValue(requireActiveDraft(userId), "internal_id");
     }
 
     private Map<String, Object> part(String publicId) {
@@ -239,60 +265,44 @@ public class QuoteDraftQueryService {
         jdbcTemplate.update("UPDATE quote_drafts SET updated_at = now() WHERE id = ?", draftId);
     }
 
+    // UPDATE→0행→INSERT 수동 업서트는 동시 PUT 2건이 둘 다 INSERT로 가서 23505로 터졌다(부하 실측 500의 범인).
+    // 부분 유니크 인덱스(V29 ux_quote_draft_items_active_single_category)를 arbiter로 지정한 원자적 업서트로 교체.
+    // conflict target의 WHERE(IN 목록 포함)는 인덱스 술어와 정확히 일치해야 추론된다. DO UPDATE는 deleted_at을
+    // 건드리지 않고, soft-delete 행은 인덱스 밖이라 충돌 대상이 아니다 — 부활 없음(기존 의미 유지).
     private void upsertSingleCategoryItem(Long draftId, Map<String, Object> part, int quantity) {
-        int updated = jdbcTemplate.update("""
-                UPDATE quote_draft_items
-                SET part_id = ?,
-                    quantity = ?,
-                    unit_price_at_add = ?,
-                    updated_at = now()
-                WHERE quote_draft_id = ?
-                  AND category = ?
-                  AND deleted_at IS NULL
+        jdbcTemplate.update("""
+                INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (quote_draft_id, category)
+                WHERE deleted_at IS NULL
+                  AND category IN ('CPU', 'GPU', 'MOTHERBOARD', 'PSU', 'CASE', 'COOLER')
+                DO UPDATE SET part_id = EXCLUDED.part_id,
+                              quantity = EXCLUDED.quantity,
+                              unit_price_at_add = EXCLUDED.unit_price_at_add,
+                              updated_at = now()
                 """,
-                longValue(part, "internal_id"),
-                quantity,
-                DbValueMapper.integer(part, "price"),
                 draftId,
-                DbValueMapper.string(part, "category"));
-        if (updated == 0) {
-            jdbcTemplate.update("""
-                    INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    draftId,
-                    longValue(part, "internal_id"),
-                    DbValueMapper.string(part, "category"),
-                    quantity,
-                    DbValueMapper.integer(part, "price"));
-        }
+                longValue(part, "internal_id"),
+                DbValueMapper.string(part, "category"),
+                quantity,
+                DbValueMapper.integer(part, "price"));
     }
 
+    // RAM·STORAGE는 같은 부품 행만 갱신(V29 ux_quote_draft_items_active_part arbiter).
     private void upsertSamePartItem(Long draftId, Map<String, Object> part, int quantity) {
-        int updated = jdbcTemplate.update("""
-                UPDATE quote_draft_items
-                SET quantity = ?,
-                    unit_price_at_add = ?,
-                    updated_at = now()
-                WHERE quote_draft_id = ?
-                  AND part_id = ?
-                  AND deleted_at IS NULL
+        jdbcTemplate.update("""
+                INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (quote_draft_id, part_id) WHERE deleted_at IS NULL
+                DO UPDATE SET quantity = EXCLUDED.quantity,
+                              unit_price_at_add = EXCLUDED.unit_price_at_add,
+                              updated_at = now()
                 """,
-                quantity,
-                DbValueMapper.integer(part, "price"),
                 draftId,
-                longValue(part, "internal_id"));
-        if (updated == 0) {
-            jdbcTemplate.update("""
-                    INSERT INTO quote_draft_items (quote_draft_id, part_id, category, quantity, unit_price_at_add)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    draftId,
-                    longValue(part, "internal_id"),
-                    DbValueMapper.string(part, "category"),
-                    quantity,
-                    DbValueMapper.integer(part, "price"));
-        }
+                longValue(part, "internal_id"),
+                DbValueMapper.string(part, "category"),
+                quantity,
+                DbValueMapper.integer(part, "price"));
     }
 
     private Map<String, Object> draftMap(Map<String, Object> draft) {

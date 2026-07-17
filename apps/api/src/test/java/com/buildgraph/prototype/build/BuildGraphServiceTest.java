@@ -22,18 +22,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 class BuildGraphServiceTest {
-    private static final String USER_TOKEN = "Bearer jwt-user-token";
-
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final ToolCheckService toolCheckService = mock(ToolCheckService.class);
-    private final CurrentUserService currentUserService = mock(CurrentUserService.class);
     private final BuildGraphLayoutService buildGraphLayoutService = mock(BuildGraphLayoutService.class);
     private final BuildCompositeScoreService buildCompositeScoreService = new BuildCompositeScoreService();
     private final PartQuery partQuery = mock(PartQuery.class);
     private final Map<String, ToolBuildPart> stubParts = new LinkedHashMap<>();
     private final BuildGraphService buildGraphService = new BuildGraphService(
             partQuery,
-            currentUserService,
             buildGraphLayoutService,
             new BuildEvaluationService(partQuery, toolCheckService, buildCompositeScoreService, new BuildScoreAdviceService())
     );
@@ -72,7 +68,7 @@ class BuildGraphServiceTest {
                         MockData.map("budget", 2000000, "totalPrice", 1990000, "priceDiff", -10000))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "view", "FOCUSED",
                 "budgetWon", 2_000_000,
@@ -175,7 +171,7 @@ class BuildGraphServiceTest {
                         MockData.map("coolerHeightMm", 157, "maxCpuCoolerHeightMm", 165))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 240_000,
                 "items", List.of(
@@ -214,7 +210,7 @@ class BuildGraphServiceTest {
                                 "ramSlotsMatched", false))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "view", "FULL",
                 "budgetWon", 430_000,
@@ -254,7 +250,7 @@ class BuildGraphServiceTest {
                         MockData.map("requiredRatedCapacityW", 1020, "psuRatedCapacityW", 1000, "ratedHeadroomW", 100, "vendorRecommendedPsuW", 1000))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 5_000_000,
                 "items", List.of(
@@ -288,7 +284,7 @@ class BuildGraphServiceTest {
                         MockData.map("gpuLengthMm", 380, "maxGpuLengthMm", 360, "coolerHeightMm", 170, "maxCpuCoolerHeightMm", 150))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 5_000_000,
                 "items", List.of(
@@ -333,7 +329,7 @@ class BuildGraphServiceTest {
 
     @Test
     void quoteDraftGraphReadsCurrentUserDraftWithoutClientItems() {
-        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
+        // 호출처가 넘긴 CurrentUser의 internalId(1004L)로 draft를 읽어야 한다 — 서비스 내 재인증 없음.
         when(partQuery.partsByActiveDraftUserId(1004L)).thenReturn(List.of(
                 new ToolBuildPart(100L, "part-gpu", "GPU", "RTX 5070", "BuildGraph", 890000,
                         MockData.map("wattage", 250, "requiredSystemPowerW", 750, "lengthMm", 304), 1),
@@ -344,13 +340,13 @@ class BuildGraphServiceTest {
         ));
         when(toolCheckService.checkBuild(anyList(), eq(1_200_000))).thenReturn(List.of(tool("price", "PASS", "확인되었습니다.", Map.of())));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "QUOTE_DRAFT_CURRENT",
                 "view", "FOCUSED",
                 "focus", Map.of("mode", "ISSUE_PATH")
         ));
 
-        verify(currentUserService).requireUser(USER_TOKEN);
+        verify(partQuery).partsByActiveDraftUserId(1004L);
         List<Map<String, Object>> nodes = castList(graph.get("nodes"));
         assertThat(nodes).extracting(node -> node.get("id")).contains("part-GPU", "part-PSU", "part-CASE");
         assertThat(graph.get("mode")).isEqualTo("ISSUE_PATH");
@@ -366,7 +362,7 @@ class BuildGraphServiceTest {
                 "GPU", new BuildGraphLayoutService.GraphPosition(420, 360)
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "items", List.of(
                         requestItem("layout-cpu", "CPU"),
@@ -394,10 +390,10 @@ class BuildGraphServiceTest {
         stubPart("qty-ram", part("qty-ram", 802L, "RAM", "32GB 2개들이 킷", 180000,
                 MockData.map("memoryType", "DDR5", "moduleCount", 2)));
         BuildGraphService realToolService = new BuildGraphService(
-                partQuery, currentUserService, buildGraphLayoutService,
+                partQuery, buildGraphLayoutService,
                 new BuildEvaluationService(partQuery, new ToolCheckService(jdbcTemplate), buildCompositeScoreService, new BuildScoreAdviceService()));
 
-        Map<String, Object> graph = realToolService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = realToolService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "items", List.of(
                         Map.of("partId", "qty-board", "category", "MOTHERBOARD", "quantity", 1),
@@ -429,10 +425,10 @@ class BuildGraphServiceTest {
         stubPart("qty-ram", part("qty-ram", 802L, "RAM", "32GB 2개들이 킷", 180000,
                 MockData.map("memoryType", "DDR5", "moduleCount", 2)));
         BuildGraphService realToolService = new BuildGraphService(
-                partQuery, currentUserService, buildGraphLayoutService,
+                partQuery, buildGraphLayoutService,
                 new BuildEvaluationService(partQuery, new ToolCheckService(jdbcTemplate), buildCompositeScoreService, new BuildScoreAdviceService()));
 
-        Map<String, Object> graph = realToolService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = realToolService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "items", List.of(
                         Map.of("partId", "qty-board", "category", "MOTHERBOARD"),
@@ -465,7 +461,7 @@ class BuildGraphServiceTest {
                                 )))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 450_000,
                 "items", List.of(
@@ -502,7 +498,7 @@ class BuildGraphServiceTest {
                 tool("price", "PASS", "저장된 현재가 기준 예산 안에 들어옵니다.", MockData.map("budget", 5000000, "totalPrice", 4170000, "priceDiff", -830000))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 5_000_000,
                 "items", List.of(
@@ -529,7 +525,7 @@ class BuildGraphServiceTest {
                                 "ratedHeadroomW", 389))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 70_000,
                 "items", List.of(requestItem("nogpu-psu", "PSU"))
@@ -559,7 +555,7 @@ class BuildGraphServiceTest {
                                 "ratedLoadPercent", null))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 980_000,
                 "items", List.of(
@@ -595,7 +591,7 @@ class BuildGraphServiceTest {
                                 "m2SlotsMatched", true))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 340_000,
                 "items", List.of(
@@ -619,7 +615,7 @@ class BuildGraphServiceTest {
                 MockData.map("coolerType", "LIQUID_AIO", "heightMm", 38, "radiatorSizeMm", 360, "socketSupport", List.of("AM5"))));
         when(toolCheckService.checkBuild(anyList(), eq(180_000))).thenReturn(List.of());
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 180_000,
                 "items", List.of(requestItem("aio-cooler", "COOLER"))
@@ -635,7 +631,7 @@ class BuildGraphServiceTest {
                 MockData.map("coolerType", "LIQUID", "heightMm", 38, "socketSupport", List.of("AM5"))));
         when(toolCheckService.checkBuild(anyList(), eq(150_000))).thenReturn(List.of());
 
-        Map<String, Object> fallbackGraph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> fallbackGraph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 150_000,
                 "items", List.of(requestItem("aio-noradiator", "COOLER"))
@@ -665,7 +661,7 @@ class BuildGraphServiceTest {
                                 "ramFormFactorMatched", true))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 390_000,
                 "items", List.of(
@@ -706,7 +702,7 @@ class BuildGraphServiceTest {
                                 "ramFormFactorMatched", true))
         ));
 
-        Map<String, Object> graph = buildGraphService.resolve(USER_TOKEN, Map.of(
+        Map<String, Object> graph = buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "budgetWon", 390_000,
                 "items", List.of(
@@ -726,7 +722,7 @@ class BuildGraphServiceTest {
     @Test
     void aiBuildGraphRejectsUnknownPartIdBeforeToolCheck() {
 
-        assertThatThrownBy(() -> buildGraphService.resolve(USER_TOKEN, Map.of(
+        assertThatThrownBy(() -> buildGraphService.resolve(currentUser(), Map.of(
                 "source", "AI_BUILD",
                 "items", List.of(requestItem("missing-part", "GPU"))
         )))
