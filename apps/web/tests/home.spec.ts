@@ -570,28 +570,62 @@ async function mockHomePartsApi(page: Page) {
     'home-case-frame',
     'home-cooler-phantom'
   ];
-  await page.route('**/api/recommendations/home-parts**', async (route) => {
-    const items = recommendedOrder
-      .map((id, index) => {
-        const part = homeParts.find((candidate) => candidate.id === id);
-        if (!part) return null;
-        return {
-          recommendationId: `home-part-${part.id}`,
-          rankPosition: index,
-          part,
-          scoreSource: 'FALLBACK',
-          reasonTags: ['benchmark', 'image']
-        };
-      })
-      .filter(Boolean);
+  const recommendedItems = recommendedOrder
+    .map((id, index) => {
+      const part = homeParts.find((candidate) => candidate.id === id);
+      if (!part) return null;
+      return {
+        recommendationId: `home-part-${part.id}`,
+        rankPosition: index,
+        part,
+        scoreSource: 'FALLBACK',
+        reasonTags: ['benchmark', 'image']
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const recommendedParts = {
+    items: recommendedItems,
+    generatedAt: '2026-07-03T10:00:00Z',
+    fallbackUsed: true
+  };
+  const categoryParts = categories.reduce<Record<string, typeof homeParts>>((acc, category) => {
+    acc[category] = homeParts.filter((part) => part.category === category);
+    return acc;
+  }, {});
+  const homeResponse = {
+    categoryParts,
+    recommendedParts
+  };
+
+  await page.route('**/api/home', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        items,
-        generatedAt: '2026-07-03T10:00:00Z',
-        fallbackUsed: true
-      })
+      body: JSON.stringify(homeResponse)
+    });
+  });
+
+  await page.route('**/api/public/home', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(homeResponse)
+    });
+  });
+
+  await page.route('**/api/recommendations/home-parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(recommendedParts)
+    });
+  });
+
+  await page.route('**/api/recommendation-events/bulk', async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ accepted: true })
     });
   });
 
