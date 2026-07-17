@@ -115,6 +115,11 @@ buildgraph:
     # role 변경·소프트 삭제 반영이 최대 이 시간만큼 늦을 수 있다 — 프로필 변경은 즉시 무효화된다.
     user-cache:
       ttl-seconds: ${AUTH_USER_CACHE_TTL_SECONDS:30}
+    refresh-token-cleanup:
+      enabled: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_ENABLED:true}
+      run-on-startup: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_RUN_ON_STARTUP:true}
+      fixed-delay-ms: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_FIXED_DELAY_MS:3600000}
+      max-active-per-user: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_MAX_ACTIVE_PER_USER:10}
     google:
       client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
       client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}

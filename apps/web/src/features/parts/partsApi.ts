@@ -11,6 +11,7 @@ import type {
   PartSearchParams,
   PartRow,
   QuoteDraft,
+  RecommendationEventBulkRequest,
   RecommendationEventRequest
 } from './types';
 
@@ -32,8 +33,19 @@ export function getPublicHome() {
   return api<PublicHomeResponse>('/api/public/home');
 }
 
+export function getHome() {
+  return api<PublicHomeResponse>('/api/home');
+}
+
 export function recordRecommendationEvent(payload: RecommendationEventRequest) {
   return api('/api/recommendation-events', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function recordRecommendationEventsBulk(payload: RecommendationEventBulkRequest) {
+  return api('/api/recommendation-events/bulk', {
     method: 'POST',
     body: JSON.stringify(payload)
   });

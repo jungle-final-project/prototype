@@ -14,6 +14,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -45,6 +46,16 @@ public class RecommendationLearningService {
 
     public RecommendationLearningService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @Transactional
+    public Map<String, Object> recordEvents(Map<String, Object> request, CurrentUserService.CurrentUser user) {
+        List<Map<String, Object>> eventRequests = eventRequests(request.get("events"));
+        List<Map<String, Object>> items = new ArrayList<>(eventRequests.size());
+        for (Map<String, Object> eventRequest : eventRequests) {
+            items.add(recordEvent(eventRequest, user));
+        }
+        return MockData.map("items", items, "count", items.size());
     }
 
     public Map<String, Object> recordEvent(Map<String, Object> request, CurrentUserService.CurrentUser user) {
@@ -84,6 +95,28 @@ public class RecommendationLearningService {
                 idempotencyKey,
                 eventPayload(request)
         );
+    }
+
+    private List<Map<String, Object>> eventRequests(Object value) {
+        if (!(value instanceof List<?> rows)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "events must be an array.");
+        }
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "events must not be empty.");
+        }
+        if (rows.size() > 20) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "events must contain 20 items or fewer.");
+        }
+        List<Map<String, Object>> events = new ArrayList<>(rows.size());
+        for (Object row : rows) {
+            if (!(row instanceof Map<?, ?> map)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "events must contain objects.");
+            }
+            Map<String, Object> event = new LinkedHashMap<>();
+            map.forEach((key, eventValue) -> event.put(String.valueOf(key), eventValue));
+            events.add(event);
+        }
+        return events;
     }
 
     public Map<String, Object> confirmAsNegativeFeedback(

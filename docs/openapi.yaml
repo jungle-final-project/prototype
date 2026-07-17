@@ -37,6 +37,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PublicHomeResponse"
+  /api/home:
+    get:
+      summary: 로그인 홈 화면 데이터 조회
+      description: 로그인 홈 첫 렌더링에 필요한 카테고리별 부품 카드와 사용자 기준 홈 추천 부품을 한 번에 반환한다. 부품 상세, 추천 클릭 이벤트, 조합 검증은 후속 API에서 처리한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 로그인 홈 화면 데이터
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicHomeResponse"
+        "401":
+          description: 인증 필요
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/demo/manufacturer-release-feed.xml:
     get:
       summary: 로컬 제조사 신제품 감지 데모 RSS
@@ -497,6 +516,37 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
           description: 관리자 전용 이벤트 타입(AS_CONFIRMED_NEGATIVE, ADMIN_*)은 관리자 API를 사용해야 함
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/recommendation-events/bulk:
+    post:
+      summary: Collect recommendation behavior events in bulk
+      description: Stores up to 20 recommendation learning events after authenticating the user once. The single-event API remains available for click/detail/save actions.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationEventBulkRequest"
+      responses:
+        "201":
+          description: Stored recommendation events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEventBulkResponse"
+        "400":
+          description: Missing events, more than 20 events, unsupported sourceSurface, or invalid eventType
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin-only events must use admin APIs
           content:
             application/json:
               schema:
@@ -4182,6 +4232,20 @@ components:
           items:
             type: string
             enum: [LOCAL, GOOGLE]
+    LoginUserDto:
+      type: object
+      required: [id, email, name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
     ProfileUpdateRequest:
       type: object
       required: [name, phoneNumber, postalCode, addressLine1, addressLine2]
@@ -4273,7 +4337,7 @@ components:
         refreshToken:
           type: string
         user:
-          $ref: "#/components/schemas/UserDto"
+          $ref: "#/components/schemas/LoginUserDto"
         profileVerificationToken:
           type: string
           nullable: true
@@ -4994,6 +5058,25 @@ components:
         eventPayload:
           type: object
           additionalProperties: true
+    RecommendationEventBulkRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/RecommendationEventRequest"
+    RecommendationEventBulkResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendationEventDto"
+        count:
+          type: integer
     AdminAsRecommendationFeedbackRequest:
       type: object
       properties:

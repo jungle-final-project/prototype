@@ -3,6 +3,8 @@ package com.buildgraph.prototype.recommendation;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.buildgraph.prototype.user.CurrentUserService;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -27,5 +29,29 @@ class RecommendationLearningServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode())
                 .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void bulkEventApiRejectsEmptyEvents() {
+        RecommendationLearningService service = new RecommendationLearningService(org.mockito.Mockito.mock(JdbcTemplate.class));
+
+        assertThatThrownBy(() -> service.recordEvents(Map.of("events", List.of()), USER))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void bulkEventApiRejectsMoreThanTwentyEvents() {
+        RecommendationLearningService service = new RecommendationLearningService(org.mockito.Mockito.mock(JdbcTemplate.class));
+        List<Map<String, Object>> events = new ArrayList<>();
+        for (int index = 0; index < 21; index += 1) {
+            events.add(Map.of("eventType", "IMPRESSION"));
+        }
+
+        assertThatThrownBy(() -> service.recordEvents(Map.of("events", events), USER))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 }

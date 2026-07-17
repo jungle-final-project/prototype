@@ -6,14 +6,12 @@ import { getCurrentUser, logout as logoutApi, type CurrentUser } from '../../fea
 import { AUTH_CHANGED_EVENT, ApiError, clearToken, getCachedAuthUser, getRefreshToken, getToken } from '../../lib/api';
 import { openAiAssistant } from '../../lib/events';
 import { PrimaryNav } from './PrimaryNav';
-import { getTechnicianProfile } from '../../features/parts/assemblyApi';
 
 export function AppHeader() {
   const navigate = useNavigate();
   const [user, setUser] = useState<CurrentUser | null>(() => readCachedCurrentUser());
   const [searchInput, setSearchInput] = useState('');
   const [headerSearchMode, setHeaderSearchMode] = useState<'general' | 'ai'>('ai');
-  const [hasTechnicianProfile, setHasTechnicianProfile] = useState(false);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,6 +38,11 @@ export function AppHeader() {
     async function loadCurrentUser() {
       if (!getToken()) {
         setUser(null);
+        return;
+      }
+      const cachedUser = readCachedCurrentUser();
+      if (cachedUser) {
+        setUser(cachedUser);
         return;
       }
       try {
@@ -69,18 +72,6 @@ export function AppHeader() {
       window.removeEventListener('storage', loadCurrentUser);
     };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!user || user.role !== 'USER') {
-      setHasTechnicianProfile(false);
-      return;
-    }
-    getTechnicianProfile()
-      .then((profile) => { if (!cancelled) setHasTechnicianProfile(Boolean(profile)); })
-      .catch(() => { if (!cancelled) setHasTechnicianProfile(false); });
-    return () => { cancelled = true; };
-  }, [user?.id, user?.role]);
 
   async function logout() {
     const refreshToken = getRefreshToken();
@@ -159,9 +150,9 @@ export function AppHeader() {
                   <AccountMenuLink to="/support/new" icon={<LifeBuoy size={16} />} label="AS 접수" />
                   {user.role === 'USER' ? (
                     <AccountMenuLink
-                      to={hasTechnicianProfile ? '/technician' : '/technician/apply'}
+                      to="/technician"
                       icon={<Wrench size={16} />}
-                      label={hasTechnicianProfile ? '기사 포털' : '기사로 참여'}
+                      label="기사 포털"
                     />
                   ) : null}
                   <button type="button" onClick={logout} className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-slate-600 transition hover:bg-slate-100 hover:text-commerce-ink focus:outline-none focus:bg-slate-100">

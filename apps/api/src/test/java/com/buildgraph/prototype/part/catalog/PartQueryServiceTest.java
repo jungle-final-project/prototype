@@ -28,6 +28,26 @@ class PartQueryServiceTest {
             jdbcTemplate, compatibilityService, new PartContextRecommendationService(), partDetailCachedLoader);
 
     @Test
+    void topActivePartsByCategoryPriceDescGroupsRowsByCategoryFromSingleQuery() {
+        List<Map<String, Object>> rawRows = List.of(
+                part("cpu-high", 201L, "CPU", "Ryzen 9", 720_000),
+                part("gpu-high", 301L, "GPU", "RTX 5080", 1_490_000),
+                part("gpu-mid", 302L, "GPU", "RTX 5070", 850_000)
+        );
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(rawRows);
+
+        Map<String, Object> response = service.topActivePartsByCategoryPriceDesc(List.of("CPU", "GPU"), 4);
+
+        assertThat(response.keySet()).containsExactly("CPU", "GPU");
+        List<Map<String, Object>> cpus = castList(response.get("CPU"));
+        List<Map<String, Object>> gpus = castList(response.get("GPU"));
+        assertThat(cpus).extracting(item -> item.get("name")).containsExactly("Ryzen 9");
+        assertThat(gpus).extracting(item -> item.get("name")).containsExactly("RTX 5080", "RTX 5070");
+        assertThat(cpus.get(0)).doesNotContainKey("internal_id");
+        assertThat(gpus.get(0)).doesNotContainKey("internal_id");
+    }
+
+    @Test
     void partsWithCompatibilitySortEvaluateAllRowsThenPaginateByStatusPriority() {
         List<Map<String, Object>> rawRows = List.of(
                 part("gpu-warn", 101L, "GPU", "RTX 5080 Compact", 1_490_000),
