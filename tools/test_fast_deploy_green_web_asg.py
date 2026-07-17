@@ -180,6 +180,9 @@ class FastDeployControlTest(unittest.TestCase):
         self.asg_version_file.write_text("7\n", encoding="utf-8")
         self.candidate_user_data_file = self.temp_root / "candidate-user-data"
         self.ssm_parameters_file = self.temp_root / "ssm-parameters.json"
+        self.ssm_prepare_parameters_file = (
+            self.temp_root / "ssm-prepare-parameters.json"
+        )
         self.cancelled_command_file = self.temp_root / "cancelled-command"
         self.target_health_call_count_file = self.temp_root / "target-health-count"
         self.target_health_call_count_file.write_text("0\n", encoding="utf-8")
@@ -357,7 +360,10 @@ class FastDeployControlTest(unittest.TestCase):
                       *rollback*) printf '%s\\n' command-rollback ;;
                       *commit*) printf '%s\\n' command-commit ;;
                       *cleanup*) printf '%s\\n' command-cleanup ;;
-                      *) printf '%s\\n' command-prepare ;;
+                      *)
+                        cp "${{parameters#file://}}" "$FAKE_SSM_PREPARE_PARAMETERS_FILE"
+                        printf '%s\\n' command-prepare
+                        ;;
                     esac
                     ;;
                   ssm:get-command-invocation)
@@ -446,6 +452,9 @@ class FastDeployControlTest(unittest.TestCase):
                 self.candidate_user_data_file
             ),
             "FAKE_SSM_PARAMETERS_FILE": str(self.ssm_parameters_file),
+            "FAKE_SSM_PREPARE_PARAMETERS_FILE": str(
+                self.ssm_prepare_parameters_file
+            ),
             "FAKE_CANCELLED_COMMAND_FILE": str(
                 self.cancelled_command_file
             ),
@@ -581,13 +590,23 @@ class FastDeployControlTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stdout)
         command = json.loads(
-            self.ssm_parameters_file.read_text(encoding="utf-8")
+            self.ssm_prepare_parameters_file.read_text(encoding="utf-8")
         )["commands"][0]
         self.assertTrue(
             command.startswith(
                 "/usr/bin/env bash <<'BUILDGRAPH_FAST_DEPLOY_REMOTE'\n"
                 "set -Eeuo pipefail\n"
             ),
+            command,
+        )
+        self.assertNotIn(r'\"', command, command)
+        self.assertIn(
+            'readonly helper_path="$(mktemp '
+            '/tmp/buildgraph-fast-deploy.XXXXXX)"',
+            command,
+        )
+        self.assertIn(
+            'runuser -u "$app_user" -- git -C "$app_root" fetch',
             command,
         )
         self.assertTrue(
@@ -682,6 +701,11 @@ class FastDeployControlTest(unittest.TestCase):
         rollback_command = json.loads(
             self.ssm_parameters_file.read_text(encoding="utf-8")
         )["commands"][0]
+        self.assertNotIn(r'\"', rollback_command, rollback_command)
+        self.assertIn(
+            'readonly cancellation_fence="$transaction_root/.cancelled-fast-',
+            rollback_command,
+        )
         self.assertIn(".cancelled-fast-", rollback_command)
         self.assertLess(
             rollback_command.index("readonly cancellation_fence"),
