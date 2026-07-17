@@ -2,8 +2,13 @@ package com.buildgraph.prototype.user;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.nimbusds.jwt.JWTClaimsSet;
+import java.time.Duration;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -13,33 +18,87 @@ import org.springframework.web.server.ResponseStatusException;
 public class CurrentUserService {
     private final JdbcTemplate jdbcTemplate;
     private final JwtTokenService jwtTokenService;
+    private final boolean currentUserCacheEnabled;
+    private final Cache<String, CurrentUser> usersByPublicId;
 
-    public CurrentUserService(JdbcTemplate jdbcTemplate, JwtTokenService jwtTokenService) {
+    @Autowired
+    public CurrentUserService(JdbcTemplate jdbcTemplate, JwtTokenService jwtTokenService, Environment environment) {
+        this(
+                jdbcTemplate,
+                jwtTokenService,
+                currentUserCacheEnabled(environment),
+                Duration.ofSeconds(longProperty(environment, "buildgraph.auth.current-user-cache.ttl-seconds", 120L)),
+                longProperty(environment, "buildgraph.auth.current-user-cache.maximum-size", 5_000L)
+        );
+    }
+
+    CurrentUserService(JdbcTemplate jdbcTemplate, JwtTokenService jwtTokenService) {
+        this(jdbcTemplate, jwtTokenService, false, Duration.ofSeconds(120), 5_000L);
+    }
+
+    CurrentUserService(
+            JdbcTemplate jdbcTemplate,
+            JwtTokenService jwtTokenService,
+            boolean currentUserCacheEnabled,
+            Duration currentUserCacheTtl,
+            long currentUserCacheMaximumSize
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.jwtTokenService = jwtTokenService;
+        this.currentUserCacheEnabled = currentUserCacheEnabled;
+        this.usersByPublicId = Caffeine.newBuilder()
+                .expireAfterWrite(currentUserCacheTtl)
+                .maximumSize(Math.max(1L, currentUserCacheMaximumSize))
+                .build();
     }
 
     public CurrentUser requireUser(String authorization) {
         String token = bearerToken(authorization);
         JWTClaimsSet claims = verifyJwt(token);
-        return findByPublicId(claims.getSubject());
+        return currentUserByPublicId(claims.getSubject());
     }
 
     public CurrentUser requireAdmin(String authorization) {
         CurrentUser user = requireUser(authorization);
-        if (!"ADMIN".equals(user.role())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
+        String freshRole = findRoleByInternalId(user.internalId());
+        if (!"ADMIN".equals(freshRole)) {
+            evictUser(user.id());
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin permission is required.");
         }
-        return user;
+        if ("ADMIN".equals(user.role())) {
+            return user;
+        }
+        CurrentUser refreshedUser = findByPublicId(user.id());
+        cacheUser(refreshedUser);
+        return refreshedUser;
+    }
+
+    public void evictUser(String publicId) {
+        if (publicId != null && !publicId.isBlank()) {
+            usersByPublicId.invalidate(publicId);
+        }
+    }
+
+    private CurrentUser currentUserByPublicId(String publicId) {
+        if (!currentUserCacheEnabled) {
+            return findByPublicId(publicId);
+        }
+        return usersByPublicId.get(publicId, this::findByPublicId);
+    }
+
+    private void cacheUser(CurrentUser user) {
+        if (currentUserCacheEnabled && user != null && user.id() != null) {
+            usersByPublicId.put(user.id(), user);
+        }
     }
 
     private String bearerToken(String authorization) {
         if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login is required.");
         }
         String token = authorization.substring("Bearer ".length()).trim();
         if (token.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login is required.");
         }
         return token;
     }
@@ -48,7 +107,7 @@ public class CurrentUserService {
         try {
             return jwtTokenService.verifyAccessToken(token);
         } catch (IllegalArgumentException exception) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.", exception);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login is required.", exception);
         }
     }
 
@@ -67,7 +126,20 @@ public class CurrentUserService {
                 .stream()
                 .findFirst()
                 .map(this::currentUser)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "등록된 사용자를 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found."));
+    }
+
+    private String findRoleByInternalId(Long internalId) {
+        return jdbcTemplate.queryForList("""
+                        SELECT role
+                        FROM users
+                        WHERE id = ?
+                          AND deleted_at IS NULL
+                        """, internalId)
+                .stream()
+                .findFirst()
+                .map(row -> DbValueMapper.string(row, "role"))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found."));
     }
 
     private CurrentUser currentUser(Map<String, Object> row) {
@@ -87,6 +159,26 @@ public class CurrentUserService {
             return number.longValue();
         }
         return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private static boolean currentUserCacheEnabled(Environment environment) {
+        String explicit = environment.getProperty("buildgraph.auth.current-user-cache.enabled");
+        if (explicit != null && !explicit.isBlank()) {
+            return Boolean.parseBoolean(explicit);
+        }
+        return "caffeine".equalsIgnoreCase(environment.getProperty("spring.cache.type", "none"));
+    }
+
+    private static long longProperty(Environment environment, String propertyName, long fallback) {
+        String value = environment.getProperty(propertyName);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     public record CurrentUser(

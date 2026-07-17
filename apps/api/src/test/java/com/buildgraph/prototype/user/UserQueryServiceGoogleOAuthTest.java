@@ -120,10 +120,10 @@ class UserQueryServiceGoogleOAuthTest {
         when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Object argument = invocation.getArgument(1);
-            if (sql.contains("FROM user_auth_providers")) {
+            if (sql.contains("WHERE p.provider = 'GOOGLE'")) {
                 return List.of();
             }
-            if (sql.contains("WHERE email") && "admin@example.com".equals(argument)) {
+            if ((sql.contains("WHERE email") || sql.contains("WHERE u.email")) && "admin@example.com".equals(argument)) {
                 return List.of(userRow(1L, "admin@example.com", "BuildGraph Admin", "ADMIN"));
             }
             return List.of();
@@ -146,7 +146,7 @@ class UserQueryServiceGoogleOAuthTest {
         when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Object argument = invocation.getArgument(1);
-            if (sql.contains("FROM user_auth_providers") && "google-sub-1".equals(argument)) {
+            if (sql.contains("WHERE p.provider = 'GOOGLE'") && "google-sub-1".equals(argument)) {
                 return List.of(userRow(1004L, "user@example.com", "Demo User", "USER"));
             }
             return List.of();
@@ -171,7 +171,7 @@ class UserQueryServiceGoogleOAuthTest {
         when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Object argument = invocation.getArgument(1);
-            if (sql.contains("FROM user_auth_providers") && "google-sub-1".equals(argument)) {
+            if (sql.contains("WHERE p.provider = 'GOOGLE'") && "google-sub-1".equals(argument)) {
                 return List.of(userRow(1004L, "user@example.com", "Demo User", "USER"));
             }
             return List.of();
@@ -226,7 +226,7 @@ class UserQueryServiceGoogleOAuthTest {
         when(jdbcTemplate.queryForList(anyString(), anyString())).thenAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Object argument = invocation.getArgument(1);
-            if (sql.contains("FROM user_auth_providers") && "google-sub-1".equals(argument)) {
+            if (sql.contains("WHERE p.provider = 'GOOGLE'") && "google-sub-1".equals(argument)) {
                 return List.of(userRowWithContact(1004L, "user@example.com", "Demo User", "USER"));
             }
             return List.of();

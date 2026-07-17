@@ -107,6 +107,40 @@ class RecommendationControllerTest {
     }
 
     @Test
+    void recommendationEventBulkStoresUserEvents() throws Exception {
+        when(recommendationLearningService.recordEvents(anyMap(), org.mockito.ArgumentMatchers.eq(USER))).thenReturn(Map.of(
+                "items", List.of(MockData.map(
+                        "id", "event-public-id",
+                        "eventType", "IMPRESSION",
+                        "labelScore", 0.0,
+                        "sourceSurface", "HOME_RECOMMENDED_PARTS",
+                        "createdAt", "2026-07-03T10:00:00Z"
+                )),
+                "count", 1
+        ));
+
+        mockMvc.perform(post("/api/recommendation-events/bulk")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "events": [
+                                    {
+                                      "eventType": "IMPRESSION",
+                                      "sourceSurface": "HOME_RECOMMENDED_PARTS",
+                                      "recommendationId": "home-part-1"
+                                    }
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.count").value(1))
+                .andExpect(jsonPath("$.items[0].eventType").value("IMPRESSION"));
+
+        verify(recommendationLearningService).recordEvents(anyMap(), org.mockito.ArgumentMatchers.eq(USER));
+    }
+
+    @Test
     void homeRecommendedPartsRequiresLogin() throws Exception {
         mockMvc.perform(get("/api/recommendations/home-parts?limit=4"))
                 .andExpect(status().isUnauthorized())

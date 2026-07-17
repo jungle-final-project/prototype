@@ -59,6 +59,15 @@ buildgraph:
       enabled: ${PAYMENT_MOCK_ENABLED:false}
       webhook-secret: ${PAYMENT_MOCK_WEBHOOK_SECRET:}
   auth:
+    current-user-cache:
+      ttl-seconds: ${BUILDGRAPH_AUTH_CURRENT_USER_CACHE_TTL_SECONDS:120}
+      maximum-size: ${BUILDGRAPH_AUTH_CURRENT_USER_CACHE_MAXIMUM_SIZE:5000}
+      enabled: ${BUILDGRAPH_AUTH_CURRENT_USER_CACHE_ENABLED:}
+    refresh-token-cleanup:
+      enabled: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_ENABLED:true}
+      run-on-startup: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_RUN_ON_STARTUP:true}
+      fixed-delay-ms: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_FIXED_DELAY_MS:3600000}
+      max-active-per-user: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_MAX_ACTIVE_PER_USER:10}
     google:
       client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
       client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}

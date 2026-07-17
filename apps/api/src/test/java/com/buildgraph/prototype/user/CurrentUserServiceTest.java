@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -62,11 +64,67 @@ class CurrentUserServiceTest {
                 "role", "USER",
                 "created_at", "2026-06-29T09:05:00Z"
         )));
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(Map.of("role", "USER")));
 
         assertThatThrownBy(() -> currentUserService.requireAdmin("Bearer " + token))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting("statusCode")
                 .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void requireUserCachesCurrentUserWhenEnabled() {
+        String userId = "00000000-0000-4000-8000-000000001004";
+        CurrentUserService cachedService = new CurrentUserService(
+                jdbcTemplate,
+                jwtTokenService,
+                true,
+                Duration.ofSeconds(120),
+                5_000L
+        );
+        String token = jwtTokenService.issueAccessToken(userClaim(userId, "USER"));
+        when(jdbcTemplate.queryForList(anyString(), eq(userId))).thenReturn(List.of(Map.of(
+                "internal_id", 1004L,
+                "id", userId,
+                "email", "user@example.com",
+                "name", "Demo User",
+                "role", "USER",
+                "created_at", "2026-06-29T09:05:00Z"
+        )));
+
+        cachedService.requireUser("Bearer " + token);
+        cachedService.requireUser("Bearer " + token);
+
+        verify(jdbcTemplate, times(1)).queryForList(anyString(), eq(userId));
+    }
+
+    @Test
+    void requireAdminRechecksRoleFromDatabase() {
+        String userId = "00000000-0000-4000-8000-000000001002";
+        CurrentUserService cachedService = new CurrentUserService(
+                jdbcTemplate,
+                jwtTokenService,
+                true,
+                Duration.ofSeconds(120),
+                5_000L
+        );
+        String token = jwtTokenService.issueAccessToken(userClaim(userId, "ADMIN"));
+        when(jdbcTemplate.queryForList(anyString(), eq(userId))).thenReturn(List.of(Map.of(
+                "internal_id", 1002L,
+                "id", userId,
+                "email", "admin@example.com",
+                "name", "Admin User",
+                "role", "ADMIN",
+                "created_at", "2026-06-29T09:05:00Z"
+        )));
+        when(jdbcTemplate.queryForList(anyString(), eq(1002L))).thenReturn(List.of(Map.of("role", "USER")));
+
+        assertThatThrownBy(() -> cachedService.requireAdmin("Bearer " + token))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting("statusCode")
+                .isEqualTo(HttpStatus.FORBIDDEN);
+
+        verify(jdbcTemplate).queryForList(anyString(), eq(1002L));
     }
 
     @Test

@@ -47,6 +47,16 @@ public class RecommendationController {
         return recommendationLearningService.recordEvent(request == null ? Map.of() : request, user);
     }
 
+    @PostMapping("/recommendation-events/bulk")
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> recordRecommendationEvents(
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return recommendationLearningService.recordEvents(request == null ? Map.of() : request, user);
+    }
+
     @GetMapping("/recommendations/home-parts")
     Map<String, Object> homeRecommendedParts(
             @org.springframework.web.bind.annotation.RequestParam(value = "limit", required = false) Integer limit,

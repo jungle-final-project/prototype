@@ -3,21 +3,25 @@ import { API_BASE_URL, ApiError, api, getRefreshToken, refreshAuthTokens } from 
 export type LoginResponse = {
   accessToken: string;
   refreshToken: string;
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    role: 'USER' | 'ADMIN';
-    phoneNumber?: string | null;
-    postalCode?: string | null;
-    addressLine1?: string | null;
-    addressLine2?: string | null;
-    authProviders?: Array<'LOCAL' | 'GOOGLE'>;
-  };
+  user: LoginUser;
   profileVerificationToken?: string;
 };
 
-export type CurrentUser = LoginResponse['user'];
+export type LoginUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: 'USER' | 'ADMIN';
+};
+
+export type CurrentUser = LoginUser & {
+  phoneNumber?: string | null;
+  postalCode?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  authProviders?: Array<'LOCAL' | 'GOOGLE'>;
+};
+
 export type SignupResponse = LoginResponse['user'];
 
 export function login(email: string, password: string) {

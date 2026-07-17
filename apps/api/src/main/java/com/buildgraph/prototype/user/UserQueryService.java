@@ -8,6 +8,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class UserQueryService {
+    private static final Logger log = LoggerFactory.getLogger(UserQueryService.class);
+
     private final JdbcTemplate jdbcTemplate;
     private final PasswordService passwordService;
     private final JwtTokenService jwtTokenService;
@@ -39,13 +43,40 @@ public class UserQueryService {
     }
 
     public Map<String, Object> login(String email, String password) {
+        long startedAt = System.nanoTime();
+        long lookupStartedAt = startedAt;
         Map<String, Object> user = findByEmail(normalizeEmail(email));
+        long lookupFinishedAt = System.nanoTime();
         String passwordHash = DbValueMapper.string(user, "password_hash");
+        long bcryptStartedAt = lookupFinishedAt;
         if (!passwordService.matches(password, passwordHash)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "이메일 또는 비밀번호가 올바르지 않습니다.");
         }
-        Map<String, Object> userDto = userMap(user);
-        return issueAuthResponse(user, userDto);
+        long bcryptFinishedAt = System.nanoTime();
+        Map<String, Object> userDto = minimalUserMap(user);
+        long refreshIssueStartedAt = bcryptFinishedAt;
+        RefreshTokenService.IssuedRefreshToken refreshToken = refreshTokenService.issue();
+        long refreshIssueFinishedAt = System.nanoTime();
+        storeRefreshToken(user, refreshToken);
+        long refreshInsertFinishedAt = System.nanoTime();
+        String accessToken = jwtTokenService.issueAccessToken(userDto);
+        long jwtFinishedAt = System.nanoTime();
+
+        log.debug(
+                "Auth login timing: lookupMs={} bcryptMs={} refreshIssueMs={} refreshInsertMs={} jwtMs={} totalMs={}",
+                elapsedMillis(lookupStartedAt, lookupFinishedAt),
+                elapsedMillis(bcryptStartedAt, bcryptFinishedAt),
+                elapsedMillis(refreshIssueStartedAt, refreshIssueFinishedAt),
+                elapsedMillis(refreshIssueFinishedAt, refreshInsertFinishedAt),
+                elapsedMillis(refreshInsertFinishedAt, jwtFinishedAt),
+                elapsedMillis(startedAt, jwtFinishedAt)
+        );
+
+        return MockData.map(
+                "accessToken", accessToken,
+                "refreshToken", refreshToken.token(),
+                "user", userDto
+        );
     }
 
     public Map<String, Object> signup(
@@ -96,7 +127,8 @@ public class UserQueryService {
                           postal_code,
                           address_line1,
                           address_line2,
-                          created_at
+                          created_at,
+                          '' AS auth_providers
                 """,
                 normalizedEmail,
                 passwordHash,
@@ -197,6 +229,7 @@ public class UserQueryService {
         if (usedGoogleVerification) {
             googleOAuthRuntimeStore.consumeProfileVerificationToken(googleVerificationToken);
         }
+        currentUserService.evictUser(currentUser.id());
         return userMap(findByInternalId(currentUser.internalId()));
     }
 
@@ -211,8 +244,8 @@ public class UserQueryService {
         }
 
         Map<String, Object> tokenRow = findActiveRefreshToken(refreshTokenService.hash(refreshToken));
-        Map<String, Object> user = findByInternalId(longValue(tokenRow, "user_id"));
-        Map<String, Object> userDto = userMap(user);
+        Map<String, Object> user = findAuthTokenUserByInternalId(longValue(tokenRow, "user_id"));
+        Map<String, Object> userDto = minimalUserMap(user);
 
         revokeRefreshToken(longValue(tokenRow, "id"));
         RefreshTokenService.IssuedRefreshToken nextRefreshToken = refreshTokenService.issue();
@@ -235,7 +268,17 @@ public class UserQueryService {
     }
 
     private Map<String, Object> findByEmail(String email) {
-        return findRowsByEmail(email)
+        return jdbcTemplate.queryForList("""
+                SELECT id AS internal_id,
+                       public_id::text AS id,
+                       email,
+                       password_hash,
+                       name,
+                       role
+                FROM users
+                WHERE email = ?
+                  AND deleted_at IS NULL
+                """, email)
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "등록된 사용자를 찾을 수 없습니다."));
@@ -324,7 +367,7 @@ public class UserQueryService {
             updateUserContact(user, contactAddress);
             user = findByInternalId(longValue(user, "internal_id"));
         }
-        Map<String, Object> userDto = userMap(user);
+        Map<String, Object> userDto = minimalUserMap(user);
         String profileVerificationToken = profileVerificationRequested(pendingLogin.redirectPath())
                 ? googleOAuthRuntimeStore.createProfileVerificationToken(DbValueMapper.string(user, "id"), pendingLogin.providerUserId())
                 : null;
@@ -337,7 +380,7 @@ public class UserQueryService {
             Boolean marketingAccepted,
             ContactAddress contactAddress
     ) {
-        Map<String, Object> user = jdbcTemplate.queryForMap("""
+        Map<String, Object> user = new java.util.LinkedHashMap<>(jdbcTemplate.queryForMap("""
                 INSERT INTO users (
                     email,
                     password_hash,
@@ -361,7 +404,8 @@ public class UserQueryService {
                           postal_code,
                           address_line1,
                           address_line2,
-                          created_at
+                          created_at,
+                          '' AS auth_providers
                 """,
                 normalizedEmail,
                 safeName(pendingLogin.name(), normalizedEmail),
@@ -370,8 +414,9 @@ public class UserQueryService {
                 contactAddress.addressLine1(),
                 contactAddress.addressLine2(),
                 Boolean.TRUE.equals(marketingAccepted)
-        );
+        ));
         linkGoogleProvider(user, pendingLogin, normalizedEmail);
+        user.put("auth_providers", "GOOGLE");
         return user;
     }
 
@@ -426,17 +471,39 @@ public class UserQueryService {
 
     private Map<String, Object> findByInternalId(Long userId) {
         return jdbcTemplate.queryForList("""
+                SELECT u.id AS internal_id,
+                       u.public_id::text AS id,
+                       u.email,
+                       u.password_hash,
+                       u.name,
+                       u.role,
+                       u.phone_number,
+                       u.postal_code,
+                       u.address_line1,
+                       u.address_line2,
+                       u.created_at,
+                       COALESCE(provider_summary.auth_providers, '') AS auth_providers
+                FROM users u
+                LEFT JOIN LATERAL (
+                    SELECT string_agg(provider.provider, ',' ORDER BY provider.provider) AS auth_providers
+                    FROM user_auth_providers provider
+                    WHERE provider.user_id = u.id
+                ) provider_summary ON true
+                WHERE u.id = ?
+                  AND u.deleted_at IS NULL
+                """, userId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid refresh token."));
+    }
+
+    private Map<String, Object> findAuthTokenUserByInternalId(Long userId) {
+        return jdbcTemplate.queryForList("""
                 SELECT id AS internal_id,
                        public_id::text AS id,
                        email,
-                       password_hash,
                        name,
-                       role,
-                       phone_number,
-                       postal_code,
-                       address_line1,
-                       address_line2,
-                       created_at
+                       role
                 FROM users
                 WHERE id = ?
                   AND deleted_at IS NULL
@@ -463,6 +530,20 @@ public class UserQueryService {
                 WHERE email = ?
                   AND deleted_at IS NULL
                 """, email);
+    }
+
+    private Map<String, Object> minimalUserMap(Map<String, Object> row) {
+        return MockData.map(
+                "id", DbValueMapper.string(row, "id"),
+                "email", DbValueMapper.string(row, "email"),
+                "name", DbValueMapper.string(row, "name"),
+                "role", DbValueMapper.string(row, "role")
+        );
+    }
+
+    private double elapsedMillis(long startedAt, long finishedAt) {
+        double millis = (finishedAt - startedAt) / 1_000_000.0;
+        return Math.round(millis * 100.0) / 100.0;
     }
 
     private Map<String, Object> userMap(Map<String, Object> row) {
@@ -649,6 +730,11 @@ public class UserQueryService {
         if (passwordHash != null && !passwordHash.isBlank()) {
             providers.add("LOCAL");
         }
+        Object preloadedProviders = row.get("auth_providers");
+        if (preloadedProviders != null) {
+            addProviderList(providers, preloadedProviders.toString());
+            return providers;
+        }
         Long internalId = longValue(row, "internal_id");
         if (internalId == null) {
             return providers;
@@ -668,6 +754,19 @@ public class UserQueryService {
             }
         }
         return providers;
+    }
+
+    private void addProviderList(List<String> providers, String providerList) {
+        if (providerList == null || providerList.isBlank()) {
+            return;
+        }
+        String[] values = providerList.split(",");
+        for (String value : values) {
+            String provider = value == null ? "" : value.trim();
+            if (!provider.isBlank() && !providers.contains(provider)) {
+                providers.add(provider);
+            }
+        }
     }
 
     private boolean hasGoogleProvider(Long internalId, String providerUserId) {

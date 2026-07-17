@@ -31,9 +31,10 @@ import {
   applyAiBuildToQuoteDraft,
   getHome,
   getPublicHome,
-  recordRecommendationEvent
+  recordRecommendationEvent,
+  recordRecommendationEventsBulk
 } from '../../parts/partsApi';
-import type { HomeRecommendedPart } from '../../parts/types';
+import type { HomeRecommendedPart, RecommendationEventRequest } from '../../parts/types';
 import { type PartCategory } from '../aiSelection';
 import {
   HomeFeaturedBuildPreview,
@@ -663,10 +664,11 @@ function PopularPartsSection({ isAuthenticated, items, loading, error }: Popular
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    const events: RecommendationEventRequest[] = [];
     for (const item of items.slice(0, 5)) {
       if (impressedIdsRef.current.has(item.recommendationId)) continue;
       impressedIdsRef.current.add(item.recommendationId);
-      void recordRecommendationEvent({
+      events.push({
         eventType: 'IMPRESSION',
         sourceSurface: 'HOME_RECOMMENDED_PARTS',
         recommendationId: item.recommendationId,
@@ -674,7 +676,10 @@ function PopularPartsSection({ isAuthenticated, items, loading, error }: Popular
         category: item.part.category,
         rankPosition: item.rankPosition,
         idempotencyKey: `home-impression-${item.recommendationId}`
-      }).catch(() => undefined);
+      });
+    }
+    if (events.length) {
+      void recordRecommendationEventsBulk({ events }).catch(() => undefined);
     }
   }, [isAuthenticated, items]);
 
