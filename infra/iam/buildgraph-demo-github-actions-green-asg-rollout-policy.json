@@ -14,7 +14,8 @@
         "autoscaling:DescribeAutoScalingGroups",
         "autoscaling:DescribeInstanceRefreshes",
         "autoscaling:DescribeScalingActivities",
-        "elasticloadbalancing:DescribeTargetHealth"
+        "elasticloadbalancing:DescribeTargetHealth",
+        "ssm:DescribeInstanceInformation"
       ],
       "Resource": "*"
     },
@@ -33,6 +34,41 @@
         "autoscaling:StartInstanceRefresh"
       ],
       "Resource": "arn:aws:autoscaling:ap-northeast-2:443915990705:autoScalingGroup:8f32aec0-e5c6-447f-82a6-05efa16d2a53:autoScalingGroupName/buildgraph-demo-api-green-asg"
+    },
+    {
+      "Sid": "UpdateOnlyGreenWebAsgLaunchTemplatePointer",
+      "Effect": "Allow",
+      "Action": "autoscaling:UpdateAutoScalingGroup",
+      "Resource": "arn:aws:autoscaling:ap-northeast-2:443915990705:autoScalingGroup:8f32aec0-e5c6-447f-82a6-05efa16d2a53:autoScalingGroupName/buildgraph-demo-api-green-asg"
+    },
+    {
+      "Sid": "RunOnlyApprovedGreenWebShellDocument",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "RunCommandsOnlyOnGreenAsgWebInstances",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:ap-northeast-2:443915990705:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/ManagedBy": "asg",
+          "ssm:resourceTag/Stack": "green",
+          "ssm:resourceTag/Service": "api"
+        }
+      }
+    },
+    {
+      "Sid": "ReadAndCancelGreenWebRunCommandExecution",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:CancelCommand"
+      ],
+      "Resource": "*"
     },
     {
       "Sid": "ValidateApprovedGreenWebAmiLaunch",
