@@ -68,11 +68,16 @@ jobs:
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
 
   web:
-    name: web
+    # 러너 1대(4 vCPU)는 워커 2에서 CPU 포화 — 러너 2대에 테스트를 반씩 나눠 벽시계를 줄인다.
+    name: web (${{ matrix.shard }})
     needs: changes
     if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
 
     steps:
       - name: Checkout
@@ -112,13 +117,13 @@ jobs:
 
       - name: Run web tests
         working-directory: apps/web
-        run: npm run test
+        run: npm run test -- --shard=${{ matrix.shard }}
 
       - name: Upload web test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: web-test-artifacts
+          name: web-test-artifacts-${{ strategy.job-index }}
           path: |
             apps/web/playwright-report
             apps/web/test-results

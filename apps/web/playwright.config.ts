@@ -10,10 +10,11 @@ const webBaseUrl = `http://127.0.0.1:${webPort}`;
 export default defineConfig({
   testDir: './tests',
   timeout: 30_000,
-  // 테스트는 서로 독립(각자 page.goto)이라 파일 내부까지 병렬화한다 — CI 벽시계의 지배 요인 해소.
+  // 테스트는 서로 독립(각자 page.goto)이라 파일 내부까지 병렬화한다 — 대형 spec 파일의 직렬 꼬리 제거.
   fullyParallel: true,
-  // CI 러너는 4 vCPU. 기본값(50%=2)이 병렬화 효과를 반토막 내므로 명시.
-  workers: process.env.CI ? 4 : undefined,
+  // CI 러너(4 vCPU)는 크로미움 2개 + vite dev 서버로 이미 CPU 포화 — 4워커 실측에서 오히려 전체가 느려졌다(과포화).
+  // 워커는 2로 고정하고 처리량은 CI 쪽 샤딩(러너 2대)으로 늘린다.
+  workers: process.env.CI ? 2 : undefined,
   // test.only가 커밋되면 CI가 축소 스위트로 조용히 통과하는 것을 차단.
   forbidOnly: !!process.env.CI,
   // retries=0 환경에서 on-first-retry는 트레이스가 영원히 안 남는다 — 실패 시 보존으로 교정.
