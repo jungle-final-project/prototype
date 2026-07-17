@@ -10,10 +10,19 @@ const webBaseUrl = `http://127.0.0.1:${webPort}`;
 export default defineConfig({
   testDir: './tests',
   timeout: 30_000,
+  // 테스트는 서로 독립(각자 page.goto)이라 파일 내부까지 병렬화한다 — CI 벽시계의 지배 요인 해소.
+  fullyParallel: true,
+  // CI 러너는 4 vCPU. 기본값(50%=2)이 병렬화 효과를 반토막 내므로 명시.
+  workers: process.env.CI ? 4 : undefined,
+  // test.only가 커밋되면 CI가 축소 스위트로 조용히 통과하는 것을 차단.
+  forbidOnly: !!process.env.CI,
+  // retries=0 환경에서 on-first-retry는 트레이스가 영원히 안 남는다 — 실패 시 보존으로 교정.
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: webBaseUrl,
     viewport: { width: 1440, height: 1024 },
-    trace: 'on-first-retry'
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure'
   },
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${webPort} --strictPort`,
