@@ -35,7 +35,7 @@ export function credentialsForVu(vu) {
 export function loginForVu(vu) {
   const response = http.post(`${baseUrl()}/api/auth/login`, JSON.stringify(credentialsForVu(vu)), {
     headers: { 'Content-Type': 'application/json' },
-    tags: commonTags('setup-login'),
+    tags: commonTags('setup-login', { endpoint: 'auth_login', visitor: 'authenticated' }),
     timeout: requestTimeout(),
   });
   if (response.status !== 200) throw new Error(`로그인 실패: vu=${vu}, status=${response.status}`);

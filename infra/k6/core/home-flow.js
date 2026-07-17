@@ -87,16 +87,6 @@ export function publicHomeFirstVisit() {
 export function authenticatedHomeFirstVisit() {
   const token = tokenForVu();
 
-  const userResponse = getCurrentUser(token);
-  check(userResponse, {
-    'auth me 200': (res) => res.status === 200
-  });
-
-  const technicianResponse = getTechnicianProfile(token);
-  check(technicianResponse, {
-    'technician profile 200 or 204': (res) => res.status === 200 || res.status === 204
-  });
-
   const homeResponse = getAuthenticatedHome(token);
   check(homeResponse, {
     'authenticated home 200': (res) => res.status === 200,
@@ -128,22 +118,6 @@ function getPublicHome() {
   });
 }
 
-function getCurrentUser(token) {
-  return http.get(`${baseUrl()}/api/auth/me`, {
-    headers: authHeaders(token),
-    tags: homeTags('auth-me', { endpoint: 'auth_me', visitor: 'authenticated' }),
-    timeout: requestTimeout()
-  });
-}
-
-function getTechnicianProfile(token) {
-  return http.get(`${baseUrl()}/api/technician/profile`, {
-    headers: authHeaders(token),
-    tags: homeTags('technician-profile', { endpoint: 'technician_profile', visitor: 'authenticated' }),
-    timeout: requestTimeout()
-  });
-}
-
 function getAuthenticatedHome(token) {
   return http.get(`${baseUrl()}/api/home`, {
     headers: authHeaders(token),
@@ -157,10 +131,11 @@ function recordHomeRecommendedPartImpressions(token, response) {
   const body = parseJson(response);
   const sourceItems = body?.recommendedParts?.items ?? body?.items;
   const items = Array.isArray(sourceItems) ? sourceItems.slice(0, HOME_PART_LIMIT) : [];
+  const events = [];
   for (const item of items) {
     const part = item?.part;
     if (!item?.recommendationId || !part?.id || !part?.category) continue;
-    const eventResponse = http.post(`${baseUrl()}/api/recommendation-events`, JSON.stringify({
+    events.push({
       eventType: 'IMPRESSION',
       sourceSurface: 'HOME_RECOMMENDED_PARTS',
       recommendationId: item.recommendationId,
@@ -168,19 +143,21 @@ function recordHomeRecommendedPartImpressions(token, response) {
       category: part.category,
       rankPosition: item.rankPosition,
       idempotencyKey: `home-impression-${item.recommendationId}`
-    }), {
-      headers: authHeaders(token),
-      tags: homeTags('recommended-part-impression', {
-        endpoint: 'recommendation_events',
-        visitor: 'authenticated',
-        eventType: 'IMPRESSION'
-      }),
-      timeout: requestTimeout()
-    });
-    check(eventResponse, {
-      'home impression recorded': (res) => res.status === 201 || res.status === 200
     });
   }
+  if (!events.length) return;
+  const eventResponse = http.post(`${baseUrl()}/api/recommendation-events/bulk`, JSON.stringify({ events }), {
+    headers: authHeaders(token),
+    tags: homeTags('recommended-part-impression', {
+      endpoint: 'recommendation_events_bulk',
+      visitor: 'authenticated',
+      eventType: 'IMPRESSION'
+    }),
+    timeout: requestTimeout()
+  });
+  check(eventResponse, {
+    'home impressions recorded': (res) => res.status === 201 || res.status === 200
+  });
 }
 
 function homeTags(phase, extra = {}) {
