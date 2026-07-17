@@ -1105,7 +1105,7 @@ function PartThumbnail({ imageUrl, name }: { imageUrl: string | null; name: stri
   const [failed, setFailed] = useState(false);
   if (!imageUrl || failed) return null;
   return (
-    <span className="hidden h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-white p-1 shadow-sm lg:flex">
+    <span className="hidden h-20 w-20 shrink-0 items-center justify-center self-center overflow-hidden rounded-md border border-slate-200 bg-white p-0.5 shadow-sm lg:flex">
       <img src={imageUrl} alt={`${name} 제품 이미지`} className="h-full w-full object-contain" loading="lazy" onError={() => setFailed(true)} />
     </span>
   );
