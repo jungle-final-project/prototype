@@ -1,59 +1,130 @@
 name: Deploy Green Web
 
+# CI가 같은 SHA를 이미 검증(웹 E2E 포함)하므로 여기서는 테스트를 반복하지 않는다.
+# 대신 deploy-compose와 동일한 workflow_run 게이트로 "CI 성공한 main 커밋"만 배포한다.
 on:
-  push:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - "apps/web/**"
-      - ".github/workflows/deploy-web-green.yml"
   workflow_dispatch:
     inputs:
       git_sha:
-        description: "40-character Git SHA to build and deploy; defaults to the selected branch SHA"
+        description: "40-character Git SHA to build and deploy; defaults to current main HEAD"
         required: false
         type: string
 
 permissions:
   contents: read
   id-token: write
+  # resolve 게이트가 CI 런 이력·커밋 변경 파일을 조회하는 데 필요.
+  actions: read
 
 concurrency:
   group: deploy-green-web
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: deployment-gate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       vars.GREEN_CD_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.target.outputs.deploy }}
+      sha: ${{ steps.target.outputs.sha }}
+
+    steps:
+      - name: Resolve CI-approved web deploy target
+        id: target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUESTED_SHA: ${{ inputs.git_sha }}
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            target_sha="$WORKFLOW_RUN_SHA"
+            if [ "$target_sha" != "$current_main_sha" ]; then
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Stale web deployment skipped"
+                echo
+                echo "CI passed for \`$target_sha\`, but current main is \`$current_main_sha\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            # 이 커밋이 웹을 건드리지 않았다면 재배포하지 않는다 (기존 push paths 필터의 대체).
+            # 커밋 API의 files 목록은 300개에서 잘리므로, 딱 300개면 안전하게 배포로 간주한다.
+            changed_files="$(gh api "repos/${GITHUB_REPOSITORY}/commits/$target_sha" --jq '.files[].filename')"
+            file_count="$(printf '%s\n' "$changed_files" | grep -c . || true)"
+            if [ "$file_count" -lt 300 ] && ! printf '%s\n' "$changed_files" | grep -qE '^apps/web/|^\.github/workflows/deploy-web-green\.yml$'; then
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Web deployment skipped (no web changes)"
+                echo
+                echo "Commit \`$target_sha\` does not touch apps/web/**."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          else
+            target_sha="${REQUESTED_SHA:-$current_main_sha}"
+            [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::git_sha must be a 40-character lowercase Git SHA"
+              exit 1
+            }
+            # 배포 전 자체 테스트를 제거했으므로, 수동 배포도 해당 SHA의 CI push 성공 이력을 요구한다.
+            ci_conclusion="$(
+              gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+                -f branch=main \
+                -f event=push \
+                -f status=completed \
+                -f head_sha="$target_sha" \
+                -f per_page=1 --jq '.workflow_runs[0].conclusion // ""'
+            )"
+            if [ "$ci_conclusion" != "success" ]; then
+              echo "::error::Commit $target_sha has no successful completed CI push run."
+              exit 1
+            fi
+          fi
+
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying CI-approved web commit \`$target_sha\`." >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
-    name: test-build-deploy-green-web
-    if: github.event_name == 'workflow_dispatch' || vars.GREEN_CD_ENABLED == 'true'
+    name: build-deploy-green-web
+    needs: resolve
+    if: needs.resolve.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     steps:
-      - name: Resolve deployment target
-        id: target
-        shell: bash
-        env:
-          REQUESTED_SHA: ${{ inputs.git_sha }}
-          DEFAULT_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          target_sha="${REQUESTED_SHA:-$DEFAULT_SHA}"
-          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::git_sha must be a 40-character lowercase Git SHA"
-            exit 1
-          }
-          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
-
       - name: Checkout target commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.target.outputs.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
 
       - name: Verify target belongs to main
         env:
-          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          DEPLOY_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           git fetch --quiet origin main
           git merge-base --is-ancestor "$DEPLOY_SHA" origin/main
@@ -68,14 +139,6 @@ jobs:
       - name: Install web dependencies
         working-directory: apps/web
         run: npm ci
-
-      - name: Install Playwright Chromium
-        working-directory: apps/web
-        run: npx playwright install --with-deps chromium
-
-      - name: Run web tests
-        working-directory: apps/web
-        run: npm run test -- --workers=1
 
       - name: Build web for same-origin API
         working-directory: apps/web
@@ -140,7 +203,7 @@ jobs:
           {
             echo "### Green Web deployment succeeded"
             echo
-            echo "- Commit: \`${{ steps.target.outputs.sha }}\`"
+            echo "- Commit: \`${{ needs.resolve.outputs.sha }}\`"
             echo "- Bucket: \`${{ vars.GREEN_S3_BUCKET }}\`"
             echo "- CloudFront: \`${{ vars.GREEN_CF_DISTRIBUTION_ID }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

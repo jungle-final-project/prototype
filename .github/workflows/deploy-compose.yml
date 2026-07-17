@@ -97,32 +97,9 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.sha }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-
-      - name: Build web
-        working-directory: apps/web
-        run: |
-          npm ci
-          npm run build
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build API
-        working-directory: apps/api
-        run: ./gradlew bootJar --no-daemon
-
+      # 러너에서의 web build/bootJar는 제거 — rsync가 dist/build를 제외하고
+      # EC2가 Docker 멀티스테이지로 소스부터 다시 빌드하므로 배포에 쓰인 적이 없다.
+      # 빌드 검증은 CI(workflow_run 게이트)가 같은 SHA로 이미 보장한다.
       - name: Validate production compose
         run: docker compose -f compose.prod.yaml --env-file .env.prod.example config --quiet
 
