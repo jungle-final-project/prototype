@@ -26,22 +26,28 @@ public class PartQuery {
         return cachedLoader.partsByPublicIds(partIds);
     }
 
-    /* 사용자별 최신 ACTIVE draft ID만 직접 찾고, 부품 본문은 공통 캐시 조회로 넘긴다. */
+    /* 사용자별 최신 ACTIVE draft의 품목을 서브쿼리 1문으로 조회한다(선조회 왕복 제거) —
+       draft가 없으면 서브쿼리가 NULL → 0행이라 기존 빈 리스트 시맨틱이 그대로 유지된다. */
     public List<ToolBuildPart> partsByActiveDraftUserId(long userInternalId) {
-        List<Map<String, Object>> drafts = jdbcTemplate.queryForList("""
-                SELECT id AS internal_id
-                FROM quote_drafts
-                WHERE user_id = ?
-                  AND status = 'ACTIVE'
-                  AND deleted_at IS NULL
-                ORDER BY updated_at DESC, id DESC
-                LIMIT 1
+        List<Map<String, Object>> draftItems = jdbcTemplate.queryForList("""
+                SELECT p.public_id::text AS part_id,
+                        qdi.quantity
+                FROM quote_draft_items qdi
+                JOIN parts p ON p.id = qdi.part_id
+                WHERE qdi.quote_draft_id = (
+                        SELECT id
+                        FROM quote_drafts
+                        WHERE user_id = ?
+                          AND status = 'ACTIVE'
+                          AND deleted_at IS NULL
+                        ORDER BY updated_at DESC, id DESC
+                        LIMIT 1
+                    )
+                    AND qdi.deleted_at IS NULL
+                    AND p.deleted_at IS NULL
+                ORDER BY qdi.created_at ASC, qdi.id ASC
                 """, userInternalId);
-        if (drafts.isEmpty()) {
-            return List.of();
-        }
-        Object draftId = drafts.get(0).get("internal_id");
-        return partsByDraftId(draftId instanceof Number number ? number.longValue() : null);
+        return partsWithQuantities(draftItems);
     }
 
     /* draft ID -> part ID/수량 -> 캐시 가능한 부품 본문 순서로 조회한다. */
@@ -56,6 +62,11 @@ public class PartQuery {
                     AND p.deleted_at IS NULL
                 ORDER BY qdi.created_at ASC, qdi.id ASC
                 """, draftId);
+        return partsWithQuantities(draftItems);
+    }
+
+    /* draft 품목 행(part_id/quantity) -> 캐시 가능한 부품 본문에 수량을 실어 반환한다. */
+    private List<ToolBuildPart> partsWithQuantities(List<Map<String, Object>> draftItems) {
         if (draftItems.isEmpty()) {
             return List.of();
         }

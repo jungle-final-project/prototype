@@ -90,7 +90,7 @@ public class AssemblyBrokerageService {
         if (items.isEmpty()) {
             throw conflict("조립을 요청할 현재 견적이 없습니다.");
         }
-        Map<String, Object> graph = buildGraphService.resolve(authorization, MockData.map("source", "QUOTE_DRAFT_CURRENT", "view", "FULL"));
+        Map<String, Object> graph = buildGraphService.resolve(user, MockData.map("source", "QUOTE_DRAFT_CURRENT", "view", "FULL"));
         if (hasBlockingFail(graph)) {
             throw new ApiException(HttpStatus.CONFLICT, "CONFLICT_STATE", "장착 불가 항목이 있어 조립 요청을 만들 수 없습니다.",
                     Map.of("reason", "COMPATIBILITY_FAIL"));

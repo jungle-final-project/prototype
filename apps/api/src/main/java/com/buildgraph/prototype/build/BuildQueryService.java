@@ -11,11 +11,13 @@ import com.buildgraph.prototype.agent.QuoteRequirementAnalysisRequest;
 import com.buildgraph.prototype.agent.QuoteRequirementAnalysisResult;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ReadThroughTtlCache;
 import com.buildgraph.prototype.part.tool.ToolBuildPart;
 import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.quote.QuoteDraftQueryService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -27,6 +29,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -66,19 +70,37 @@ public class BuildQueryService {
     private final AgentJobPublisher agentJobPublisher;
     private final AiChatEngine aiChatEngine;
     private final ToolCheckService toolCheckService;
+    // 내 견적함 목록(userId 키) 단기 캐시 — 배치화 후에도 6~7 쿼리 + 도구 재검증이라 목록 폴링이 무겁다.
+    // 신선도는 TTL + mutation 훅으로 보장: 견적을 바꾸는 모든 경로(recommendations 생성·saveFromChat·
+    // renameBuild·deleteBuild)가 해당 유저 키를 즉시 무효화한다. 캐시 값은 불변 취급(변형 금지).
+    private final ReadThroughTtlCache<Long, List<Map<String, Object>>> buildsHistoryCache;
 
+    @Autowired
     public BuildQueryService(
             JdbcTemplate jdbcTemplate,
             AgentTraceService agentTraceService,
             AgentJobPublisher agentJobPublisher,
             AiChatEngine aiChatEngine,
-            ToolCheckService toolCheckService
+            ToolCheckService toolCheckService,
+            @Value("${build.history-cache.ttl-seconds:15}") long historyCacheTtlSeconds
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.agentTraceService = agentTraceService;
         this.agentJobPublisher = agentJobPublisher;
         this.aiChatEngine = aiChatEngine;
         this.toolCheckService = toolCheckService;
+        this.buildsHistoryCache = new ReadThroughTtlCache<>(Duration.ofSeconds(historyCacheTtlSeconds), 512);
+    }
+
+    // 테스트용: 목록 캐시를 끈다(ttl 0) — 기존 단건 호출 기대(호출↔쿼리 1:1)를 그대로 유지한다.
+    BuildQueryService(
+            JdbcTemplate jdbcTemplate,
+            AgentTraceService agentTraceService,
+            AgentJobPublisher agentJobPublisher,
+            AiChatEngine aiChatEngine,
+            ToolCheckService toolCheckService
+    ) {
+        this(jdbcTemplate, agentTraceService, agentJobPublisher, aiChatEngine, toolCheckService, 0L);
     }
 
     public Map<String, Object> parse(Map<String, Object> request, CurrentUserService.CurrentUser user) {
@@ -156,6 +178,7 @@ public class BuildQueryService {
             createdBuildIds.add(insertBuild(requirement.internalId(), plan, parts, warnings));
         }
 
+        evictBuildsHistory(user.internalId()); // 견적 3개 신규 생성 — 목록 캐시 무효화
         String agentSessionId = runAgent(new AgentSessionRoot(AgentSessionRootType.REQUIREMENT, requirement.publicId()), user.internalId());
         List<Map<String, Object>> recommendations = createdBuildIds.stream()
                 .map(id -> buildDetail(id, user))
@@ -171,9 +194,18 @@ public class BuildQueryService {
     }
 
     // 내 견적함 목록. 과거엔 build마다 부품·예산·에이전트세션·근거·벤치마크를 개별 조회해
-    // 30개 기준 ~180 쿼리(N+1)가 나갔다. 이제 상위 목록 1회 + build_id IN(...) 배치 5~6회로 상수화한다.
-    // 배치 쿼리 결과는 buildSummary(단건)와 동일함을 실데이터로 대조 검증했다(세션 DISTINCT ON=LIMIT1, 부품·근거 parity).
+    // 30개 기준 ~180 쿼리(N+1)가 나갔다. 이제 상위 목록 1회 + build_id IN(...) 배치 5~6회로 상수화하고,
+    // 결과를 userId 키로 단기 캐시한다(mutation 시 evictBuildsHistory로 즉시 무효화).
     public List<Map<String, Object>> builds(CurrentUserService.CurrentUser user) {
+        return buildsHistoryCache.get(user.internalId(), () -> loadBuilds(user));
+    }
+
+    private void evictBuildsHistory(Long userInternalId) {
+        buildsHistoryCache.remove(userInternalId);
+    }
+
+    // 배치 쿼리 결과는 buildSummary(단건)와 동일함을 실데이터로 대조 검증했다(세션 DISTINCT ON=LIMIT1, 부품·근거 parity).
+    private List<Map<String, Object>> loadBuilds(CurrentUserService.CurrentUser user) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                         SELECT b.public_id::text AS id, b.name, b.total_price, b.confidence, b.warnings, b.created_at
                         FROM builds b
@@ -406,6 +438,7 @@ public class BuildQueryService {
         List<Map<String, Object>> warnings = warningsFor(toolResults, displayTotal, budget == null ? 0 : budget);
         Long requirementInternalId = insertChatRequirement(user.internalId(), rawMessage, budget, parsedContext);
         String buildId = insertChatBuild(requirementInternalId, title, displayTotal, confidence, displayPriceParts, warnings);
+        evictBuildsHistory(user.internalId()); // 챗 저장으로 견적 추가 — 목록 캐시 무효화
         return MockData.map("id", buildId);
     }
 
@@ -465,6 +498,7 @@ public class BuildQueryService {
             name = name.substring(0, 120);
         }
         jdbcTemplate.update("UPDATE builds SET name = ? WHERE public_id = ?::uuid", name, id);
+        evictBuildsHistory(user.internalId()); // 이름 변경 — 목록 캐시 무효화
         return buildDetail(id, user);
     }
 
@@ -479,6 +513,7 @@ public class BuildQueryService {
         buildRow(id, user.internalId());
         // 소프트 삭제: builds를 참조하는 학습/에이전트 테이블의 FK·데이터는 보존하고 사용자 목록에서만 감춘다.
         jdbcTemplate.update("UPDATE builds SET deleted_at = now() WHERE public_id = ?::uuid AND deleted_at IS NULL", id);
+        evictBuildsHistory(user.internalId()); // 삭제 — 목록 캐시 무효화
     }
 
     public Map<String, Object> changePart(String id, Map<String, Object> request, CurrentUserService.CurrentUser user) {

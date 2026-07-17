@@ -22,20 +22,24 @@ public class RecommendationScoringClient {
 
     private final HttpClient httpClient;
     private final String endpoint;
+    // score 요청 전체 타임아웃 — 예전엔 3s 하드코딩이라 reranker.timeout-ms를 줄여도 홈 동기 경로의
+    // 최악 블로킹이 줄지 않았다. 이제 connect·request 모두 같은 노브를 따른다(health/reload는 핫패스 아님).
+    private final Duration scoreRequestTimeout;
 
     public RecommendationScoringClient(
             @Value("${recommendation.reranker.endpoint:http://localhost:8091/score}") String endpoint,
             @Value("${recommendation.reranker.timeout-ms:1200}") long timeoutMs
     ) {
         this.endpoint = endpoint;
+        this.scoreRequestTimeout = Duration.ofMillis(Math.max(100, timeoutMs));
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(Math.max(100, timeoutMs)))
+                .connectTimeout(scoreRequestTimeout)
                 .build();
     }
 
     public Map<String, Object> score(Map<String, Object> payload) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
-                .timeout(Duration.ofSeconds(3))
+                .timeout(scoreRequestTimeout)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(OBJECT_MAPPER.writeValueAsString(payload), StandardCharsets.UTF_8))
                 .build();

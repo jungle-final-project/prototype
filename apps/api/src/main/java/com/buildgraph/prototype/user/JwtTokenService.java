@@ -25,6 +25,9 @@ public class JwtTokenService {
     private final String issuer;
     private final Duration accessTokenTtl;
     private final Clock clock;
+    // 인증 핫패스에서 요청마다 new MACVerifier(HMAC 키 셋업)를 반복하지 않도록 1회 생성해 재사용.
+    // Nimbus JWS 검증기는 스레드세이프(내부 MAC 인스턴스를 verify마다 새로 만든다).
+    private final MACVerifier verifier;
 
     @Autowired
     public JwtTokenService(
@@ -39,6 +42,11 @@ public class JwtTokenService {
         this.secret = jwtSecret.getBytes(StandardCharsets.UTF_8);
         if (this.secret.length < 32) {
             throw new IllegalArgumentException("JWT secret must be at least 32 bytes.");
+        }
+        try {
+            this.verifier = new MACVerifier(this.secret);
+        } catch (JOSEException exception) {
+            throw new IllegalArgumentException("Invalid JWT secret for HMAC verification.", exception);
         }
         this.issuer = issuer;
         this.accessTokenTtl = accessTokenTtl;
@@ -73,7 +81,7 @@ public class JwtTokenService {
     public JWTClaimsSet verifyAccessToken(String token) {
         try {
             SignedJWT jwt = SignedJWT.parse(token);
-            if (!jwt.verify(new MACVerifier(secret))) {
+            if (!jwt.verify(verifier)) {
                 throw new IllegalArgumentException("Invalid access token signature.");
             }
             JWTClaimsSet claims = jwt.getJWTClaimsSet();

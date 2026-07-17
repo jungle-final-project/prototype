@@ -23,24 +23,23 @@ import org.springframework.web.server.ResponseStatusException;
 public class BuildGraphService {
     private static final Set<String> CATEGORIES = Set.of("CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER");
     private final PartQuery partQuery;
-    private final CurrentUserService currentUserService;
     private final BuildGraphLayoutService buildGraphLayoutService;
     private final BuildEvaluationService buildEvaluationService;
 
     @Autowired
     public BuildGraphService(
             PartQuery partQuery,
-            CurrentUserService currentUserService,
             BuildGraphLayoutService buildGraphLayoutService,
             BuildEvaluationService buildEvaluationService
     ) {
         this.partQuery = partQuery;
-        this.currentUserService = currentUserService;
         this.buildGraphLayoutService = buildGraphLayoutService;
         this.buildEvaluationService = buildEvaluationService;
     }
 
-    public Map<String, Object> resolve(String authorization, Map<String, Object> request) {
+    // 호출처(컨트롤러/조립중개)가 이미 requireUser로 검증한 사용자를 받는다 —
+    // 서비스에서 재호출하면 JWT 파싱+서명 검증이 요청당 2회가 된다.
+    public Map<String, Object> resolve(CurrentUserService.CurrentUser user, Map<String, Object> request) {
         Map<String, Object> body = request == null ? Map.of() : request;
         String source = firstText(text(body.get("source")), "AI_BUILD").toUpperCase(Locale.ROOT);
         String view = firstText(text(body.get("view")), "FOCUSED").toUpperCase(Locale.ROOT);
@@ -54,15 +53,12 @@ public class BuildGraphService {
                     text(focus.get("category")),
                     text(focus.get("tool"))
             );
-            case "QUOTE_DRAFT_CURRENT" -> {
-                CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
-                yield buildEvaluationService.evaluateCurrentDraft(
-                        user.internalId(),
-                        requestedBudget,
-                        text(focus.get("category")),
-                        text(focus.get("tool"))
-                );
-            }
+            case "QUOTE_DRAFT_CURRENT" -> buildEvaluationService.evaluateCurrentDraft(
+                    user.internalId(),
+                    requestedBudget,
+                    text(focus.get("category")),
+                    text(focus.get("tool"))
+            );
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 그래프 source입니다.");
         };
         List<ToolBuildPart> parts = evaluation.parts();

@@ -42,6 +42,10 @@ spring:
   sql:
     init:
       mode: never
+  jpa:
+    # OSIV off — 요청 전체에 영속성 컨텍스트를 붙드는 기본값을 끈다. 트랜잭션 밖 lazy 접근 지점
+    # 전수 확인 결과 0곳(JPA 소비자는 agent persistence 계열뿐)이라 무위험.
+    open-in-view: false
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -100,7 +104,13 @@ buildgraph:
       # 실서버 안전 기본값은 false다. 로컬/테스트 환경에서만 명시적으로 활성화한다.
       enabled: ${PAYMENT_MOCK_ENABLED:false}
       webhook-secret: ${PAYMENT_MOCK_WEBHOOK_SECRET:}
+  health:
+    # /api/health의 DB 판정(select 1) 캐시 TTL(ms). 0이면 캐시 끔(요청마다 프로브).
+    # DOWN(예외)은 캐시하지 않아 복구 감지는 즉시다.
+    db-probe-cache-ttl-ms: ${HEALTH_DB_PROBE_CACHE_TTL_MS:1000}
   auth:
+    # bcrypt cost(2^n). 기본 10 불변. 검증 비용은 저장된 해시의 cost를 따름 — 부하테스트 계정은 재해시 필요.
+    bcrypt-strength: ${BCRYPT_STRENGTH:10}
     # requireUser의 JWT subject→사용자 캐시 TTL(초). 0이면 캐시 끔(요청마다 users SELECT).
     # role 변경·소프트 삭제 반영이 최대 이 시간만큼 늦을 수 있다 — 프로필 변경은 즉시 무효화된다.
     user-cache:
@@ -299,6 +309,12 @@ recommendation:
     zone: "${RECOMMENDATION_DRIFT_ZONE:Asia/Seoul}"
     min-samples: ${RECOMMENDATION_DRIFT_MIN_SAMPLES:500}
     retrain-on-severe: ${RECOMMENDATION_DRIFT_RETRAIN_ON_SEVERE:false}
+
+build:
+  # 내 견적함 목록(builds) userId 키 인메모리 캐시 TTL(초). 0이면 캐시 끔.
+  # 견적 mutation(추천 생성·챗 저장·이름변경·삭제)은 해당 유저 키를 즉시 무효화한다.
+  history-cache:
+    ttl-seconds: ${BUILD_HISTORY_CACHE_TTL_SECONDS:15}
 
 part:
   # 순수 카탈로그 조회(GET /api/parts, draft compatibility 제외) 인메모리 캐시 TTL(초). 0이면 캐시 끔.

@@ -31,8 +31,9 @@ public class BuildGraphController {
             @RequestBody(required = false) Map<String, Object> request,
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
-        currentUserService.requireUser(authorization);
-        return buildGraphService.resolve(authorization, request == null ? Map.of() : request);
+        // requireUser 결과를 그대로 넘긴다 — 서비스가 재호출하면 JWT 검증이 요청당 2회가 된다.
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return buildGraphService.resolve(user, request == null ? Map.of() : request);
     }
 
     @GetMapping("/build-graph-layouts/default")

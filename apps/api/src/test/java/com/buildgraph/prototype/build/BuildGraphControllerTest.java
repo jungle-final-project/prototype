@@ -27,6 +27,14 @@ import org.springframework.web.server.ResponseStatusException;
 @WebMvcTest(BuildGraphController.class)
 class BuildGraphControllerTest {
     private static final String USER_TOKEN = "Bearer jwt-user-token";
+    private static final CurrentUserService.CurrentUser USER = new CurrentUserService.CurrentUser(
+            1004L,
+            "00000000-0000-4000-8000-000000001004",
+            "user@example.com",
+            "Demo User",
+            "USER",
+            "2026-06-30T00:00:00Z"
+    );
 
     @Autowired
     private MockMvc mockMvc;
@@ -64,7 +72,9 @@ class BuildGraphControllerTest {
 
     @Test
     void resolveReturnsDependencyGraphForAiBuildItems() throws Exception {
-        when(buildGraphService.resolve(eq(USER_TOKEN), anyMap())).thenReturn(MockData.map(
+        // 컨트롤러가 requireUser 결과(CurrentUser)를 서비스로 그대로 전달해야 한다 — 서비스 재검증(2회 JWT) 금지.
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
+        when(buildGraphService.resolve(eq(USER), anyMap())).thenReturn(MockData.map(
                 "mode", "BUILD_OVERVIEW",
                 "summary", "GPU 선택으로 PSU와 케이스 조건을 확인해야 합니다.",
                 "nodes", List.of(
@@ -126,7 +136,7 @@ class BuildGraphControllerTest {
                 .andExpect(jsonPath("$.toolResults[0].tool").value("power"));
 
         verify(currentUserService).requireUser(USER_TOKEN);
-        verify(buildGraphService).resolve(eq(USER_TOKEN), anyMap());
+        verify(buildGraphService).resolve(eq(USER), anyMap());
     }
 
     @Test
