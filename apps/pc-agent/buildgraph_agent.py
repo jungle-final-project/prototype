@@ -103,6 +103,7 @@ from pc_agent_ui_rendering import (
     render_finding_icon,
     render_fluid_wave_frame,
     render_home_hardware_icon as render_pillow_home_hardware_icon,
+    render_number_badge,
     render_progress_ring as render_pillow_progress_ring,
     render_result_icon as render_pillow_result_icon,
     render_rounded_surface,
@@ -1109,6 +1110,23 @@ def result_action_columns(
         (round(left + index * width), round(left + (index + 1) * width))
         for index in range(count)
     )
+
+
+def result_action_vertical_layout(
+    rendered_text: str,
+    line_height: int,
+    container_top: int = 568,
+    container_height: int = 40,
+) -> tuple[int, int]:
+    """Center one- and two-line action text and its number badge on one axis."""
+
+    line_count = max(1, min(2, len(str(rendered_text).splitlines())))
+    text_height = max(1, int(line_height)) * line_count
+    text_top = round(container_top + (container_height - text_height) / 2)
+    badge_center = round(text_top + text_height / 2)
+    return text_top, badge_center
+
+
 EVENT_PANEL_SIGNAL_CODES = {
     "REMOTE_DRIVER_OS",
     "REMOTE_APP_LAUNCHER",
@@ -6425,21 +6443,21 @@ def show_log_viewer(
         result = ui.get("diagnosisResult")
         display_progress, result_available = diagnosis_display_progress(snapshot, result)
 
-        round_rect(70, 180, 930, 288, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        round_rect(70, 180, 930, 296, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
         draw_chat_icon(109, 234, 42)
         text(148, 198, "전달받은 증상", 15, colors["text"], "semibold", width=735)
         text(148, 224, fitted_text(symptom, 14, 735, 2), 14, "#777777", "regular", width=735)
-        text(148, 271, fitted_text(scope_text, 13, 735, 1), 13, "#888888", "regular", width=735)
+        text(148, 270, fitted_text(scope_text, 13, 735, 1), 13, "#888888", "regular", width=735)
 
         terminal_statuses = {"COMPLETED", "UNSUPPORTED", "FAILED", "TIMED_OUT", "CANCELLED"}
         completed_count = sum(task.status in terminal_statuses for task in snapshot.tasks)
-        round_rect(70, 300, 930, 392, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
-        ring_item = draw_progress_ring(124, 346, display_progress)
-        percent_item = text(124, 346, f"{display_progress}%", 15, colors["text"], "semibold", "center")
-        title_item = text(190, 320, "진단 완료" if result_available else "하드웨어 진단 진행 중", 16, colors["text"], "semibold")
+        round_rect(70, 308, 930, 400, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        ring_item = draw_progress_ring(124, 354, display_progress)
+        percent_item = text(124, 354, f"{display_progress}%", 15, colors["text"], "semibold", "center")
+        title_item = text(190, 328, "진단 완료" if result_available else "하드웨어 진단 진행 중", 16, colors["text"], "semibold")
         detail = "진단 작업이 완료되었습니다." if result_available else ui["status"] or current_label
-        detail_item = text(190, 346, str(detail), 14, "#777777", "regular", width=600)
-        summary_item = text(190, 372, f"전체 {len(snapshot.tasks)}개 · 완료 {completed_count}개", 13, "#888888", "regular")
+        detail_item = text(190, 354, str(detail), 14, "#777777", "regular", width=600)
+        summary_item = text(190, 380, f"전체 {len(snapshot.tasks)}개 · 완료 {completed_count}개", 13, "#888888", "regular")
         ui["diagnosisProgressItems"] = {
             "ring": ring_item,
             "percent": percent_item,
@@ -6459,14 +6477,14 @@ def show_log_viewer(
             status_label, tone = diagnosis_component_presentation(snapshot, component)
             color = tone_color(tone)
             fill = {"running": "#f5f9ff", "warning": "#fff9ee", "error": "#fff5f5"}.get(tone, "#ffffff")
-            round_rect(x, 404, x + 206, 478, UI_CARD_RADIUS, fill, "#d7dce0", UI_CARD_BORDER_WIDTH)
-            draw_hardware_icon(x + 27, 430, component, color if tone != "neutral" else "#666666")
-            text(x + 50, 423, label, 15, colors["text"], "semibold", width=90)
-            draw_status_icon(x + 28, 454, tone, 14)
-            text(x + 50, 454, status_label, 13, color, "semibold", "w", width=130)
+            round_rect(x, 412, x + 206, 486, UI_CARD_RADIUS, fill, "#d7dce0", UI_CARD_BORDER_WIDTH)
+            draw_hardware_icon(x + 27, 438, component, color if tone != "neutral" else "#666666")
+            text(x + 50, 431, label, 15, colors["text"], "semibold", width=90)
+            draw_status_icon(x + 28, 462, tone, 14)
+            text(x + 50, 462, status_label, 13, color, "semibold", "w", width=130)
 
-        round_rect(70, 490, 492, 662, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
-        text(88, 510, "검사 작업", 15, colors["text"], "semibold")
+        round_rect(70, 498, 492, 684, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        text(88, 514, "검사 작업", 15, colors["text"], "semibold")
         current_index = next(
             (index for index, task in enumerate(snapshot.tasks) if task.task_id == snapshot.current_task_id),
             max(0, len([task for task in snapshot.tasks if task.status not in {"PENDING", "RUNNING"}]) - 1),
@@ -6474,15 +6492,15 @@ def show_log_viewer(
         start_index = max(0, min(current_index - 1, max(0, len(snapshot.tasks) - 4)))
         checklist = snapshot.tasks[start_index:start_index + 4]
         for idx, task in enumerate(checklist):
-            cy = 550 + idx * 32
+            cy = 550 + idx * 38
             status_label, tone = diagnosis_task_presentation(task.status)
             draw_status_icon(96, cy, tone, 14)
             label = DiagnosisOrchestrator.TASK_LABELS.get(task.task_id, task.task_id)
             text(114, cy - 8, label, 13, colors["text"], "semibold", "w", width=250)
             text(114, cy + 10, f"{task.component.upper()} · {status_label}", 12, tone_color(tone), "regular", "w", width=250)
 
-        round_rect(508, 490, 930, 662, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
-        text(526, 510, "실시간 진단 로그", 15, colors["text"], "semibold")
+        round_rect(508, 498, 930, 684, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        text(526, 514, "실시간 진단 로그", 15, colors["text"], "semibold")
         visible_events = snapshot.events[-4:]
         for idx, event in enumerate(visible_events):
             cy = 550 + idx * 32
@@ -6497,13 +6515,13 @@ def show_log_viewer(
             source_label = event.component or event.task_id or "진단"
             text(548, cy + 10, fitted_text(f"{source_label} · {event.message}", 11, 350, 1), 11, colors["text"], "regular", "w", width=350)
         if result_available:
-            button(390, 678, 610, 730, "진단 결과 보기", show_diagnosis_result, True, size=15)
+            button(390, 696, 610, 748, "진단 결과 보기", show_diagnosis_result, True, size=15)
         elif snapshot.state in {"FAILED", "TIMED_OUT"}:
-            button(390, 678, 610, 730, "진단 재시도", request_diagnosis_retry, False, size=15)
+            button(390, 696, 610, 748, "진단 재시도", request_diagnosis_retry, False, size=15)
         elif snapshot.state == "CANCELLED":
-            text(500, 704, "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
+            text(500, 722, "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
         else:
-            button(390, 678, 610, 730, "진단 취소", request_diagnosis_cancel, False, size=15)
+            button(390, 696, 610, 748, "진단 취소", request_diagnosis_cancel, False, size=15)
 
     def draw_result_icon(x: int, y: int) -> None:
         photo = cached_photo(
@@ -6567,13 +6585,25 @@ def show_log_viewer(
         columns = result_action_columns(len(actions))
         for index, (label, (column_left, column_right)) in enumerate(zip(actions, columns, strict=False), start=1):
             badge_x = column_left + 18
-            canvas.create_oval(badge_x - 13, 575, badge_x + 13, 601, fill="#fff0ef", outline="")
-            text(badge_x, 588, str(index), 11, colors["red"], "semibold", "center")
             text_width = max(80, column_right - column_left - 58)
+            action_label = fitted_text(label, 12, text_width, 2)
+            action_font = measurement_fonts.get((12, "regular"))
+            line_height = (
+                int(action_font.metrics("linespace"))
+                if action_font is not None
+                else 18
+            )
+            action_text_y, badge_center_y = result_action_vertical_layout(action_label, line_height)
+            badge_photo = cached_photo(
+                ("result-action-badge", 26, "#fff0ef"),
+                lambda: render_number_badge(26, "#fff0ef"),
+            )
+            canvas.create_image(badge_x, badge_center_y, image=badge_photo)
+            text(badge_x, badge_center_y + 1, str(index), 11, colors["red"], "semibold", "center")
             text(
                 column_left + 48,
-                570,
-                fitted_text(label, 12, text_width, 2),
+                action_text_y,
+                action_label,
                 12,
                 "#333333",
                 "regular",

@@ -10,6 +10,7 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 SUPERSAMPLE = 4
+PROGRESS_RING_SUPERSAMPLE = 8
 FLUID_WAVE_SIZE = (170, 58)
 FLUID_WAVE_FRAME_COUNT = 30
 FLUID_WAVE_USAGE_BUCKETS = (0, 10, 20, 30, 40, 50, 60, 70, 79, 80, 89, 90, 100)
@@ -690,24 +691,31 @@ def render_finding_icon(kind: str, size: int = 24, color: str = "#ef5350") -> Im
 
 def render_progress_ring(progress: int, size: int = 88, ring_width: int = 6) -> Image.Image:
     value = max(0, min(100, int(progress)))
-    image = _canvas((size, size))
+    scale = PROGRESS_RING_SUPERSAMPLE
+    image = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image, "RGBA")
-    width = _scaled(ring_width)
-    margin = width / 2 + _scaled(1)
+    width = max(1, int(round(ring_width * scale)))
+    margin = width / 2 + 2.5 * scale
     bounds = (margin, margin, image.width - margin, image.height - margin)
-    draw.arc(bounds, 0, 359, fill=_rgba("#e8e8e8"), width=width)
-    if value:
+    draw.ellipse(bounds, outline=_rgba("#e8e8e8"), width=width)
+    if value == 100:
+        draw.ellipse(bounds, outline=_rgba("#111111"), width=width)
+    elif value:
         end = -90 + 360 * value / 100
         draw.arc(bounds, -90, end, fill=_rgba("#111111"), width=width)
-        radius = (bounds[2] - bounds[0]) / 2
-        center = ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2)
-        cap_radius = width / 2
-        for angle in (-90, end):
-            radians = math.radians(angle)
-            x = center[0] + math.cos(radians) * radius
-            y = center[1] + math.sin(radians) * radius
-            draw.ellipse((x - cap_radius, y - cap_radius, x + cap_radius, y + cap_radius), fill=_rgba("#111111"))
     return _downsample(image, (size, size))
+
+
+def render_number_badge(size: int = 26, fill: str = "#fff0ef") -> Image.Image:
+    target_size = max(1, int(size))
+    image = _canvas((target_size, target_size))
+    draw = ImageDraw.Draw(image, "RGBA")
+    inset = _scaled(0.5)
+    draw.ellipse(
+        (inset, inset, image.width - 1 - inset, image.height - 1 - inset),
+        fill=_rgba(fill),
+    )
+    return _downsample(image, (target_size, target_size))
 
 
 def build_fluid_wave_cache(

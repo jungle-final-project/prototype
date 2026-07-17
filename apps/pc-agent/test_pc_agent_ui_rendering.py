@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import inspect
 import threading
 import unittest
 import weakref
@@ -25,6 +26,7 @@ from pc_agent_ui_rendering import (
     render_fluid_wave_frame,
     render_hardware_icon,
     render_home_hardware_icon,
+    render_number_badge,
     render_progress_ring,
     render_result_icon,
     render_rounded_surface,
@@ -148,6 +150,40 @@ class PcAgentUiRenderingTest(unittest.TestCase):
 
         self.assertTrue(any(0 < alpha < 255 for alpha in surface_alpha))
         self.assertTrue(any(0 < alpha < 255 for alpha in ring_alpha))
+
+    def test_progress_ring_uses_smooth_unclipped_supersampled_edges(self) -> None:
+        ring = render_progress_ring(15)
+        alpha = ring.getchannel("A")
+        bounds = alpha.getbbox()
+        edge_alpha = max(
+            max(alpha.crop((0, 0, ring.width, 1)).getdata()),
+            max(alpha.crop((0, ring.height - 1, ring.width, ring.height)).getdata()),
+            max(alpha.crop((0, 0, 1, ring.height)).getdata()),
+            max(alpha.crop((ring.width - 1, 0, ring.width, ring.height)).getdata()),
+        )
+
+        self.assertIsNotNone(bounds)
+        self.assertLessEqual(edge_alpha, 8)
+        self.assertGreater(len({value for value in alpha.getdata() if 0 < value < 255}), 8)
+
+    def test_progress_ring_has_no_explicit_caps_and_uses_full_ellipse_at_100(self) -> None:
+        source = inspect.getsource(render_progress_ring)
+        zero = render_progress_ring(0)
+        complete = render_progress_ring(100)
+
+        self.assertNotIn("cap_radius", source)
+        self.assertNotIn("for angle in", source)
+        self.assertIn("if value == 100:", source)
+        self.assertIn('draw.ellipse(bounds, outline=_rgba("#111111")', source)
+        self.assertNotEqual(zero.tobytes(), complete.tobytes())
+
+    def test_number_badge_is_antialiased_at_target_size(self) -> None:
+        badge = render_number_badge(26)
+        alpha = badge.getchannel("A")
+
+        self.assertEqual((26, 26), badge.size)
+        self.assertIsNotNone(badge.getbbox())
+        self.assertTrue(any(0 < value < 255 for value in alpha.getdata()))
 
     def test_hardware_step_status_and_progress_assets_render_at_target_size(self) -> None:
         for component in ("cpu", "gpu", "ram", "disk"):

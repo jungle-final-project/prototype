@@ -1009,13 +1009,18 @@ class AgentGoal1112Test(unittest.TestCase):
     def test_page_two_uses_shared_icons_and_updates_progress_without_full_rerender(self) -> None:
         source = inspect.getsource(agent.show_log_viewer)
         tick_source = source[source.index("def diagnosis_progress_tick"):source.index("def draw_diagnosing")]
+        diagnosing_source = source[source.index("def draw_diagnosing"):source.index("def draw_result_icon")]
 
         self.assertIn("render_pillow_home_hardware_icon", source)
+        self.assertNotIn("create_arc", diagnosing_source)
         self.assertIn('canvas.itemconfigure(items["ring"]', tick_source)
         self.assertIn('canvas.itemconfigure(items["percent"]', tick_source)
         self.assertNotIn("render()", tick_source)
         self.assertTrue(tick_source.rstrip().endswith("schedule_diagnosis_progress_tick()"))
         self.assertIn('callback_state["diagnosisProgressAfterId"]', source)
+        self.assertIn('round_rect(70, 180, 930, 296', diagnosing_source)
+        self.assertIn('text(148, 270, fitted_text(scope_text', diagnosing_source)
+        self.assertIn('cy = 550 + idx * 38', diagnosing_source)
 
     def test_page_text_is_measured_and_action_columns_are_even(self) -> None:
         measure = lambda value: len(value) * 10
@@ -1023,6 +1028,12 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual("12345\n6789…", agent.fit_measured_text("123456789012", 50, 2, measure))
         self.assertEqual(((145, 382), (382, 618), (618, 855)), agent.result_action_columns(3))
         self.assertEqual(((145, 500), (500, 855)), agent.result_action_columns(2))
+        self.assertEqual((580, 588), agent.result_action_vertical_layout("한 줄", 16))
+        self.assertEqual((572, 588), agent.result_action_vertical_layout("첫 줄\n둘째 줄", 16))
+
+        result_source = inspect.getsource(agent.show_log_viewer)
+        self.assertIn('render_number_badge(26, "#fff0ef")', result_source)
+        self.assertNotIn('canvas.create_oval(badge_x - 13', result_source)
 
     def test_diagnosis_presentations_use_actual_task_and_evidence_status(self) -> None:
         running = agent.DiagnosisTask("display_devices", "gpu", 20, status="RUNNING")
