@@ -112,7 +112,13 @@ from pc_agent_ui_rendering import (
     render_step_node,
     render_summary_icon,
 )
+from pc_agent_demo_scenarios import (
+    DEMO_DATA_MODE,
+    GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID,
+    demo_scenario_id,
+)
 from windows_graphics_diagnostics import (
+    Code43RemoteSupportDemoGraphicsProvider,
     NO_RESULTS as WINDOWS_NO_RESULTS,
     OK as WINDOWS_QUERY_OK,
     PowerShellJsonRunner,
@@ -632,12 +638,65 @@ SUPPORTED_GRAPHICS_SYMPTOM_FRAGMENTS = (
     "화면이 나오지 않",
     "그래픽 출력 중단",
     "화면 복구",
+    "화면이 잠깐 꺼졌다가 다시 켜",
 )
 
 
 def is_supported_graphics_symptom(symptom: str) -> bool:
     normalized = " ".join(symptom.strip().split())
     return bool(normalized) and any(fragment in normalized for fragment in SUPPORTED_GRAPHICS_SYMPTOM_FRAGMENTS)
+
+
+def diagnosis_demo_scenario_id(session: DiagnosisSession | None) -> str | None:
+    if not isinstance(session, DiagnosisSession):
+        return None
+    return demo_scenario_id(session.request.mode, session.request.symptom)
+
+
+def collect_session_windows_graphics_snapshot(
+    session: DiagnosisSession | None,
+    live_provider: Callable[[], WindowsGraphicsDiagnosticsSnapshot],
+    demo_provider: Callable[[], WindowsGraphicsDiagnosticsSnapshot],
+) -> WindowsGraphicsDiagnosticsSnapshot:
+    if diagnosis_demo_scenario_id(session) == GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID:
+        return demo_provider()
+    return live_provider()
+
+
+def discard_persisted_demo_session(
+    diagnosis_store: DiagnosisSessionStore,
+    metrics_store: MetricsStore,
+    diagnosis_log_store: DiagnosisLogStore,
+    diagnosis_result_store: DiagnosisResultStore,
+) -> bool:
+    session = diagnosis_store.session
+    if not isinstance(session, DiagnosisSession) or session.request.mode != DEMO_DATA_MODE:
+        return False
+    reset_diagnosis_session_state(
+        diagnosis_store,
+        metrics_store,
+        diagnosis_log_store,
+        diagnosis_result_store,
+    )
+    return True
+
+
+def diagnosis_event_sync_detail(
+    snapshot: DiagnosisRunSnapshot,
+    event: Any,
+    session: DiagnosisSession | None,
+) -> dict[str, Any]:
+    detail = event.to_dict()
+    detail.update({
+        "sessionState": snapshot.state,
+        "progress": snapshot.progress,
+        "mode": snapshot.mode,
+        "dataMode": snapshot.mode,
+    })
+    scenario_id = diagnosis_demo_scenario_id(session)
+    if scenario_id:
+        detail["scenarioId"] = scenario_id
+    return detail
 
 
 def graphics_diagnosis_task_handlers(
@@ -5763,6 +5822,7 @@ def show_log_viewer(
     ui = {
         "state": capture_state,
         "demo": diagnosis_session.request.mode == "DEMO" if isinstance(diagnosis_session, DiagnosisSession) else False,
+        "scenarioId": diagnosis_demo_scenario_id(diagnosis_session),
         "diagnosisSession": diagnosis_session,
         "diagnosisSnapshot": diagnosis_snapshot,
         "diagnosisResult": result_snapshot,
@@ -6223,6 +6283,13 @@ def show_log_viewer(
     def draw_progress_ring(x: int, y: int, progress: int) -> None:
         canvas.create_image(x, y, image=progress_ring_photo(progress))
 
+    def draw_demo_scenario_badge(y: int) -> None:
+        scenario_id = ui.get("scenarioId")
+        if not ui.get("demo") or not isinstance(scenario_id, str) or not scenario_id:
+            return
+        round_rect(574, y, 912, y + 24, 12, "#fff8eb", "#f0b24a", 1)
+        text(743, y + 12, f"DEMO · {scenario_id}", 10, "#9a5c00", "semibold", "center", width=324)
+
     def draw_diagnosing() -> None:
         active_session = ui["diagnosisSession"]
         snapshot = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else ui.get("diagnosisSnapshot")
@@ -6282,6 +6349,7 @@ def show_log_viewer(
         round_rect(70, 180, 930, 250, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
         draw_chat_icon(109, 215, 42)
         text(148, 196, "전달받은 증상", 15, colors["text"], "semibold", width=735)
+        draw_demo_scenario_badge(188)
         text(148, 219, symptom, 14, "#777777", "regular", width=735)
         text(148, 239, scope_text, 13, "#888888", "regular", width=735)
 
@@ -6364,6 +6432,7 @@ def show_log_viewer(
         round_rect(70, 180, 930, 670, 12, "#ffffff", "#d7dce0")
         draw_result_icon(112, 222)
         text(145, 214, "진단 결과", 17, colors["text"], "semibold")
+        draw_demo_scenario_badge(194)
         if not isinstance(result, DiagnosisResult):
             text(145, 258, "진단 결과를 불러올 수 없습니다.", 23, colors["text"], "semibold")
             text(145, 307, "저장된 측정 근거를 확인한 뒤 다시 시도하세요.", 14, "#5f6368")
@@ -7031,6 +7100,7 @@ def show_log_viewer(
         if isinstance(session, DiagnosisSession):
             ui["initialMetricsRequested"] = True
             ui["demo"] = session.request.mode == "DEMO"
+            ui["scenarioId"] = diagnosis_demo_scenario_id(session)
             metrics = metrics_snapshot_provider() if callable(metrics_snapshot_provider) else None
             diagnosis = diagnosis_snapshot_provider() if callable(diagnosis_snapshot_provider) else None
             result = diagnosis_result_provider() if callable(diagnosis_result_provider) else None
@@ -7049,6 +7119,7 @@ def show_log_viewer(
             )
         else:
             ui["demo"] = False
+            ui["scenarioId"] = None
             ui["state"] = "SYMPTOM_CONFIRM"
         queue_ui_render()
 
@@ -8049,6 +8120,12 @@ def run_background(
         metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
         diagnosis_log_store = DiagnosisLogStore(app_data_dir() / "diagnosis-progress-state.json")
         diagnosis_result_store = DiagnosisResultStore(app_data_dir() / "diagnosis-result-state.json")
+        discard_persisted_demo_session(
+            diagnosis_store,
+            metrics_store,
+            diagnosis_log_store,
+            diagnosis_result_store,
+        )
         move_terminal_session_to_idle(diagnosis_store, diagnosis_log_store.snapshot)
         diagnosis_rule_engine = DiagnosisRuleEngine()
         diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}
@@ -8087,12 +8164,7 @@ def run_background(
             for event in snapshot.events:
                 if event.event_id in forwarded_event_ids:
                     continue
-                detail = event.to_dict()
-                detail.update({
-                    "sessionState": snapshot.state,
-                    "progress": snapshot.progress,
-                    "mode": snapshot.mode,
-                })
+                detail = diagnosis_event_sync_detail(snapshot, event, diagnosis_store.session)
                 if client.send_diagnosis_status(detail):
                     forwarded_event_ids.add(event.event_id)
 
@@ -8127,6 +8199,7 @@ def run_background(
         windows_graphics_provider = WindowsGraphicsDiagnosticsProvider(
             PowerShellJsonRunner(hidden_kwargs_provider=hidden_subprocess_kwargs),
         )
+        code43_demo_graphics_provider = Code43RemoteSupportDemoGraphicsProvider()
         diagnosis_orchestrator = DiagnosisOrchestrator(
             lambda: metrics_store.snapshot,
             diagnosis_log_store,
@@ -8140,7 +8213,11 @@ def run_background(
                 lambda: diagnosis_store.session,
                 lambda: metrics_store.snapshot,
                 lambda: diagnosis_log_store.snapshot,
-                windows_graphics_provider.collect,
+                lambda: collect_session_windows_graphics_snapshot(
+                    diagnosis_store.session,
+                    windows_graphics_provider.collect,
+                    code43_demo_graphics_provider.collect,
+                ),
             ),
             task_definitions=GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
             task_labels=GRAPHICS_DIAGNOSIS_TASK_LABELS,

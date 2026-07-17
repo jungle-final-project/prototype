@@ -907,6 +907,90 @@ class AgentGoal1112Test(unittest.TestCase):
     def test_pretendard_is_the_first_ui_font_candidate(self) -> None:
         self.assertEqual("Pretendard", agent.UI_FONT_CANDIDATES[0])
 
+    def test_code43_demo_symptom_is_specific_and_does_not_overmatch_unrelated_text(self) -> None:
+        symptom = "게임 중 화면이 잠깐 꺼졌다가 다시 켜지고,\n이후 게임이 심하게 느려졌어요."
+
+        self.assertTrue(agent.is_supported_graphics_symptom(symptom))
+        self.assertFalse(agent.is_supported_graphics_symptom("게임 중 소리가 잠깐 끊겼다가 다시 들립니다."))
+        self.assertFalse(agent.is_supported_graphics_symptom("게임이 심하게 느려졌어요."))
+
+    def test_code43_fixture_is_selected_only_for_explicit_demo_scenario(self) -> None:
+        live_provider = MagicMock(return_value="live-snapshot")
+        demo_provider = MagicMock(return_value="demo-snapshot")
+        symptom = "게임 중 화면이 잠깐 꺼졌다가 다시 켜지고, 이후 게임이 심하게 느려졌어요."
+
+        def session(mode: str, current_symptom: str) -> DiagnosisSession:
+            return DiagnosisSession(DiagnosisRequest(
+                "diagnosis-demo", "device-1", current_symptom, ("gpu",),
+                "2026-07-13T00:00:00Z", "2026-07-13T00:02:00Z", mode,
+            ))
+
+        self.assertEqual(
+            "live-snapshot",
+            agent.collect_session_windows_graphics_snapshot(
+                session("LIVE", symptom), live_provider, demo_provider,
+            ),
+        )
+        self.assertEqual(
+            "live-snapshot",
+            agent.collect_session_windows_graphics_snapshot(
+                session("DEMO", "게임이 심하게 느려졌어요."), live_provider, demo_provider,
+            ),
+        )
+        self.assertEqual(
+            "demo-snapshot",
+            agent.collect_session_windows_graphics_snapshot(
+                session("DEMO", symptom), live_provider, demo_provider,
+            ),
+        )
+        self.assertEqual(2, live_provider.call_count)
+        demo_provider.assert_called_once_with()
+
+    def test_persisted_demo_session_is_discarded_but_live_session_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for mode, expected_discarded in (("DEMO", True), ("LIVE", False)):
+                with self.subTest(mode=mode):
+                    suffix = mode.casefold()
+                    diagnosis_store = agent.DiagnosisSessionStore(root / f"session-{suffix}.json")
+                    request = DiagnosisRequest(
+                        f"diagnosis-{suffix}", "device-1", "증상", ("gpu",),
+                        "2026-07-13T00:00:00Z", "2026-07-13T00:02:00Z", mode,
+                    )
+                    diagnosis_store.accept(DiagnosisSession(request))
+                    metrics_store = agent.MetricsStore(root / f"metrics-{suffix}.json")
+                    metrics_store.begin(request.diagnosis_id, mode)
+                    diagnosis_log_store = agent.DiagnosisLogStore(root / f"progress-{suffix}.json")
+                    diagnosis_log_store.replace(agent.DiagnosisRunSnapshot(
+                        diagnosis_id=request.diagnosis_id,
+                        mode=mode,
+                        state="COLLECTING",
+                    ))
+                    result_store = agent.DiagnosisResultStore(root / f"result-{suffix}.json")
+
+                    discarded = agent.discard_persisted_demo_session(
+                        diagnosis_store,
+                        metrics_store,
+                        diagnosis_log_store,
+                        result_store,
+                    )
+
+                    self.assertEqual(expected_discarded, discarded)
+                    if expected_discarded:
+                        self.assertIsNone(diagnosis_store.session)
+                        self.assertIsNone(metrics_store.snapshot.diagnosis_id)
+                        self.assertIsNone(diagnosis_log_store.snapshot.diagnosis_id)
+                    else:
+                        self.assertEqual(request.diagnosis_id, diagnosis_store.session.request.diagnosis_id)
+                        self.assertEqual(request.diagnosis_id, metrics_store.snapshot.diagnosis_id)
+
+    def test_demo_scenario_badge_is_bound_only_to_diagnosing_and_result_pages(self) -> None:
+        source = inspect.getsource(agent.show_log_viewer)
+
+        self.assertIn("draw_demo_scenario_badge(188)", source)
+        self.assertIn("draw_demo_scenario_badge(194)", source)
+        self.assertEqual(2, source.count("draw_demo_scenario_badge(") - 1)
+
     def test_diagnosis_presentations_use_actual_task_and_evidence_status(self) -> None:
         running = agent.DiagnosisTask("display_devices", "gpu", 20, status="RUNNING")
         warning = agent.DiagnosisTask(
