@@ -576,6 +576,34 @@ class FastDeployControlTest(unittest.TestCase):
         self.assertEqual("8", self.asg_version_file.read_text().strip())
         self.assertIn("completed", result.stdout.lower())
 
+    def test_ssm_command_enters_bash_before_enabling_pipefail(self) -> None:
+        result = self._run(apply=True)
+
+        self.assertEqual(0, result.returncode, result.stdout)
+        command = json.loads(
+            self.ssm_parameters_file.read_text(encoding="utf-8")
+        )["commands"][0]
+        self.assertTrue(
+            command.startswith(
+                "/usr/bin/env bash <<'BUILDGRAPH_FAST_DEPLOY_REMOTE'\n"
+                "set -Eeuo pipefail\n"
+            ),
+            command,
+        )
+        self.assertTrue(
+            command.rstrip().endswith("BUILDGRAPH_FAST_DEPLOY_REMOTE"),
+            command,
+        )
+        syntax = subprocess.run(
+            ["/bin/sh", "-n"],
+            input=command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, syntax.returncode, syntax.stdout)
+
     def test_api_digest_replacement_preserves_four_key_contract(self) -> None:
         result = self._run(apply=True)
 
@@ -924,7 +952,7 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
                 """\
                 #!/usr/bin/env bash
                 set -euo pipefail
-                printf 'git:%s\n' "$*" >>"$FAKE_REMOTE_TRACE_FILE"
+                printf 'git:%s\\n' "$*" >>"$FAKE_REMOTE_TRACE_FILE"
                 if [[ "${1:-}" == "-C" ]]; then shift 2; fi
                 case "${1:-}" in
                   rev-parse)
@@ -935,7 +963,7 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
                     if [[ "${3:-}" == "$FAKE_SOURCE_GIT_SHA" && "${FAKE_FAIL_SOURCE_CHECKOUT:-false}" == "true" ]]; then
                       exit 43
                     fi
-                    printf '%s\n' "${3:-}" >"$FAKE_GIT_HEAD_FILE"
+                    printf '%s\\n' "${3:-}" >"$FAKE_GIT_HEAD_FILE"
                     ;;
                   diff)
                     [[ "${FAKE_GIT_DIRTY:-false}" != "true" ]]
@@ -957,9 +985,9 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
                 """\
                 #!/usr/bin/env bash
                 set -euo pipefail
-                printf 'aws:%s\n' "$*" >>"$FAKE_REMOTE_TRACE_FILE"
+                printf 'aws:%s\\n' "$*" >>"$FAKE_REMOTE_TRACE_FILE"
                 [[ "${1:-}" == "ecr" && "${2:-}" == "get-login-password" ]]
-                printf '%s\n' token
+                printf '%s\\n' token
                 """
             ),
         )
@@ -981,7 +1009,7 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
                 """\
                 #!/usr/bin/env bash
                 set -euo pipefail
-                printf 'docker:%s\n' "$*" >>"$FAKE_REMOTE_TRACE_FILE"
+                printf 'docker:%s\\n' "$*" >>"$FAKE_REMOTE_TRACE_FILE"
 
                 manifest_value() {
                   local key="$1"
@@ -997,11 +1025,11 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
                   format="${3:-}"
                   container_id="${4:-}"
                   if [[ "$format" == *State.Health.Status* ]]; then
-                    printf '%s\n' healthy
+                    printf '%s\\n' healthy
                     exit 0
                   fi
                   if [[ "$format" == *BUILDGRAPH_SCHEDULING_ENABLED=false* ]]; then
-                    printf '%s\n' "${FAKE_API_SCHEDULING_DISABLED:-true}"
+                    printf '%s\\n' "${FAKE_API_SCHEDULING_DISABLED:-true}"
                     exit 0
                   fi
                   case "$container_id" in
@@ -1023,11 +1051,11 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
                 [[ "${1:-}" == "compose" ]] || exit 93
                 args=" $* "
                 if [[ "$args" == *" ps -q nginx "* ]]; then
-                  printf '%s\n' cid-nginx
+                  printf '%s\\n' cid-nginx
                 elif [[ "$args" == *" ps -q api "* ]]; then
-                  printf '%s\n' cid-api
+                  printf '%s\\n' cid-api
                 elif [[ "$args" == *" ps -q xgb-reranker "* ]]; then
-                  printf '%s\n' cid-xgb-reranker
+                  printf '%s\\n' cid-xgb-reranker
                 elif [[ "$args" == *" up -d "* && "${FAKE_SIGNAL_PARENT_ON_TARGET_UP:-false}" == "true" && "$(manifest_value API_IMAGE_URI "$FAKE_IMAGE_MANIFEST")" == "$FAKE_TARGET_API_IMAGE" ]]; then
                   kill -TERM "$PPID"
                   sleep 0.1
@@ -1123,6 +1151,22 @@ class FastDeployRemoteTransactionTest(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def test_fake_commands_begin_with_an_executable_bash_shebang(self) -> None:
+        for path in sorted(self.fake_bin.iterdir()):
+            with self.subTest(command=path.name):
+                self.assertTrue(
+                    path.read_bytes().startswith(b"#!/usr/bin/env bash\n"),
+                    f"{path.name} does not start with a Bash shebang",
+                )
+                syntax = subprocess.run(
+                    ["bash", "-n", str(path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, syntax.returncode, syntax.stdout)
 
     def _runtime_values(self) -> dict[str, str]:
         return dict(

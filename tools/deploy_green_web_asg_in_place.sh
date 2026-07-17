@@ -393,6 +393,7 @@ write_ssm_parameters() {
   target_manifest_b64="$(base64 <"$TARGET_MANIFEST_FILE" | tr -d '\n')"
   if [[ "$action" == "prepare" ]]; then
     remote_command="$(cat <<EOF
+/usr/bin/env bash <<'BUILDGRAPH_FAST_DEPLOY_REMOTE'
 set -Eeuo pipefail
 umask 077
 readonly app_root='${APP_ROOT}'
@@ -406,10 +407,12 @@ runuser -u \"\$app_user\" -- git -C \"\$app_root\" cat-file -e \"\${helper_sha}^
 runuser -u \"\$app_user\" -- git -C \"\$app_root\" show \"\${helper_sha}:tools/apply_green_asg_release_in_place.sh\" >\"\$helper_path\"
 chmod 700 \"\$helper_path\"
 \"\$helper_path\" prepare --deployment-id '${DEPLOYMENT_ID}' --service '${SERVICE}' --source-git-sha '${SOURCE_GIT_SHA}' --target-git-sha '${GIT_SHA}' --source-manifest-b64 '${source_manifest_b64}' --target-manifest-b64 '${target_manifest_b64}'
+BUILDGRAPH_FAST_DEPLOY_REMOTE
 EOF
 )"
   else
     remote_command="$(cat <<EOF
+/usr/bin/env bash <<'BUILDGRAPH_FAST_DEPLOY_REMOTE'
 set -Eeuo pipefail
 umask 077
 readonly app_root='${APP_ROOT}'
@@ -430,6 +433,7 @@ fi
 runuser -u \"\$app_user\" -- git -C \"\$app_root\" show \"\${helper_sha}:tools/apply_green_asg_release_in_place.sh\" >\"\$helper_path\"
 chmod 700 \"\$helper_path\"
 \"\$helper_path\" '${action}' --deployment-id '${DEPLOYMENT_ID}'
+BUILDGRAPH_FAST_DEPLOY_REMOTE
 EOF
 )"
   fi
