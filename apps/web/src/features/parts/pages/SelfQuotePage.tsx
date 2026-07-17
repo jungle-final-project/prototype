@@ -24,9 +24,14 @@ import {
   type AiSelectedBuild
 } from '../../quote/aiSelection';
 import { AiBuildAssistant } from '../../quote/components/AiBuildAssistant';
+import {
+  applicationKindForBuild,
+  rememberAiDraftPerformanceView,
+  startAiDraftApplicationFeedback
+} from '../../quote/components/AiDraftApplicationFeedbackCoordinator';
 import { buildSaveErrorMessage, resolveBuildGraph, saveBuildFromChat } from '../../quote/quoteApi';
 import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
-import { QuotePerformancePanel } from '../components/slot-board/QuotePerformancePanel';
+import { QuotePerformancePanel, type QuotePerformanceView } from '../components/slot-board/QuotePerformancePanel';
 import { SlotBoard, type SlotBoardVisualMode } from '../components/slot-board/SlotBoard';
 import { SlotCandidatePanel } from '../components/slot-board/SlotCandidatePanel';
 import { QuoteCheckoutActions, SlotStatusBar } from '../components/slot-board/SlotStatusBar';
@@ -67,6 +72,9 @@ function SelfQuoteSlotBoardPage() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const rememberPerformanceView = useCallback((view: QuotePerformanceView) => {
+    rememberAiDraftPerformanceView({ ...view, updatedAt: new Date().toISOString() });
+  }, []);
   const categoryParam = searchParams.get('category');
   const selectedCategory: PartCategory | null = isSlotCategory(categoryParam) ? categoryParam : null;
   const [aiBuild, setAiBuild] = useState<AiSelectedBuild | null>(() => readSelectedAiBuild());
@@ -205,6 +213,11 @@ function SelfQuoteSlotBoardPage() {
       saveSelectedAiBuild(build);
       setAiBuild(readSelectedAiBuild());
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
+      startAiDraftApplicationFeedback({
+        draft: appliedDraft,
+        applicationKind: applicationKindForBuild(build),
+        activeBuildId: build.id
+      });
       invalidateQuoteDraft();
     } catch {
       setCompareApplyError('선택한 조합을 견적에 적용하지 못했습니다. 잠시 후 다시 시도해 주세요.');
@@ -395,6 +408,7 @@ function SelfQuoteSlotBoardPage() {
                 isLoading={graphQuery.isLoading || graphQuery.isFetching}
                 isError={graphQuery.isError}
                 onRetry={() => void graphQuery.refetch()}
+                onPerformanceViewChange={rememberPerformanceView}
                 compact
               />
             )}

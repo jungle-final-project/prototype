@@ -78,9 +78,7 @@ class CurrentUserServiceTest {
         CurrentUserService cachedService = new CurrentUserService(
                 jdbcTemplate,
                 jwtTokenService,
-                true,
-                Duration.ofSeconds(120),
-                5_000L
+                120L
         );
         String token = jwtTokenService.issueAccessToken(userClaim(userId, "USER"));
         when(jdbcTemplate.queryForList(anyString(), eq(userId))).thenReturn(List.of(Map.of(
@@ -104,9 +102,7 @@ class CurrentUserServiceTest {
         CurrentUserService cachedService = new CurrentUserService(
                 jdbcTemplate,
                 jwtTokenService,
-                true,
-                Duration.ofSeconds(120),
-                5_000L
+                120L
         );
         String token = jwtTokenService.issueAccessToken(userClaim(userId, "ADMIN"));
         when(jdbcTemplate.queryForList(anyString(), eq(userId))).thenReturn(List.of(Map.of(

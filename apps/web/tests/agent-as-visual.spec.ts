@@ -25,7 +25,28 @@ const beforeDecisionTicket = {
       { type: 'AS_RAG_MATCH', summary: 'GPU thermal throttling 신호가 감지됐습니다.' }
     ],
     rawSamples: [
-      { sampleId: 'sample-1', text: 'gpu temperature reached 95c' }
+      {
+        refId: 'sample-1',
+        schemaVersion: '1',
+        collectedAt: '2026-07-02T06:18:20Z',
+        agentId: 'agent-qa-001',
+        sequence: 42,
+        kind: 'SYSTEM_METRIC',
+        payload: {
+          gpuTemperatureC: 95,
+          message: 'gpu temperature reached 95c',
+          diagnosticContext: 'masked-context-'.repeat(24)
+        },
+        privacyFlags: { containsRawPath: false, masked: true }
+      },
+      {
+        sampleId: 'legacy-sample-2',
+        text: JSON.stringify({
+          capturedAt: '2026-07-02T06:19:20Z',
+          event: 'frame_drop',
+          fpsAvg: 47
+        })
+      }
     ]
   },
   supportRouting: {
@@ -87,17 +108,50 @@ const visitRecommendedTicket = {
   }
 };
 
+const noSampleTicket = {
+  ...beforeDecisionTicket,
+  id: 'qa-ticket-no-samples',
+  logSummary: {
+    ...beforeDecisionTicket.logSummary,
+    rawSamples: []
+  }
+};
+
+const diagnosisOnlyTicket = {
+  ...beforeDecisionTicket,
+  id: 'qa-ticket-diagnosis-evidence',
+  logUploadId: null,
+  logSummaryText: null,
+  logSummary: null,
+  diagnosisEvidence: [
+    {
+      taskId: 'gpu-temperature',
+      component: 'gpu',
+      metricType: 'temperature',
+      value: 95,
+      unit: 'C',
+      availability: 'AVAILABLE',
+      status: 'ABNORMAL',
+      source: 'nvidia-smi',
+      sampledAt: '2026-07-02T06:18:20Z'
+    }
+  ]
+};
+
 test('captures Agent AS demo UI evidence and verifies admin decision reflection', async ({ page }) => {
   const consoleErrors: string[] = [];
   const apiCalls: string[] = [];
   const tickets = new Map<string, MockTicket>([
     [beforeDecisionTicket.id, beforeDecisionTicket],
     [afterDecisionTicket.id, afterDecisionTicket],
-    [visitRecommendedTicket.id, visitRecommendedTicket]
+    [visitRecommendedTicket.id, visitRecommendedTicket],
+    [noSampleTicket.id, noSampleTicket],
+    [diagnosisOnlyTicket.id, diagnosisOnlyTicket]
   ]);
   let decisionPatchPayload: Record<string, unknown> | undefined;
   let remoteRequestPayload: Record<string, unknown> | undefined;
   let feedbackPayload: Record<string, unknown> | undefined;
+  let deletedTicketId: string | undefined;
 
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -174,6 +228,20 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.route(/\/api\/admin\/as-tickets\/[^/]+$/, async (route) => {
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());
+    if (route.request().method() === 'DELETE') {
+      deletedTicketId = ticketId;
+      tickets.delete(ticketId);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: ticketId,
+          deleted: true,
+          deletedAt: '2026-07-16T06:00:00Z'
+        })
+      });
+      return;
+    }
     if (route.request().method() === 'PATCH') {
       decisionPatchPayload = route.request().postDataJSON() as Record<string, unknown>;
       const current = tickets.get(ticketId) ?? beforeDecisionTicket;
@@ -222,6 +290,36 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.goto('/admin/as-tickets');
   await expect(page.getByRole('main')).toContainText('추천 서비스');
   await expect(page.getByRole('main')).toContainText('방문지원 신청');
+
+  for (const column of ['상태', '검토', '결정', '추천 서비스']) {
+    await expect(page.getByRole('columnheader', { name: column, exact: true })).toHaveCSS('white-space', 'nowrap');
+  }
+
+  const nowrapValues = [
+    page.getByTitle('OPEN').first(),
+    page.getByTitle('REQUIRED').first(),
+    page.getByTitle('VISIT_REQUIRED').first(),
+    page.getByText('방문지원 신청', { exact: true }).first()
+  ];
+  for (const value of nowrapValues) {
+    await expect(value).toHaveCSS('white-space', 'nowrap');
+    expect(await value.evaluate((element) => (
+      element.scrollWidth <= element.clientWidth + 1
+      && element.scrollHeight <= element.clientHeight + 1
+    ))).toBe(true);
+  }
+
+  const ticketListPanel = page.getByTestId('admin-as-ticket-list-panel');
+  const ticketSummaryPanel = page.getByTestId('admin-as-ticket-summary-panel');
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    const listBox = await ticketListPanel.boundingBox();
+    const summaryBox = await ticketSummaryPanel.boundingBox();
+    expect(listBox).not.toBeNull();
+    expect(summaryBox).not.toBeNull();
+    expect(summaryBox!.y).toBeGreaterThan(listBox!.y + listBox!.height);
+  }
+
   await page.goto('/admin/as-tickets/qa-ticket-before');
   await expect(page.getByRole('main')).toContainText('지원 결정 저장');
   await expect(page.getByRole('main')).toContainText('추천 서비스');
@@ -229,6 +327,57 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('GPU 온도 상승 신호');
   await expect(page.getByRole('main')).toContainText('GPU_THERMAL_SPIKE');
   await expect(page.getByRole('main')).toContainText('CHECK_GPU_DRIVER');
+
+  const ticketOverview = page.getByTestId('admin-as-ticket-overview');
+  const overviewLabels = await ticketOverview.locator('tbody > tr > td:first-child').allTextContents();
+  expect(overviewLabels.slice(0, 3)).toEqual(['상태', '에이전트 로그', '분석 상태']);
+  await expect(ticketOverview.locator('tbody > tr:first-child > td:first-child')).toHaveCSS('white-space', 'nowrap');
+  for (const removedLabel of [
+    '추천 근거 코드',
+    '원격 조치 후보',
+    '방문 판단 근거',
+    '차단 요인',
+    '원인 후보',
+    '업그레이드 후보',
+    '원격지원',
+    '방문지원'
+  ]) {
+    expect(overviewLabels).not.toContain(removedLabel);
+  }
+
+  const showAgentLogs = ticketOverview.getByRole('button', { name: '에이전트 데이터 보기 (2건)', exact: true });
+  await expect(showAgentLogs).toHaveAttribute('aria-expanded', 'false');
+  await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toHaveCount(0);
+  await showAgentLogs.click();
+  await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toBeVisible();
+  await expect(ticketOverview).toContainText('개인정보가 마스킹된 핵심 업로드 로그 샘플이며 최대 20건까지 표시됩니다.');
+  await expect(ticketOverview).toContainText('SYSTEM_METRIC');
+  await expect(ticketOverview).toContainText('#42');
+  await expect(ticketOverview).toContainText('gpu temperature reached 95c');
+  await expect(ticketOverview).toContainText('frame_drop');
+
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => (
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+    ))).toBe(true);
+  }
+
+  await ticketOverview.getByRole('button', { name: '에이전트 데이터 닫기', exact: true }).click();
+  await expect(ticketOverview.getByTestId('agent-log-samples-panel')).toHaveCount(0);
+
+  await page.goto('/admin/as-tickets/qa-ticket-no-samples');
+  await expect(page.getByTestId('admin-as-ticket-overview')).toContainText('업로드된 로그가 있으나 표시 가능한 샘플이 없습니다.');
+
+  await page.goto('/admin/as-tickets/qa-ticket-diagnosis-evidence');
+  const diagnosisOverview = page.getByTestId('admin-as-ticket-overview');
+  await diagnosisOverview.getByRole('button', { name: '에이전트 데이터 보기 (1건)', exact: true }).click();
+  await expect(diagnosisOverview.getByTestId('agent-log-samples-panel')).toContainText('실시간 진단 근거');
+  await expect(diagnosisOverview.getByTestId('agent-log-samples-panel')).toContainText('gpu · temperature');
+  await expect(diagnosisOverview.getByTestId('agent-log-samples-panel')).toContainText('nvidia-smi');
+  await expect(page.getByRole('main')).toContainText('PC Agent 실시간 진단 근거 1건 연결됨');
+
+  await page.goto('/admin/as-tickets/qa-ticket-before');
   await page.getByLabel('검토 상태').selectOption('APPROVED');
   await page.getByLabel('지원 결정').selectOption('REMOTE_POSSIBLE');
   await page.getByLabel('위험도').selectOption('HIGH');
@@ -265,10 +414,21 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('Remote support link sent.');
   await page.screenshot({ path: `${screenshotDir}/05-mobile-ticket.png`, fullPage: true });
 
+  await page.evaluate(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/admin/as-tickets');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'AS 티켓 qa-ticket-no-samples 삭제', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'AS 티켓 qa-ticket-no-samples 삭제', exact: true })).toHaveCount(0);
+  expect(deletedTicketId).toBe('qa-ticket-no-samples');
+
   expect(apiCalls).toEqual(expect.arrayContaining([
     'GET /api/as-tickets/qa-ticket-before',
     'GET /api/admin/as-tickets/qa-ticket-before',
-    'PATCH /api/admin/as-tickets/qa-ticket-before'
+    'PATCH /api/admin/as-tickets/qa-ticket-before',
+    'DELETE /api/admin/as-tickets/qa-ticket-no-samples'
   ]));
   expect(consoleErrors).toEqual([]);
 });

@@ -14,6 +14,14 @@ class CacheConfigTest {
             .withUserConfiguration(CacheConfig.class);
 
     @Test
+    void missingTypeUsesCaffeineCacheManagerByDefault() {
+        contextRunner.run(context -> {
+            assertThat(context).hasSingleBean(CacheManager.class);
+            assertThat(context.getBean(CacheManager.class)).isInstanceOf(CaffeineCacheManager.class);
+        });
+    }
+
+    @Test
     void noneUsesNoOpCacheManager() {
         contextRunner.withPropertyValues("spring.cache.type=none").run(context -> {
             assertThat(context).hasSingleBean(CacheManager.class);

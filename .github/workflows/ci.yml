@@ -9,23 +9,82 @@ on:
 
 permissions:
   contents: read
+  # changes 잡이 PR 변경 파일 목록 API(gh api pulls/N/files)를 읽는 데 필요.
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 변경 영역 감지 — 무거운 잡(web/api/smoke)만 조건부로 돌린다.
+  # main/dev push는 항상 전체 실행: gradle 캐시 쓰기와 deploy-compose의 workflow_run 게이트가 이 결과에 의존한다.
+  # 미분류 파일이 하나라도 있으면 전체 실행으로 폴백(검증 누락보다 과실행이 낫다).
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      api: ${{ steps.filter.outputs.api }}
+      smoke: ${{ steps.filter.outputs.smoke }}
+    steps:
+      - name: Detect changed areas
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            echo "api=true" >> "$GITHUB_OUTPUT"
+            echo "smoke=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          echo "changed files:"
+          echo "$files"
+          web=false; api=false; smoke=false; unknown=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              apps/web/*) web=true ;;
+              apps/api/*) api=true; smoke=true ;;
+              apps/pc-agent/*) ;;
+              tools/*) smoke=true ;;
+              infra/*) smoke=true ;;
+              compose*.yaml|.env.*.example) smoke=true ;;
+              docs/*|*.md) ;;
+              .github/workflows/ci.yml) web=true; api=true; smoke=true ;;
+              .github/*) ;;
+              *) unknown=true ;;
+            esac
+          done <<< "$files"
+          if [ "$unknown" = true ]; then
+            web=true; api=true; smoke=true
+          fi
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
+
   web:
-    name: web
+    # 러너 1대(4 vCPU)는 워커 2에서 CPU 포화 — 러너 3대에 테스트를 나눠 벽시계를 줄인다.
+    name: web (${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -35,9 +94,22 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('apps/web/package-lock.json') }}
+
       - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright OS dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: apps/web
+        run: npx playwright install-deps chromium
 
       - name: Build web
         working-directory: apps/web
@@ -45,13 +117,13 @@ jobs:
 
       - name: Run web tests
         working-directory: apps/web
-        run: npm run test
+        run: npm run test -- --shard=${{ matrix.shard }}
 
       - name: Upload web test artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: web-test-artifacts
+          name: web-test-artifacts-${{ strategy.job-index }}
           path: |
             apps/web/playwright-report
             apps/web/test-results
@@ -60,33 +132,31 @@ jobs:
 
   api:
     name: api
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
-      - name: Run API tests
+      - name: Test and package API
         working-directory: apps/api
-        run: ./gradlew test --no-daemon
-
-      - name: Build API
-        working-directory: apps/api
-        run: ./gradlew bootJar --no-daemon
+        run: ./gradlew test bootJar --no-daemon
 
       - name: Upload API test artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-test-artifacts
           path: |
@@ -102,10 +172,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -118,7 +188,13 @@ jobs:
           python -m unittest \
             tools.test_validate_openapi \
             tools.test_validate_infrastructure_separation \
-            tools.test_validate_green_deployment
+            tools.test_validate_green_deployment \
+            tools.test_bootstrap_green_asg \
+            tools.test_prepare_green_asg_builder \
+            tools.test_provision_green_private_app_network \
+            tools.test_migrate_green_web_asg_private \
+            tools.test_rollout_green_web_asg_release \
+            tools.test_fast_deploy_green_web_asg
 
   compose:
     name: compose
@@ -127,7 +203,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate Docker Compose
         run: |
@@ -142,10 +218,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -163,7 +239,7 @@ jobs:
 
       - name: Upload PC Agent artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pc-agent-artifacts
           path: ${{ runner.temp }}/pc-agent
@@ -172,6 +248,8 @@ jobs:
 
   docker-runtime-smoke:
     name: docker-runtime-smoke
+    needs: changes
+    if: needs.changes.outputs.smoke == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -184,7 +262,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build Docker images and smoke test API container
         shell: bash
@@ -201,7 +279,8 @@ jobs:
           }
           trap cleanup EXIT
 
-          docker compose -f compose.yaml build api web
+          # web 이미지는 기동·헬스체크 대상이 아니고(dev용 Dockerfile) 빌드만 하고 버려졌다 — 제외.
+          docker compose -f compose.yaml build api
           docker compose -f compose.yaml up -d postgres redis rabbitmq mailpit api
 
           for attempt in {1..90}; do
@@ -217,7 +296,7 @@ jobs:
 
       - name: Upload Docker runtime smoke artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docker-runtime-smoke-artifacts
           path: ${{ runner.temp }}/docker-runtime-smoke

@@ -2,13 +2,16 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
+import com.buildgraph.prototype.common.ReadThroughTtlCache;
 import com.buildgraph.prototype.user.CurrentUserService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,6 +32,11 @@ public class BuildGraphLayoutService {
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
     );
     private final JdbcTemplate jdbcTemplate;
+    // DEFAULT 레이아웃은 전역 상수 성격(관리자만 변경)인데 resolve마다 SELECT+Jackson 파싱이 반복돼
+    // 짧은 TTL로 캐시한다(single-flight 내장). '저장 레이아웃 없음'도 흔한 상태라 Optional로 부재까지 캐시.
+    // 저장/초기화 시 remove로 즉시 무효화하므로 TTL은 다중 인스턴스 대비 신선도 상한일 뿐이다.
+    private final ReadThroughTtlCache<String, Optional<SavedLayout>> layoutCache =
+            new ReadThroughTtlCache<>(Duration.ofSeconds(30), 4);
 
     public BuildGraphLayoutService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -78,15 +86,23 @@ public class BuildGraphLayoutService {
                 admin.internalId(),
                 admin.internalId()
         );
+        // 저장 직후 조회가 옛 캐시를 보지 않도록 즉시 무효화한다(TTL 만료 대기 금지).
+        layoutCache.remove(DEFAULT_LAYOUT_KEY);
         return layoutResponse("SAVED", mergeWithDefaults(positions), anchors, null);
     }
 
     public Map<String, Object> resetDefaultLayout(CurrentUserService.CurrentUser admin) {
         jdbcTemplate.update("DELETE FROM build_graph_layouts WHERE layout_key = ?", DEFAULT_LAYOUT_KEY);
+        layoutCache.remove(DEFAULT_LAYOUT_KEY);
         return layoutResponse("DEFAULT", defaultPositions(), Map.of(), null);
     }
 
     private SavedLayout savedLayout() {
+        // 캐시 값은 불변으로 취급한다 — 소비처(mergeWithDefaults/layoutResponse)는 복사본만 만든다.
+        return layoutCache.get(DEFAULT_LAYOUT_KEY, this::loadSavedLayout).orElse(null);
+    }
+
+    private Optional<SavedLayout> loadSavedLayout() {
         return jdbcTemplate.queryForList("""
                         SELECT positions_json::text AS positions_json,
                                anchors_json::text AS anchors_json,
@@ -101,8 +117,7 @@ public class BuildGraphLayoutService {
                         parsePositions(DbValueMapper.string(row, "positions_json")),
                         parseAnchors(DbValueMapper.string(row, "anchors_json")),
                         DbValueMapper.timestamp(row, "updated_at")
-                ))
-                .orElse(null);
+                ));
     }
 
     private static Map<String, GraphPosition> normalizePositions(Map<String, Object> request) {

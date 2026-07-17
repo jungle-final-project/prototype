@@ -20,6 +20,15 @@ java {
     }
 }
 
+// Local bootRun only: an empty shell variable must not override application.yml's JDBC default.
+def localDatasourceUrl = providers.environmentVariable('SPRING_DATASOURCE_URL')
+        .map { value -> value.trim().isEmpty() ? 'jdbc:postgresql://localhost:55432/buildgraph' : value }
+        .orElse('jdbc:postgresql://localhost:55432/buildgraph')
+
+tasks.named('bootRun') {
+    environment 'SPRING_DATASOURCE_URL', localDatasourceUrl.get()
+}
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-amqp'

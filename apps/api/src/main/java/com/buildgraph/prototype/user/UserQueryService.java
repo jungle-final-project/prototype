@@ -229,7 +229,7 @@ public class UserQueryService {
         if (usedGoogleVerification) {
             googleOAuthRuntimeStore.consumeProfileVerificationToken(googleVerificationToken);
         }
-        currentUserService.evictUser(currentUser.id());
+        currentUserService.evictCachedUser(currentUser.id());
         return userMap(findByInternalId(currentUser.internalId()));
     }
 

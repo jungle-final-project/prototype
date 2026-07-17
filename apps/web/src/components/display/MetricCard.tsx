@@ -1,5 +1,11 @@
-export function MetricCard({ label, value, tone = 'blue' }: { label: string; value: string; tone?: 'blue' | 'green' | 'orange' }) {
-  const color = tone === 'green' ? 'text-commerce-green' : tone === 'orange' ? 'text-commerce-sale' : 'text-brand-blue';
+export function MetricCard({ label, value, tone = 'blue' }: { label: string; value: string; tone?: 'blue' | 'green' | 'orange' | 'point' }) {
+  const color = tone === 'green'
+    ? 'text-commerce-green'
+    : tone === 'orange'
+      ? 'text-commerce-sale'
+      : tone === 'point'
+        ? 'text-commerce-point'
+        : 'text-brand-blue';
   return (
     <div className="rounded-md border border-commerce-line bg-white p-4 shadow-sm">
       <div className="text-xs font-bold text-slate-500">{label}</div>

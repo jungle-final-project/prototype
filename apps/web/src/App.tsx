@@ -9,6 +9,7 @@ import { AsChatPage, SupportNewPage, SupportTicketPage } from './features/suppor
 import { SupportChatWidget } from './features/support/SupportChatWidget';
 import { AdminAssemblyPage, AdminBuildGraphLayoutsPage, AdminDashboardPage, AdminLoadTestsPage, AdminPartsPage, AdminPriceJobsPage, AdminSupportChatSessionsPage, AdminTicketDetailPage, AdminTicketsPage, AgentSessionAdminPage, AgentSessionsListAdminPage, RagEvidenceAdminPage, RagEvidenceListAdminPage, ToolInvocationAdminPage, ToolInvocationsListAdminPage } from './features/admin/AdminPages';
 import { AiBuildAssistant } from './features/quote/components/AiBuildAssistant';
+import { AiDraftApplicationFeedbackCoordinator } from './features/quote/components/AiDraftApplicationFeedbackCoordinator';
 import { TechnicianApplyPage, TechnicianDashboardPage, TechnicianJobsPage, TechnicianRequestDetailPage } from './features/technician/TechnicianPages';
 import { getToken } from './lib/api';
 
@@ -64,6 +65,7 @@ export default function App() {
         <Route path="/admin/as-tickets/:ticketId" element={<RequireAdmin><AdminTicketDetailPage /></RequireAdmin>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <AiDraftApplicationFeedbackCoordinator />
       <GlobalSupportChatWidget />
       <GlobalAiBuildAssistant />
     </>

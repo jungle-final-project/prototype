@@ -38,6 +38,88 @@ html.page-scrollbar-hidden body::-webkit-scrollbar {
   display: none;
 }
 
+/* 부품 후보 목록은 확대·낮은 화면에서도 독립 스크롤 영역임을 사용자가 알 수 있어야 한다. */
+.slot-candidate-list {
+  overscroll-behavior: contain;
+  scrollbar-color: color-mix(in srgb, #111827 55%, transparent) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.slot-candidate-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.slot-candidate-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.slot-candidate-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background: color-mix(in srgb, #111827 55%, transparent);
+  background-clip: padding-box;
+}
+
+.slot-candidate-list::-webkit-scrollbar-thumb:hover {
+  background: #111827;
+  background-clip: padding-box;
+}
+
+/*
+ * 150% 브라우저 확대나 1366x768 노트북처럼 세로 작업 공간이 짧은 데스크톱.
+ * 모바일 바텀시트로 바꾸지 않고 오버레이를 유지하되, 보조 설명과 상단 제어부의
+ * 세로 여백을 줄여 후보 결과 영역을 최소 1개 카드 이상 읽을 수 있게 확보한다.
+ */
+@media (min-width: 1024px) and (max-height: 800px) {
+  .slot-candidate-panel__header {
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .slot-candidate-panel__description {
+    display: none;
+  }
+
+  .slot-candidate-panel__search,
+  .slot-candidate-panel__filters,
+  .slot-candidate-panel__selected {
+    padding: 6px 12px;
+  }
+
+  .slot-candidate-panel__search input {
+    height: 32px;
+  }
+
+  .slot-candidate-panel__filter-controls {
+    column-gap: 6px;
+    row-gap: 4px;
+  }
+
+  .slot-candidate-panel__filters [data-testid='candidate-manufacturer'],
+  .slot-candidate-panel__filters [data-testid='candidate-min-price'],
+  .slot-candidate-panel__filters [data-testid='candidate-max-price'] {
+    height: 28px;
+  }
+
+  .slot-candidate-panel__selected-label {
+    margin-bottom: 2px;
+  }
+
+  .slot-candidate-panel__selected-items {
+    row-gap: 4px;
+  }
+
+  .slot-candidate-panel__selected-item {
+    padding: 2px 8px;
+  }
+
+  .slot-candidate-list {
+    padding: 8px 8px 8px 12px;
+  }
+}
+
 button,
 input,
 select,
@@ -739,19 +821,6 @@ textarea {
   filter:
     drop-shadow(0 7px 20px rgba(37, 99, 235, 0.72))
     drop-shadow(0 0 12px rgba(37, 99, 235, 0.38));
-}
-
-.iso-part[data-selected='true'][data-spotlight='true'] .iso-part-img,
-.iso-part[data-selected='true'][data-hovered='true'] .iso-part-img,
-.iso-part[data-selected='true'] .iso-part-img {
-  filter:
-    drop-shadow(0 0 2px rgba(37, 99, 235, 0.95))
-    drop-shadow(0 0 7px rgba(37, 99, 235, 0.88))
-    drop-shadow(0 6px 20px rgba(37, 99, 235, 0.72));
-}
-
-.iso-part[data-selected='true'][data-mounting='false'][data-status='FAIL'] .iso-part-img {
-  animation: none;
 }
 
 .slot-problem-marker {

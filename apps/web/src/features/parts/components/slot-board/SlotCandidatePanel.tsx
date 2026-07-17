@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Eye, Heart, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay';
 import { listParts } from '../../partsApi';
@@ -8,11 +9,33 @@ import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
+import { useBoardDrag, useIsDesktop } from './useBoardDrag';
 
 // CPU·GPU만 벤치마크 점수가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 버튼을 숨긴다.
 const PERF_COMPARABLE = new Set(['CPU', 'GPU']);
 
 const CANDIDATE_PAGE_SIZE = 20;
+
+// 데스크톱 패널 초기 위치·크기: 보드 스테이지 좌측에 12px 여백으로 떠 있던 기존 배치를 그대로 재현한다.
+// 포탈(document.body) + position:fixed라 보드 밖으로도 드래그할 수 있다.
+function panelInitialRect() {
+  const fallback = { left: 24, top: 96, width: 420, height: 560 };
+  if (typeof document === 'undefined') {
+    return fallback;
+  }
+  const stage = document.querySelector('[data-testid="slot-board-body-stage"]')
+    ?? document.querySelector('[data-testid="slot-board"]');
+  const rect = stage?.getBoundingClientRect();
+  if (!rect || rect.width === 0) {
+    return fallback;
+  }
+  return {
+    left: rect.left + 12,
+    top: rect.top + 12,
+    width: Math.min(Math.min(520, Math.max(360, rect.width * 0.52)), rect.width) - 24,
+    height: Math.max(320, rect.height - 24)
+  };
+}
 
 type SlotCandidatePanelProps = {
   slot: SlotConfig;
@@ -46,6 +69,37 @@ export function SlotCandidatePanel({
   const [maxPrice, setMaxPrice] = useState<number | undefined>(undefined);
   const [hideFail, setHideFail] = useState(false);
   const [onlyWishlist, setOnlyWishlist] = useState(false);
+  // 데스크톱 패널: 포탈+fixed로 띄워 헤더 드래그(보드 밖 허용, 화면 이탈만 방지)·꼭지점 리사이즈.
+  // 모바일 바텀시트는 고정. 한 번 옮겨두면 슬롯을 바꾸거나 닫았다 열어도 그 자리를 지키고,
+  // 핸들 더블클릭으로만 초기 위치·크기로 되돌린다.
+  const isDesktop = useIsDesktop();
+  const [initialRect, setInitialRect] = useState(() => panelInitialRect());
+  const {
+    targetRef: panelRef,
+    dragStyle,
+    isDragging,
+    startDrag: startPanelDrag,
+    resetDrag
+  } = useBoardDrag<HTMLElement>({
+    persistKey: 'slot-candidate-panel',
+    anchor: { left: initialRect.left, top: initialRect.top }
+  });
+  // URL로 페이지와 함께 마운트되면 첫 렌더 시점엔 보드가 아직 DOM에 없다 —
+  // 커밋 직후(페인트 전) 실제 스테이지 위치로 다시 잰다.
+  useLayoutEffect(() => {
+    setInitialRect(panelInitialRect());
+  }, []);
+  const applyInitialSize = () => {
+    const el = panelRef.current;
+    if (el && typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+      el.style.width = `${initialRect.width}px`;
+      el.style.height = `${initialRect.height}px`;
+    }
+  };
+  const resetPanelPlacement = () => {
+    resetDrag();
+    applyInitialSize();
+  };
   const [wishlist, setWishlist] = useState<Set<string>>(() => readWishlist());
   const [quickViewPart, setQuickViewPart] = useState<PartRow | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
@@ -192,20 +246,30 @@ export function SlotCandidatePanel({
     }
   };
 
-  return (
+  const panelContent = (
     <>
       <div aria-hidden="true" onClick={onClose} className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" />
       <section
+        ref={panelRef}
         data-testid="slot-candidate-panel"
         data-placement={placement}
         role="dialog"
         aria-label={`${slot.label} 부품 목록`}
-        className="panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:static lg:z-auto lg:h-full lg:max-h-none lg:min-h-0 lg:w-full lg:rounded-none lg:border-0 lg:border-r lg:border-commerce-line lg:shadow-xl"
+        style={isDesktop
+          ? { width: initialRect.width, height: initialRect.height, ...dragStyle }
+          : dragStyle}
+        className="panel slot-candidate-panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:inset-auto lg:z-[55] lg:max-h-[92vh] lg:min-h-[280px] lg:w-auto lg:min-w-[320px] lg:max-w-[92vw] lg:rounded-xl lg:border lg:border-commerce-line lg:shadow-xl lg:[resize:both]"
       >
-      <div className="flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3">
+      <div
+        data-testid="slot-candidate-panel-handle"
+        title="드래그해서 옮기고, 더블클릭하면 원래 자리로 돌아옵니다"
+        onPointerDown={startPanelDrag}
+        onDoubleClick={resetPanelPlacement}
+        className={`slot-candidate-panel__header flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3 ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'} select-none lg:touch-none`}
+      >
         <div className="min-w-0">
           <h2 className="text-base font-black text-commerce-ink">{slot.label} 부품 목록</h2>
-          <p className="mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 장착 불가 후보도 담아서 사유를 확인할 수 있어요</p>
+          <p data-testid="candidate-panel-description" className="slot-candidate-panel__description mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 장착 불가 후보도 담아서 사유를 확인할 수 있어요</p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center rounded-md border border-commerce-line bg-white px-2 py-1">
@@ -234,7 +298,7 @@ export function SlotCandidatePanel({
       </div>
 
       {/* 검색: 이름·제조사로 후보를 좁힌다(디바운스 300ms, 호환 검사·정렬은 그대로 유지). */}
-      <div className="shrink-0 border-b border-commerce-line px-4 py-2.5">
+      <div data-testid="candidate-panel-search" className="slot-candidate-panel__search shrink-0 border-b border-commerce-line px-4 py-2.5">
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
@@ -261,8 +325,8 @@ export function SlotCandidatePanel({
       </div>
 
       {/* 필터: 제조사·가격대(기존 GET /api/parts 파라미터 재사용) + 장착 불가 숨기기(client-side, 기본 꺼짐). */}
-      <div className="shrink-0 border-b border-commerce-line px-4 py-2.5">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+      <div data-testid="candidate-panel-filters" className="slot-candidate-panel__filters shrink-0 border-b border-commerce-line px-4 py-2.5">
+        <div className="slot-candidate-panel__filter-controls flex flex-wrap items-center gap-x-2 gap-y-2">
           <select
             aria-label="제조사 필터"
             data-testid="candidate-manufacturer"
@@ -322,11 +386,11 @@ export function SlotCandidatePanel({
 
       {/* 담은 부품은 후보 피드와 독립된 관리 행으로 유지한다. RAM/SSD 수량과 제거를 여기서 바로 조작한다. */}
       {draftItems.length > 0 ? (
-        <div className="shrink-0 border-b border-commerce-line px-4 py-3">
-          <div className="mb-1.5 text-[11px] font-black text-slate-500">담은 {slot.label} {draftItems.length}개</div>
-          <div className="space-y-1.5">
+        <div data-testid="candidate-panel-selected" className="slot-candidate-panel__selected shrink-0 border-b border-commerce-line px-4 py-3">
+          <div className="slot-candidate-panel__selected-label mb-1.5 text-[11px] font-black text-slate-500">담은 {slot.label} {draftItems.length}개</div>
+          <div className="slot-candidate-panel__selected-items space-y-1.5">
             {draftItems.map((item) => (
-              <div key={item.partId} className="flex items-center justify-between gap-2 rounded-md border border-commerce-line bg-white px-2.5 py-1.5 text-xs">
+              <div key={item.partId} className="slot-candidate-panel__selected-item flex items-center justify-between gap-2 rounded-md border border-commerce-line bg-white px-2.5 py-1.5 text-xs">
                 <div className="min-w-0">
                   <Link to={`/parts/${item.partId}`} className="block truncate font-black text-commerce-ink hover:text-brand-blue hover:underline">{item.name}</Link>
                   <div className="text-[11px] text-slate-500">수량 {item.quantity} · {item.lineTotal.toLocaleString()}원</div>
@@ -358,7 +422,7 @@ export function SlotCandidatePanel({
       ) : null}
 
       {/* 후보 목록만 스크롤하고 보드 자체의 크기에는 영향을 주지 않는다. */}
-      <div data-testid="slot-candidate-list" className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto p-4">
+      <div data-testid="slot-candidate-list" className="slot-candidate-list min-h-0 flex-1 overflow-y-auto p-4">
         {isLoading ? (
           <div className="rounded-md border border-commerce-line p-4 text-sm text-slate-500">후보 목록을 불러오는 중입니다.</div>
         ) : null}
@@ -531,6 +595,9 @@ export function SlotCandidatePanel({
       ) : null}
     </>
   );
+
+  // 데스크톱은 body 포탈 — overflow-hidden인 보드 스테이지를 벗어나 화면 어디로든 옮길 수 있다.
+  return isDesktop ? createPortal(panelContent, document.body) : panelContent;
 }
 
 const WISHLIST_KEY = 'buildgraph.wishlist';

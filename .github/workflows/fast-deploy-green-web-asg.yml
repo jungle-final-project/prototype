@@ -1,0 +1,180 @@
+name: Fast Deploy Green Web ASG
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Existing ASG container to update in place"
+        required: true
+        type: choice
+        options:
+          - api
+          - xgb-reranker
+      git_sha:
+        description: "Exact current main SHA; defaults to the selected branch SHA"
+        required: false
+        type: string
+      image_tag:
+        description: "Immutable ECR SHA tag; defaults to git_sha"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  # 자가치유 스텝이 Publish 워크플로를 디스패치·관전하기 위해 필요.
+  actions: write
+
+concurrency:
+  group: deploy-green-web-asg-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: fast-deploy-green-web-asg
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Resolve immutable deployment target
+        id: target
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.git_sha }}
+          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
+          DEFAULT_SHA: ${{ github.sha }}
+          SERVICE: ${{ inputs.service }}
+        run: |
+          set -euo pipefail
+          target_sha="${REQUESTED_SHA:-$DEFAULT_SHA}"
+          image_tag="${REQUESTED_IMAGE_TAG:-$target_sha}"
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::git_sha must be a 40-character lowercase Git SHA"
+            exit 1
+          }
+          [[ "$image_tag" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::image_tag must be a 40-character lowercase Git SHA"
+            exit 1
+          }
+          [[ "$target_sha" == "$image_tag" ]] || {
+            echo "::error::git_sha and image_tag must match for Fast Deploy"
+            exit 1
+          }
+          echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact current main deployment
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          main_sha="$(git rev-parse origin/main)"
+          [[ "$DEPLOY_SHA" == "$main_sha" ]] || {
+            echo "::error::Fast Deploy must use the exact current origin/main SHA: $main_sha"
+            exit 1
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tools/requirements.txt
+
+      - name: Validate Fast Deploy contracts
+        run: |
+          python -m pip install -r tools/requirements.txt
+          python -m unittest \
+            tools.test_validate_green_deployment \
+            tools.test_fast_deploy_green_web_asg
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # 이미지 부재 자가치유 — web-only 커밋이 main HEAD가 되면 Publish는 경로 필터로 스킵돼
+      # HEAD 태그 이미지가 ECR에 없고, 아래 preflight가 반드시 거부한다(반복 발생 이력).
+      # 불변 계약(git_sha == image_tag == 현재 main HEAD)은 그대로 두고, 이미지가 없을 때만
+      # 해당 서비스의 Publish 워크플로를 같은 SHA로 디스패치해 완료를 기다린 뒤 진행한다.
+      # Publish는 reuse-or-publish라 중복 디스패치에도 안전하고, concurrency 그룹이 달라 교착 없음.
+      - name: Ensure immutable image exists (self-heal via Publish)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVICE: ${{ steps.target.outputs.service }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          API_REPOSITORY: ${{ vars.GREEN_API_ECR_REPOSITORY }}
+          XGB_REPOSITORY: ${{ vars.GREEN_XGB_ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          case "$SERVICE" in
+            api) repository="$API_REPOSITORY"; publish_workflow="Publish Green API Image" ;;
+            xgb-reranker) repository="$XGB_REPOSITORY"; publish_workflow="Publish Green XGB Reranker Image" ;;
+            *) echo "::error::unknown service: $SERVICE"; exit 1 ;;
+          esac
+          : "${repository:?ECR repository variable is required for $SERVICE}"
+          if aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$DEPLOY_SHA" >/dev/null 2>&1; then
+            echo "Immutable image already published for $DEPLOY_SHA"
+            exit 0
+          fi
+          echo "No image for $DEPLOY_SHA (path-filtered publish skip) — dispatching '$publish_workflow' and waiting"
+          gh workflow run "$publish_workflow" --ref main -f git_sha="$DEPLOY_SHA"
+          run_id=""
+          for _ in $(seq 1 30); do
+            sleep 10
+            run_id="$(gh run list --workflow "$publish_workflow" --limit 10 \
+              --json databaseId,headSha,createdAt \
+              --jq "[.[] | select(.headSha == \"$DEPLOY_SHA\")] | sort_by(.createdAt) | last | .databaseId // empty")"
+            [[ -n "$run_id" ]] && break
+          done
+          [[ -n "$run_id" ]] || { echo "::error::dispatched publish run not found for $DEPLOY_SHA"; exit 1; }
+          echo "Waiting for publish run $run_id"
+          gh run watch "$run_id" --exit-status
+          aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$DEPLOY_SHA" >/dev/null || {
+            echo "::error::publish finished but image still missing for $DEPLOY_SHA"
+            exit 1
+          }
+
+      - name: Read-only Fast Deploy preflight
+        shell: bash
+        run: |
+          bash tools/deploy_green_web_asg_in_place.sh \
+            --service "${{ steps.target.outputs.service }}" \
+            --git-sha "${{ steps.target.outputs.sha }}" \
+            --image-tag "${{ steps.target.outputs.image_tag }}"
+
+      - name: Update the existing ASG container
+        id: deploy
+        shell: bash
+        run: |
+          bash tools/deploy_green_web_asg_in_place.sh \
+            --service "${{ steps.target.outputs.service }}" \
+            --git-sha "${{ steps.target.outputs.sha }}" \
+            --image-tag "${{ steps.target.outputs.image_tag }}" \
+            --apply
+
+      - name: Record Fast Deploy
+        if: success()
+        run: |
+          {
+            echo "### Green Web ASG Fast Deploy succeeded"
+            echo
+            echo "- Service: \`${{ steps.target.outputs.service }}\`"
+            echo "- Commit: \`${{ steps.target.outputs.sha }}\`"
+            echo "- ECR tag: \`${{ steps.target.outputs.image_tag }}\`"
+            echo "- Existing instance: \`${{ steps.deploy.outputs.instance_id || 'see deploy log' }}\`"
+            echo "- Next Launch Template version: \`${{ steps.deploy.outputs.launch_template_version || 'see deploy log' }}\`"
+            echo "- Deployment mode: in-place container update; brief API or WebSocket interruption is accepted"
+            echo "- Next step: verify API smoke and WebSocket reconnection"
+          } >> "$GITHUB_STEP_SUMMARY"
