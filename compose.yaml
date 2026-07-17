@@ -241,6 +241,8 @@ services:
     build:
       context: ./apps/web
     container_name: buildgraph-web
+    environment:
+      VITE_DEV_PROXY_TARGET: http://api:8080
     depends_on:
       - api
     ports:
