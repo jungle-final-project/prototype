@@ -182,7 +182,7 @@ class GreenDeploymentContractTest(unittest.TestCase):
         self.assertNotIn("GREEN_EC2_INSTANCE_ID", text)
         self.assertNotIn("aws ssm send-command", text)
 
-    def test_asg_rollout_policy_is_scoped_and_does_not_grant_ssm(self) -> None:
+    def test_asg_rollout_policy_scopes_fast_deploy_mutations(self) -> None:
         policy = json.loads(ASG_ROLLOUT_POLICY.read_text(encoding="utf-8"))
         statements = policy.get("Statement", [])
         actions = {
@@ -199,12 +199,59 @@ class GreenDeploymentContractTest(unittest.TestCase):
         self.assertIn("ec2:CreateLaunchTemplateVersion", actions)
         self.assertIn("autoscaling:StartInstanceRefresh", actions)
         self.assertIn("autoscaling:RollbackInstanceRefresh", actions)
+        self.assertIn("autoscaling:UpdateAutoScalingGroup", actions)
         self.assertIn("elasticloadbalancing:DescribeTargetHealth", actions)
         self.assertIn("ec2:RunInstances", actions)
         self.assertIn("iam:PassRole", actions)
-        self.assertNotIn("autoscaling:UpdateAutoScalingGroup", actions)
-        self.assertFalse(any(action.startswith("ssm:") for action in actions))
+        self.assertIn("ssm:DescribeInstanceInformation", actions)
+        self.assertIn("ssm:SendCommand", actions)
+        self.assertIn("ssm:GetCommandInvocation", actions)
+        self.assertIn("ssm:ListCommandInvocations", actions)
+        self.assertIn("ssm:CancelCommand", actions)
         self.assertFalse(any(action == "*" for action in actions))
+
+        green_asg_arn = (
+            "arn:aws:autoscaling:ap-northeast-2:443915990705:"
+            "autoScalingGroup:8f32aec0-e5c6-447f-82a6-05efa16d2a53:"
+            "autoScalingGroupName/buildgraph-demo-api-green-asg"
+        )
+        update_statement = next(
+            statement
+            for statement in statements
+            if statement.get("Action") == "autoscaling:UpdateAutoScalingGroup"
+        )
+        self.assertEqual(green_asg_arn, update_statement.get("Resource"))
+
+        document_statement = next(
+            statement
+            for statement in statements
+            if statement.get("Action") == "ssm:SendCommand"
+            and "document/AWS-RunShellScript" in str(statement.get("Resource"))
+        )
+        self.assertEqual(
+            "arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript",
+            document_statement.get("Resource"),
+        )
+
+        instance_statement = next(
+            statement
+            for statement in statements
+            if statement.get("Action") == "ssm:SendCommand"
+            and ":instance/*" in str(statement.get("Resource"))
+        )
+        self.assertEqual(
+            "arn:aws:ec2:ap-northeast-2:443915990705:instance/*",
+            instance_statement.get("Resource"),
+        )
+        self.assertEqual(
+            {
+                "ssm:resourceTag/ManagedBy": "asg",
+                "ssm:resourceTag/Stack": "green",
+                "ssm:resourceTag/Service": "api",
+            },
+            instance_statement.get("Condition", {}).get("StringEquals"),
+        )
+
         policy_text = json.dumps(policy, sort_keys=True)
         self.assertIn("lt-0024991a1e82e5e6c", policy_text)
         self.assertIn("buildgraph-demo-api-green-asg", policy_text)

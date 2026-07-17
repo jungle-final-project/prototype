@@ -1,10 +1,10 @@
-name: Release Green Web ASG
+name: Fast Deploy Green Web ASG
 
 on:
   workflow_dispatch:
     inputs:
       service:
-        description: "Runtime image to release"
+        description: "Existing ASG container to update in place"
         required: true
         type: choice
         options:
@@ -28,13 +28,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: release-green-web-asg
+  deploy:
+    name: fast-deploy-green-web-asg
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
 
     steps:
-      - name: Resolve immutable release target
+      - name: Resolve immutable deployment target
         id: target
         shell: bash
         env:
@@ -55,7 +55,7 @@ jobs:
             exit 1
           }
           [[ "$target_sha" == "$image_tag" ]] || {
-            echo "::error::git_sha and image_tag must match for an immutable release"
+            echo "::error::git_sha and image_tag must match for Fast Deploy"
             exit 1
           }
           echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
@@ -63,76 +63,73 @@ jobs:
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
 
       - name: Checkout target commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ steps.target.outputs.sha }}
           fetch-depth: 0
 
-      - name: Verify exact current main release
+      - name: Verify exact current main deployment
+        shell: bash
         env:
-          RELEASE_SHA: ${{ steps.target.outputs.sha }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           git fetch --quiet origin main
           main_sha="$(git rev-parse origin/main)"
-          [[ "$RELEASE_SHA" == "$main_sha" ]] || {
-            echo "::error::Forward ASG releases must use the exact current origin/main SHA: $main_sha"
+          [[ "$DEPLOY_SHA" == "$main_sha" ]] || {
+            echo "::error::Fast Deploy must use the exact current origin/main SHA: $main_sha"
             exit 1
           }
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: tools/requirements.txt
 
-      - name: Validate ASG rollout contracts
+      - name: Validate Fast Deploy contracts
         run: |
           python -m pip install -r tools/requirements.txt
           python -m unittest \
             tools.test_validate_green_deployment \
-            tools.test_bootstrap_green_asg \
-            tools.test_rollout_green_web_asg_release \
             tools.test_fast_deploy_green_web_asg
 
       - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Read-only rollout preflight
+      - name: Read-only Fast Deploy preflight
         shell: bash
         run: |
-          bash tools/rollout_green_web_asg_release.sh \
+          bash tools/deploy_green_web_asg_in_place.sh \
             --service "${{ steps.target.outputs.service }}" \
             --git-sha "${{ steps.target.outputs.sha }}" \
-            --image-tag "${{ steps.target.outputs.image_tag }}" \
-            --bootstrap-manifest infra/asg/green-release.env
+            --image-tag "${{ steps.target.outputs.image_tag }}"
 
-      - name: Create Launch Template version and refresh ASG
-        id: rollout
+      - name: Update the existing ASG container
+        id: deploy
         shell: bash
         run: |
-          bash tools/rollout_green_web_asg_release.sh \
+          bash tools/deploy_green_web_asg_in_place.sh \
             --service "${{ steps.target.outputs.service }}" \
             --git-sha "${{ steps.target.outputs.sha }}" \
             --image-tag "${{ steps.target.outputs.image_tag }}" \
-            --bootstrap-manifest infra/asg/green-release.env \
             --apply
 
-      - name: Record release
+      - name: Record Fast Deploy
         if: success()
         run: |
           {
-            echo "### Green Web ASG release succeeded"
+            echo "### Green Web ASG Fast Deploy succeeded"
             echo
             echo "- Service: \`${{ steps.target.outputs.service }}\`"
             echo "- Commit: \`${{ steps.target.outputs.sha }}\`"
             echo "- ECR tag: \`${{ steps.target.outputs.image_tag }}\`"
-            echo "- Launch Template version: \`${{ steps.rollout.outputs.launch_template_version || 'see rollout log' }}\`"
-            echo "- Instance Refresh: \`${{ steps.rollout.outputs.instance_refresh_id || 'see rollout log' }}\`"
-            echo "- Deployment mode: 100/200 without CloudFront isolation"
-            echo "- Next step: verify API smoke and WebSocket/PC Agent reconnection"
+            echo "- Existing instance: \`${{ steps.deploy.outputs.instance_id || 'see deploy log' }}\`"
+            echo "- Next Launch Template version: \`${{ steps.deploy.outputs.launch_template_version || 'see deploy log' }}\`"
+            echo "- Deployment mode: in-place container update; brief API or WebSocket interruption is accepted"
+            echo "- Next step: verify API smoke and WebSocket reconnection"
           } >> "$GITHUB_STEP_SUMMARY"
