@@ -70,16 +70,20 @@ export function SlotCandidatePanel({
   const [hideFail, setHideFail] = useState(false);
   const [onlyWishlist, setOnlyWishlist] = useState(false);
   // 데스크톱 패널: 포탈+fixed로 띄워 헤더 드래그(보드 밖 허용, 화면 이탈만 방지)·꼭지점 리사이즈.
-  // 모바일 바텀시트는 고정. 더블클릭·슬롯 전환 시 초기 위치·크기로 복귀.
+  // 모바일 바텀시트는 고정. 한 번 옮겨두면 슬롯을 바꾸거나 닫았다 열어도 그 자리를 지키고,
+  // 핸들 더블클릭으로만 초기 위치·크기로 되돌린다.
   const isDesktop = useIsDesktop();
+  const [initialRect, setInitialRect] = useState(() => panelInitialRect());
   const {
     targetRef: panelRef,
     dragStyle,
     isDragging,
     startDrag: startPanelDrag,
     resetDrag
-  } = useBoardDrag<HTMLElement>({ resetKey: slot.category });
-  const [initialRect, setInitialRect] = useState(() => panelInitialRect());
+  } = useBoardDrag<HTMLElement>({
+    persistKey: 'slot-candidate-panel',
+    anchor: { left: initialRect.left, top: initialRect.top }
+  });
   // URL로 페이지와 함께 마운트되면 첫 렌더 시점엔 보드가 아직 DOM에 없다 —
   // 커밋 직후(페인트 전) 실제 스테이지 위치로 다시 잰다.
   useLayoutEffect(() => {
@@ -96,11 +100,6 @@ export function SlotCandidatePanel({
     resetDrag();
     applyInitialSize();
   };
-  // 슬롯 전환 시 훅의 resetDrag가 인라인 크기를 지우므로, 초기 크기를 다시 입힌다.
-  useEffect(() => {
-    applyInitialSize();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slot.category]);
   const [wishlist, setWishlist] = useState<Set<string>>(() => readWishlist());
   const [quickViewPart, setQuickViewPart] = useState<PartRow | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
@@ -257,7 +256,7 @@ export function SlotCandidatePanel({
         role="dialog"
         aria-label={`${slot.label} 부품 목록`}
         style={isDesktop
-          ? { left: initialRect.left, top: initialRect.top, width: initialRect.width, height: initialRect.height, ...dragStyle }
+          ? { width: initialRect.width, height: initialRect.height, ...dragStyle }
           : dragStyle}
         className="panel slot-candidate-panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:inset-auto lg:z-[55] lg:max-h-[92vh] lg:min-h-[280px] lg:w-auto lg:min-w-[320px] lg:max-w-[92vw] lg:rounded-xl lg:border lg:border-commerce-line lg:shadow-xl lg:[resize:both]"
       >
