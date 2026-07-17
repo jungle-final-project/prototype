@@ -399,14 +399,14 @@ umask 077
 readonly app_root='${APP_ROOT}'
 readonly app_user='${APP_USER}'
 readonly helper_sha='${GIT_SHA}'
-readonly helper_path=\"\$(mktemp /tmp/buildgraph-fast-deploy.XXXXXX)\"
-cleanup_fast_helper() { rm -f \"\$helper_path\"; }
+readonly helper_path="\$(mktemp /tmp/buildgraph-fast-deploy.XXXXXX)"
+cleanup_fast_helper() { rm -f "\$helper_path"; }
 trap cleanup_fast_helper EXIT
-runuser -u \"\$app_user\" -- git -C \"\$app_root\" fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
-runuser -u \"\$app_user\" -- git -C \"\$app_root\" cat-file -e \"\${helper_sha}^{commit}\"
-runuser -u \"\$app_user\" -- git -C \"\$app_root\" show \"\${helper_sha}:tools/apply_green_asg_release_in_place.sh\" >\"\$helper_path\"
-chmod 700 \"\$helper_path\"
-\"\$helper_path\" prepare --deployment-id '${DEPLOYMENT_ID}' --service '${SERVICE}' --source-git-sha '${SOURCE_GIT_SHA}' --target-git-sha '${GIT_SHA}' --source-manifest-b64 '${source_manifest_b64}' --target-manifest-b64 '${target_manifest_b64}'
+runuser -u "\$app_user" -- git -C "\$app_root" fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+runuser -u "\$app_user" -- git -C "\$app_root" cat-file -e "\${helper_sha}^{commit}"
+runuser -u "\$app_user" -- git -C "\$app_root" show "\${helper_sha}:tools/apply_green_asg_release_in_place.sh" >"\$helper_path"
+chmod 700 "\$helper_path"
+"\$helper_path" prepare --deployment-id '${DEPLOYMENT_ID}' --service '${SERVICE}' --source-git-sha '${SOURCE_GIT_SHA}' --target-git-sha '${GIT_SHA}' --source-manifest-b64 '${source_manifest_b64}' --target-manifest-b64 '${target_manifest_b64}'
 BUILDGRAPH_FAST_DEPLOY_REMOTE
 EOF
 )"
@@ -418,21 +418,21 @@ umask 077
 readonly app_root='${APP_ROOT}'
 readonly app_user='${APP_USER}'
 readonly helper_sha='${GIT_SHA}'
-readonly helper_path=\"\$(mktemp /tmp/buildgraph-fast-deploy.XXXXXX)\"
-cleanup_fast_helper() { rm -f \"\$helper_path\"; }
+readonly helper_path="\$(mktemp /tmp/buildgraph-fast-deploy.XXXXXX)"
+cleanup_fast_helper() { rm -f "\$helper_path"; }
 trap cleanup_fast_helper EXIT
 if [[ '${action}' == 'rollback' ]]; then
   readonly transaction_root='/var/lib/buildgraph/fast-deploy'
-  readonly cancellation_fence=\"\$transaction_root/.cancelled-${DEPLOYMENT_ID}\"
-  readonly fence_candidate=\"\${cancellation_fence}.tmp.\$\$\"
-  install -d -m 0700 \"\$transaction_root\"
-  printf '%s\\n' \"cancelled_at=\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" >\"\$fence_candidate\"
-  chmod 600 \"\$fence_candidate\"
-  mv -f \"\$fence_candidate\" \"\$cancellation_fence\"
+  readonly cancellation_fence="\$transaction_root/.cancelled-${DEPLOYMENT_ID}"
+  readonly fence_candidate="\${cancellation_fence}.tmp.\$\$"
+  install -d -m 0700 "\$transaction_root"
+  printf '%s\\n' "cancelled_at=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"\$fence_candidate"
+  chmod 600 "\$fence_candidate"
+  mv -f "\$fence_candidate" "\$cancellation_fence"
 fi
-runuser -u \"\$app_user\" -- git -C \"\$app_root\" show \"\${helper_sha}:tools/apply_green_asg_release_in_place.sh\" >\"\$helper_path\"
-chmod 700 \"\$helper_path\"
-\"\$helper_path\" '${action}' --deployment-id '${DEPLOYMENT_ID}'
+runuser -u "\$app_user" -- git -C "\$app_root" show "\${helper_sha}:tools/apply_green_asg_release_in_place.sh" >"\$helper_path"
+chmod 700 "\$helper_path"
+"\$helper_path" '${action}' --deployment-id '${DEPLOYMENT_ID}'
 BUILDGRAPH_FAST_DEPLOY_REMOTE
 EOF
 )"
