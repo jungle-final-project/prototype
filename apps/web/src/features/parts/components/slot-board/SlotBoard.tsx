@@ -2340,6 +2340,10 @@ function popoverFixedPosition(category: PartCategory, variant: SlotRelationPopov
 }
 
 // 데스크톱 팝오버 공통 스타일: 우하단 꼭지점 네이티브 리사이즈 + 내용 스크롤 + 크기 상하한.
+// 문제 팝오버와 정상(관계) 팝오버는 사용자 눈에 하나의 "설명 카드"다 — 옮겨 놓은 자리를 같은 키로 공유해
+// 부품을 바꿔(문제↔정상 전환 포함) 카드 종류가 바뀌어도 그 자리에서 내용만 갈아끼운 것처럼 보이게 한다.
+const RELATION_POPOVER_PLACEMENT_KEY = 'slot-relation-popover';
+
 const POPOVER_DESKTOP_CLASS =
   'z-[80] rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl ' +
   '[resize:both] overflow-auto min-w-[240px] min-h-[150px] max-w-[90vw] max-h-[80vh]';
@@ -2365,10 +2369,14 @@ function SlotProblemPopover({
   const isDesktop = useIsDesktop();
   // 호출부에서 key=category로 리마운트되므로 초기 좌표는 마운트 시 1회 계산이면 충분하다.
   const [position] = useState(() => popoverFixedPosition(detail.category, placementVariant));
-  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({ resetKey: detail.category });
+  // 설명 카드는 문제/정상이 같은 자리를 쓴다 — 한 번 옮겨두면 부품을 바꿔도 그 자리에서 내용만 바뀐다.
+  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({
+    persistKey: RELATION_POPOVER_PLACEMENT_KEY,
+    anchor: { left: position.left, top: position.top }
+  });
   const placement = position.placement;
   const style: CSSProperties = isDesktop
-    ? { position: 'fixed', left: position.left, top: position.top, width: placement.width, ...dragStyle }
+    ? { position: 'fixed', width: placement.width, ...dragStyle }
     : {};
   const toneClass = detail.status === 'FAIL'
     ? 'border-red-200 bg-red-50 text-red-700'
@@ -2553,10 +2561,14 @@ function SlotRelationOkPopover({
   const isDesktop = useIsDesktop();
   // 호출부에서 key=category로 리마운트되므로 초기 좌표는 마운트 시 1회 계산이면 충분하다.
   const [position] = useState(() => popoverFixedPosition(category, placementVariant));
-  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({ resetKey: category });
+  // 문제 팝오버와 같은 자리를 공유한다(위 상수 주석 참고).
+  const { targetRef, dragStyle, isDragging, startDrag, resetDrag } = useBoardDrag<HTMLElement>({
+    persistKey: RELATION_POPOVER_PLACEMENT_KEY,
+    anchor: { left: position.left, top: position.top }
+  });
   const placement = position.placement;
   const style: CSSProperties = isDesktop
-    ? { position: 'fixed', left: position.left, top: position.top, width: placement.width, ...dragStyle }
+    ? { position: 'fixed', width: placement.width, ...dragStyle }
     : {};
   const popover = (
     <section
@@ -2670,26 +2682,17 @@ function useSlotRelationPopover({
         setActiveCategory(null);
       }
     };
-    // 바깥 클릭 닫기 — 다른 부품 클릭은 pointerdown이 먼저 닫고 이어지는 클릭이 새로 연다.
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('[data-testid="slot-problem-popover"], [data-testid="slot-relation-popover"]')) {
-        return;
-      }
-      setActiveCategory(null);
-    };
+    // 바깥 클릭으로는 닫지 않는다 — 옮겨 놓고 부품마다 훑어보는 카드라, 아무 클릭에나 사라지면
+    // 가져다 놓는 의미가 없어진다. 닫기는 닫기 버튼·ESC·대상 부품이 빠질 때뿐이다.
     window.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('pointerdown', handlePointerDown);
     };
   }, [activeCategory]);
 
   const openRelation = (category: PartCategory) => {
     if (filledCategories.has(category)) {
-      // 토글 닫기는 두지 않는다 — 바깥클릭 닫기가 pointerdown에서 먼저 닫아버려
-      // 같은 부품 재클릭이 '닫힘→다시 열림'으로 뒤집히는 레이스가 생긴다.
+      // 다른 부품을 눌러도 카드는 그 자리에 남고 내용만 이 부품으로 바뀐다.
       setActiveCategory(category);
     }
   };

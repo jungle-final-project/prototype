@@ -1120,10 +1120,14 @@ test('placement board part click explains relations instead of opening the candi
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
   await expect(page).toHaveURL('/self-quote');
 
-  // 팝오버 밖(보드 헤더 여백)을 클릭하면 닫힌다 — 검색 패널은 열리지 않는다.
+  // 팝오버 밖(보드 헤더 여백)을 클릭해도 닫히지 않는다 — 옮겨 놓고 쓰는 카드라 아무 클릭에나 사라지지 않는다.
   await page.getByTestId('slot-board-widget').click({ position: { x: 8, y: 8 } });
-  await expect(problemPopover).toHaveCount(0);
+  await expect(problemPopover).toBeVisible();
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+
+  // 닫기는 명시적으로 — ESC로 닫힌다.
+  await page.keyboard.press('Escape');
+  await expect(problemPopover).toHaveCount(0);
 
   // 문제에 연루된 상대 부품 바로가기 — GPU 전력 문제에서 파워 후보로 곧장 넘어갈 수 있다.
   await page.getByTestId('slot-fused-area-GPU').click();
@@ -1254,6 +1258,88 @@ test('candidate panel can be dragged by its header on desktop', async ({ page })
   expect(Math.round((popoverAfter?.y ?? 0) - (popoverBefore?.y ?? 0))).toBe(20);
   await popover.getByRole('button', { name: '문제 사유 닫기' }).click();
   await expect(popover).toHaveCount(0);
+});
+
+// 떠 있는 카드는 "가져다 놓고 쓰는" 도구다 — 한 번 옮기면 부품을 바꾸거나 닫았다 열어도 그 자리를 지킨다.
+// (안 옮긴 상태에서는 기존대로 클릭한 부품 옆에 뜬다.)
+test('floating cards keep the spot the user dragged them to', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildGraphResponse()) });
+  });
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+
+  // ── 설명 카드: 옮긴 자리가 부품을 바꿔도(문제 GPU → 정상 CPU, 카드 종류까지 바뀜) 유지된다.
+  await page.getByTestId('slot-fused-area-GPU').click();
+  const problem = page.getByTestId('slot-problem-popover');
+  await expect(problem).toBeVisible();
+  const problemHandle = await page.getByTestId('slot-problem-popover-handle').boundingBox();
+  const px = (problemHandle?.x ?? 0) + (problemHandle?.width ?? 0) / 2;
+  const py = (problemHandle?.y ?? 0) + 8;
+  await page.mouse.move(px, py);
+  await page.mouse.down();
+  await page.mouse.move(px + 40, py + 30, { steps: 4 });
+  await page.mouse.up();
+  const placed = await problem.boundingBox();
+
+  // 다른 부품 클릭 → 닫히지 않고, 놓아둔 자리에서 내용만 바뀐다.
+  await page.getByTestId('slot-fused-area-CPU').click();
+  const relation = page.getByTestId('slot-relation-popover');
+  await expect(relation).toBeVisible();
+  await expect(relation).toContainText('호환 가능');
+  const afterSwitch = await relation.boundingBox();
+  expect(Math.abs((afterSwitch?.x ?? 0) - (placed?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((afterSwitch?.y ?? 0) - (placed?.y ?? 0))).toBeLessThanOrEqual(1);
+
+  // 닫았다 다시 열어도 그 자리다.
+  await relation.getByRole('button', { name: '관계 상태 닫기' }).click();
+  await expect(relation).toHaveCount(0);
+  await page.getByTestId('slot-fused-area-CPU').click();
+  const reopened = await page.getByTestId('slot-relation-popover').boundingBox();
+  expect(Math.abs((reopened?.x ?? 0) - (placed?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((reopened?.y ?? 0) - (placed?.y ?? 0))).toBeLessThanOrEqual(1);
+
+  // 더블클릭하면 기억한 자리를 버리고 부품 옆 기본 자리로 돌아간다.
+  await page.getByTestId('slot-relation-popover-handle').dblclick({ position: { x: 10, y: 10 } });
+  const afterReset = await page.getByTestId('slot-relation-popover').boundingBox();
+  expect(Math.abs((afterReset?.x ?? 0) - (placed?.x ?? 0))).toBeGreaterThan(20);
+  await page.keyboard.press('Escape');
+
+  // ── 후보 패널: 옮긴 자리가 카테고리를 바꿔도, 닫았다 열어도 유지된다.
+  await page.getByTestId('checklist-GPU').click();
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+  await page.waitForTimeout(350); // 등장 애니메이션(slot-panel-in)이 transform을 쥐고 있는 동안은 측정하지 않는다.
+  const panelHandle = await page.getByTestId('slot-candidate-panel-handle').boundingBox();
+  const hx = (panelHandle?.x ?? 0) + (panelHandle?.width ?? 0) / 2;
+  const hy = (panelHandle?.y ?? 0) + 12;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(hx + 32, hy + 16, { steps: 4 });
+  await page.mouse.up();
+  const panelPlaced = await panel.boundingBox();
+
+  await page.getByTestId('checklist-CPU').click();
+  await expect(panel.getByRole('heading', { name: 'CPU 부품 목록' })).toBeVisible();
+  const panelAfterSwitch = await panel.boundingBox();
+  expect(Math.abs((panelAfterSwitch?.x ?? 0) - (panelPlaced?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((panelAfterSwitch?.y ?? 0) - (panelPlaced?.y ?? 0))).toBeLessThanOrEqual(1);
+
+  await panel.getByRole('button', { name: '후보 패널 닫기' }).click();
+  await expect(panel).toHaveCount(0);
+  await page.getByTestId('checklist-CPU').click();
+  await expect(panel).toBeVisible();
+  await page.waitForTimeout(350);
+  const panelReopened = await panel.boundingBox();
+  expect(Math.abs((panelReopened?.x ?? 0) - (panelPlaced?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((panelReopened?.y ?? 0) - (panelPlaced?.y ?? 0))).toBeLessThanOrEqual(1);
 });
 
 test('draws a card-to-part elbow connector only for the selected card in 3D view', async ({ page }) => {
