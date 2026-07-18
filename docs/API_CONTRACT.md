@@ -61,6 +61,7 @@ API DTO의 `id`는 내부 PK가 아니라 `public_id` 문자열이다.
 | `CONFLICT_STATE` | `409` | 허용되지 않은 상태 전이, 이미 실행 중인 job/session |
 | `DUPLICATE_RESOURCE` | `409` | 이메일 중복, 동일 active price alert 중복 |
 | `FILE_VALIDATION_ERROR` | `400` | JSONL 업로드 파일 크기/MIME/확장자/line 검증 실패 |
+| `RATE_LIMITED` | `429` | 짧은 시간 안에 반복된 로그인 시도 |
 | `PRECONDITION_REQUIRED` | `428` | LLM 필수 기능에서 `OPENAI_API_KEY` 등 서버 선행 설정 누락 |
 | `UPSTREAM_ERROR` | `502` | LLM 응답 JSON 계약 위반 또는 외부 LLM 호출 처리 실패 |
 | `INTERNAL_ERROR` | `500` | 서버 내부 오류 |
@@ -154,6 +155,8 @@ MVP 기준 결정값:
 | `GET` | `/api/auth/google/start` | no | 1번 | `?redirect=/my/quotes` | `302 Google OAuth redirect` | runtime |
 | `GET` | `/api/auth/google/callback` | no | 1번 | Google callback query | `302 /auth/callback?code=one-time-code&redirect=/my/quotes` | `users`, `user_auth_providers`, runtime |
 | `POST` | `/api/auth/exchange` | no | 1번 | `{ "code": "one-time-code", "termsAccepted": true, "marketingAccepted": false, "phoneNumber": "010-1234-5678", "postalCode": "06236", "addressLine1": "서울시 강남구 테헤란로 1", "addressLine2": "101호" }` | `{ "accessToken": "jwt-access-token", "refreshToken": "opaque-refresh-token", "user": { "id": "c6d75f0c-0f57-4d1c-a8b2-a4079dcd40fd", "email": "user@example.com", "name": "홍길동", "role": "USER" } }` | `users`, `user_auth_providers`, `refresh_tokens`, runtime |
+
+`POST /api/auth/login`은 같은 IP 또는 같은 이메일 기준으로 짧은 시간 안에 반복 시도가 누적되면 비밀번호 검증 전에 `429 RATE_LIMITED`를 반환한다. 제한값은 `LOGIN_RATE_LIMIT_*` 환경변수로 조정한다.
 
 Auth/User 구현 owner는 1번이다. 5번은 `Authorization` header 전달, token 저장 helper, `RequireAdmin`, admin guard, security allowlist, 공통 `ErrorResponse` 정합성을 검토한다.
 

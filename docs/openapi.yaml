@@ -135,6 +135,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: 이메일 또는 비밀번호 불일치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: 반복 로그인 시도 제한
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/auth/refresh:
     post:
       summary: access token 재발급
@@ -4090,7 +4102,7 @@ components:
       properties:
         code:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR, INVALID_DIAGNOSIS_REQUEST, AGENT_DISCONNECTED, DUPLICATE_DIAGNOSIS_ID, AGENT_RESPONSE_TIMEOUT, AGENT_RESPONSE_INTERRUPTED, AGENT_CONNECTION_FAILED, AGENT_RESPONSE_FAILED]
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, RATE_LIMITED, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR, INVALID_DIAGNOSIS_REQUEST, AGENT_DISCONNECTED, DUPLICATE_DIAGNOSIS_ID, AGENT_RESPONSE_TIMEOUT, AGENT_RESPONSE_INTERRUPTED, AGENT_CONNECTION_FAILED, AGENT_RESPONSE_FAILED]
         message:
           type: string
         details:
@@ -5259,35 +5271,35 @@ components:
         CPU:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         GPU:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         MOTHERBOARD:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         RAM:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         STORAGE:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         PSU:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         CASE:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         COOLER:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
     HomeRecommendedPartsResponse:
       type: object
       required: [items, generatedAt, fallbackUsed]
@@ -5302,6 +5314,36 @@ components:
         fallbackUsed:
           type: boolean
           description: XGBoost scorer를 쓰지 못해 deterministic fallback 랭킹을 사용했는지 여부
+    HomePartSummaryDto:
+      type: object
+      required: [id, category, name, price, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        name:
+          type: string
+        manufacturer:
+          type: string
+          nullable: true
+        price:
+          type: integer
+        status:
+          $ref: "#/components/schemas/GenericStatus"
+        attributes:
+          type: object
+          nullable: true
+          description: Home card display attributes only, such as imageUrl and shortSpec.
+          additionalProperties: true
+        externalOffer:
+          type: object
+          nullable: true
+          properties:
+            imageUrl:
+              type: string
+              nullable: true
     HomeRecommendedBuildsResponse:
       type: object
       required: [items, generatedAt, fallbackUsed]
@@ -5326,7 +5368,7 @@ components:
         rankPosition:
           type: integer
         part:
-          $ref: "#/components/schemas/PartDto"
+          $ref: "#/components/schemas/HomePartSummaryDto"
         scoreSource:
           type: string
           enum: [XGBOOST, FALLBACK]
