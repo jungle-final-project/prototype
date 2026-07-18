@@ -295,6 +295,7 @@ recommendation:
   # 홈 응답(사용자 무관) 인메모리 캐시 TTL(초). 0이면 캐시 끔. 가격은 일일 갱신이라 수십 초 지연 무해.
   home-cache:
     ttl-seconds: ${HOME_CACHE_TTL_SECONDS:30}
+    stale-seconds: ${HOME_CACHE_STALE_SECONDS:300}
     authenticated:
       ttl-seconds: ${AUTH_HOME_CACHE_TTL_SECONDS:300}
       stale-seconds: ${AUTH_HOME_CACHE_STALE_SECONDS:900}
