@@ -77,9 +77,11 @@ public class AuthenticatedHomeService {
     }
 
     private Map<String, Object> computeHome() {
+        Map<String, Object> categoryParts = homeCategoryPartsService.priceDescCategoryParts();
+        Map<String, Object> recommendedParts = homePartRecommendationService.sharedHomeParts(5);
         return MockData.map(
-                "categoryParts", homeCategoryPartsService.priceDescCategoryParts(),
-                "recommendedParts", homePartRecommendationService.sharedHomeParts(5)
+                "categoryParts", HomePartSummaryMapper.categoryParts(categoryParts),
+                "recommendedParts", HomePartSummaryMapper.recommendedParts(recommendedParts)
         );
     }
 

@@ -5223,35 +5223,35 @@ components:
         CPU:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         GPU:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         MOTHERBOARD:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         RAM:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         STORAGE:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         PSU:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         CASE:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
         COOLER:
           type: array
           items:
-            $ref: "#/components/schemas/PartDto"
+            $ref: "#/components/schemas/HomePartSummaryDto"
     HomeRecommendedPartsResponse:
       type: object
       required: [items, generatedAt, fallbackUsed]
@@ -5266,6 +5266,36 @@ components:
         fallbackUsed:
           type: boolean
           description: XGBoost scorer를 쓰지 못해 deterministic fallback 랭킹을 사용했는지 여부
+    HomePartSummaryDto:
+      type: object
+      required: [id, category, name, price, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/PartCategory"
+        name:
+          type: string
+        manufacturer:
+          type: string
+          nullable: true
+        price:
+          type: integer
+        status:
+          $ref: "#/components/schemas/GenericStatus"
+        attributes:
+          type: object
+          nullable: true
+          description: Home card display attributes only, such as imageUrl and shortSpec.
+          additionalProperties: true
+        externalOffer:
+          type: object
+          nullable: true
+          properties:
+            imageUrl:
+              type: string
+              nullable: true
     HomeRecommendedBuildsResponse:
       type: object
       required: [items, generatedAt, fallbackUsed]
@@ -5290,7 +5320,7 @@ components:
         rankPosition:
           type: integer
         part:
-          $ref: "#/components/schemas/PartDto"
+          $ref: "#/components/schemas/HomePartSummaryDto"
         scoreSource:
           type: string
           enum: [XGBOOST, FALLBACK]
