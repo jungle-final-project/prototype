@@ -111,6 +111,14 @@ buildgraph:
   auth:
     # bcrypt cost(2^n). 기본 10 불변. 검증 비용은 저장된 해시의 cost를 따름 — 부하테스트 계정은 재해시 필요.
     bcrypt-strength: ${BCRYPT_STRENGTH:10}
+    login-rate-limit:
+      enabled: ${LOGIN_RATE_LIMIT_ENABLED:true}
+      ip-window-seconds: ${LOGIN_RATE_LIMIT_IP_WINDOW_SECONDS:60}
+      max-attempts-per-ip: ${LOGIN_RATE_LIMIT_MAX_ATTEMPTS_PER_IP:120}
+      failure-window-seconds: ${LOGIN_RATE_LIMIT_FAILURE_WINDOW_SECONDS:300}
+      max-failures-per-email: ${LOGIN_RATE_LIMIT_MAX_FAILURES_PER_EMAIL:5}
+      max-failures-per-ip-email: ${LOGIN_RATE_LIMIT_MAX_FAILURES_PER_IP_EMAIL:5}
+      block-seconds: ${LOGIN_RATE_LIMIT_BLOCK_SECONDS:60}
     # requireUser의 JWT subject→사용자 캐시 TTL(초). 0이면 캐시 끔(요청마다 users SELECT).
     # role 변경·소프트 삭제 반영이 최대 이 시간만큼 늦을 수 있다 — 프로필 변경은 즉시 무효화된다.
     user-cache:

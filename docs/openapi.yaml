@@ -135,6 +135,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: 이메일 또는 비밀번호 불일치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: 반복 로그인 시도 제한
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/auth/refresh:
     post:
       summary: access token 재발급
@@ -4054,7 +4066,7 @@ components:
       properties:
         code:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR, INVALID_DIAGNOSIS_REQUEST, AGENT_DISCONNECTED, DUPLICATE_DIAGNOSIS_ID, AGENT_RESPONSE_TIMEOUT, AGENT_RESPONSE_INTERRUPTED, AGENT_CONNECTION_FAILED, AGENT_RESPONSE_FAILED]
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, RATE_LIMITED, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR, INVALID_DIAGNOSIS_REQUEST, AGENT_DISCONNECTED, DUPLICATE_DIAGNOSIS_ID, AGENT_RESPONSE_TIMEOUT, AGENT_RESPONSE_INTERRUPTED, AGENT_CONNECTION_FAILED, AGENT_RESPONSE_FAILED]
         message:
           type: string
         details:
