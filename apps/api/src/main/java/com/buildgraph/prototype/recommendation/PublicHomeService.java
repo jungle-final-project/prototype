@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +20,7 @@ public class PublicHomeService {
     private final Duration staleTtl;
     private final Executor refreshExecutor;
 
+    @Autowired
     public PublicHomeService(
             HomeCategoryPartsService homeCategoryPartsService,
             HomePartRecommendationService homePartRecommendationService,
