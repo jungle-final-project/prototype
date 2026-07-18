@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -61,9 +62,11 @@ public class PartCompatibleCandidateService {
                 .filter(part -> category.equals(part.category()))
                 .map(ToolBuildPart::publicId)
                 .toList();
-        List<CandidateEvaluation> evaluations = activeCandidates(category, Math.max(20, limit * 4)).stream()
+        List<CandidatePart> pool = activeCandidates(category, Math.max(20, limit * 4));
+        Map<Long, Map<String, Object>> benchmarks = prefetchBenchmarks(baseParts, pool.stream().map(CandidatePart::toolPart), checkedTools);
+        List<CandidateEvaluation> evaluations = pool.stream()
                 .filter(candidate -> !selectedPartIds.contains(candidate.toolPart().publicId()))
-                .map(candidate -> evaluate(baseParts, candidate, category, checkedTools, "REPLACE", null))
+                .map(candidate -> evaluate(baseParts, candidate, category, checkedTools, "REPLACE", null, benchmarks))
                 .sorted(Comparator
                         .comparingInt((CandidateEvaluation evaluation) -> statusRank(evaluation.status()))
                         .thenComparingInt(evaluation -> firstNumber(evaluation.partMap().get("price"), 0)))
@@ -114,9 +117,15 @@ public class PartCompatibleCandidateService {
                 .distinct()
                 .toList();
         List<String> checkedTools = checkedTools(normalizedCategory);
-        return rows.stream()
-                .map(row -> {
-                    CandidateEvaluation evaluation = evaluate(baseParts, new CandidatePart(toolPart(row), responsePart(row)), normalizedCategory, checkedTools, normalizedMode, normalizedTarget);
+        List<CandidatePart> candidates = rows.stream()
+                .map(row -> new CandidatePart(toolPart(row), responsePart(row)))
+                .toList();
+        // 후보 패널은 카테고리 전수(M개)를 평가한다 — 후보마다 performance 툴이 벤치마크를 조회하던
+        // N+1(M회)을 드래프트+후보 전체 1회 배치 로드로 대체한다.
+        Map<Long, Map<String, Object>> benchmarks = prefetchBenchmarks(baseParts, candidates.stream().map(CandidatePart::toolPart), checkedTools);
+        return candidates.stream()
+                .map(candidate -> {
+                    CandidateEvaluation evaluation = evaluate(baseParts, candidate, normalizedCategory, checkedTools, normalizedMode, normalizedTarget, benchmarks);
                     Map<String, Object> part = new LinkedHashMap<>(evaluation.partMap());
                     part.put("compatibility", evaluation.partListCompatibility());
                     // 추천기는 Tool이 이미 적재한 결과와 현재 선택 category만 읽는다. 응답 직전
@@ -185,6 +194,7 @@ public class PartCompatibleCandidateService {
                 .filter(id -> id != null && !id.isBlank())
                 .toList());
         Map<String, ToolBuildPart> candidatesById = partsByPublicIds(List.copyOf(distinctIds));
+        Map<Long, Map<String, Object>> benchmarks = prefetchBenchmarks(baseParts, candidatesById.values().stream(), checkedTools);
         List<String> passed = new ArrayList<>();
         List<String> warningFallbacks = new ArrayList<>();
         List<String> alreadySelected = new ArrayList<>();
@@ -206,7 +216,8 @@ public class PartCompatibleCandidateService {
                     normalizedCategory,
                     checkedTools,
                     normalizedMode,
-                    null
+                    null,
+                    benchmarks
             );
             if ("PASS".equals(evaluation.status())) {
                 passed.add(candidateId);
@@ -438,7 +449,19 @@ public class PartCompatibleCandidateService {
                 .toList();
     }
 
-    private CandidateEvaluation evaluate(List<ToolBuildPart> baseParts, CandidatePart candidate, String category, List<String> checkedTools, String mode, String replaceTargetPartId) {
+    /**
+     * 호출처(후보 패널·compatible-candidates·Build Chat 게이트)는 후보 루프 진입 전
+     * prefetchBenchmarks로 벤치마크를 요청당 1회 배치 로드해 넘긴다 — 후보마다
+     * performance 툴이 DB를 조회하던 N+1 회피. 판정 로직·결과는 프리페치 유무와 무관하게 동일하다.
+     */
+    private Map<Long, Map<String, Object>> prefetchBenchmarks(List<ToolBuildPart> baseParts, Stream<ToolBuildPart> candidates, List<String> checkedTools) {
+        if (checkedTools.isEmpty()) {
+            return Map.of();
+        }
+        return toolCheckService.loadLatestBenchmarks(Stream.concat(baseParts.stream(), candidates).toList());
+    }
+
+    private CandidateEvaluation evaluate(List<ToolBuildPart> baseParts, CandidatePart candidate, String category, List<String> checkedTools, String mode, String replaceTargetPartId, Map<Long, Map<String, Object>> prefetchedBenchmarks) {
         if (checkedTools.isEmpty()) {
             return new CandidateEvaluation(candidate.partMap(), "PASS", "ACTIVE 부품 후보입니다.", checkedTools, List.of());
         }
@@ -486,7 +509,7 @@ public class PartCompatibleCandidateService {
                     .toList());
             nextParts.add(candidate.toolPart());
         }
-        List<Map<String, Object>> toolResults = toolCheckService.checkBuild(nextParts, total(nextParts));
+        List<Map<String, Object>> toolResults = toolCheckService.checkBuild(nextParts, total(nextParts), prefetchedBenchmarks);
         List<String> applicableCheckedTools = ToolApplicabilityPolicy.applicableCandidateTools(checkedTools, nextParts);
         List<Map<String, Object>> relevantResults = toolResults.stream()
                 .filter(result -> applicableCheckedTools.contains(text(result.get("tool"))))
