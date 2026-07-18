@@ -67,10 +67,11 @@ test('shows the account-bound download and diagnosis CTAs when no diagnosis exis
 });
 
 test('uses the shared diagnosis polling hook for current progress, task, and logs', async ({ page }) => {
-  const initial = diagnosisResponse({
+  const initial = diagnosisSummary({
     currentProgress: 20,
     currentTask: 'hardware-overview',
-    events: [event('event-1', 'COLLECTING', 20, '하드웨어 정보를 수집하고 있습니다.')]
+    currentStatus: 'COLLECTING',
+    recentMessages: [recentMessage('event-1', 'COLLECTING', 20, '하드웨어 정보를 수집하고 있습니다.')]
   });
   await routeLatest(page, initial);
   await routeDiagnosis(page, diagnosisResponse({
@@ -93,7 +94,7 @@ test('uses the shared diagnosis polling hook for current progress, task, and log
 });
 
 test('shows the completed server result and linked AS ticket without inventing a visit decision', async ({ page }) => {
-  const completed = completedDiagnosis({
+  const completed = completedSummary({
     asTicket: {
       id: TICKET_ID,
       status: 'OPEN',
@@ -121,18 +122,68 @@ test('shows the completed server result and linked AS ticket without inventing a
   await expect(card.getByRole('link', { name: '지원 요청 보기' })).toHaveAttribute('href', `/support/${TICKET_ID}`);
 });
 
+test('refreshes latest on window focus and removes the listener after unmount', async ({ page }) => {
+  let latestRequests = 0;
+  let ticketAvailable = false;
+  await page.route('**/api/users/me/agent-diagnosis-requests/latest', (route) => {
+    latestRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        diagnosis: completedSummary(ticketAvailable
+          ? {
+              asTicket: {
+                id: TICKET_ID,
+                status: 'OPEN',
+                reviewStatus: 'REQUIRED',
+                supportDecision: null,
+                createdAt: '2026-07-18T00:06:00Z'
+              }
+            }
+          : {})
+      })
+    });
+  });
+  await routeDiagnosis(page, completedDiagnosis());
+
+  await page.goto('/my/profile');
+  const card = page.getByTestId('pc-agent-dashboard-card');
+  await expect(card.getByTestId('pc-agent-dashboard-result')).toContainText('그래픽 장치·드라이버 구성 이상');
+  expect(latestRequests).toBeGreaterThan(0);
+  await expect(card.getByTestId('pc-agent-dashboard-ticket')).toHaveCount(0);
+
+  const initialRequestCount = latestRequests;
+  ticketAvailable = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(card.getByTestId('pc-agent-dashboard-ticket')).toContainText('원격지원 요청 접수');
+  expect(latestRequests).toBeGreaterThan(initialRequestCount);
+
+  await page.goto('/login');
+  const requestCountAfterUnmount = latestRequests;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(200);
+  expect(latestRequests).toBe(requestCountAfterUnmount);
+});
+
 for (const terminal of [
   { status: 'FAILED', title: 'PC Agent 진단 실패' },
   { status: 'CANCELLED', title: 'PC Agent 진단 취소' },
   { status: 'TIMED_OUT', title: 'PC Agent 진단 시간 초과' }
 ]) {
   test(`shows the server ${terminal.status} state and a clean retry CTA`, async ({ page }) => {
+    const summary = diagnosisSummary({
+      currentStatus: terminal.status,
+      completed: true,
+      currentProgress: 40,
+      recentMessages: [recentMessage(`event-${terminal.status}`, terminal.status, 40, `서버 ${terminal.status} 상태입니다.`)]
+    });
     const response = diagnosisResponse({
       completed: true,
       currentProgress: 40,
       events: [event(`event-${terminal.status}`, terminal.status, 40, `서버 ${terminal.status} 상태입니다.`)]
     });
-    await routeLatest(page, response);
+    await routeLatest(page, summary);
     await routeDiagnosis(page, response);
 
     await page.goto('/my/profile');
@@ -200,6 +251,49 @@ function diagnosisResponse(override: Record<string, unknown> = {}) {
   };
 }
 
+function diagnosisSummary(override: Record<string, unknown> = {}) {
+  return {
+    diagnosisId: DIAGNOSIS_ID,
+    status: 'ACCEPTED',
+    connectionStatus: 'CONNECTED',
+    agentConnected: true,
+    accepted: true,
+    currentStatus: null,
+    currentProgress: 0,
+    currentTask: null,
+    recentMessages: [],
+    completed: false,
+    resultAvailable: false,
+    resultSeverity: null,
+    resolutionType: null,
+    dataMode: null,
+    scenarioId: null,
+    requestedAt: '2026-07-18T00:00:00Z',
+    completedAt: null,
+    asTicket: null,
+    createdAt: '2026-07-18T00:00:00Z',
+    updatedAt: '2026-07-18T00:00:00Z',
+    ...override
+  };
+}
+
+function completedSummary(override: Record<string, unknown> = {}) {
+  return diagnosisSummary({
+    currentStatus: 'COMPLETED',
+    currentProgress: 100,
+    currentTask: 'evidence-finalize',
+    recentMessages: [recentMessage('event-complete', 'COMPLETED', 100, '진단을 완료했습니다.')],
+    completed: true,
+    resultAvailable: true,
+    resultSeverity: 'WARNING',
+    resolutionType: 'SOFTWARE_RECOVERY',
+    dataMode: 'DEMO',
+    scenarioId: 'GRAPHICS_CODE43_REMOTE_SUPPORT',
+    completedAt: '2026-07-18T00:05:00Z',
+    ...override
+  });
+}
+
 function completedDiagnosis(override: Record<string, unknown> = {}) {
   return diagnosisResponse({
     currentProgress: 100,
@@ -241,5 +335,15 @@ function event(eventId: string, status: string, progressPercent: number, message
     message,
     occurredAt: '2026-07-18T00:00:01Z',
     createdAt: '2026-07-18T00:00:01Z'
+  };
+}
+
+function recentMessage(eventId: string, status: string, progressPercent: number, message: string) {
+  return {
+    eventId,
+    status,
+    progressPercent,
+    message,
+    occurredAt: '2026-07-18T00:00:01Z'
   };
 }

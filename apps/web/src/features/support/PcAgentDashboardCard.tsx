@@ -5,7 +5,7 @@ import { ApiError } from '../../lib/api';
 import { formatKstDateTime } from '../../lib/dateTime';
 import { downloadPcAgentForCurrentUser } from './agentDownload';
 import { getLatestPcAgentDiagnosis } from './supportApi';
-import type { PcAgentDiagnosisDto, PcAgentDiagnosisResultDto } from './supportApi';
+import type { PcAgentDiagnosisDto, PcAgentDiagnosisResultDto, PcAgentDiagnosisSummaryDto } from './supportApi';
 import { diagnosisStatus, usePcAgentDiagnosisPolling } from './usePcAgentDiagnosisPolling';
 
 type LoadState = 'loading' | 'ready' | 'error';
@@ -16,32 +16,56 @@ const FAILED_STATES = new Set(['FAILED', 'CANCELLED', 'TIMED_OUT']);
 export function PcAgentDashboardCard() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [loadError, setLoadError] = useState('');
-  const [latestDiagnosis, setLatestDiagnosis] = useState<PcAgentDiagnosisDto | null>(null);
+  const [latestDiagnosis, setLatestDiagnosis] = useState<PcAgentDiagnosisSummaryDto | null>(null);
   const [diagnosisId, setDiagnosisId] = useState('');
   const [downloadState, setDownloadState] = useState<DownloadState>('idle');
   const [downloadMessage, setDownloadMessage] = useState('');
   const polling = usePcAgentDiagnosisPolling(diagnosisId);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setLoadState('loading');
-    setLoadError('');
-    getLatestPcAgentDiagnosis(controller.signal)
-      .then((response) => {
+    let disposed = false;
+    let hasLoaded = false;
+    let controller: AbortController | null = null;
+
+    async function loadLatest(showLoading: boolean) {
+      controller?.abort();
+      const requestController = new AbortController();
+      controller = requestController;
+      if (showLoading) {
+        setLoadState('loading');
+        setLoadError('');
+      }
+      try {
+        const response = await getLatestPcAgentDiagnosis(requestController.signal);
+        if (disposed || controller !== requestController) return;
+        hasLoaded = true;
         setLatestDiagnosis(response.diagnosis);
         setDiagnosisId(response.diagnosis?.diagnosisId ?? '');
         setLoadState('ready');
-      })
-      .catch((cause) => {
-        if (isAbortError(cause)) return;
-        setLatestDiagnosis(null);
-        setDiagnosisId('');
-        setLoadState('error');
-        setLoadError(cause instanceof ApiError
-          ? cause.message
-          : '최근 PC Agent 진단 상태를 불러오지 못했습니다.');
-      });
-    return () => controller.abort();
+      } catch (cause) {
+        if (disposed || controller !== requestController || isAbortError(cause)) return;
+        if (!hasLoaded) {
+          setLatestDiagnosis(null);
+          setDiagnosisId('');
+          setLoadState('error');
+          setLoadError(cause instanceof ApiError
+            ? cause.message
+            : '최근 PC Agent 진단 상태를 불러오지 못했습니다.');
+        }
+      }
+    }
+
+    const handleFocus = () => {
+      void loadLatest(false);
+    };
+
+    void loadLatest(true);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', handleFocus);
+      controller?.abort();
+    };
   }, []);
 
   async function downloadAgent() {
@@ -129,11 +153,13 @@ function NoDiagnosisState({
   );
 }
 
-function DiagnosisState({ diagnosis, pollingError }: { diagnosis: PcAgentDiagnosisDto; pollingError: string }) {
-  const status = diagnosisStatus(diagnosis);
+function DiagnosisState({ diagnosis, pollingError }: { diagnosis: PcAgentDiagnosisDto | PcAgentDiagnosisSummaryDto; pollingError: string }) {
+  const status = dashboardDiagnosisStatus(diagnosis);
   const progress = Math.max(0, Math.min(100, diagnosis.currentProgress ?? 0));
   const failed = FAILED_STATES.has(status);
-  const logs = (diagnosis.events ?? [])
+  const result = 'result' in diagnosis ? diagnosis.result : null;
+  const messages = 'events' in diagnosis ? diagnosis.events : diagnosis.recentMessages;
+  const logs = messages
     .map((event) => event.message?.trim())
     .filter((message): message is string => Boolean(message))
     .slice(-3);
@@ -146,7 +172,7 @@ function DiagnosisState({ diagnosis, pollingError }: { diagnosis: PcAgentDiagnos
         <p><span className="font-bold text-slate-800">진단 시작</span><br />{formatKstDateTime(diagnosis.requestedAt ?? diagnosis.createdAt)}</p>
       </div>
 
-      {!diagnosis.result && !failed ? (
+      {!result && !failed ? (
         <div data-testid="pc-agent-dashboard-progress" className="space-y-3">
           <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
             <span>{diagnosis.currentTask || '진단 준비 중'}</span>
@@ -169,7 +195,7 @@ function DiagnosisState({ diagnosis, pollingError }: { diagnosis: PcAgentDiagnos
         </div>
       ) : null}
 
-      {diagnosis.result ? <CompletedDiagnosis result={diagnosis.result} completedAt={diagnosis.completedAt} /> : null}
+      {result ? <CompletedDiagnosis result={result} completedAt={diagnosis.completedAt} /> : null}
 
       {failed ? (
         <div className="space-y-3">
@@ -182,7 +208,7 @@ function DiagnosisState({ diagnosis, pollingError }: { diagnosis: PcAgentDiagnos
 
       {pollingError ? <StateMessage type="warn" title="진단 상태 조회 확인 필요" body={pollingError} /> : null}
 
-      {diagnosis.result && !failed ? (
+      {result && !failed ? (
         <Link to={detailPath} className="inline-flex h-10 items-center rounded border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:border-[#de6c2d] hover:text-[#de6c2d]">
           진단 결과 보기
         </Link>
@@ -242,9 +268,14 @@ function LinkedTicket({ ticket }: { ticket: NonNullable<PcAgentDiagnosisDto['asT
   );
 }
 
-function diagnosisDisplayStatus(diagnosis: PcAgentDiagnosisDto) {
+function diagnosisDisplayStatus(diagnosis: PcAgentDiagnosisDto | PcAgentDiagnosisSummaryDto) {
   if (diagnosis.asTicket) return diagnosis.asTicket.status;
-  return diagnosisStatus(diagnosis);
+  return dashboardDiagnosisStatus(diagnosis);
+}
+
+function dashboardDiagnosisStatus(diagnosis: PcAgentDiagnosisDto | PcAgentDiagnosisSummaryDto) {
+  if ('events' in diagnosis) return diagnosisStatus(diagnosis);
+  return diagnosis.currentStatus || diagnosis.status;
 }
 
 function failureTitle(status: string) {

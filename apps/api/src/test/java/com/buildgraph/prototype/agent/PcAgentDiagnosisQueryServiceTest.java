@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -77,7 +78,10 @@ class PcAgentDiagnosisQueryServiceTest {
                 .containsEntry("resolutionType", "SOFTWARE_RECOVERY")
                 .containsEntry("dataMode", "DEMO")
                 .containsEntry("scenarioId", "GRAPHICS_CODE43_REMOTE_SUPPORT");
-        assertThat((List<?>) response.get("events")).hasSize(1);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> detailEvents = (List<Map<String, Object>>) response.get("events");
+        assertThat(detailEvents).hasSize(1);
+        assertThat(detailEvents.get(0)).containsEntry("rawPayload", Map.of("dataMode", "DEMO"));
         @SuppressWarnings("unchecked")
         Map<String, Object> resultResponse = (Map<String, Object>) response.get("result");
         assertThat(resultResponse)
@@ -166,8 +170,45 @@ class PcAgentDiagnosisQueryServiceTest {
     void latestReturnsAnOwnedDiagnosisWithItsLinkedTicket() {
         when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenAnswer(invocation -> {
             String sql = invocation.getArgument(0);
-            if (sql.contains("ORDER BY requested_at DESC")) {
-                return List.of(Map.of("diagnosis_id", DIAGNOSIS_ID.toString()));
+            if (sql.contains("FROM pc_agent_diagnosis_requests")) {
+                return List.of(requestRow());
+            }
+            if (sql.contains("FROM pc_agent_diagnosis_events") && sql.contains("LIMIT 1")) {
+                return List.of(Map.of(
+                        "task_id", "evidence-finalize",
+                        "status", "COMPLETED",
+                        "progress_percent", 100,
+                        "occurred_at", Instant.parse("2026-07-13T01:00:02Z"),
+                        "created_at", Instant.parse("2026-07-13T01:00:03Z")
+                ));
+            }
+            if (sql.contains("FROM pc_agent_diagnosis_events")) {
+                return List.of(
+                        Map.of(
+                                "event_id", "event-diagnosing",
+                                "status", "DIAGNOSING",
+                                "progress_percent", 70,
+                                "message", "그래픽 장치 상태를 확인하고 있습니다.",
+                                "occurred_at", Instant.parse("2026-07-13T01:00:01Z")
+                        ),
+                        Map.of(
+                                "event_id", "event-completed",
+                                "status", "COMPLETED",
+                                "progress_percent", 100,
+                                "message", "진단을 완료했습니다.",
+                                "occurred_at", Instant.parse("2026-07-13T01:00:02Z")
+                        )
+                );
+            }
+            if (sql.contains("FROM pc_agent_diagnosis_results")) {
+                return List.of(Map.of(
+                        "result_id", "result-1",
+                        "severity", "WARNING",
+                        "resolution_type", "SOFTWARE_RECOVERY",
+                        "data_mode", "DEMO",
+                        "scenario_id", "GRAPHICS_CODE43_REMOTE_SUPPORT",
+                        "updated_at", Instant.parse("2026-07-13T01:00:04Z")
+                ));
             }
             if (sql.contains("FROM as_tickets")) {
                 return List.of(Map.of(
@@ -177,22 +218,25 @@ class PcAgentDiagnosisQueryServiceTest {
                         "created_at", Instant.parse("2026-07-13T01:01:00Z")
                 ));
             }
-            return List.of(requestRow());
+            return List.of();
         });
-        PcAgentDiagnosisEventEntity completedEvent = event(
-                "event-completed", "evidence-finalize", "COMPLETED", 100,
-                "진단을 완료했습니다.", "2026-07-13T01:00:02Z"
-        );
-        when(eventRepository.findAllByDiagnosisIdOrderByOccurredAtAscIdAsc(DIAGNOSIS_ID))
-                .thenReturn(List.of(completedEvent));
-        PcAgentDiagnosisResultEntity completedResult = result();
-        when(resultRepository.findByDiagnosisId(DIAGNOSIS_ID)).thenReturn(Optional.of(completedResult));
 
         Map<String, Object> response = service.latest(USER);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> diagnosis = (Map<String, Object>) response.get("diagnosis");
-        assertThat(diagnosis).containsEntry("diagnosisId", DIAGNOSIS_ID.toString());
+        assertThat(diagnosis)
+                .containsEntry("diagnosisId", DIAGNOSIS_ID.toString())
+                .containsEntry("currentStatus", "COMPLETED")
+                .containsEntry("currentProgress", 100)
+                .containsEntry("completed", true)
+                .containsEntry("resultAvailable", true)
+                .doesNotContainKeys("events", "result", "rawPayload");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> recentMessages = (List<Map<String, Object>>) diagnosis.get("recentMessages");
+        assertThat(recentMessages).hasSize(2);
+        assertThat(recentMessages).allSatisfy(message -> assertThat(message)
+                .doesNotContainKeys("rawPayload", "taskId", "eventType", "createdAt"));
         @SuppressWarnings("unchecked")
         Map<String, Object> ticket = (Map<String, Object>) diagnosis.get("asTicket");
         assertThat(ticket)
@@ -202,15 +246,34 @@ class PcAgentDiagnosisQueryServiceTest {
                 .containsEntry("supportDecision", null);
         verify(jdbcTemplate).queryForList(
                 argThat(sql -> sql.contains("FROM pc_agent_diagnosis_requests")
-                        && sql.contains("WHERE user_id = ?")
-                        && sql.contains("ORDER BY requested_at DESC")),
+                        && sql.contains("WHERE r.user_id = ?")
+                        && sql.contains("ORDER BY r.requested_at DESC")),
                 eq(USER.internalId())
+        );
+        verify(jdbcTemplate, times(2)).queryForList(
+                argThat(sql -> sql.contains("FROM pc_agent_diagnosis_events")
+                        && !sql.contains("raw_payload")),
+                eq(DIAGNOSIS_ID)
+        );
+        verify(jdbcTemplate).queryForList(
+                argThat(sql -> sql.contains("BTRIM(message)") && sql.contains("LIMIT 3")),
+                eq(DIAGNOSIS_ID)
+        );
+        verify(jdbcTemplate).queryForList(
+                argThat(sql -> sql.contains("FROM pc_agent_diagnosis_results")
+                        && !sql.contains("evidence")
+                        && !sql.contains("findings")
+                        && !sql.contains("actions")
+                        && !sql.contains("raw_payload")),
+                eq(DIAGNOSIS_ID)
         );
         verify(jdbcTemplate).queryForList(
                 argThat(sql -> sql.contains("FROM as_tickets") && sql.contains("AND user_id = ?")),
                 eq(DIAGNOSIS_ID),
                 eq(USER.internalId())
         );
+        verify(eventRepository, never()).findAllByDiagnosisIdOrderByOccurredAtAscIdAsc(any());
+        verify(resultRepository, never()).findByDiagnosisId(any());
     }
 
     @Test

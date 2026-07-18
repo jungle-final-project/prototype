@@ -9,7 +9,6 @@ import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -108,24 +107,131 @@ public class PcAgentDiagnosisQueryService {
 
     @Transactional(readOnly = true)
     public Map<String, Object> latest(CurrentUserService.CurrentUser user) {
-        String diagnosisId = jdbcTemplate.queryForList("""
-                        SELECT diagnosis_id::text AS diagnosis_id
-                        FROM pc_agent_diagnosis_requests
-                        WHERE user_id = ?
-                        ORDER BY requested_at DESC, diagnosis_id DESC
+        Map<String, Object> request = jdbcTemplate.queryForList("""
+                        SELECT r.diagnosis_id::text AS diagnosis_id,
+                               d.public_id::text AS device_id,
+                               r.request_status,
+                               r.connection_status,
+                               r.accepted_at,
+                               r.requested_at,
+                               r.created_at,
+                               r.updated_at
+                        FROM pc_agent_diagnosis_requests r
+                        JOIN agent_devices d ON d.id = r.agent_device_id
+                        WHERE r.user_id = ?
+                        ORDER BY r.requested_at DESC, r.diagnosis_id DESC
                         LIMIT 1
                         """, user.internalId())
                 .stream()
                 .findFirst()
-                .map(row -> DbValueMapper.string(row, "diagnosis_id"))
                 .orElse(null);
-        if (diagnosisId == null) {
+        if (request == null) {
             return MockData.map("diagnosis", null);
         }
 
-        Map<String, Object> diagnosis = new LinkedHashMap<>(get(user, diagnosisId));
-        diagnosis.put("asTicket", linkedTicket(user, UUID.fromString(diagnosisId)));
-        return MockData.map("diagnosis", diagnosis);
+        UUID diagnosisId = UUID.fromString(DbValueMapper.string(request, "diagnosis_id"));
+        Map<String, Object> latestEvent = jdbcTemplate.queryForList("""
+                        SELECT task_id,
+                               status,
+                               progress_percent,
+                               occurred_at,
+                               created_at
+                        FROM pc_agent_diagnosis_events
+                        WHERE diagnosis_id = ?
+                        ORDER BY occurred_at DESC, id DESC
+                        LIMIT 1
+                        """, diagnosisId)
+                .stream()
+                .findFirst()
+                .orElse(null);
+        List<Map<String, Object>> recentMessages = jdbcTemplate.queryForList("""
+                        SELECT event_id,
+                               status,
+                               progress_percent,
+                               message,
+                               occurred_at
+                        FROM (
+                          SELECT id,
+                                 event_id,
+                                 status,
+                                 progress_percent,
+                                 message,
+                                 occurred_at
+                          FROM pc_agent_diagnosis_events
+                          WHERE diagnosis_id = ?
+                            AND message IS NOT NULL
+                            AND BTRIM(message) <> ''
+                          ORDER BY occurred_at DESC, id DESC
+                          LIMIT 3
+                        ) recent
+                        ORDER BY occurred_at ASC, id ASC
+                        """, diagnosisId)
+                .stream()
+                .map(PcAgentDiagnosisQueryService::recentMessageResponse)
+                .toList();
+        Map<String, Object> result = jdbcTemplate.queryForList("""
+                        SELECT severity,
+                               resolution_type,
+                               data_mode,
+                               scenario_id,
+                               updated_at
+                        FROM pc_agent_diagnosis_results
+                        WHERE diagnosis_id = ?
+                        """, diagnosisId)
+                .stream()
+                .findFirst()
+                .orElse(null);
+
+        String requestStatus = DbValueMapper.string(request, "request_status");
+        String currentStatus = latestEvent == null ? null : DbValueMapper.string(latestEvent, "status");
+        boolean accepted = request.get("accepted_at") != null
+                || "ACCEPTED".equals(requestStatus)
+                || "DUPLICATE".equals(requestStatus);
+        boolean completed = result != null
+                || (currentStatus != null && TERMINAL_STATES.contains(currentStatus));
+        Object completedAt = result != null
+                ? DbValueMapper.timestamp(result, "updated_at")
+                : completed && latestEvent != null
+                        ? DbValueMapper.timestamp(latestEvent, "occurred_at")
+                        : null;
+        Object updatedAt = latestTimestamp(
+                DbValueMapper.timestamp(request, "updated_at"),
+                latestEvent == null ? null : DbValueMapper.timestamp(latestEvent, "created_at"),
+                result == null ? null : DbValueMapper.timestamp(result, "updated_at")
+        );
+
+        return MockData.map("diagnosis", MockData.map(
+                "diagnosisId", diagnosisId.toString(),
+                "status", requestStatus,
+                "connectionStatus", DbValueMapper.string(request, "connection_status"),
+                "agentConnected", broker.isConnected(DbValueMapper.string(request, "device_id")),
+                "accepted", accepted,
+                "currentStatus", currentStatus,
+                "currentProgress", latestEvent == null ? 0 : DbValueMapper.integer(latestEvent, "progress_percent"),
+                "currentTask", latestEvent == null ? null : DbValueMapper.string(latestEvent, "task_id"),
+                "recentMessages", recentMessages,
+                "completed", completed,
+                "resultAvailable", result != null,
+                "resultSeverity", result == null ? null : DbValueMapper.string(result, "severity"),
+                "resolutionType", result == null ? null : DbValueMapper.string(result, "resolution_type"),
+                "dataMode", result == null ? null : DbValueMapper.string(result, "data_mode"),
+                "scenarioId", result == null ? null : DbValueMapper.string(result, "scenario_id"),
+                "requestedAt", DbValueMapper.timestamp(request, "requested_at"),
+                "completedAt", completedAt,
+                "createdAt", DbValueMapper.timestamp(request, "created_at"),
+                "updatedAt", updatedAt,
+                "asTicket", linkedTicket(user, diagnosisId)
+        ));
+    }
+
+    private static Map<String, Object> recentMessageResponse(Map<String, Object> event) {
+        return MockData.map(
+                "eventId", DbValueMapper.string(event, "event_id"),
+                "status", DbValueMapper.string(event, "status"),
+                "progressPercent", DbValueMapper.integer(event, "progress_percent"),
+                "message", DbValueMapper.string(event, "message"),
+                "occurredAt", DbValueMapper.timestamp(event, "occurred_at")
+        );
     }
 
     private Map<String, Object> linkedTicket(CurrentUserService.CurrentUser user, UUID diagnosisId) {

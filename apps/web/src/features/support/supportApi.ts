@@ -76,6 +76,37 @@ export type PcAgentDiagnosisTicketDto = {
   createdAt?: string | null;
 };
 
+export type PcAgentDiagnosisRecentMessageDto = {
+  eventId: string;
+  status: string;
+  progressPercent: number;
+  message: string;
+  occurredAt: string;
+};
+
+export type PcAgentDiagnosisSummaryDto = {
+  diagnosisId: string;
+  status: string;
+  connectionStatus?: string | null;
+  agentConnected: boolean;
+  accepted: boolean;
+  currentStatus?: string | null;
+  currentProgress: number;
+  currentTask?: string | null;
+  recentMessages: PcAgentDiagnosisRecentMessageDto[];
+  completed: boolean;
+  resultAvailable: boolean;
+  resultSeverity?: string | null;
+  resolutionType?: string | null;
+  dataMode?: 'LIVE' | 'DEMO' | null;
+  scenarioId?: string | null;
+  requestedAt?: string | null;
+  completedAt?: string | null;
+  asTicket?: PcAgentDiagnosisTicketDto | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PcAgentDiagnosisDto = {
   diagnosisId: string;
   status: string;
@@ -98,7 +129,7 @@ export type PcAgentDiagnosisDto = {
 };
 
 export type LatestPcAgentDiagnosisDto = {
-  diagnosis: PcAgentDiagnosisDto | null;
+  diagnosis: PcAgentDiagnosisSummaryDto | null;
 };
 
 export function uploadAgentLog(rangeMinutes: number, consentAccepted: boolean, file: File, metadata: UploadAgentLogMetadata = {}) {

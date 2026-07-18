@@ -3994,8 +3994,91 @@ components:
       properties:
         diagnosis:
           allOf:
-            - $ref: "#/components/schemas/PcAgentDiagnosisDto"
+            - $ref: "#/components/schemas/PcAgentDiagnosisSummaryDto"
           nullable: true
+    PcAgentDiagnosisSummaryDto:
+      type: object
+      required: [diagnosisId, status, agentConnected, accepted, currentProgress, recentMessages, completed, resultAvailable, createdAt, updatedAt]
+      properties:
+        diagnosisId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        connectionStatus:
+          type: string
+          nullable: true
+        agentConnected:
+          type: boolean
+        accepted:
+          type: boolean
+        currentStatus:
+          type: string
+          nullable: true
+        currentProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        currentTask:
+          type: string
+          nullable: true
+        recentMessages:
+          type: array
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/PcAgentDiagnosisRecentMessageDto"
+        completed:
+          type: boolean
+        resultAvailable:
+          type: boolean
+        resultSeverity:
+          type: string
+          nullable: true
+        resolutionType:
+          type: string
+          nullable: true
+        dataMode:
+          type: string
+          enum: [LIVE, DEMO]
+          nullable: true
+        scenarioId:
+          type: string
+          nullable: true
+        requestedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        asTicket:
+          allOf:
+            - $ref: "#/components/schemas/PcAgentDiagnosisTicketSummary"
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PcAgentDiagnosisRecentMessageDto:
+      type: object
+      required: [eventId, status, progressPercent, message, occurredAt]
+      properties:
+        eventId:
+          type: string
+        status:
+          type: string
+        progressPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        message:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
     PcAgentDiagnosisDto:
       type: object
       required: [diagnosisId, status, agentConnected, accepted, currentProgress, events, completed, createdAt, updatedAt]
@@ -4083,7 +4166,7 @@ components:
       properties:
         code:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR, INVALID_DIAGNOSIS_REQUEST, AGENT_DISCONNECTED, DUPLICATE_DIAGNOSIS_ID, AGENT_RESPONSE_TIMEOUT, AGENT_RESPONSE_INTERRUPTED, AGENT_CONNECTION_FAILED, AGENT_RESPONSE_FAILED]
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT_STATE, DUPLICATE_RESOURCE, FILE_VALIDATION_ERROR, PRECONDITION_REQUIRED, UPSTREAM_ERROR, INTERNAL_ERROR, INVALID_DIAGNOSIS_REQUEST, DIAGNOSIS_NOT_FOUND, AGENT_DISCONNECTED, DUPLICATE_DIAGNOSIS_ID, AGENT_RESPONSE_TIMEOUT, AGENT_RESPONSE_INTERRUPTED, AGENT_CONNECTION_FAILED, AGENT_RESPONSE_FAILED]
         message:
           type: string
         details:
