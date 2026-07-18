@@ -21,11 +21,11 @@ public class AuthenticatedHomeService {
         this.homePartRecommendationService = homePartRecommendationService;
     }
 
-    @Cacheable(cacheNames = CACHE_NAME, key = "'user:' + #user.id()")
+    @Cacheable(cacheNames = CACHE_NAME, key = "'authenticated-home:v1'")
     public Map<String, Object> home(CurrentUserService.CurrentUser user) {
         return MockData.map(
                 "categoryParts", homeCategoryPartsService.priceDescCategoryParts(),
-                "recommendedParts", homePartRecommendationService.homeParts(user, 5)
+                "recommendedParts", homePartRecommendationService.sharedHomeParts(5)
         );
     }
 }

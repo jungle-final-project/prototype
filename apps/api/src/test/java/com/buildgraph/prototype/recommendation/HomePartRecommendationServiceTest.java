@@ -164,6 +164,30 @@ class HomePartRecommendationServiceTest {
         assertThat(castStringList(items.get(0).get("reasonTags"))).doesNotContain("userReaction");
     }
 
+    @Test
+    void sharedHomePartsUsesFallbackWithoutUserSpecificScoring() {
+        when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+                part("gpu-1", "GPU", 900000, 95),
+                part("cpu-1", "CPU", 600000, 93),
+                part("ram-1", "RAM", 180000, 80),
+                part("psu-1", "PSU", 210000, 78)
+        ));
+        HomePartRecommendationService service = new HomePartRecommendationService(
+                jdbcTemplate,
+                scoringClient,
+                modelRegistry,
+                true
+        );
+
+        Map<String, Object> response = service.sharedHomeParts(4);
+
+        assertThat(response.get("fallbackUsed")).isEqualTo(true);
+        List<Map<String, Object>> items = castList(response.get("items"));
+        assertThat(items).hasSize(4);
+        assertThat(items.get(0).get("scoreSource")).isEqualTo("FALLBACK");
+        verifyNoInteractions(scoringClient, modelRegistry);
+    }
+
     private static Map<String, Object> part(String id, String category, int price, int score) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("internal_id", Math.abs(id.hashCode()));
