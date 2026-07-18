@@ -589,6 +589,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/recommendation-events/bulk/async:
+    post:
+      summary: Queue recommendation behavior events in bulk
+      description: Accepts up to 20 recommendation learning events after authenticating the user once, then stores them asynchronously through RabbitMQ. Home impression events use this endpoint so DB writes do not block the home response path.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationEventBulkRequest"
+      responses:
+        "202":
+          description: Recommendation events accepted for asynchronous storage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEventBulkAcceptedResponse"
+        "400":
+          description: Missing events, more than 20 events, unsupported sourceSurface, or invalid eventType
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin-only events must use admin APIs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Recommendation event queue is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/recommendations/home-builds:
     get:
       summary: 홈 검증 추천 조합
@@ -5125,6 +5162,15 @@ components:
             $ref: "#/components/schemas/RecommendationEventDto"
         count:
           type: integer
+    RecommendationEventBulkAcceptedResponse:
+      type: object
+      required: [accepted, queued]
+      properties:
+        accepted:
+          type: boolean
+        queued:
+          type: integer
+          minimum: 1
     AdminAsRecommendationFeedbackRequest:
       type: object
       properties:
