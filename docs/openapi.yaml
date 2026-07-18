@@ -3303,7 +3303,10 @@ paths:
   /api/support/chat-sessions/current:
     get:
       summary: 현재 사용자 상담방 조회
-      description: asTicketId가 없고 active 상담방도 없으면 contact=null과 supportNewPath=/support/new를 반환한다.
+      description: >-
+        asTicketId가 없고 active 상담방도 없으면 contact=null과 supportNewPath=/support/new를 반환한다.
+        summary=true(닫힌 위젯 배지용)이면 최근 메시지·방문예약을 제외한 경량 요약을 반환하고
+        pollingIntervalMs를 더 느슨하게(30초) 내려준다. summary 생략 시 기존 전체 응답과 동일.
       security:
         - bearerAuth: []
       parameters:
@@ -3313,6 +3316,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - in: query
+          name: summary
+          required: false
+          description: true면 messages/방문예약을 제외한 경량 배지 요약 응답(닫힌 위젯 폴링용).
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: 현재 사용자 상담방 또는 AS 접수 유도 응답
