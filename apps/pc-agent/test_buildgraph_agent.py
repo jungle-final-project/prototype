@@ -3209,6 +3209,30 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertIsNotNone(tray_image)
             self.assertEqual(tray_image.size, (64, 64))
 
+    def test_screen_logo_asset_is_transparent_and_drawn_without_moving_layout(self) -> None:
+        self.assertIsNotNone(agent.Image)
+        self.assertNotEqual(agent.SCREEN_LOGO_PNG, agent.AGENT_ICON_PNG)
+        logo_path = agent.app_asset_path(agent.SCREEN_LOGO_PNG)
+        self.assertTrue(logo_path.exists())
+        with agent.Image.open(logo_path) as logo:
+            self.assertEqual(logo.mode, "RGBA")
+            self.assertEqual(logo.size, (1254, 1254))
+            self.assertEqual(0, logo.getchannel("A").getpixel((0, 0)))
+            self.assertIsNotNone(logo.getchannel("A").getbbox())
+
+        rendered = agent.render_screen_logo_image()
+        self.assertEqual(rendered.mode, "RGBA")
+        self.assertEqual(rendered.size, agent.SCREEN_LOGO_DISPLAY_SIZE)
+        self.assertIsNotNone(rendered.getchannel("A").getbbox())
+
+        source = inspect.getsource(agent.show_log_viewer)
+        self.assertIn("draw_screen_logo()", source)
+        self.assertIn('canvas.create_image(*SCREEN_LOGO_POSITION, image=photo, anchor="center")', source)
+        self.assertIn('canvas.move("all", 0, -PC_AGENT_REMOVED_HEADER_HEIGHT)', source)
+
+        build_script = Path(agent.__file__).with_name("build-agent-exe.ps1").read_text(encoding="utf-8")
+        self.assertIn('$Args += "$Assets;assets"', build_script)
+
 
 class FakePulseWidget:
     """StatusPulse가 쓰는 위젯 표면(after/after_cancel/winfo_exists)만 흉내낸다."""

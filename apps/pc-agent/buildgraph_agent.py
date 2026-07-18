@@ -195,6 +195,9 @@ APP_NAME = DISPLAY_APP_NAME
 APP_ASSET_DIR = "assets"
 AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
+SCREEN_LOGO_PNG = "pc-agent-logo.png"
+SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
+SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
 DEFAULT_AGENT_VERSION = "0.1.18"
@@ -3921,6 +3924,20 @@ def app_asset_path(filename: str) -> Path:
     return runtime_asset_path(Path(APP_ASSET_DIR) / filename)
 
 
+def render_screen_logo_image(size: tuple[int, int] = SCREEN_LOGO_DISPLAY_SIZE) -> Any:
+    if Image is None:
+        raise RuntimeError("Pillow is required for the PC Agent screen logo")
+    width, height = (max(1, int(size[0])), max(1, int(size[1])))
+    logo_path = app_asset_path(SCREEN_LOGO_PNG)
+    with Image.open(logo_path) as source:
+        logo = source.convert("RGBA")
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+    logo.thumbnail((width, height), resample)
+    surface = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    surface.alpha_composite(logo, ((width - logo.width) // 2, (height - logo.height) // 2))
+    return surface
+
+
 def apply_agent_window_icon(window: object) -> None:
     if tk is None:
         return
@@ -6139,6 +6156,13 @@ def show_log_viewer(
         round_rect(878, 68, 970, 102, 8, "#ffffff", "#111111" if ui["demo"] else "#cfcfcf", 1)
         text(924, 85, measurement_label, 13, colors["text"], "regular", "center")
 
+    def draw_screen_logo() -> None:
+        photo = cached_photo(
+            ("screen-logo", SCREEN_LOGO_DISPLAY_SIZE),
+            render_screen_logo_image,
+        )
+        canvas.create_image(*SCREEN_LOGO_POSITION, image=photo, anchor="center")
+
     def draw_step(number: int, x: int, label: str, style: str) -> None:
         if style == "loading":
             frames = [
@@ -6709,6 +6733,7 @@ def show_log_viewer(
         wave_animation["spinnerItems"].clear()
         canvas.delete("all")
         button_counter["value"] = 0
+        draw_screen_logo()
         draw_status_controls()
         draw_stepper()
         if ui["state"] == "SYMPTOM_CONFIRM":
