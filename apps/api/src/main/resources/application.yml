@@ -6,8 +6,10 @@ server:
   tomcat:
     threads:
       # HTTP worker 스레드. DB pool(Hikari)보다 많으면 DB 대기 요청이 JVM 안에서 큐잉된다.
-      # 단일 소형 EC2 시작값(부하테스트로 A/B). 스레드당 스택 ~1MB이므로 컨테이너 mem 예산과 함께 본다.
-      max: ${TOMCAT_THREADS_MAX:150}
+      # 부하 실측(2026-07-19 breakpoint) 기준 상향: 1043rps에서 동시 요청 ~209 > 150이라
+      # 스레드 만석 큐잉이 p95를 600ms로 밀어올렸다(무릎 시점 CPU 72%로 여유).
+      # 스레드당 스택 ~1MB이므로 컨테이너 mem 예산과 함께 본다.
+      max: ${TOMCAT_THREADS_MAX:300}
       min-spare: ${TOMCAT_THREADS_MIN_SPARE:20}
     # worker가 모두 바쁠 때 OS 소켓 백로그 큐 길이. 초과 연결은 즉시 거절되어 빠른 실패를 유도한다.
     accept-count: ${TOMCAT_ACCEPT_COUNT:100}
@@ -33,9 +35,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:buildgraph}
     password: ${SPRING_DATASOURCE_PASSWORD:buildgraph}
     hikari:
-      # DB 커넥션 풀. 단일 API 인스턴스 × 15는 Postgres 기본 max_connections(100) 대비 여유.
+      # DB 커넥션 풀. 부하 실측(2026-07-19)에서 RDS 커넥션이 20(앱 15+기타)에서 플랫 —
+      # 풀 만석 대기가 무릎(p95 600ms)의 공범이라 25로 상향(RDS t4g.small max_connections 대비 여유).
       # connection-timeout: 풀이 포화면 1.5초 내 커넥션을 못 받을 때 빠르게 실패(무한 대기 방지).
-      maximum-pool-size: ${DB_POOL_MAX_SIZE:15}
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:25}
       minimum-idle: ${DB_POOL_MIN_IDLE:5}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:1500}
       validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:800}
