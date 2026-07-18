@@ -1911,6 +1911,18 @@ test('renders a temporary chatbot build detail and saves it to a persisted build
   await expect(page.getByRole('heading', { name: `추천 견적 결과 / ${temporaryBuild.title}` })).toBeVisible();
   await expect(page.getByText('저장 전 AI 챗봇 추천')).toBeVisible();
   await expect(page.getByRole('link', { name: temporaryBuild.items[0].name })).toBeVisible();
+  const partsPanel = page.getByRole('heading', { name: '구성 부품' }).locator('..').locator('..').locator('..');
+  await expect(partsPanel.getByRole('columnheader', { name: '상태' })).toBeVisible();
+  await expect(partsPanel.getByRole('table').getByText('활성', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: '검증 결과' })).toHaveCount(0);
+  const summaryPanel = page.getByRole('heading', { name: '견적 요약 / 액션' }).locator('..').locator('..').locator('..');
+  await expect(partsPanel.getByText('검증 요약', { exact: true })).toBeVisible();
+  await expect(partsPanel.getByText('1/1 통과', { exact: true })).toBeVisible();
+  await expect(summaryPanel.getByText('검증 요약', { exact: true })).toHaveCount(0);
+  const [partsBox, summaryBox] = await Promise.all([partsPanel.boundingBox(), summaryPanel.boundingBox()]);
+  expect(partsBox).not.toBeNull();
+  expect(summaryBox).not.toBeNull();
+  expect(Math.abs((partsBox?.height ?? 0) - (summaryBox?.height ?? 0))).toBeLessThanOrEqual(1);
   await page.getByRole('button', { name: '견적 저장' }).click();
 
   await expect.poll(() => saveRequests.length).toBe(1);
