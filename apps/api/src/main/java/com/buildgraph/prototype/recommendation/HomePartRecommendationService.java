@@ -188,6 +188,10 @@ public class HomePartRecommendationService {
     }
 
     public Map<String, Object> publicHomeParts(Integer limit) {
+        return sharedHomeParts(limit);
+    }
+
+    public Map<String, Object> sharedHomeParts(Integer limit) {
         int safeLimit = limit == null ? 4 : Math.min(Math.max(limit, 1), 12);
         List<HomePartCandidate> candidates = loadCandidates();
         if (candidates.isEmpty()) {
