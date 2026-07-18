@@ -592,7 +592,7 @@ paths:
   /api/recommendation-events/bulk/async:
     post:
       summary: Queue recommendation behavior events in bulk
-      description: Accepts up to 20 recommendation learning events after authenticating the user once, then stores them asynchronously through RabbitMQ. Home impression events use this endpoint so DB writes do not block the home response path.
+      description: Accepts up to 20 recommendation learning events after authenticating the user once, places them into a bounded local publish queue, then publishes to RabbitMQ from a background publisher thread for asynchronous storage. Home impression events use this endpoint so DB writes and RabbitMQ publish waits do not block the home response path.
       security:
         - bearerAuth: []
       requestBody:
@@ -621,7 +621,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
-          description: Recommendation event queue is unavailable
+          description: Recommendation event publish queue is full or unavailable
           content:
             application/json:
               schema:
