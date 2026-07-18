@@ -7,15 +7,16 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 @Service
 public class RecommendationEventPublisher {
@@ -26,6 +27,7 @@ public class RecommendationEventPublisher {
     private final int retryMaxAttempts;
     private final Duration retryDelay;
 
+    @Autowired
     public RecommendationEventPublisher(
             RabbitTemplate rabbitTemplate,
             @Qualifier("recommendationEventPublisherExecutor") Executor publisherExecutor,

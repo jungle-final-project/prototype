@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -25,6 +26,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -41,6 +46,13 @@ class RecommendationEventPublisherTest {
 
     @Mock
     private RabbitTemplate rabbitTemplate;
+
+    @Test
+    void springContextCanCreatePublisherWithExecutorConfig() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(PublisherContextConfig.class)
+                .run(context -> assertThat(context).hasSingleBean(RecommendationEventPublisher.class));
+    }
 
     @Test
     void publishBulkEventsSubmitsRabbitPublishOutsideRequestThread() {
@@ -130,6 +142,15 @@ class RecommendationEventPublisherTest {
         void runOnlyTask() {
             assertThat(tasks).hasSize(1);
             tasks.get(0).run();
+        }
+    }
+
+    @TestConfiguration
+    @Import({RecommendationEventPublisher.class, RecommendationEventPublisherConfig.class})
+    static class PublisherContextConfig {
+        @Bean
+        RabbitTemplate rabbitTemplate() {
+            return mock(RabbitTemplate.class);
         }
     }
 }
