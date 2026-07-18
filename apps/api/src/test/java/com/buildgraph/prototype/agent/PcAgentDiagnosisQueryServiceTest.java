@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.agent.persistence.PcAgentDiagnosisEventEntity;
@@ -82,6 +84,58 @@ class PcAgentDiagnosisQueryServiceTest {
     }
 
     @Test
+    void returnsOngoingProgressAndEventsInPersistedOrder() {
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of(requestRow()));
+        PcAgentDiagnosisEventEntity first = event(
+                "event-1", "hardware-overview", "COLLECTING", 20,
+                "하드웨어 정보를 수집하고 있습니다.", "2026-07-13T01:00:00Z"
+        );
+        PcAgentDiagnosisEventEntity second = event(
+                "event-2", "graphics-device-state", "DIAGNOSING", 55,
+                "그래픽 장치 상태를 확인하고 있습니다.", "2026-07-13T01:00:02Z"
+        );
+        when(eventRepository.findAllByDiagnosisIdOrderByOccurredAtAscIdAsc(DIAGNOSIS_ID))
+                .thenReturn(List.of(first, second));
+        when(resultRepository.findByDiagnosisId(DIAGNOSIS_ID)).thenReturn(Optional.empty());
+
+        Map<String, Object> response = service.get(USER, DIAGNOSIS_ID.toString());
+
+        assertThat(response)
+                .containsEntry("currentProgress", 55)
+                .containsEntry("currentTask", "graphics-device-state")
+                .containsEntry("completed", false)
+                .containsEntry("result", null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> events = (List<Map<String, Object>>) response.get("events");
+        assertThat(events).extracting(event -> event.get("eventId"))
+                .containsExactly("event-1", "event-2");
+        assertThat(events).extracting(event -> event.get("status"))
+                .containsExactly("COLLECTING", "DIAGNOSING");
+    }
+
+    @Test
+    void returnsTerminalFailureWithoutInventingAResult() {
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of(requestRow()));
+        PcAgentDiagnosisEventEntity failed = event(
+                "event-failed", "graphics-device-state", "FAILED", 42,
+                "그래픽 장치 상태 확인에 실패했습니다.", "2026-07-13T01:00:02Z"
+        );
+        when(eventRepository.findAllByDiagnosisIdOrderByOccurredAtAscIdAsc(DIAGNOSIS_ID))
+                .thenReturn(List.of(failed));
+        when(resultRepository.findByDiagnosisId(DIAGNOSIS_ID)).thenReturn(Optional.empty());
+
+        Map<String, Object> response = service.get(USER, DIAGNOSIS_ID.toString());
+
+        assertThat(response)
+                .containsEntry("completed", true)
+                .containsEntry("result", null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> events = (List<Map<String, Object>>) response.get("events");
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).containsEntry("status", "FAILED");
+    }
+
+    @Test
     void anotherUsersDiagnosisIsNotExposed() {
         when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of());
 
@@ -92,6 +146,51 @@ class PcAgentDiagnosisQueryServiceTest {
                     assertThat(apiError.status().value()).isEqualTo(404);
                     assertThat(apiError.code()).isEqualTo("DIAGNOSIS_NOT_FOUND");
                 });
+    }
+
+    @Test
+    void invalidDiagnosisIdIsHandledAsNotFoundBeforeDatabaseLookup() {
+        assertThatThrownBy(() -> service.get(USER, "not-a-diagnosis-id"))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> {
+                    ApiException apiError = (ApiException) error;
+                    assertThat(apiError.status().value()).isEqualTo(404);
+                    assertThat(apiError.code()).isEqualTo("DIAGNOSIS_NOT_FOUND");
+                });
+        verify(jdbcTemplate, never()).queryForList(anyString(), any(Object[].class));
+    }
+
+    private static Map<String, Object> requestRow() {
+        return Map.of(
+                "diagnosis_id", DIAGNOSIS_ID.toString(),
+                "device_id", "00000000-0000-4000-8000-000000000111",
+                "request_status", "ACCEPTED",
+                "connection_status", "CONNECTED",
+                "accepted_at", Instant.parse("2026-07-13T00:59:00Z"),
+                "created_at", Instant.parse("2026-07-13T00:58:00Z"),
+                "updated_at", Instant.parse("2026-07-13T00:59:00Z")
+        );
+    }
+
+    private static PcAgentDiagnosisEventEntity event(
+            String eventId,
+            String taskId,
+            String status,
+            int progress,
+            String message,
+            String occurredAt
+    ) {
+        PcAgentDiagnosisEventEntity event = mock(PcAgentDiagnosisEventEntity.class);
+        when(event.eventId()).thenReturn(eventId);
+        when(event.taskId()).thenReturn(taskId);
+        when(event.eventType()).thenReturn("PROGRESS_UPDATED");
+        when(event.status()).thenReturn(status);
+        when(event.progressPercent()).thenReturn(progress);
+        when(event.message()).thenReturn(message);
+        when(event.occurredAt()).thenReturn(Instant.parse(occurredAt));
+        when(event.createdAt()).thenReturn(Instant.parse(occurredAt).plusSeconds(1));
+        when(event.rawPayload()).thenReturn(Map.of());
+        return event;
     }
 
     private static PcAgentDiagnosisResultEntity result() {
