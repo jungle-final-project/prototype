@@ -305,6 +305,13 @@ ai:
       recent-message-limit: ${BUILD_CHAT_54_MINI_FAST_RECENT_MESSAGE_LIMIT:0}
 
 recommendation:
+  events:
+    publisher:
+      workers: ${RECOMMENDATION_EVENTS_PUBLISHER_WORKERS:2}
+      queue-capacity: ${RECOMMENDATION_EVENTS_PUBLISHER_QUEUE_CAPACITY:2048}
+      retry-max-attempts: ${RECOMMENDATION_EVENTS_PUBLISHER_RETRY_MAX_ATTEMPTS:3}
+      retry-delay-ms: ${RECOMMENDATION_EVENTS_PUBLISHER_RETRY_DELAY_MS:100}
+      shutdown-wait-seconds: ${RECOMMENDATION_EVENTS_PUBLISHER_SHUTDOWN_WAIT_SECONDS:5}
   # 홈 응답(사용자 무관) 인메모리 캐시 TTL(초). 0이면 캐시 끔. 가격은 일일 갱신이라 수십 초 지연 무해.
   home-cache:
     ttl-seconds: ${HOME_CACHE_TTL_SECONDS:30}
