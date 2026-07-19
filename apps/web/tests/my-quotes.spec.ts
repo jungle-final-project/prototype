@@ -379,8 +379,7 @@ test('shows saved quotes while hiding target price alert UI', async ({ page }) =
   await expect(perfMatrix.getByTestId('quote-compare-fps-delta')).toContainText('B가 14 FPS 더 높음');
   await expect(perfMatrix.getByTestId('quote-compare-fps-bar-A')).toHaveClass(/transition-\[height\]/);
   await expect(perfMatrix.getByTestId('quote-compare-fps-bar-B')).toHaveCSS('background-color', 'rgb(53, 118, 202)');
-  await expect(perfMatrix.getByTestId('quote-score-policy')).toContainText('성능 43%');
-  await expect(perfMatrix.getByTestId('quote-score-policy')).toContainText('근거 신뢰도 8%');
+  await expect(perfMatrix.getByTestId('quote-score-policy')).toHaveCount(0);
   // 수치가 있는 부품만 동일 색상 상대 막대를 사용한다.
   await expect(perfMatrix.getByTestId('quote-compare-bar-CPU-A')).toContainText('72점');
   await expect(perfMatrix.getByTestId('quote-compare-bar-GPU-B')).toContainText('92점');

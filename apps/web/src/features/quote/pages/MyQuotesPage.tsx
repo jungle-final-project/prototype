@@ -796,8 +796,6 @@ function SavedBuildComparisonResult({ columnA, columnB }: { columnA: ComparisonC
         <GamePerformanceDifferenceCard columnA={columnA} columnB={columnB} />
       </div>
 
-      <ScorePolicyNote columnA={columnA} columnB={columnB} />
-
       <div className="overflow-visible rounded-lg border border-slate-200 bg-white">
         <div className="hidden grid-cols-[minmax(0,1fr)_132px_76px_132px_minmax(0,1fr)] items-center rounded-t-lg border-b border-slate-200 bg-slate-50 px-4 py-2 text-center text-[11px] font-black text-slate-500 md:grid">
           <span>A 견적</span>
@@ -1012,16 +1010,6 @@ function FpsBar({ label, value, scale }: { label: 'A' | 'B'; value: number; scal
       </div>
       <span className={`mt-1 text-[10px] font-black ${label === 'A' ? 'text-[#DE6C2D]' : 'text-[#3576CA]'}`}>{label}</span>
     </div>
-  );
-}
-
-function ScorePolicyNote({ columnA, columnB }: { columnA: ComparisonColumn; columnB: ComparisonColumn }) {
-  const score = columnA.compositeScore ?? columnB.compositeScore;
-  const policyText = scorePolicyText(score);
-  return (
-    <p data-testid="quote-score-policy" className="rounded-md border border-slate-200 bg-slate-50 px-4 py-2.5 text-center text-[11px] font-semibold leading-5 text-slate-500">
-      {policyText}
-    </p>
   );
 }
 
@@ -1344,16 +1332,6 @@ function comparisonRecommendation(columnA: ComparisonColumn, columnB: Comparison
       : '두 견적의 가격이 같아 종합 점수 확인 후 선택할 수 있습니다.';
   }
   return { winner, description };
-}
-
-function scorePolicyText(score: BuildCompositeScore | null) {
-  if (!score || !Array.isArray(score.components) || score.components.length === 0 || score.maxScore <= 0) {
-    return '종합 점수는 현재 부품 데이터와 호환성·성능 Tool 결과를 기준으로 산정됩니다.';
-  }
-  const components = score.components
-    .filter((component) => component.maxScore > 0)
-    .map((component) => `${component.label} ${Math.round((component.maxScore / score.maxScore) * 100)}%`);
-  return `종합 점수는 ${components.join(' · ')}를 반영하여 산정됩니다.`;
 }
 
 function relativeDifferencePercent(valueA: number, valueB: number) {
