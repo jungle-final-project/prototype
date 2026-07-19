@@ -415,6 +415,7 @@ function SelfQuoteSlotBoardPage() {
           </div>
           <QuoteChecklist
             draftItems={draftItems}
+            draftReady={Boolean(quoteDraft)}
             selectedCategory={selectedCategory}
             nextCategory={nextCategory}
             onSelect={selectSlot}
@@ -558,6 +559,7 @@ function writeSlotBoardVisualMode(mode: SlotBoardVisualMode) {
 
 function QuoteChecklist({
   draftItems,
+  draftReady,
   selectedCategory,
   nextCategory,
   onSelect,
@@ -567,6 +569,7 @@ function QuoteChecklist({
   statusByCategory
 }: {
   draftItems: QuoteDraftItem[];
+  draftReady: boolean;
   selectedCategory: PartCategory | null;
   nextCategory: PartCategory | null;
   onSelect: (category: PartCategory) => void;
@@ -575,6 +578,7 @@ function QuoteChecklist({
   isRemovePending: boolean;
   statusByCategory: Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>;
 }) {
+  const flashDelays = useChecklistFlashByCategory(draftItems, draftReady);
   const filledCount = RECOMMENDED_SLOT_ORDER.filter((category) => draftItems.some((item) => item.category === category)).length;
 
   const toggleCategory = (category: PartCategory) => {
@@ -622,7 +626,7 @@ function QuoteChecklist({
           ) : null}
         </span>
       </div>
-      <ol className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+      <ol className="min-h-0 flex-1 space-y-1.5 overflow-x-hidden overflow-y-auto pr-1">
         {RECOMMENDED_SLOT_ORDER.map((category, index) => {
           const items = draftItems.filter((item) => item.category === category);
           const filled = items.length > 0;
@@ -633,6 +637,8 @@ function QuoteChecklist({
           const slotStatus = statusByCategory.get(category);
           const hasFail = filled && slotStatus === 'FAIL';
           const hasWarn = filled && slotStatus === 'WARN';
+          const flashDelay = flashDelays.get(category);
+          const isFlashing = flashDelay !== undefined;
           return (
             <li key={category}>
               <div
@@ -643,14 +649,18 @@ function QuoteChecklist({
                 data-testid={`checklist-${category}`}
                 data-filled={filled ? 'true' : 'false'}
                 data-next={isNext ? 'true' : 'false'}
+                data-flash={isFlashing ? 'true' : 'false'}
+                style={isFlashing ? { animationDelay: `${flashDelay}ms` } : undefined}
                 onClick={() => toggleCategory(category)}
                 onKeyDown={(event) => toggleCategoryFromKeyboard(event, category)}
                 className={`w-full rounded-md border px-2.5 py-2 text-left text-xs transition ${
-                  hasFail
-                    ? 'checklist-problem-fill-pulse'
-                    : hasWarn
-                      ? 'checklist-warning-fill-pulse'
-                      : ''
+                  isFlashing
+                    ? 'checklist-attach-flash'
+                    : hasFail
+                      ? 'checklist-problem-fill-pulse'
+                      : hasWarn
+                        ? 'checklist-warning-fill-pulse'
+                        : ''
                 } ${
                   isSelected
                     ? hasFail
@@ -665,7 +675,7 @@ function QuoteChecklist({
                           ? 'border-amber-200 bg-amber-50/50 hover:border-amber-400'
                           : 'border-emerald-100 bg-white hover:border-emerald-300'
                       : isNext
-                        ? 'slot-empty-pulse slot-hint-shimmer border-brand-blue bg-blue-50/50'
+                        ? `${isFlashing ? '' : 'slot-empty-pulse slot-hint-shimmer '}border-brand-blue bg-blue-50/50`
                         : 'border-dashed border-slate-300 bg-white hover:border-slate-400'
                 }`}
               >
@@ -725,6 +735,57 @@ function QuoteChecklist({
       </ol>
     </aside>
   );
+}
+
+const CHECKLIST_FLASH_BASE_MS = 900;
+const CHECKLIST_FLASH_STAGGER_MS = 80;
+
+// SlotBoard.useAttachFlashByCategory 변형: 제거된 카테고리도 감지하고,
+// 여러 행이 한 번에 바뀌면 권장 순서대로 계단식 재생하도록 카테고리별 지연(ms)을 돌려준다.
+// ready 게이트로 드래프트 첫 로드(진입 시점)는 기준선만 잡고 플래시하지 않는다.
+function useChecklistFlashByCategory(items: QuoteDraftItem[], ready: boolean) {
+  const signatures = new Map<string, string>();
+  for (const item of items) {
+    signatures.set(item.category, `${signatures.get(item.category) ?? ''}${item.partId}:${item.quantity}|`);
+  }
+  const signatureText = [...signatures.entries()].map(([category, value]) => `${category}=${value}`).sort().join(';');
+  const previousRef = useRef<Map<string, string> | null>(null);
+  const [flashDelays, setFlashDelays] = useState<Map<PartCategory, number>>(new Map());
+
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    const previous = previousRef.current;
+    previousRef.current = signatures;
+    if (previous === null) {
+      return;
+    }
+    const changed = new Set<PartCategory>();
+    for (const [category, signature] of signatures) {
+      if (previous.get(category) !== signature) {
+        changed.add(category as PartCategory);
+      }
+    }
+    for (const category of previous.keys()) {
+      if (!signatures.has(category)) {
+        changed.add(category as PartCategory);
+      }
+    }
+    if (changed.size === 0) {
+      return;
+    }
+    const ordered = RECOMMENDED_SLOT_ORDER.filter((category) => changed.has(category));
+    setFlashDelays(new Map(ordered.map((category, index) => [category, index * CHECKLIST_FLASH_STAGGER_MS])));
+    const timer = window.setTimeout(
+      () => setFlashDelays(new Map()),
+      CHECKLIST_FLASH_BASE_MS + (ordered.length - 1) * CHECKLIST_FLASH_STAGGER_MS
+    );
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signatureText, ready]);
+
+  return flashDelays;
 }
 
 // 멘토 피드백: 지금까지 고른 부품을 엑셀 견적서처럼 — 그리드 아래 전폭 테이블 박스.

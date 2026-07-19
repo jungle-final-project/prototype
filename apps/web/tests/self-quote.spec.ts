@@ -4234,13 +4234,19 @@ test('flashes the slot after attaching a part without breaking the flow', async 
   await page.goto('/self-quote?category=GPU');
 
   const gpuSlot = page.getByTestId('slot-GPU');
+  const gpuChecklistRow = page.getByTestId('checklist-GPU');
   await expect(gpuSlot).toHaveAttribute('data-flash', 'false');
+  await expect(gpuChecklistRow).toHaveAttribute('data-flash', 'false');
   await page.getByTestId('slot-candidate-panel').getByRole('button', { name: /플래시 GPU 후보 담기/ }).click();
 
   // 장착 직후 flash 상태가 켜졌다가 자동으로 꺼지고, 조작 흐름은 그대로 동작한다.
   await expect(gpuSlot).toHaveAttribute('data-flash', 'true');
+  // 체크리스트 행도 같은 변경 신호로 카드 채워짐 플래시가 켜진다(단일 변경이라 지연 0).
+  await expect(gpuChecklistRow).toHaveAttribute('data-flash', 'true');
+  await expect(gpuChecklistRow).toHaveCSS('animation-delay', '0s');
   await expect(gpuSlot).toHaveAttribute('title', '플래시 GPU 후보');
   await expect(gpuSlot).toHaveAttribute('data-flash', 'false', { timeout: 3000 });
+  await expect(gpuChecklistRow).toHaveAttribute('data-flash', 'false', { timeout: 3000 });
 });
 
 test.skip('keeps attach and remove flows working with reduced motion', async ({ page }) => {
@@ -5300,10 +5306,24 @@ test('applies a recent AI recommendation from the assistant without rendering du
   // 가성비안 적용 → 기존 일괄 적용 API 호출 + 체크리스트에 실제 적용 결과 반영.
   await budgetCard.getByRole('button', { name: '이 조합으로 셀프 견적 보기' }).click();
   await expect.poll(() => applyRequests).toEqual([{ buildId: 'ai-budget', itemCount: 2 }]);
+  // 일괄 적용은 바뀐 행이 권장 순서(CPU→GPU)대로 80ms 계단식 카드 채워짐 플래시를 재생한다.
+  await expect(page.getByTestId('checklist-CPU')).toHaveAttribute('data-flash', 'true');
+  await expect(page.getByTestId('checklist-CPU')).toHaveCSS('animation-delay', '0s');
+  await expect(page.getByTestId('checklist-GPU')).toHaveAttribute('data-flash', 'true');
+  await expect(page.getByTestId('checklist-GPU')).toHaveCSS('animation-delay', '0.08s');
   await expect(page.getByTestId('checklist-GPU')).toContainText('가성비 GPU');
   await expect(page.getByTestId('checklist-CPU')).toContainText('가성비 CPU');
+  await expect(page.getByTestId('checklist-CPU')).toHaveAttribute('data-flash', 'false', { timeout: 3000 });
+  await expect(page.getByTestId('checklist-GPU')).toHaveAttribute('data-flash', 'false', { timeout: 3000 });
   await expect(page.getByTestId('ai-chat-messages')).toContainText('완성 견적이 담겼습니다. 현재 종합 점수는 734점이며, 배그 4K 예상 성능은 평균 55FPS입니다.');
   await expect(page.getByTestId('ai-selected-build-panel')).toHaveCount(0);
+
+  // reduced-motion에서는 플래시 신호(data-flash)는 토글되지만 모션 자체는 꺼진다(전 화면 공통 규칙).
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await assistant.locator('article').filter({ hasText: '고성능형 추천 조합' }).getByRole('button', { name: '이 조합으로 셀프 견적 보기' }).click();
+  await expect(page.getByTestId('checklist-GPU')).toHaveAttribute('data-flash', 'true');
+  await expect(page.getByTestId('checklist-GPU')).toHaveCSS('animation-name', 'none');
+  await expect(page.getByTestId('checklist-GPU')).toHaveAttribute('data-flash', 'false', { timeout: 3000 });
 });
 
 test('applies the single immediately preceding AI build from an explicit natural-language confirmation', async ({ page }) => {
