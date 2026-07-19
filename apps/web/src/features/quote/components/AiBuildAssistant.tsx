@@ -9,6 +9,7 @@ import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import type { QuoteDraft } from '../../parts/types';
 import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
+import { ensurePcAgentConnected } from '../../support/pcAgentLauncher';
 import { requestPcAgentDiagnosis } from '../../support/supportApi';
 import { AiChatPendingBubble } from './AiChatPendingBubble';
 import { applicationKindForBuild, startAiDraftApplicationFeedback } from './AiDraftApplicationFeedbackCoordinator';
@@ -1514,27 +1515,44 @@ function SupportGuidanceCard({
   const [diagnosisState, setDiagnosisState] = useState<'idle' | 'requesting' | 'accepted' | 'rejected' | 'error'>('idle');
   const [diagnosisMessage, setDiagnosisMessage] = useState('');
   const [diagnosisMode, setDiagnosisMode] = useState<'LIVE' | 'DEMO'>('LIVE');
+  const diagnosisRequestInFlight = useRef(false);
+  const diagnosisConnectionController = useRef<AbortController | null>(null);
   const canDownload = guidance.actions.some((action) => action.type === 'DOWNLOAD_PC_AGENT');
   const supportRoute = guidance.actions.find((action) => action.type === 'OPEN_SUPPORT_NEW')?.route ?? '/support/new';
 
+  useEffect(() => () => diagnosisConnectionController.current?.abort(), []);
+
   async function requestAgentDiagnosis() {
-    if (diagnosisState === 'requesting') return;
+    if (diagnosisRequestInFlight.current) return;
+    diagnosisRequestInFlight.current = true;
     setDiagnosisState('requesting');
     setDiagnosisMessage('');
+    const controller = new AbortController();
+    diagnosisConnectionController.current = controller;
     try {
+      const connected = await ensurePcAgentConnected(controller.signal);
+      if (!connected) {
+        setDiagnosisState('error');
+        setDiagnosisMessage('설치된 PC Agent를 실행했지만 연결되지 않았습니다. 실행 상태를 확인한 뒤 다시 시도해 주세요.');
+        return;
+      }
       const response = await requestPcAgentDiagnosis({
         symptom: symptom.trim(),
         requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
         mode: diagnosisMode
-      });
+      }, controller.signal);
       if (response.status === 'ACCEPTED') {
         setDiagnosisState('accepted');
         setDiagnosisMessage('설치된 PC Agent가 증상을 접수했습니다. PC 화면의 진단 창을 확인해 주세요.');
+        const destination = new URL(supportRoute, window.location.origin);
+        destination.searchParams.set('diagnosisId', response.diagnosisId);
+        navigate(`${destination.pathname}${destination.search}`);
       } else {
         setDiagnosisState('rejected');
         setDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
       }
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setDiagnosisState('error');
       if (cause instanceof ApiError && cause.code === 'AGENT_DISCONNECTED') {
         setDiagnosisMessage('실행 중인 PC Agent가 없습니다. 아래에서 다운로드해 실행한 뒤 다시 접수해 주세요.');
@@ -1543,6 +1561,11 @@ function SupportGuidanceCard({
       } else {
         setDiagnosisMessage('PC Agent 접수 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
       }
+    } finally {
+      if (diagnosisConnectionController.current === controller) {
+        diagnosisConnectionController.current = null;
+      }
+      diagnosisRequestInFlight.current = false;
     }
   }
 

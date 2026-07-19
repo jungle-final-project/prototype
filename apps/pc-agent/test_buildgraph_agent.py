@@ -2588,6 +2588,27 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(startup_path.name, f"{agent.APP_NAME}.cmd")
             self.assertIn(f'"{installed}" run-background', startup_path.read_text(encoding="utf-8"))
 
+    def test_register_url_protocol_launches_without_uri_identity_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "PCAgent.exe"
+            with patch("buildgraph_agent.os.name", "nt"), \
+                    patch.object(agent.sys, "frozen", True, create=True), \
+                    patch("buildgraph_agent.ensure_installed_executable", return_value=executable), \
+                    patch("winreg.CreateKey") as create_key, \
+                    patch("winreg.SetValueEx") as set_value:
+                registered = agent.register_url_protocol()
+
+            self.assertTrue(registered)
+            created_paths = [call.args[1] for call in create_key.call_args_list]
+            self.assertEqual(created_paths, [
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}",
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}\DefaultIcon",
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}\shell\open\command",
+            ])
+            command = set_value.call_args_list[-1].args[-1]
+            self.assertEqual(command, f'"{executable}"')
+            self.assertNotIn("%1", command)
+
     def test_ensure_installed_executable_skips_copy_when_content_matches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

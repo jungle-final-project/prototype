@@ -78,6 +78,19 @@ class PcAgentDiagnosisRequestServiceTest {
     }
 
     @Test
+    void connectionStatusChecksOnlyTheCurrentUsersRegisteredDevices() {
+        when(jdbcTemplate.queryForList(contains("FROM agent_devices"), eq(7L)))
+                .thenReturn(List.of(
+                        MockData.map("device_id", "device-1"),
+                        MockData.map("device_id", "device-2")
+                ));
+        when(broker.isConnected("device-1")).thenReturn(false);
+        when(broker.isConnected("device-2")).thenReturn(true);
+
+        assertThat(service.connectionStatus(USER)).containsEntry("connected", true);
+    }
+
+    @Test
     void preservesExplicitDemoModeAcrossStoredRequestAndAgentDispatch() {
         when(jdbcTemplate.queryForList(contains("FROM agent_devices"), eq(7L)))
                 .thenReturn(List.of(MockData.map("device_id", "device-1")));

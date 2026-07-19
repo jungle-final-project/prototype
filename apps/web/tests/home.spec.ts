@@ -1220,21 +1220,30 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
       })
     });
   });
+  await page.addInitScript(() => {
+    const originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function click() {
+      if (this.href.startsWith('buildgraph-pc-agent:')) {
+        const target = window as Window & { __pcAgentProtocolLaunches?: string[] };
+        target.__pcAgentProtocolLaunches = [...(target.__pcAgentProtocolLaunches ?? []), this.href];
+        return;
+      }
+      originalClick.call(this);
+    };
+  });
   const diagnosisBodies: Array<{ symptom?: string; mode?: string; requestedChecks?: string[] }> = [];
-  let diagnosisResponseStatus: 'ACCEPTED' | 'DISCONNECTED' = 'DISCONNECTED';
+  let connectionChecks = 0;
+  let diagnosisGetCount = 0;
+  await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ connected: ++connectionChecks > 1 })
+  }));
   await page.route('**/api/users/me/agent-diagnosis-requests', async (route) => {
     const requestBody = JSON.parse(route.request().postData() ?? '{}');
     diagnosisBodies.push(requestBody);
-    if (diagnosisResponseStatus === 'DISCONNECTED') {
-      await route.fulfill({
-        status: 409,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 'AGENT_DISCONNECTED', message: 'no agent' })
-      });
-      return;
-    }
     await route.fulfill({
-      status: 200,
+      status: 201,
       contentType: 'application/json',
       body: JSON.stringify({
         diagnosisId: 'diag-e2e-1',
@@ -1243,6 +1252,35 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
         expiresAt: '2026-07-15T00:05:00Z',
         mode: requestBody.mode,
         status: 'ACCEPTED'
+      })
+    });
+  });
+  await page.route('**/api/users/me/agent-diagnosis-requests/diag-e2e-1', (route) => {
+    diagnosisGetCount += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        diagnosisId: 'diag-e2e-1', status: 'ACCEPTED', connectionStatus: 'CONNECTED',
+        agentConnected: true, accepted: true, currentProgress: 100, currentTask: 'evidence-finalize',
+        events: [{
+          eventId: 'event-1', taskId: 'graphics-device-state', eventType: 'PROGRESS_UPDATED',
+          status: 'COMPLETED', progressPercent: 100, message: '진단을 완료했습니다.',
+          occurredAt: '2026-07-15T00:00:05Z', createdAt: '2026-07-15T00:00:05Z'
+        }],
+        completed: true, resolutionType: 'SOFTWARE_RECOVERY', dataMode: 'DEMO',
+        scenarioId: 'GRAPHICS_CODE43_REMOTE_SUPPORT',
+        result: {
+          resultId: 'result-1', diagnosisType: 'DEVICE_DRIVER_CONFIGURATION_ISSUE', severity: 'WARNING',
+          title: '그래픽 장치·드라이버 구성 이상', summary: 'Arc A350M Code 43 상태가 확인되었습니다.',
+          resolutionType: 'SOFTWARE_RECOVERY', canAutoRecover: false,
+          evidence: [{ metricType: 'PNP_PROBLEM_CODE', device: 'Intel Arc A350M', value: 43 }],
+          findings: [{ code: 'GRAPHICS_DEVICE_CODE_43' }], actions: ['원격 점검을 권장합니다.'],
+          dataMode: 'DEMO', scenarioId: 'GRAPHICS_CODE43_REMOTE_SUPPORT',
+          rawPayload: { remoteAsRecommended: true },
+          createdAt: '2026-07-15T00:00:05Z', updatedAt: '2026-07-15T00:00:05Z'
+        },
+        createdAt: '2026-07-15T00:00:00Z', updatedAt: '2026-07-15T00:00:05Z'
       })
     });
   });
@@ -1260,27 +1298,28 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   await expect(demoMode).toHaveAttribute('aria-checked', 'false');
   await expect(guidance).toContainText('실시간 측정');
 
-  // 1) 에이전트 미실행: 안내 문구가 뜨고 재시도 가능해야 한다.
-  await submit.click();
-  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('실행 중인 PC Agent가 없습니다');
-  expect(diagnosisBodies[0].symptom).toBe(symptomText); // 대화에서 말한 증상이 그대로 전달된다
-  expect(diagnosisBodies[0].mode).toBe('LIVE');
-
-  // 2) 에이전트 연결됨: 접수 성공 + 버튼이 접수 완료로 잠긴다.
+  // 에이전트 미실행 상태는 프로토콜로 한 번 깨운 뒤, 연결 확인 후 diagnosis POST를 한 번만 보낸다.
   await demoMode.click();
   await expect(demoMode).toHaveAttribute('aria-checked', 'true');
   await expect(guidance).toContainText('Code 43 시연 모드');
-  await demoMode.click();
-  await expect(demoMode).toHaveAttribute('aria-checked', 'false');
-  await demoMode.click();
-  diagnosisResponseStatus = 'ACCEPTED';
   await submit.click();
-  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PC Agent가 증상을 접수했습니다');
-  await expect(submit).toContainText('접수 완료');
-  await expect(submit).toBeDisabled();
-  await expect(demoMode).toBeDisabled();
-  expect(diagnosisBodies[1].symptom).toBe(symptomText);
-  expect(diagnosisBodies[1].mode).toBe('DEMO');
+  await expect(page).toHaveURL(/\/support\/new\?diagnosisId=diag-e2e-1$/);
+  await expect(page.getByTestId('pc-agent-diagnosis-result')).toContainText('그래픽 장치·드라이버 구성 이상');
+  expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches)).toEqual([
+    'buildgraph-pc-agent://open'
+  ]);
+  expect(diagnosisBodies).toHaveLength(1);
+  expect(diagnosisBodies[0].symptom).toBe(symptomText);
+  expect(diagnosisBodies[0].mode).toBe('DEMO');
+  const terminalGetCount = diagnosisGetCount;
+  expect(terminalGetCount).toBeGreaterThan(0);
+  await page.waitForTimeout(2_300);
+  expect(diagnosisGetCount).toBe(terminalGetCount);
+
+  await page.reload();
+  await expect(page.getByTestId('pc-agent-diagnosis-result')).toContainText('그래픽 장치·드라이버 구성 이상');
+  expect(diagnosisBodies).toHaveLength(1);
+  expect(diagnosisGetCount).toBeGreaterThan(1);
 });
 
 test('docks the desktop AI assistant and shifts the page while open', async ({ page }) => {

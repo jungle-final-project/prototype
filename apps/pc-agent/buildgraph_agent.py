@@ -192,6 +192,7 @@ LEGACY_DISPLAY_APP_NAMES = ("BuildGraphAgent", "PC Agent", "BuildGraph PC Agent"
 DOWNLOAD_FILE_PREFIX = DISPLAY_APP_NAME
 LEGACY_DOWNLOAD_FILE_PREFIXES = ("BuildGraphAgent",)
 APP_NAME = DISPLAY_APP_NAME
+PC_AGENT_URL_PROTOCOL = "buildgraph-pc-agent"
 APP_ASSET_DIR = "assets"
 AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
@@ -3868,6 +3869,29 @@ def register_startup() -> Path:
     path = directory / f"{APP_NAME}.cmd"
     path.write_text(f"@echo off\nstart \"\" {executable_command()}\n", encoding="utf-8")
     return path
+
+
+def protocol_launch_command() -> str:
+    if getattr(sys, "frozen", False):
+        return f'"{ensure_installed_executable()}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+
+
+def register_url_protocol() -> bool:
+    if os.name != "nt":
+        return False
+    import winreg
+
+    protocol_key = rf"Software\Classes\{PC_AGENT_URL_PROTOCOL}"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key) as key:
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, "URL:PCAgent Protocol")
+        winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\DefaultIcon") as key:
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, str(ensure_installed_executable()))
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\shell\open\command") as key:
+        # URI의 userId/diagnosisId는 받지 않는다. 무인자 실행은 서버 인증 WebSocket 요청만 처리한다.
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, protocol_launch_command())
+    return True
 
 
 def pid_file() -> Path:
@@ -8246,6 +8270,7 @@ def run_background(
             with error_log.open("a", encoding="utf-8") as file:
                 file.write(f"{datetime.now(KST).isoformat()} auto-register failed: {exception}\n")
         register_startup()
+        register_url_protocol()
         hide_console_window()
         write_pid()
         runtime = AgentRuntime()
