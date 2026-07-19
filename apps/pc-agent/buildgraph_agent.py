@@ -2552,9 +2552,20 @@ class HardwareMetricCollector:
             return
         try:
             usage = self.psutil.disk_usage(disk_usage_root())
-            disk_usage = clamp_percent(getattr(usage, "percent", None))
-            disk_used = rounded_or_none(getattr(usage, "used", None))
             disk_total = rounded_or_none(getattr(usage, "total", None))
+            disk_free = rounded_or_none(getattr(usage, "free", None))
+            if (
+                disk_total is None
+                or disk_free is None
+                or disk_total <= 0
+                or disk_free < 0
+                or disk_free > disk_total
+            ):
+                disk_usage = None
+                disk_used = None
+            else:
+                disk_used = round(disk_total - disk_free, 1)
+                disk_usage = clamp_percent(disk_used / disk_total * 100.0)
         except Exception as exception:
             disk_usage = None
             disk_used = None
@@ -2564,11 +2575,11 @@ class HardwareMetricCollector:
             mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, reason)
             mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, reason)
         if disk_usage is None:
-            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage unavailable")
+            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk total/free bytes unavailable")
         else:
             set_metric_aliases(payload, DISK_USAGE_FIELDS, disk_usage)
         if disk_used is None:
-            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil disk used bytes unavailable")
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil disk total/free bytes unavailable")
         else:
             set_metric_aliases(payload, DISK_USED_BYTES_FIELDS, disk_used)
         if disk_total is None:
@@ -4725,15 +4736,9 @@ def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScree
         (snapshot.memory_used, snapshot.memory_total),
     )
     disk_storage_available = snapshot.disk_usage.availability == SENSOR_COLLECTED
-    disk_activity_available = snapshot.disk_activity.availability == SENSOR_COLLECTED
     disk_primary = snapshot.disk_usage if disk_storage_available else snapshot.disk_activity
     disk_label = "저장 공간" if disk_storage_available else "활성 시간"
     disk_status, disk_tone = component_status(disk_primary, (snapshot.disk_health,))
-    if disk_storage_available and disk_activity_available:
-        activity_status, activity_tone = component_status(snapshot.disk_activity)
-        tone_priority = {"default": 0, "warning": 1, "danger": 2}
-        if tone_priority.get(activity_tone, 0) > tone_priority.get(disk_tone, 0):
-            disk_status, disk_tone = activity_status, activity_tone
 
     memory_capacity = f"{memory_size_text(snapshot.memory_used)} / {memory_size_text(snapshot.memory_total)}"
     disk_details = (
