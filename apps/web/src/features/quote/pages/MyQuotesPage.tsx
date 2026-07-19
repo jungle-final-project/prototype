@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Check, ClipboardList, Copy, FileText, GitBranch, Pencil, PencilLine, Save, ShoppingBag, Target, Trash2, Trophy, X } from 'lucide-react';
-import { Panel, Screen, StateMessage } from '../../../components/ui';
+import { DataTable, Panel, Screen, StateMessage } from '../../../components/ui';
 import { applyAiBuildToQuoteDraft, getPart } from '../../parts/partsApi';
 import { listAssemblyRequests } from '../../parts/assemblyApi';
 import { QuotePerformancePanel } from '../../parts/components/slot-board/QuotePerformancePanel';
@@ -34,6 +34,7 @@ export function MyQuotesPage() {
   const [selectedAlertBuildId, setSelectedAlertBuildId] = useState('');
   const [selectedSavedPartId, setSelectedSavedPartId] = useState('');
   const [graphBuild, setGraphBuild] = useState<BuildSummary | null>(null);
+  const [detailBuild, setDetailBuild] = useState<BuildSummary | null>(null);
   const [recommendedBuild, setRecommendedBuild] = useState<{ buildId: string; label: 'A' | 'B' } | null>(null);
   const [targetPrice, setTargetPrice] = useState('850000');
   const [alertInputError, setAlertInputError] = useState('');
@@ -207,6 +208,7 @@ export function MyQuotesPage() {
                     onCheckout={openCheckoutForBuild}
                     onEditParts={openSelfQuoteForBuild}
                     onDuplicate={openSelfQuoteForBuild}
+                    onOpenDetails={setDetailBuild}
                     onOpenGraph={setGraphBuild}
                     onRename={(name) => renameBuildMutation.mutate({ buildId: build.id, name })}
                     onDelete={() => { if (!deleteBuildMutation.isPending) deleteBuildMutation.mutate(build.id); }}
@@ -337,6 +339,9 @@ export function MyQuotesPage() {
           onClose={() => setGraphBuild(null)}
         />
       ) : null}
+      {detailBuild ? (
+        <SavedBuildPartsDialog build={detailBuild} onClose={() => setDetailBuild(null)} />
+      ) : null}
     </Screen>
   );
 }
@@ -364,6 +369,7 @@ function SavedBuildCard({
   onCheckout,
   onEditParts,
   onDuplicate,
+  onOpenDetails,
   onOpenGraph,
   onRename,
   onDelete,
@@ -379,6 +385,7 @@ function SavedBuildCard({
   onCheckout: (build: BuildSummary) => void;
   onEditParts: (build: BuildSummary) => void;
   onDuplicate: (build: BuildSummary) => void;
+  onOpenDetails: (build: BuildSummary) => void;
   onOpenGraph: (build: BuildSummary) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
@@ -500,9 +507,13 @@ function SavedBuildCard({
         >
           <ShoppingBag size={14} /> {isPreparingCheckout ? '구매 준비 중' : '구매하기'}
         </button>
-        <Link to={`/builds/${build.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink">
+        <button
+          type="button"
+          onClick={() => onOpenDetails(build)}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 hover:border-commerce-ink hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
+        >
           <FileText size={14} /> 견적 상세
-        </Link>
+        </button>
         <button
           type="button"
           disabled={!hasCheckoutItems || isPreparingSelfQuote}
@@ -1604,6 +1615,102 @@ function PriceAlertRow({ alert }: { alert: PriceAlert }) {
         <div className={`h-full rounded-full ${achieved ? 'bg-emerald-500' : 'bg-[#de6c2d]'}`} style={{ width: `${progress}%` }} />
       </div>
     </article>
+  );
+}
+
+function SavedBuildPartsDialog({ build, onClose }: { build: BuildSummary; onClose: () => void }) {
+  const items = build.items ?? [];
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="saved-build-parts-dialog-title"
+        className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-commerce-line px-4 py-4 sm:px-5">
+          <div className="min-w-0">
+            <h2 id="saved-build-parts-dialog-title" className="truncate text-lg font-black text-commerce-ink" title={`${displayBuildName(build)} 구성 부품`}>
+              {displayBuildName(build)} 구성 부품
+            </h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              저장된 견적의 부품 {items.length}개와 저장 가격을 확인합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            autoFocus
+            aria-label="견적 상세 닫기"
+            onClick={onClose}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-commerce-line bg-white text-slate-500 hover:border-slate-300 hover:text-commerce-ink focus:outline-none focus:ring-4 focus:ring-[#f4c8b2]"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {items.length > 0 ? (
+            <>
+              <div className="space-y-2 md:hidden">
+                {items.map((item) => (
+                  <article key={`${build.id}-${item.category}-${resolvePartId(item) ?? item.name}`} className="rounded-md border border-commerce-line bg-white p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-black text-slate-500">{labelForCategory(item.category)}</span>
+                      <span className="whitespace-nowrap text-sm font-black text-[#de6c2d]">{item.price.toLocaleString()}원</span>
+                    </div>
+                    <div className="mt-2 text-sm font-black leading-5 text-commerce-ink">{item.name}</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{item.manufacturer ?? '-'}</div>
+                  </article>
+                ))}
+              </div>
+              <div className="hidden md:block">
+                <DataTable
+                  columns={['분류', '부품명', '제조사', '가격']}
+                  nowrapColumns={['분류', '제조사', '가격']}
+                  rows={items.map((item) => ({
+                    분류: labelForCategory(item.category),
+                    부품명: <span className="font-bold text-commerce-ink">{item.name}</span>,
+                    제조사: item.manufacturer ?? '-',
+                    가격: <span className="whitespace-nowrap font-black text-commerce-ink">{item.price.toLocaleString()}원</span>
+                  }))}
+                />
+              </div>
+            </>
+          ) : (
+            <StateMessage type="info" title="구성 부품 없음" body="이 저장 견적에는 표시할 부품 정보가 없습니다." />
+          )}
+        </div>
+
+        <footer className="flex items-center justify-between gap-4 border-t border-commerce-line bg-slate-50 px-4 py-3 sm:px-5">
+          <span className="text-xs font-black text-slate-500">견적 합계</span>
+          <span className="text-lg font-black text-[#de6c2d]">{build.totalPrice.toLocaleString()}원</span>
+        </footer>
+      </section>
+    </div>
   );
 }
 

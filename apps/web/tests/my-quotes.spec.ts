@@ -335,7 +335,19 @@ test('shows saved quotes while hiding target price alert UI', async ({ page }) =
   await expect(page.getByLabel('저장 견적 부품')).toHaveCount(0);
   await expect(page.getByLabel('목표가', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('price-alert-row-part-gpu-5070')).toHaveCount(0);
-  await expect(firstBuild.getByRole('link', { name: '견적 상세' })).toHaveAttribute('href', '/builds/build-qhd-balanced');
+  const detailButton = firstBuild.getByRole('button', { name: '견적 상세' });
+  await expect(detailButton).toBeVisible();
+  await expect(firstBuild.getByRole('link', { name: '견적 상세' })).toHaveCount(0);
+  await detailButton.click();
+  await expect(page).toHaveURL('/my/quotes');
+  const detailDialog = page.getByRole('dialog', { name: 'QHD 균형 저장 견적 구성 부품' });
+  await expect(detailDialog).toBeVisible();
+  await expect(detailDialog.getByRole('columnheader', { name: '분류' })).toBeVisible();
+  await expect(detailDialog).toContainText('AMD Ryzen 7 9700X');
+  await expect(detailDialog).toContainText('GeForce RTX 5070');
+  await expect(detailDialog).toContainText('2,180,000원');
+  await page.keyboard.press('Escape');
+  await expect(detailDialog).toHaveCount(0);
   await expect(firstBuild.getByRole('button', { name: '부품 변경' })).toBeVisible();
   // 저장 견적 비교 — 비교할 견적을 고르면 전 카테고리 부품 + 성능을 좌우로 나열.
   const perfMatrix = page.getByTestId('saved-builds-comparison');
