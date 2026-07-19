@@ -6,6 +6,7 @@ import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../.
 import { formatSeoulDateTime } from '../../../lib/dateTime';
 import { createAsRecommendationFeedback, getAdminTicket, updateAdminTicket } from '../adminApi';
 import type { AdminAsTicket, AsTicketStatus } from '../adminApi';
+import { AdminTicketSupportChat } from '../components/AdminTicketSupportChat';
 
 const STATUS_OPTIONS: AsTicketStatus[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'CANCELLED'];
 const REVIEW_OPTIONS = ['', 'NOT_REQUIRED', 'REQUIRED', 'IN_REVIEW', 'APPROVED', 'REJECTED'];
@@ -122,6 +123,10 @@ export function AdminTicketDetailPage() {
 
   const ticket = ticketQuery.data;
 
+  // '지원 결정 저장' Panel은 티켓 상담방 채팅 UI로 대체되어 렌더링하지 않는다.
+  // 폼 코드는 보존한다(셀프견적 LegacySelfQuoteListSections 선례) — 복원하려면 true로.
+  const showLegacySupportDecisionPanel = false;
+
   if (ticketQuery.isLoading) {
     return (
       <AdminShell title="AS 티켓 상세">
@@ -152,6 +157,7 @@ export function AdminTicketDetailPage() {
           </Panel>
         </div>
 
+        {showLegacySupportDecisionPanel ? (
         <Panel title="지원 결정 저장" subtitle="처리 상태, 담당자, 검토 상태, 지원 결정을 저장합니다.">
           <form onSubmit={submit} className="space-y-4">
             <div>
@@ -268,6 +274,9 @@ export function AdminTicketDetailPage() {
             {updateMutation.isError ? <StateMessage type="warn" title="저장 실패" body="허용되지 않는 상태 전이이거나 담당자 ID가 유효하지 않습니다." /> : null}
           </form>
         </Panel>
+        ) : (
+          <AdminTicketSupportChat ticketId={ticketId} />
+        )}
 
         <Panel title="로그 요약" subtitle="raw 로그가 아니라 서버가 만든 학습용 요약 피처입니다.">
           <DataTable columns={['항목', '내용']} rows={logSummaryRows(ticket)} />

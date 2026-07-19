@@ -184,6 +184,8 @@ const diagnosisOnlyTicket = {
 };
 
 test('captures Agent AS demo UI evidence and verifies admin decision reflection', async ({ page }) => {
+  // 화면 증적 캡처 + 티켓 상담방 채팅 흐름까지 한 번에 도는 긴 테스트라 병렬 부하에서 30초를 넘길 수 있다.
+  test.slow();
   const consoleErrors: string[] = [];
   const apiCalls: string[] = [];
   const tickets = new Map<string, MockTicket>([
@@ -304,6 +306,62 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     await fulfillTicket(route, tickets.get(ticketId));
   });
 
+  // 티켓 상세에 상담방 채팅이 박히면서 관리자 채팅 API도 모킹한다.
+  // (모킹이 없으면 dev proxy가 죽은 포트로 향해 콘솔 에러 단언이 깨진다.)
+  const chatRoom = {
+    id: 'qa-chat-room-1',
+    asTicketId: beforeDecisionTicket.id,
+    status: 'ACTIVE',
+    ticketStatus: 'OPEN',
+    title: 'AS 상담방',
+    symptom: 'GPU temperature spike during gaming',
+    lastMessagePreview: '게임 중 GPU 온도가 계속 올라갑니다.',
+    lastMessageAt: '2026-07-02T07:00:00Z',
+    adminUnreadCount: 1,
+    canSendMessage: true,
+    user: { id: 'user-001', email: 'user@example.com', name: 'QA User' }
+  };
+  let chatMessages: Array<Record<string, unknown>> = [
+    { id: 'chat-msg-1', role: 'SYSTEM', content: '상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.', createdAt: '2026-07-02T06:31:00Z' },
+    { id: 'chat-msg-2', role: 'USER', content: '게임 중 GPU 온도가 계속 올라갑니다.', senderName: 'QA User', createdAt: '2026-07-02T07:00:00Z' }
+  ];
+  let chatMessagePayload: Record<string, unknown> | undefined;
+  await page.route('**/api/admin/support/chat-sessions', async (route) => {
+    recordApiCall(apiCalls, route.request());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [chatRoom], pollingIntervalMs: 5000 })
+    });
+  });
+  await page.route('**/api/admin/support/chat-sessions/qa-chat-room-1**', async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/ws-ticket')) {
+      // ticket 없이 응답하면 openSupportChatSocket이 WebSocket을 열지 않고 조용히 폴링으로 남는다.
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) });
+      return;
+    }
+    if (route.request().method() === 'POST' && url.pathname.endsWith('/messages')) {
+      chatMessagePayload = route.request().postDataJSON() as Record<string, unknown>;
+      chatMessages = [
+        ...chatMessages,
+        {
+          id: `chat-msg-${chatMessages.length + 1}`,
+          role: 'ADMIN',
+          content: String(chatMessagePayload.content ?? ''),
+          senderName: 'BuildGraph Admin',
+          createdAt: '2026-07-02T07:05:00Z'
+        }
+      ];
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ contact: chatRoom, messages: chatMessages, pollingIntervalMs: 5000 })
+    });
+  });
+
   await page.goto('/support/new');
   await expect(page.getByRole('main')).toContainText('AS 접수');
   await expect(page.getByRole('main')).toContainText('문제 발생 전후 로그');
@@ -377,7 +435,9 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('지원 결정');
 
   await page.goto('/admin/as-tickets/qa-ticket-before');
-  await expect(page.getByRole('main')).toContainText('지원 결정 저장');
+  // 지원 결정 저장 폼은 렌더링에서 빠지고 그 자리에 티켓 상담방 채팅이 나온다.
+  await expect(page.getByRole('main')).not.toContainText('지원 결정 저장');
+  await expect(page.getByTestId('admin-ticket-support-chat')).toBeVisible();
   await expect(page.getByRole('main')).toContainText('추천 서비스');
   await expect(page.getByRole('main')).toContainText('우선 진단만 받기');
   await expect(page.getByRole('main')).toContainText('GPU 온도 상승 신호');
@@ -433,39 +493,30 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(diagnosisOverview.getByTestId('agent-log-samples-panel')).toContainText('nvidia-smi');
   await expect(page.getByRole('main')).toContainText('PC Agent 실시간 진단 근거 1건 연결됨');
 
+  // 결정 폼 대신 티켓 상담방 채팅으로 관리자가 직접 답변을 보낸다.
   await page.goto('/admin/as-tickets/qa-ticket-before');
-  await page.getByLabel('검토 상태').selectOption('APPROVED');
-  await page.getByLabel('지원 결정').selectOption('REMOTE_POSSIBLE');
-  await page.getByLabel('위험도').selectOption('HIGH');
-  await page.getByLabel('진단 적중 여부').selectOption('ACCURATE');
-  await page.getByLabel('원격지원 링크').fill('https://support.example.test/session/qa-ticket-before');
-  await page.getByLabel('관리자 메모').fill('Remote support link sent.');
-  await page.getByRole('button', { name: '결정 저장' }).click();
-  await expect(page.getByRole('main')).toContainText('결정 저장 완료');
-  await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('Remote support link sent.');
+  const ticketChat = page.getByTestId('admin-ticket-support-chat');
+  await expect(ticketChat).toContainText('게임 중 GPU 온도가 계속 올라갑니다.');
+  await ticketChat.getByPlaceholder('관리자 답변을 입력하세요').fill('원격 지원 링크를 보내드렸습니다.');
+  await ticketChat.getByRole('button', { name: '답변 전송' }).click();
+  await expect(ticketChat).toContainText('원격 지원 링크를 보내드렸습니다.');
+  expect(chatMessagePayload).toMatchObject({ content: '원격 지원 링크를 보내드렸습니다.' });
+  await expect(ticketChat.getByPlaceholder('관리자 답변을 입력하세요')).toHaveValue('');
   await expect(page.getByRole('main')).not.toContainText('undefined');
-  expect(decisionPatchPayload).toMatchObject({
-    reviewStatus: 'APPROVED',
-    supportDecision: 'REMOTE_POSSIBLE',
-    riskLevel: 'HIGH',
-    diagnosticAccuracy: 'ACCURATE',
-    remoteSupportLink: 'https://support.example.test/session/qa-ticket-before',
-    adminNote: 'Remote support link sent.'
-  });
-  await page.screenshot({ path: `${screenshotDir}/03-admin-ticket-decision-fields.png`, fullPage: true });
+  await page.screenshot({ path: `${screenshotDir}/03-admin-ticket-chat.png`, fullPage: true });
 
   await page.evaluate(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
   });
-  await page.goto('/support/qa-ticket-before');
+  // 결정 반영 사용자측 화면은 결정이 저장된 정적 시드 티켓(qa-ticket-after)으로 확인한다.
+  await page.goto('/support/qa-ticket-after');
   await expect(page.getByRole('main')).toContainText('승인됨');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('https://support.example.test/session/qa-ticket-before');
+  await expect(page.getByRole('main')).toContainText('https://support.example.test/session/qa-ticket-after');
   await page.screenshot({ path: `${screenshotDir}/04-support-ticket-after-decision.png`, fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/support/qa-ticket-before');
+  await page.goto('/support/qa-ticket-after');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
   await expect(page.getByRole('main')).toContainText('Remote support link sent.');
   await page.screenshot({ path: `${screenshotDir}/05-mobile-ticket.png`, fullPage: true });
@@ -483,7 +534,8 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   expect(apiCalls).toEqual(expect.arrayContaining([
     'GET /api/as-tickets/qa-ticket-before',
     'GET /api/admin/as-tickets/qa-ticket-before',
-    'PATCH /api/admin/as-tickets/qa-ticket-before',
+    'GET /api/admin/support/chat-sessions',
+    'POST /api/admin/support/chat-sessions/qa-chat-room-1/messages',
     'DELETE /api/admin/as-tickets/qa-ticket-no-samples'
   ]));
   expect(consoleErrors).toEqual([]);
