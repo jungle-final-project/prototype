@@ -22,14 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 @WebMvcTest(HomeController.class)
 class HomeControllerTest {
     private static final String USER_TOKEN = "Bearer jwt-user-token";
-    private static final CurrentUserService.CurrentUser USER = new CurrentUserService.CurrentUser(
-            1L,
-            "00000000-0000-4000-8000-000000001001",
-            "user@example.com",
-            "Demo User",
-            "USER",
-            null
-    );
+    private static final String USER_ID = "00000000-0000-4000-8000-000000001001";
 
     @Autowired
     private MockMvc mockMvc;
@@ -42,9 +35,9 @@ class HomeControllerTest {
 
     @BeforeEach
     void setUpAuth() {
-        when(currentUserService.requireUser(null))
+        when(currentUserService.requireAuthenticatedSubject(null))
                 .thenThrow(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."));
-        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
+        when(currentUserService.requireAuthenticatedSubject(USER_TOKEN)).thenReturn(USER_ID);
     }
 
     @Test
@@ -58,7 +51,7 @@ class HomeControllerTest {
 
     @Test
     void userCanLoadAggregatedHome() throws Exception {
-        when(authenticatedHomeService.home(USER)).thenReturn(Map.of(
+        when(authenticatedHomeService.home()).thenReturn(Map.of(
                 "categoryParts", Map.of("GPU", List.of(Map.of(
                         "id", "gpu-public-id",
                         "category", "GPU",
@@ -86,6 +79,7 @@ class HomeControllerTest {
                 .andExpect(jsonPath("$.categoryParts.GPU[0].name").value("RTX 5070"))
                 .andExpect(jsonPath("$.recommendedParts.items[0].recommendationId").value("home-part-gpu-public-id"));
 
-        verify(authenticatedHomeService).home(USER);
+        verify(currentUserService).requireAuthenticatedSubject(USER_TOKEN);
+        verify(authenticatedHomeService).home();
     }
 }

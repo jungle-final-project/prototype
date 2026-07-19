@@ -5,7 +5,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -15,15 +14,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class AuthenticatedHomeServiceTest {
-    private static final CurrentUserService.CurrentUser USER = new CurrentUserService.CurrentUser(
-            1L,
-            "00000000-0000-4000-8000-000000001001",
-            "user@example.com",
-            "Demo User",
-            "USER",
-            null
-    );
-
     @Mock
     private HomeCategoryPartsService homeCategoryPartsService;
 
@@ -51,7 +41,7 @@ class AuthenticatedHomeServiceTest {
                 homePartRecommendationService
         );
 
-        Map<String, Object> response = service.home(USER);
+        Map<String, Object> response = service.home();
 
         Map<String, Object> slimCategoryParts = castMap(response.get("categoryParts"));
         Map<String, Object> gpu = castList(slimCategoryParts.get("GPU")).get(0);
@@ -84,7 +74,7 @@ class AuthenticatedHomeServiceTest {
         );
 
         service.prewarm();
-        Map<String, Object> response = service.home(USER);
+        Map<String, Object> response = service.home();
 
         assertThat(castMap(response.get("categoryParts")).get("CPU")).isNotNull();
         verify(homePartRecommendationService, times(1)).sharedHomeParts(5);
@@ -104,8 +94,8 @@ class AuthenticatedHomeServiceTest {
                 Runnable::run
         );
 
-        service.home(USER);
-        service.home(USER);
+        service.home();
+        service.home();
 
         verify(homePartRecommendationService, times(2)).sharedHomeParts(5);
     }
@@ -124,9 +114,9 @@ class AuthenticatedHomeServiceTest {
                 Runnable::run
         );
 
-        assertThat(castMap(service.home(USER).get("recommendedParts")).get("generatedAt")).isEqualTo("generated-1");
+        assertThat(castMap(service.home().get("recommendedParts")).get("generatedAt")).isEqualTo("generated-1");
         service.prewarm();
-        assertThat(castMap(service.home(USER).get("recommendedParts")).get("generatedAt")).isEqualTo("generated-2");
+        assertThat(castMap(service.home().get("recommendedParts")).get("generatedAt")).isEqualTo("generated-2");
 
         verify(homePartRecommendationService, times(2)).sharedHomeParts(5);
     }
