@@ -146,6 +146,14 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const centerMessagesScrollRef = useRef<HTMLDivElement | null>(null);
   // 답변이 자라는 동안 최신 글자까지 따라가되, 사용자가 위로 올려 읽는 중에는 멈추고 버튼으로 되돌린다.
   const stickToBottom = useStickToBottom();
+  // 중앙 모달은 스크롤 컨테이너에 ref 두 개(커스텀 스크롤바용 + 추적용)를 물려야 한다.
+  // 인라인 화살표로 넘기면 렌더마다 ref가 detach/attach 되어 읽던 위치가 바닥으로 초기화된다 —
+  // useCallback으로 고정해 노드가 실제로 바뀔 때만 재부착되게 한다.
+  const stickToBottomContainerRef = stickToBottom.containerRef;
+  const centerMessagesRef = useCallback((node: HTMLDivElement | null) => {
+    centerMessagesScrollRef.current = node;
+    stickToBottomContainerRef(node);
+  }, [stickToBottomContainerRef]);
   const centerScrollbarHideTimerRef = useRef<number | null>(null);
   const centerScrollbarVisibleRef = useRef(false);
   const isEmbedded = variant === 'embedded';
@@ -882,10 +890,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
                 {centeredCloseButton}
                 <div className="relative min-h-0">
                   <div
-                    ref={(node) => {
-                      centerMessagesScrollRef.current = node;
-                      stickToBottom.containerRef(node);
-                    }}
+                    ref={centerMessagesRef}
                     data-testid="ai-chat-messages"
                     className="scrollbar-hidden max-h-[calc(100dvh-14rem)] space-y-6 overflow-y-auto pb-4 pt-3"
                     onWheel={(event) => {
