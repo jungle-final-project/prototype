@@ -120,8 +120,8 @@ public class PartCompatibleCandidateService {
         List<CandidatePart> candidates = rows.stream()
                 .map(row -> new CandidatePart(toolPart(row), responsePart(row)))
                 .toList();
-        // 후보 패널은 카테고리 전수(M개)를 평가한다 — 후보마다 performance 툴이 벤치마크를 조회하던
-        // N+1(M회)을 드래프트+후보 전체 1회 배치 로드로 대체한다.
+        // 호출자가 준 후보 집합(기본·호환 정렬은 카테고리 전수, 명시적 정렬은 페이지 행)을 평가한다 —
+        // 후보마다 performance 툴이 벤치마크를 조회하던 N+1을 드래프트+후보 전체 1회 배치 로드로 대체한다.
         Map<Long, Map<String, Object>> benchmarks = prefetchBenchmarks(baseParts, candidates.stream().map(CandidatePart::toolPart), checkedTools);
         return candidates.stream()
                 .map(candidate -> {
