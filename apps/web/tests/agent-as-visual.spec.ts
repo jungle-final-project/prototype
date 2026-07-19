@@ -148,7 +148,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     [noSampleTicket.id, noSampleTicket],
     [diagnosisOnlyTicket.id, diagnosisOnlyTicket]
   ]);
-  let decisionPatchPayload: Record<string, unknown> | undefined;
+  let reviewActionPayload: Record<string, unknown> | undefined;
   let remoteRequestPayload: Record<string, unknown> | undefined;
   let feedbackPayload: Record<string, unknown> | undefined;
   let deletedTicketId: string | undefined;
@@ -197,6 +197,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     const current = tickets.get(ticketId) ?? beforeDecisionTicket;
     const updated = {
       ...current,
+      requestType: 'REMOTE_SUPPORT',
       remoteSupportStatus: 'REQUESTED',
       reviewStatus: 'REQUIRED'
     };
@@ -242,20 +243,46 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
       });
       return;
     }
-    if (route.request().method() === 'PATCH') {
-      decisionPatchPayload = route.request().postDataJSON() as Record<string, unknown>;
-      const current = tickets.get(ticketId) ?? beforeDecisionTicket;
-      const updated = {
-        ...current,
-        ...decisionPatchPayload,
-        id: ticketId,
-        remoteSupportStatus: decisionPatchPayload.remoteSupportLink ? 'LINK_SENT' : current.remoteSupportStatus
-      };
-      tickets.set(ticketId, updated);
-      await fulfillTicket(route, updated);
-      return;
-    }
     await fulfillTicket(route, tickets.get(ticketId));
+  });
+  await page.route(/\/api\/admin\/as-tickets\/[^/]+\/approve-remote-support$/, async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const match = new URL(route.request().url()).pathname.match(/\/api\/admin\/as-tickets\/([^/]+)\/approve-remote-support$/);
+    const ticketId = match?.[1] ?? beforeDecisionTicket.id;
+    reviewActionPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const current = tickets.get(ticketId) ?? beforeDecisionTicket;
+    const updated = {
+      ...current,
+      id: ticketId,
+      status: 'IN_PROGRESS',
+      requestType: 'REMOTE_SUPPORT',
+      reviewStatus: 'APPROVED',
+      supportDecision: 'REMOTE_POSSIBLE',
+      assignedAdminId: 'admin-001',
+      adminNote: reviewActionPayload.adminNote,
+      reviewedAt: '2026-07-16T06:00:00Z',
+      remoteSupportStatus: 'WAITING_FOR_CODE'
+    };
+    tickets.set(ticketId, updated);
+    await fulfillTicket(route, updated);
+  });
+  await page.route(/\/api\/(?:admin\/)?as-tickets\/[^/]+\/remote-support$/, async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const match = new URL(route.request().url()).pathname.match(/\/api\/(?:admin\/)?as-tickets\/([^/]+)\/remote-support$/);
+    const ticket = tickets.get(match?.[1] ?? beforeDecisionTicket.id) ?? beforeDecisionTicket;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: ticket.remoteSupportStatus ?? 'REQUESTED',
+        provider: 'CHROME_REMOTE_DESKTOP',
+        accessCodeRegistered: false,
+        maskedAccessCode: null,
+        accessCodeRegisteredAt: null,
+        startedAt: null,
+        completedAt: null
+      })
+    });
   });
 
   await page.goto('/support/new');
@@ -321,17 +348,15 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   }
 
   await page.goto('/admin/as-tickets/qa-ticket-before');
-  await expect(page.getByRole('main')).toContainText('지원 결정 저장');
-  await expect(page.getByRole('main')).toContainText('추천 서비스');
+  await expect(page.getByRole('main')).toContainText('관리자 검토');
+  await expect(page.getByRole('main')).toContainText('Agent 권장 처리');
   await expect(page.getByRole('main')).toContainText('우선 진단만 받기');
   await expect(page.getByRole('main')).toContainText('GPU 온도 상승 신호');
-  await expect(page.getByRole('main')).toContainText('GPU_THERMAL_SPIKE');
-  await expect(page.getByRole('main')).toContainText('CHECK_GPU_DRIVER');
 
   const ticketOverview = page.getByTestId('admin-as-ticket-overview');
   const overviewLabels = await ticketOverview.locator('tbody > tr > td:first-child').allTextContents();
-  expect(overviewLabels.slice(0, 3)).toEqual(['상태', '에이전트 로그', '분석 상태']);
-  await expect(ticketOverview.locator('tbody > tr:first-child > td:first-child')).toHaveCSS('white-space', 'nowrap');
+  expect(overviewLabels.slice(0, 4)).toEqual(['상태', '접수 시각', '사용자', '담당자']);
+  await expect(ticketOverview.getByRole('cell', { name: '상태', exact: true })).toHaveCSS('white-space', 'nowrap');
   for (const removedLabel of [
     '추천 근거 코드',
     '원격 조치 후보',
@@ -378,24 +403,15 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('PC Agent 실시간 진단 근거 1건 연결됨');
 
   await page.goto('/admin/as-tickets/qa-ticket-before');
-  await page.getByLabel('검토 상태').selectOption('APPROVED');
-  await page.getByLabel('지원 결정').selectOption('REMOTE_POSSIBLE');
-  await page.getByLabel('위험도').selectOption('HIGH');
-  await page.getByLabel('진단 적중 여부').selectOption('ACCURATE');
-  await page.getByLabel('원격지원 링크').fill('https://support.example.test/session/qa-ticket-before');
-  await page.getByLabel('관리자 메모').fill('Remote support link sent.');
-  await page.getByRole('button', { name: '결정 저장' }).click();
-  await expect(page.getByRole('main')).toContainText('결정 저장 완료');
+  await page.getByLabel('관리자 메모').fill('Remote support approved.');
+  await page.getByRole('button', { name: '원격 지원 승인' }).click();
+  await expect(page.getByRole('main')).toContainText('처리 결과');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('Remote support link sent.');
+  await expect(page.getByRole('main')).toContainText('지원 코드 등록 대기');
+  await expect(page.getByRole('main')).toContainText('Remote support approved.');
   await expect(page.getByRole('main')).not.toContainText('undefined');
-  expect(decisionPatchPayload).toMatchObject({
-    reviewStatus: 'APPROVED',
-    supportDecision: 'REMOTE_POSSIBLE',
-    riskLevel: 'HIGH',
-    diagnosticAccuracy: 'ACCURATE',
-    remoteSupportLink: 'https://support.example.test/session/qa-ticket-before',
-    adminNote: 'Remote support link sent.'
+  expect(reviewActionPayload).toMatchObject({
+    adminNote: 'Remote support approved.'
   });
   await page.screenshot({ path: `${screenshotDir}/03-admin-ticket-decision-fields.png`, fullPage: true });
 
@@ -405,13 +421,14 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.goto('/support/qa-ticket-before');
   await expect(page.getByRole('main')).toContainText('승인됨');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('https://support.example.test/session/qa-ticket-before');
+  await expect(page.getByRole('main')).toContainText('원격 지원이 승인되었습니다');
+  await expect(page.getByRole('main')).toContainText('지원 코드');
   await page.screenshot({ path: `${screenshotDir}/04-support-ticket-after-decision.png`, fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/support/qa-ticket-before');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('Remote support link sent.');
+  await expect(page.getByRole('main')).toContainText('Remote support approved.');
   await page.screenshot({ path: `${screenshotDir}/05-mobile-ticket.png`, fullPage: true });
 
   await page.evaluate(() => {
@@ -427,7 +444,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   expect(apiCalls).toEqual(expect.arrayContaining([
     'GET /api/as-tickets/qa-ticket-before',
     'GET /api/admin/as-tickets/qa-ticket-before',
-    'PATCH /api/admin/as-tickets/qa-ticket-before',
+    'POST /api/admin/as-tickets/qa-ticket-before/approve-remote-support',
     'DELETE /api/admin/as-tickets/qa-ticket-no-samples'
   ]));
   expect(consoleErrors).toEqual([]);

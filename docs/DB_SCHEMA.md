@@ -1473,7 +1473,7 @@ Index:
 
 ### remote_support_sessions
 
-목적: AS 티켓에 대한 원격 지원 세션 상태와 외부 지원 도구 정보를 저장한다 (V56, Chrome Remote Desktop 코드 필드는 V127).
+목적: AS 티켓에 대한 원격 지원 세션 상태와 외부 지원 도구 정보를 저장한다 (V56, Chrome Remote Desktop 코드 필드는 V130).
 
 Owner: 4번
 
@@ -1722,7 +1722,7 @@ Owner: 4번
 | `upgrade_candidates` | `JSONB` | yes | - | 업그레이드 후보 배열 |
 | `admin_note` | `TEXT` | yes | - | 관리자 메모 |
 | `resolved_at` | `TIMESTAMPTZ` | yes | - | 해결 시각 |
-| `reviewed_at` | `TIMESTAMPTZ` | yes | - | 관리자 검토가 최종 승인 또는 반려된 시각 (V126) |
+| `reviewed_at` | `TIMESTAMPTZ` | yes | - | 관리자 검토가 최종 승인 또는 반려된 시각 (V129) |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
 | `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
 | `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |
