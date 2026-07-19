@@ -963,7 +963,7 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertFalse(agent.is_supported_graphics_symptom("게임 중 소리가 잠깐 끊겼다가 다시 들립니다."))
         self.assertFalse(agent.is_supported_graphics_symptom("게임이 심하게 느려졌어요."))
 
-    def test_code43_fixture_is_selected_only_for_explicit_demo_scenario(self) -> None:
+    def test_code43_fixture_is_selected_only_for_explicit_demo_mode(self) -> None:
         live_provider = MagicMock(return_value="live-snapshot")
         demo_provider = MagicMock(return_value="demo-snapshot")
         symptom = "게임 중 화면이 잠깐 꺼졌다가 다시 켜지고, 이후 게임이 심하게 느려졌어요."
@@ -981,7 +981,7 @@ class AgentGoal1112Test(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            "live-snapshot",
+            "demo-snapshot",
             agent.collect_session_windows_graphics_snapshot(
                 session("DEMO", "게임이 심하게 느려졌어요."), live_provider, demo_provider,
             ),
@@ -992,8 +992,8 @@ class AgentGoal1112Test(unittest.TestCase):
                 session("DEMO", symptom), live_provider, demo_provider,
             ),
         )
-        self.assertEqual(2, live_provider.call_count)
-        demo_provider.assert_called_once_with()
+        live_provider.assert_called_once_with()
+        self.assertEqual(2, demo_provider.call_count)
 
     def test_persisted_demo_session_is_discarded_but_live_session_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

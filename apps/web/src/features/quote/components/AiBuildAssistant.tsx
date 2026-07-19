@@ -1513,6 +1513,7 @@ function SupportGuidanceCard({
   const [downloadMessage, setDownloadMessage] = useState('');
   const [diagnosisState, setDiagnosisState] = useState<'idle' | 'requesting' | 'accepted' | 'rejected' | 'error'>('idle');
   const [diagnosisMessage, setDiagnosisMessage] = useState('');
+  const [diagnosisMode, setDiagnosisMode] = useState<'LIVE' | 'DEMO'>('LIVE');
   const canDownload = guidance.actions.some((action) => action.type === 'DOWNLOAD_PC_AGENT');
   const supportRoute = guidance.actions.find((action) => action.type === 'OPEN_SUPPORT_NEW')?.route ?? '/support/new';
 
@@ -1524,7 +1525,7 @@ function SupportGuidanceCard({
       const response = await requestPcAgentDiagnosis({
         symptom: symptom.trim(),
         requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
-        mode: 'LIVE'
+        mode: diagnosisMode
       });
       if (response.status === 'ACCEPTED') {
         setDiagnosisState('accepted');
@@ -1609,6 +1610,36 @@ function SupportGuidanceCard({
       <p className={`${isLarge ? 'mt-4 text-sm leading-6' : 'mt-3 text-[11px] leading-5'} rounded-md border border-cyan-100 bg-white px-3 py-2 font-semibold text-slate-600`}>
         위 항목은 입력한 증상에서 흔히 확인하는 가능성입니다. 원인 확정과 지원 방식은 PC Agent의 별도 진단 AI가 동의한 로그를 확인한 뒤 안내합니다.
       </p>
+
+      {symptom.trim() ? (
+        <div className={`${isLarge ? 'mt-4' : 'mt-3'} flex items-center gap-3`}>
+          <button
+            type="button"
+            role="switch"
+            aria-label="시연 모드"
+            aria-checked={diagnosisMode === 'DEMO'}
+            data-testid="ai-agent-demo-mode"
+            disabled={diagnosisState === 'requesting' || diagnosisState === 'accepted'}
+            onClick={() => setDiagnosisMode((current) => current === 'LIVE' ? 'DEMO' : 'LIVE')}
+            className={`${diagnosisMode === 'DEMO' ? 'bg-cyan-700' : 'bg-slate-300'} relative h-6 w-11 rounded-full transition focus:outline-none focus:ring-4 focus:ring-cyan-100 disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            <span
+              aria-hidden="true"
+              className={`${diagnosisMode === 'DEMO' ? 'translate-x-5' : 'translate-x-1'} absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow transition`}
+            />
+          </button>
+          <div>
+            <p className={`${isLarge ? 'text-sm' : 'text-xs'} font-black text-slate-700`}>
+              {diagnosisMode === 'DEMO' ? 'Code 43 시연 모드' : '실시간 측정'}
+            </p>
+            <p className={`${isLarge ? 'text-xs' : 'text-[10px]'} font-semibold text-slate-500`}>
+              {diagnosisMode === 'DEMO'
+                ? '다음 진단 한 건에만 시연 모드를 요청합니다.'
+                : '실제 PC 센서와 그래픽 장치 상태를 진단합니다.'}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-wrap`}>
         {symptom.trim() ? (

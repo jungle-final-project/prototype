@@ -1223,7 +1223,8 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   const diagnosisBodies: Array<{ symptom?: string; mode?: string; requestedChecks?: string[] }> = [];
   let diagnosisResponseStatus: 'ACCEPTED' | 'DISCONNECTED' = 'DISCONNECTED';
   await page.route('**/api/users/me/agent-diagnosis-requests', async (route) => {
-    diagnosisBodies.push(JSON.parse(route.request().postData() ?? '{}'));
+    const requestBody = JSON.parse(route.request().postData() ?? '{}');
+    diagnosisBodies.push(requestBody);
     if (diagnosisResponseStatus === 'DISCONNECTED') {
       await route.fulfill({
         status: 409,
@@ -1240,7 +1241,7 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
         deviceId: 'device-1',
         requestedAt: '2026-07-15T00:00:00Z',
         expiresAt: '2026-07-15T00:05:00Z',
-        mode: 'LIVE',
+        mode: requestBody.mode,
         status: 'ACCEPTED'
       })
     });
@@ -1254,7 +1255,10 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   const guidance = page.getByTestId('ai-support-guidance');
   await expect(guidance).toBeVisible();
   const submit = guidance.getByTestId('ai-agent-diagnosis-request');
+  const demoMode = guidance.getByRole('switch', { name: '시연 모드' });
   await expect(submit).toContainText('PC Agent로 바로 접수');
+  await expect(demoMode).toHaveAttribute('aria-checked', 'false');
+  await expect(guidance).toContainText('실시간 측정');
 
   // 1) 에이전트 미실행: 안내 문구가 뜨고 재시도 가능해야 한다.
   await submit.click();
@@ -1263,12 +1267,20 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   expect(diagnosisBodies[0].mode).toBe('LIVE');
 
   // 2) 에이전트 연결됨: 접수 성공 + 버튼이 접수 완료로 잠긴다.
+  await demoMode.click();
+  await expect(demoMode).toHaveAttribute('aria-checked', 'true');
+  await expect(guidance).toContainText('Code 43 시연 모드');
+  await demoMode.click();
+  await expect(demoMode).toHaveAttribute('aria-checked', 'false');
+  await demoMode.click();
   diagnosisResponseStatus = 'ACCEPTED';
   await submit.click();
   await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PC Agent가 증상을 접수했습니다');
   await expect(submit).toContainText('접수 완료');
   await expect(submit).toBeDisabled();
+  await expect(demoMode).toBeDisabled();
   expect(diagnosisBodies[1].symptom).toBe(symptomText);
+  expect(diagnosisBodies[1].mode).toBe('DEMO');
 });
 
 test('docks the desktop AI assistant and shifts the page while open', async ({ page }) => {

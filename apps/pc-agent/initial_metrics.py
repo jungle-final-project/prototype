@@ -520,7 +520,7 @@ class InitialMetricsCoordinator:
     def _run(self, diagnosis_id: str, mode: str, stop_event: threading.Event) -> None:
         try:
             try:
-                provider = self.demo_provider_factory() if mode == "DEMO" else self.live_provider_factory()
+                provider = self.live_provider_factory()
             except PermissionError:
                 self._finish_with_unavailable(
                     diagnosis_id,
