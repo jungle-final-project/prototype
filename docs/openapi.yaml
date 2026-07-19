@@ -1126,7 +1126,7 @@ paths:
             enum: [category, price_asc, price_desc, name, compatibility]
         - in: query
           name: compatibilitySource
-          description: 특정 category 조회에서 현재 견적초안 기준 호환성 상태를 PartDto.compatibility에 포함한다. 연계 부품이 선택되어 있으면 PASS 후보 최대 3개에 PartDto.recommendation을 추가하고 목록 최상단에 둔다.
+          description: 특정 category 조회에서 현재 견적초안 기준 호환성 상태를 PartDto.compatibility에 포함한다. 연계 부품이 선택되어 있으면 PASS 후보 최대 3개에 PartDto.recommendation을 추가한다. 추천 후보의 목록 최상단 고정(재정렬)은 기본(category)·compatibility 정렬에서만 적용되고, 명시적 정렬(price_asc/price_desc/name)은 정렬 순서를 유지한 채 페이지 내 PASS 후보 기준으로 recommendation 뱃지만 단다(서버가 페이지 행만 평가).
           schema:
             type: string
             enum: [QUOTE_DRAFT_CURRENT]

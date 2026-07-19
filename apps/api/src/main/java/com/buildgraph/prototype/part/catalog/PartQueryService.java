@@ -25,6 +25,8 @@ import org.springframework.http.HttpStatus;
 public class PartQueryService {
     private static final Set<String> CATEGORIES = Set.of("CPU", "GPU", "RAM", "MOTHERBOARD", "STORAGE", "PSU", "CASE", "COOLER");
     private static final Set<String> STATUSES = Set.of("ACTIVE", "INACTIVE", "DISCONTINUED");
+    // 명시적 정렬 — 정렬 기준이 draft와 무관해 SQL ORDER BY+LIMIT으로 페이지 행만 뽑아 평가할 수 있는 sort들.
+    private static final Set<String> PAGE_SCOPED_SORTS = Set.of("price_asc", "price_desc", "name");
     private final JdbcTemplate jdbcTemplate;
     private final PartCompatibleCandidateService compatibilityService;
     private final PartDetailCachedLoader partDetailCachedLoader;
@@ -36,6 +38,8 @@ public class PartQueryService {
     // "사용자 draft에 따라 응답이 달라진다"는 무캐시 사유를 지키면서, 같은 draft로 페이지를 넘길 때마다
     // 카테고리 전량을 재평가하던 중복 작업(부하 실측 트래픽 55% 경로)만 제거한다.
     private final ReadThroughTtlCache<CompatibilityRowsKey, List<Map<String, Object>>> compatibilityRowsCache;
+    // 페이지-스코프 평가(명시적 정렬) 응답 캐시 — 값에 total까지 담아 히트 시 DB 왕복이 draft 서명 1쿼리로 끝난다.
+    private final ReadThroughTtlCache<CompatibilityRowsKey, Map<String, Object>> pagedCompatibilityCache;
 
     @Autowired
     public PartQueryService(
@@ -52,6 +56,7 @@ public class PartQueryService {
         this.partDetailCachedLoader = partDetailCachedLoader;
         this.partsCache = new ReadThroughTtlCache<>(Duration.ofSeconds(cacheTtlSeconds), 512);
         this.compatibilityRowsCache = new ReadThroughTtlCache<>(Duration.ofSeconds(compatibilityCacheTtlSeconds), 1024);
+        this.pagedCompatibilityCache = new ReadThroughTtlCache<>(Duration.ofSeconds(compatibilityCacheTtlSeconds), 2048);
     }
 
     // 편의 생성자(테스트/내부용) — 캐시 기본 TTL(카탈로그 30초, 호환성 15초).
@@ -361,6 +366,9 @@ public class PartQueryService {
         if (user == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
         }
+        if (PAGE_SCOPED_SORTS.contains(search.sort())) {
+            return pagedCompatibilityParts(user, search, compatibilitySource, compatibilityMode, replaceTargetPartId);
+        }
         // 키는 page/size를 제외한 전 파라미터 + draft 내용 서명 — 페이지 넘김은 같은 평가본을 재사용하고,
         // draft가 바뀌면 서명이 바뀌어 즉시 재평가된다.
         CompatibilityRowsKey key = new CompatibilityRowsKey(
@@ -374,7 +382,9 @@ public class PartQueryService {
                 search.sort(),
                 compatibilitySource,
                 blankToNull(compatibilityMode),
-                blankToNull(replaceTargetPartId)
+                blankToNull(replaceTargetPartId),
+                null,
+                null
         );
         List<Map<String, Object>> rows = compatibilityRowsCache.get(key,
                 () -> evaluatedCompatibilityRows(user, search, compatibilitySource, compatibilityMode, replaceTargetPartId));
@@ -384,6 +394,50 @@ public class PartQueryService {
                 "size", search.size(),
                 "total", rows.size()
         );
+    }
+
+    /**
+     * 명시적 정렬(price_asc/price_desc/name)의 호환성 후보 경로 — 정렬이 draft와 무관하므로
+     * SQL ORDER BY+LIMIT으로 페이지 행만 뽑아 그 부분만 평가한다. 미스 비용이 카테고리 크기(32~87)와
+     * 무관하게 페이지 크기로 고정된다 (부하 실측 55% 트래픽이 price_asc — 2026-07-19).
+     * 추천 톱3는 전량 평가 없이는 "전체 기준 톱3"를 계산할 수 없어, 이 경로에서는 페이지 내 PASS 후보
+     * 기준 뱃지로만 달고 상단 고정(재정렬)을 하지 않는다 — 고정은 기본·호환 정렬에서 유지(제품 결정).
+     */
+    private Map<String, Object> pagedCompatibilityParts(CurrentUserService.CurrentUser user, PartSearch search, String compatibilitySource, String compatibilityMode, String replaceTargetPartId) {
+        CompatibilityRowsKey key = new CompatibilityRowsKey(
+                draftSignature(user),
+                search.category(),
+                search.query(),
+                search.manufacturer(),
+                search.status(),
+                search.minPrice(),
+                search.maxPrice(),
+                search.sort(),
+                compatibilitySource,
+                blankToNull(compatibilityMode),
+                blankToNull(replaceTargetPartId),
+                search.page(),
+                search.size()
+        );
+        return pagedCompatibilityCache.get(key, () -> {
+            List<Map<String, Object>> pageRows = detailRows(partPublicIds(search, orderBy(search.sort()), true));
+            List<Map<String, Object>> evaluated = compatibilityService.partRowsWithCompatibility(
+                    user,
+                    compatibilitySource,
+                    search.category(),
+                    compatibilityMode,
+                    replaceTargetPartId,
+                    pageRows
+            );
+            return MockData.map(
+                    "items", recommendationService.annotate(search.category(), evaluated).stream()
+                            .map(this::stripInternalFields)
+                            .toList(),
+                    "page", search.page(),
+                    "size", search.size(),
+                    "total", countParts(search)
+            );
+        });
     }
 
     private List<Map<String, Object>> evaluatedCompatibilityRows(CurrentUserService.CurrentUser user, PartSearch search, String compatibilitySource, String compatibilityMode, String replaceTargetPartId) {
@@ -728,7 +782,9 @@ public class PartQueryService {
     private record SqlWhere(String sql, List<Object> params) {
     }
 
-    // 호환성 평가본 캐시 키 — page/size 제외(페이지 넘김 재사용이 목적), draft 내용 서명 포함(즉시 무효화).
+    // 호환성 평가본 캐시 키 — draft 내용 서명 포함(즉시 무효화).
+    // 전량 평가 경로는 page/size를 null로 둬(페이지 넘김이 같은 평가본을 재사용),
+    // 페이지-스코프 경로는 page/size까지 키에 넣는다(캐시 값이 해당 페이지 응답이므로).
     private record CompatibilityRowsKey(
             String draftSignature,
             String category,
@@ -740,7 +796,9 @@ public class PartQueryService {
             String sort,
             String source,
             String mode,
-            String replaceTargetPartId
+            String replaceTargetPartId,
+            Integer page,
+            Integer size
     ) {
     }
 
