@@ -551,41 +551,9 @@ function PerfPanelBody({
                 </div>
               );
 
-              // 비교 모드: 헤더를 본문과 같은 두 칼럼 그리드로 정렬한다 —
-              // CPU|GPU 토글은 구분선 왼쪽(가격·성능 칼럼) 끝, 교체 후보 선택은 구분선 오른쪽(게임 칼럼) 시작에 온다.
+              // 비교 모드의 조작부는 아래 좌우 본문 섹션에서만 렌더링한다.
               if (activeComparison && hasWorkspace && onStartComparison) {
-                return (
-                  <div className="hidden">
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                      <span className="shrink-0 text-sm font-black text-slate-600">가격·성능 향상</span>
-                      <PerfCategoryToggle
-                        innerRef={compareToggleRef}
-                        category={compareCategory}
-                        compact
-                        onSelect={(pickerCategory) => {
-                          setCompareCategory(pickerCategory);
-                          if (activeComparison.category !== pickerCategory) {
-                            onClearComparison?.();
-                          }
-                        }}
-                      />
-                    </div>
-                    <div className="flex min-w-0 flex-wrap items-start justify-between gap-2 border-commerce-line lg:border-l lg:pl-2">
-                      <CandidateCombo
-                        perfItems={perfItems}
-                        activeComparison={activeComparison}
-                        onStartComparison={onStartComparison}
-                        onClearComparison={onClearComparison}
-                        compact
-                        hideToggle
-                        category={compareCategory}
-                        onCategoryChange={setCompareCategory}
-                        keepOpenRef={compareToggleRef}
-                      />
-                      {resolutionPicker}
-                    </div>
-                  </div>
-                );
+                return null;
               }
 
               return (
