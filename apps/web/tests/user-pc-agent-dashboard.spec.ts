@@ -32,24 +32,31 @@ test.beforeEach(async ({ page }) => {
 
 test('shows the account-bound download and diagnosis CTAs when no diagnosis exists', async ({ page }) => {
   let activationRequests = 0;
+  let executableVersion = '1.0.0';
+  let executableBody = 'test-agent-executable';
   await routeLatest(page, null);
+  await captureDownloadedPackages(page);
   await page.route('**/api/users/me/agent-activation-token', (route) => {
     activationRequests += 1;
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ id: 'activation-1', activationToken: 'owned-one-time-token', tokenType: 'ACTIVATION' })
+      body: JSON.stringify({
+        id: `activation-${activationRequests}`,
+        activationToken: `owned-one-time-token-${activationRequests}`,
+        tokenType: 'ACTIVATION'
+      })
     });
   });
   await page.route('**/downloads/pc-agent/latest.json', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ version: '1.0.0', downloadUrl: '/downloads/pc-agent/PCAgent.exe' })
+    body: JSON.stringify({ version: executableVersion, downloadUrl: '/downloads/pc-agent/PCAgent.exe' })
   }));
   await page.route('**/downloads/pc-agent/PCAgent.exe*', (route) => route.fulfill({
     status: 200,
     contentType: 'application/octet-stream',
-    body: 'test-agent-executable'
+    body: executableBody
   }));
 
   await page.goto('/my/profile');
@@ -63,8 +70,78 @@ test('shows the account-bound download and diagnosis CTAs when no diagnosis exis
   ]);
   expect(download.suggestedFilename()).toBe('PCAgent.zip');
   expect(activationRequests).toBe(1);
+  const firstPackage = await capturedPackage(page, 0);
+  expect(readStoredZipEntry(firstPackage, 'PCAgent.exe'))
+    .toEqual(new TextEncoder().encode(executableBody));
+  expect(JSON.parse(new TextDecoder().decode(readStoredZipEntry(firstPackage, 'pcagent-activation.json'))))
+    .toMatchObject({ activationToken: 'owned-one-time-token-1' });
+  expect(new TextDecoder().decode(readStoredZipEntry(firstPackage, 'README.txt')))
+    .toContain('Keep PCAgent.exe and pcagent-activation.json in the same folder.');
   await expect(card).toContainText('계정에 귀속된 PCAgent.zip');
+
+  executableVersion = '1.0.1';
+  executableBody = 'test-agent-executable-v2';
+  const [secondDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    card.getByRole('button', { name: 'PC Agent 다운로드' }).click()
+  ]);
+  expect(secondDownload.suggestedFilename()).toBe('PCAgent.zip');
+  const secondPackage = await capturedPackage(page, 1);
+  expect(readStoredZipEntry(secondPackage, 'PCAgent.exe'))
+    .toEqual(new TextEncoder().encode(executableBody));
+  expect(JSON.parse(new TextDecoder().decode(readStoredZipEntry(secondPackage, 'pcagent-activation.json'))))
+    .toMatchObject({ activationToken: 'owned-one-time-token-2' });
+  expect(activationRequests).toBe(2);
 });
+
+async function captureDownloadedPackages(page: Page) {
+  await page.addInitScript(() => {
+    const captured: number[][] = [];
+    const state = globalThis as typeof globalThis & { __pcAgentPackages?: number[][] };
+    state.__pcAgentPackages = captured;
+    const originalCreateObjectUrl = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob: Blob) => {
+      void blob.arrayBuffer().then((buffer) => captured.push(Array.from(new Uint8Array(buffer))));
+      return originalCreateObjectUrl(blob);
+    };
+  });
+}
+
+async function capturedPackage(page: Page, index: number) {
+  await expect.poll(() => page.evaluate((packageIndex) => {
+    const state = globalThis as typeof globalThis & { __pcAgentPackages?: number[][] };
+    return state.__pcAgentPackages?.[packageIndex]?.length ?? 0;
+  }, index)).toBeGreaterThan(0);
+  const bytes = await page.evaluate((packageIndex) => {
+    const state = globalThis as typeof globalThis & { __pcAgentPackages?: number[][] };
+    return state.__pcAgentPackages?.[packageIndex] ?? [];
+  }, index);
+  return new Uint8Array(bytes);
+}
+
+function readStoredZipEntry(archive: Uint8Array, expectedName: string) {
+  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+  const decoder = new TextDecoder();
+  let offset = 0;
+  while (offset + 30 <= archive.length && view.getUint32(offset, true) === 0x04034b50) {
+    const compressionMethod = view.getUint16(offset + 8, true);
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    const name = decoder.decode(archive.subarray(nameStart, nameStart + nameLength));
+    if (name === expectedName) {
+      if (compressionMethod !== 0) {
+        throw new Error(`Unexpected compression method for ${expectedName}: ${compressionMethod}`);
+      }
+      return archive.subarray(dataStart, dataEnd);
+    }
+    offset = dataEnd;
+  }
+  throw new Error(`ZIP entry not found: ${expectedName}`);
+}
 
 test('uses the shared diagnosis polling hook for current progress, task, and logs', async ({ page }) => {
   const initial = diagnosisSummary({
