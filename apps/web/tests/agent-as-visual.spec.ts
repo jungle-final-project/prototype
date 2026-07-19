@@ -108,6 +108,51 @@ const visitRecommendedTicket = {
   }
 };
 
+const code43AgentTicket = {
+  ...beforeDecisionTicket,
+  id: 'qa-ticket-code43',
+  status: 'OPEN',
+  reviewStatus: 'REQUIRED',
+  supportDecision: null,
+  symptom: '게임 중 화면이 끊기고 검은 화면이 나타납니다.',
+  userId: 'user-code43-public-id',
+  userEmail: 'code43-user@example.com',
+  userName: 'Code43 User',
+  logUploadId: null,
+  diagnosisId: '9a0e3c21-6648-41e7-a88e-17be1761b806',
+  diagnosisMode: 'DEMO',
+  diagnosisTitle: '그래픽 장치 오류 상태가 확인되었습니다',
+  diagnosisSummary: 'Intel Arc A350M이 Code 43을 보고해 원격 지원을 권장합니다.',
+  diagnosisEvidence: [{
+    component: 'gpu',
+    metricType: 'display_device_status',
+    value: { deviceName: 'Intel(R) Arc(TM) A350M Graphics', problemCode: 43 },
+    description: 'Intel Arc A350M / Code 43'
+  }],
+  diagnosisResult: {
+    recommendedActions: ['그래픽 드라이버 재설치 또는 이전 버전 롤백', '원격 AS 기사 연결']
+  },
+  diagnosisEvents: [
+    { eventId: 'event-code43-1', progressPercent: 35, message: '그래픽 장치 상태 확인 중' },
+    { eventId: 'event-code43-2', progressPercent: 100, message: 'Code 43 진단 완료' }
+  ],
+  logSummaryText: null,
+  logSummary: null,
+  supportRouting: {
+    recommendedDecision: 'REMOTE_POSSIBLE',
+    confidence: 'HIGH',
+    reasonCodes: ['GRAPHICS_DEVICE_CODE_43'],
+    remoteActions: ['그래픽 드라이버 재설치 또는 이전 버전 롤백', '원격 AS 기사 연결'],
+    visitReasons: [],
+    blockingFactors: [],
+    recommendedService: 'REMOTE_SUPPORT',
+    recommendedServiceLabel: '원격지원 신청',
+    requiresAdminApproval: true
+  },
+  causeCandidates: [],
+  upgradeCandidates: []
+};
+
 const noSampleTicket = {
   ...beforeDecisionTicket,
   id: 'qa-ticket-no-samples',
@@ -145,6 +190,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     [beforeDecisionTicket.id, beforeDecisionTicket],
     [afterDecisionTicket.id, afterDecisionTicket],
     [visitRecommendedTicket.id, visitRecommendedTicket],
+    [code43AgentTicket.id, code43AgentTicket],
     [noSampleTicket.id, noSampleTicket],
     [diagnosisOnlyTicket.id, diagnosisOnlyTicket]
   ]);
@@ -290,6 +336,8 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.goto('/admin/as-tickets');
   await expect(page.getByRole('main')).toContainText('추천 서비스');
   await expect(page.getByRole('main')).toContainText('방문지원 신청');
+  await expect(page.getByRole('main')).toContainText('원격지원 신청');
+  await expect(page.getByRole('main')).toContainText('code43-user@example.com');
 
   for (const column of ['상태', '검토', '결정', '추천 서비스']) {
     await expect(page.getByRole('columnheader', { name: column, exact: true })).toHaveCSS('white-space', 'nowrap');
@@ -319,6 +367,14 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     expect(summaryBox).not.toBeNull();
     expect(summaryBox!.y).toBeGreaterThan(listBox!.y + listBox!.height);
   }
+
+  await page.goto('/admin/as-tickets/qa-ticket-code43');
+  await expect(page.getByRole('main')).toContainText('9a0e3c21-6648-41e7-a88e-17be1761b806');
+  await expect(page.getByRole('main')).toContainText('Intel Arc A350M / Code 43');
+  await expect(page.getByRole('main')).toContainText('그래픽 드라이버 재설치 또는 이전 버전 롤백');
+  await expect(page.getByRole('main')).toContainText('Code 43 진단 완료');
+  await expect(page.getByRole('main')).toContainText('원격지원 신청');
+  await expect(page.getByRole('main')).toContainText('지원 결정');
 
   await page.goto('/admin/as-tickets/qa-ticket-before');
   await expect(page.getByRole('main')).toContainText('지원 결정 저장');
