@@ -901,18 +901,29 @@ public class DefaultAiChatEngine implements AiChatEngine {
      * LLM이 처음부터 "목록으로 이동"이라고 답했으면 손대지 않는다.
      */
     private static String correctedRouteMessage(String assistantMessage, EngineRouteIntent routeIntent) {
-        if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason())
-                || assistantMessage == null
-                || !assistantMessage.contains("상세")) {
+        if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason()) || !promisesDetailPage(assistantMessage)) {
             return assistantMessage;
         }
         String category = text(routeIntent.context().get("category"));
-        String partQuery = text(routeIntent.context().get("partQuery"));
+        // route의 q= 값과 같은 정제를 거친 문구를 인용한다 — 도착한 화면의 검색어와 답변이 어긋나지 않게.
+        String partQuery = text(PartRouteResolver.extractPartQuery(text(routeIntent.context().get("partQuery"))));
         String label = category == null ? "부품" : categoryLabel(category);
         String head = partQuery == null
                 ? "찾으시는 상품을 하나로 특정하지 못했어요. "
                 : "'" + partQuery + "'에 정확히 맞는 상품을 하나로 특정하지 못했어요. ";
         return head + label + " 후보 목록에서 확인해 주세요.";
+    }
+
+    /**
+     * "상세페이지"라는 약속만 잡는다. 그냥 "상세"로 판단하면 "상세 스펙을 알려드릴게요"처럼
+     * 이동을 약속하지 않은 정상 답변까지 통째로 갈아치운다.
+     */
+    private static boolean promisesDetailPage(String assistantMessage) {
+        if (assistantMessage == null) {
+            return false;
+        }
+        String compact = assistantMessage.replaceAll("\\s+", "");
+        return compact.contains("상세페이지") || compact.contains("상품페이지") || compact.contains("제품페이지");
     }
 
     private EngineRouteIntent normalizeRouteIntent(Map<String, Object> source, String selectedCategory) {

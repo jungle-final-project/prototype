@@ -561,8 +561,13 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       setRevealMessageId(assistantMessage.id);
       // "상세페이지로 이동할게요"라고 답했으면 실제로 이동한다. 답변은 이미 세션에 저장했으므로
       // 이동한 화면에서도 그대로 남는다(위 카테고리 즉시 이동 경로와 같은 방식).
+      // 패널을 먼저 닫아야 한다 — 중앙 모달은 fixed inset-0 전체화면이라 열린 채로 두면
+      // 도착한 화면을 그대로 덮어, 사용자 눈에는 이동이 일어나지 않은 것과 똑같이 보인다.
       const navigationRoute = navigationRouteFrom(response);
       if (navigationRoute) {
+        if (!isEmbedded) {
+          setOpen(false);
+        }
         navigate(navigationRoute);
       }
       const verifiedRepairBuild = responseBuilds?.length === 1
