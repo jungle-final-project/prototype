@@ -339,10 +339,10 @@ export function withdrawTechnicianOffer(offerId: string, reason: string) {
   });
 }
 
-export function listAdminAssemblyRequests(params: { q?: string; status?: string; region?: string } = {}) {
+export function listAdminAssemblyRequests(params: { q?: string; status?: string; region?: string; page?: number; size?: number } = {}) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
-    if (value) search.set(key, value);
+    if (value !== undefined && value !== '') search.set(key, String(value));
   });
   return api<AssemblyRequestPage>(`/api/admin/assembly-requests?${search.toString()}`);
 }

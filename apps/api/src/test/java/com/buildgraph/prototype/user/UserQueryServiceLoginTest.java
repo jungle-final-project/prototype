@@ -70,7 +70,20 @@ class UserQueryServiceLoginTest {
                 eq(refreshTokenService.hash(refreshToken)),
                 any(Timestamp.class)
         );
+        verify(jdbcTemplate).update(
+                org.mockito.ArgumentMatchers.contains("active_rank > ?"),
+                eq(1004L),
+                eq(3)
+        );
         assertThat(response.get("user")).isInstanceOf(Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> user = (Map<String, Object>) response.get("user");
+        assertThat(user)
+                .containsEntry("id", "00000000-0000-4000-8000-000000001004")
+                .containsEntry("email", "user@example.com")
+                .containsEntry("name", "Demo User")
+                .containsEntry("role", "USER")
+                .doesNotContainKeys("phoneNumber", "postalCode", "addressLine1", "addressLine2", "authProviders");
     }
 
     @Test

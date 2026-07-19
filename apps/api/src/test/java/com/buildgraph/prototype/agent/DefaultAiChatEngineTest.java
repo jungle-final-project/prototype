@@ -13,7 +13,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.buildgraph.prototype.part.PartAliasReviewService;
+import com.buildgraph.prototype.part.catalog.PartAliasReviewService;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;

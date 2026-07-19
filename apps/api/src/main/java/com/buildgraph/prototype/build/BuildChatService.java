@@ -2,6 +2,7 @@ package com.buildgraph.prototype.build;
 
 import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.agent.AiChatEngineRequest;
+import com.buildgraph.prototype.agent.mock.MockAiChatEngine;
 import com.buildgraph.prototype.agent.SupportGuidanceDraft;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
 import com.buildgraph.prototype.agent.AiChatIntent;
@@ -10,10 +11,10 @@ import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.agent.PartReplacementRanker;
 import com.buildgraph.prototype.agent.PartRouteResolver;
-import com.buildgraph.prototype.part.PartCompatibleCandidateService;
-import com.buildgraph.prototype.part.ToolBuildPart;
-import com.buildgraph.prototype.part.ToolCheckService;
-import com.buildgraph.prototype.part.ToolApplicabilityPolicy;
+import com.buildgraph.prototype.part.catalog.PartCompatibleCandidateService;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolApplicabilityPolicy;
 import com.buildgraph.prototype.recommendation.CandidateReranker;
 import com.buildgraph.prototype.recommendation.NoopCandidateReranker;
 import com.buildgraph.prototype.user.CurrentUserService;
@@ -54,6 +55,7 @@ public class BuildChatService {
     private static final Pattern EXPLICIT_CPU_MODEL = Pattern.compile("(?i)\\b\\d{4,5}x3d\\b|\\b\\d{4,5}x\\b|\\bi[3579]-?\\d{4,5}\\b");
     private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
     private static final Pattern WATT_PATTERN = Pattern.compile("(\\d{3,4})\\s*w", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TARGET_FPS_PATTERN = Pattern.compile("(\\d{2,3})\\s*(?:fps|프레임)", Pattern.CASE_INSENSITIVE);
     private static final Pattern EXACT_PART_ADD_SUFFIX = Pattern.compile(
             "\\s*(?:견적(?:에|으로)?\\s*)?(?:담아\\s*줘|넣어\\s*줘|추가해\\s*줘|담아|넣어|추가해)\\s*[.!?]?\\s*$",
             Pattern.CASE_INSENSITIVE
@@ -117,6 +119,8 @@ public class BuildChatService {
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
     private final AiChatEngine aiChatEngine;
+    private MockAiChatEngine mockAiChatEngine;
+    private BuildChatTestMode buildChatTestMode;
     private final BuildChatCacheService buildChatCacheService;
     private final PartReplacementRanker partReplacementRanker;
     private final CandidateReranker candidateReranker;
@@ -228,6 +232,12 @@ public class BuildChatService {
         this.partCompatibleCandidateService = partCompatibleCandidateService;
     }
 
+    @Autowired(required = false)
+    public void setBuildChatTestMode(BuildChatTestMode buildChatTestMode, MockAiChatEngine mockAiChatEngine) {
+        this.buildChatTestMode = buildChatTestMode;
+        this.mockAiChatEngine = mockAiChatEngine;
+    }
+
     public Map<String, Object> chat(Map<String, Object> request) {
         return chat(request, (String) null);
     }
@@ -241,8 +251,24 @@ public class BuildChatService {
     }
 
     public Map<String, Object> chat(Map<String, Object> request, String requestedAiProfile, CurrentUserService.CurrentUser user) {
+        return chat(request, requestedAiProfile, user, null, null);
+    }
+
+    public Map<String, Object> chat(
+            Map<String, Object> request,
+            String requestedAiProfile,
+            CurrentUserService.CurrentUser user,
+            String requestedAiMode,
+            String suppliedTestKey
+    ) {
+        if (buildChatTestMode == null && ((requestedAiMode != null && !requestedAiMode.isBlank())
+                || (suppliedTestKey != null && !suppliedTestKey.isBlank()))) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "AI Build Chat test mode is unavailable.");
+        }
+        boolean mockRequest = buildChatTestMode != null
+                && buildChatTestMode.requireMockRequest(requestedAiMode, suppliedTestKey);
         long startedNanos = System.nanoTime();
-        Map<String, Object> rawBody = request == null ? Map.of() : request;
+        Map<String, Object> rawBody = BuildChatTestMode.sanitizedRequest(request, mockRequest);
         String rawMessage = requireText(rawBody.get("message"), "message는 필수입니다.");
         // 직전 되묻기(clarification)에 대한 후속 답변이면 원 요청과 합성해 한 문장처럼 라우팅한다.
         // 서버는 상태를 저장하지 않고 프론트가 originalMessage를 에코하는 무상태 왕복이다.
@@ -345,6 +371,22 @@ public class BuildChatService {
                 return response;
             }
         }
+        Optional<Map<String, Object>> targetFpsPreview = targetFpsGpuPreviewResponse(body, message);
+        if (targetFpsPreview.isPresent()) {
+            Map<String, Object> response = targetFpsPreview.get();
+            attachFollowUpContext(response, message);
+            logBuildChatPath("FAST_TARGET_FPS_DRAFT_EDIT", startedNanos, userId, requestedAiProfile, false,
+                    BuildChatGuardStats.empty());
+            return response;
+        }
+        Optional<Map<String, Object>> compatibleCasePreview = compatibleCaseRepairPreviewResponse(body, message);
+        if (compatibleCasePreview.isPresent()) {
+            Map<String, Object> response = compatibleCasePreview.get();
+            attachFollowUpContext(response, message);
+            logBuildChatPath("FAST_COMPATIBLE_CASE_DRAFT_EDIT", startedNanos, userId, requestedAiProfile, false,
+                    BuildChatGuardStats.empty());
+            return response;
+        }
         Optional<Map<String, Object>> exactPartPreview = exactSingletonPartPreviewResponse(body, message, user);
         if (exactPartPreview.isPresent()) {
             Map<String, Object> response = exactPartPreview.get();
@@ -401,6 +443,14 @@ public class BuildChatService {
         // 라우터가 UNSUPPORTED로 본 문장도 즉답 거절하지 않는다 — 키워드 오인("램을 바꿔줘" 류)이
         // 잦아, LLM 제약 파서까지 흘려보내 실제 의도(부품 제약·드래프트 변경·설명)를 살린다.
         // LLM이 불가하거나 실패할 때만 우아한 거절(기능 안내 + 바로 눌러볼 칩)로 마무리한다.
+        Optional<Map<String, Object>> minimumFeasibleBuild = minimumFeasibleBuildResponse(body, message);
+        if (minimumFeasibleBuild.isPresent()) {
+            Map<String, Object> response = minimumFeasibleBuild.get();
+            buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+            logBuildChatPath("FAST_MINIMUM_FEASIBLE_BUILD", startedNanos, userId, requestedAiProfile, false,
+                    BuildChatGuardStats.routeFallback());
+            return response;
+        }
         boolean recommendFlow = intentDecision.intent() == BuildChatIntent.BUILD_RECOMMEND;
         // 명시 부품 하드 조건은 모델명·예산이 정확히 일치해야만 재사용할 수 있다. exact cache는 계속
         // 사용하되, miss 가능성이 높은 semantic lookup을 위해 임베딩을 먼저 호출하지 않는다. 복잡한
@@ -521,7 +571,7 @@ public class BuildChatService {
         }
         AiChatEngineResponse engineResponse;
         try {
-            engineResponse = aiChatEngine.respondLlmRequired(new AiChatEngineRequest(
+            AiChatEngineRequest engineRequest = new AiChatEngineRequest(
                     message,
                     chatSurface(body),
                     firstText(
@@ -532,7 +582,10 @@ public class BuildChatService {
                     text(body.get("draftId")),
                     engineBody,
                     userId
-            ), requestedAiProfile);
+            );
+            engineResponse = mockRequest
+                    ? mockAiChatEngine.respond(engineRequest)
+                    : aiChatEngine.respondLlmRequired(engineRequest, requestedAiProfile);
         } catch (RuntimeException error) {
             if (recommendFlow) {
                 throw error;
@@ -1176,6 +1229,27 @@ public class BuildChatService {
         return new BudgetIntent(budget, mode, hasRawHardPartConstraint(message), hasRawNegatedPartConstraint(message));
     }
 
+    static boolean isMinimumFeasibleBuildRequest(String message) {
+        if (message == null || parseBudgetWon(message) != null) {
+            return false;
+        }
+        String normalized = normalizeCommand(message);
+        return containsAnyNormalized(normalized,
+                "최소견적", "최저견적", "최소비용", "최저비용",
+                "가장저렴한견적", "제일저렴한견적", "가장싼견적", "제일싼견적",
+                "가장싼구성", "제일싼구성", "가능한최저예산", "최소예산으로", "최저예산으로");
+    }
+
+    // 담긴 부품을 유지·완성하려는 의도 마커 — draftCompletionFastResponse 트리거(채워/완성/나머지/마저)와
+    // 유지 의도 표현(이 견적/지금 견적/담긴/그대로/유지)을 함께 본다. normalizeCommand가 공백을 제거하므로
+    // "이 견적"도 "이견적"으로 비교된다.
+    static boolean hasDraftCompletionIntentMarker(String message) {
+        String normalized = normalizeCommand(message);
+        return containsAnyNormalized(normalized,
+                "나머지", "마저", "채워", "채우", "완성",
+                "이견적", "지금견적", "담긴", "그대로", "유지");
+    }
+
     private static boolean isStandaloneBuildRecommend(String message, Map<String, Object> request, BudgetIntent rawBudgetIntent) {
         // 견적 초안 존재 여부는 map이 비었는지가 아니라 items가 있는지로 판정해야 함(빈 items 배열을 "초안 있음"으로 오인 방지)
         if (!objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty() || (rawBudgetIntent != null && rawBudgetIntent.explicitHardConstraint())) {
@@ -1185,7 +1259,8 @@ public class BuildChatService {
         boolean preferenceBuildLike = containsAnyNormalized(normalized, "위주", "말고", "cuda", "로컬ai", "실험용", "그래픽카드로추천");
         boolean buildLike = containsAnyNormalized(normalized,
                 "pc", "피시", "컴퓨터", "컴", "견적", "본체", "구성", "데스크탑", "데스크톱", "워크스테이션", "머신", "사양", "조합",
-                "목표", "게임", "게이밍", "qhd", "fhd", "4k", "hz", "배그", "발로란트", "오버워치", "사이버펑크", "로스트아크")
+                "목표", "게임", "게이밍", "qhd", "fhd", "4k", "hz", "배그", "배틀그라운드", "battleground", "pubg",
+                "발로란트", "오버워치", "사이버펑크", "로스트아크")
                 || preferenceBuildLike;
         boolean recommendLike = containsAnyNormalized(normalized,
                 "추천", "맞춰", "맞추", "구성", "용pc", "pc", "뽑아", "짜줘", "짜주", "골라", "조립", "만들어", "세팅", "내줘", "부탁", "필요", "구해줘");
@@ -1219,7 +1294,8 @@ public class BuildChatService {
     private static boolean hasSpecificBuildSignal(String message, String normalized) {
         return parseBudgetWon(message) != null
                 || containsAnyNormalized(normalized,
-                "게임", "게이밍", "qhd", "fhd", "4k", "144", "hz", "배그", "발로란트", "발로", "오버워치", "옵치",
+                "게임", "게이밍", "qhd", "fhd", "4k", "144", "hz", "배그", "배틀그라운드", "battleground", "pubg",
+                "발로란트", "발로", "오버워치", "옵치",
                 "사이버펑크", "로스트아크", "로아", "디아블로", "디아", "몬헌", "몬스터헌터", "배틀필드", "스타크래프트",
                 "스타2", "롤", "리그오브레전드", "메이플", "피파", "롤토체스", "레이드", "오픈월드",
                 "영상", "편집", "프리미어", "블렌더", "렌더", "개발", "도커", "docker", "ide", "코딩", "ai", "cuda", "로컬ai", "실험용",
@@ -1944,12 +2020,14 @@ public class BuildChatService {
     }
 
     private static String gameKeyFromText(String message) {
-        String text = message == null ? "" : message.toLowerCase(Locale.ROOT);
-        if (containsAnyText(text, "배그", "pubg", "battleground")) return "pubg";
-        if (containsAnyText(text, "로아", "로스트아크", "lost ark")) return "lost-ark";
-        if (containsAnyText(text, "발로란트", "valorant")) return "valorant";
-        if (containsAnyText(text, "오버워치", "overwatch")) return "overwatch-2";
-        if (containsAnyText(text, "사이버펑크", "사펑", "cyberpunk")) return "cyberpunk-2077";
+        String compact = message == null
+                ? ""
+                : message.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        if (containsAnyText(compact, "배그", "배틀그라운드", "pubg", "battleground")) return "pubg";
+        if (containsAnyText(compact, "로아", "로스트아크", "lostark")) return "lost-ark";
+        if (containsAnyText(compact, "발로란트", "valorant")) return "valorant";
+        if (containsAnyText(compact, "오버워치", "overwatch")) return "overwatch-2";
+        if (containsAnyText(compact, "사이버펑크", "사펑", "cyberpunk")) return "cyberpunk-2077";
         return null;
     }
 
@@ -2074,6 +2152,11 @@ public class BuildChatService {
         }
         // 예산 무관/끝판왕처럼 서버가 즉시 추천할 수 있다고 판정한 후속 답변은 가로채지 않는다.
         if (BuildChatIntentRouter.hasOpenBudget(message)) {
+            return Optional.empty();
+        }
+        // "최소 견적"은 숫자 누락이 아니라 현재 ACTIVE 자산에서 가능한 최저 완성 구성을
+        // 요청한 상대 예산 의도다. 다시 예산을 묻지 않고 검증된 최소 구성 사다리로 넘긴다.
+        if (isMinimumFeasibleBuildRequest(message)) {
             return Optional.empty();
         }
 
@@ -2326,7 +2409,7 @@ public class BuildChatService {
     private static String clarificationMinimumNotice(String message, boolean usageOnly, int minimum) {
         int roundedUp = ((minimum + 9_999) / 10_000) * 10_000;
         String subject = usageOnly ? usageLabel(inferUsageTags(message)) + " PC" : "기본 PC";
-        return "현재 내부 자산 기준 " + subject + " 구성은 최소 약 "
+        return "현재 판매 중인 부품 기준 " + subject + " 구성은 최소 약 "
                 + formatBudgetLabel(roundedUp) + "부터 가능합니다.";
     }
 
@@ -2462,7 +2545,8 @@ public class BuildChatService {
         if (containsAnyNormalized(normalized, "소리가안", "소리안나", "오디오")) {
             return "AUDIO";
         }
-        if (containsAnyNormalized(normalized, "프레임드랍", "버벅", "끊겨", "끊김", "갑자기느려", "느려졌", "튕겨", "튕김", "크래시")) {
+        // "끊켜/끊킴"은 실사용에서 흔한 표기 변형이라 함께 인식한다.
+        if (containsAnyNormalized(normalized, "프레임드랍", "버벅", "끊겨", "끊김", "끊켜", "끊킴", "갑자기느려", "느려졌", "튕겨", "튕김", "크래시")) {
             return "PERFORMANCE_STUTTER";
         }
         if (containsAnyNormalized(normalized, "과열", "너무뜨거", "온도가너무", "팬소리")) {
@@ -3459,14 +3543,14 @@ public class BuildChatService {
                     .thenComparingInt(candidate -> candidate.part().price() == null
                             ? Integer.MAX_VALUE
                             : candidate.part().price()));
-            List<CaseFitCandidate> topFit = fitCandidates.stream().limit(3).toList();
+            CaseFitCandidate topFit = fitCandidates.stream().findFirst().orElse(null);
 
             response.put("answerType", "PART");
             response.put("builds", List.of());
             response.put("simulation", null);
             response.remove("quickReplyCommands");
             response.remove("clarification");
-            if (topFit.isEmpty()) {
+            if (topFit == null) {
                 response.put("message", "현재 내부 자산 중 선택된 GPU·쿨러·파워의 알려진 장착 여유가 줄지 않으면서 "
                         + "실제로 더 넓어지고 자동 검증을 통과하는 케이스를 찾지 못했습니다.");
                 response.put("quickReplies", List.of("현재 견적의 다른 개선점 설명해줘"));
@@ -3475,20 +3559,13 @@ public class BuildChatService {
             String evidenceLabel = airflowRequested
                     ? "통풍 근거가 있고 현재 케이스보다 확인 가능한 장착 여유가 넓은"
                     : "현재 케이스보다 확인 가능한 장착 여유가 넓은";
-            response.put("message", evidenceLabel + " 케이스 TOP" + topFit.size() + "입니다. "
-                    + caseFitImprovementListText(topFit)
-                    + " 알려진 GPU·CPU 쿨러·파워 장착 수치가 나빠지는 후보는 제외했습니다.");
-            setPartRecommendationQuickReplies(response, "CASE", topFit.stream()
-                    .map(candidate -> new BuildChatFeasibilityService.PartOption(
-                            candidate.part().publicId(),
-                            candidate.part().name(),
-                            candidate.part().price(),
-                            null,
-                            null,
-                            null
-                    ))
-                    .toList());
-            return true;
+            return applyVerifiedCaseImprovementPreview(
+                    response,
+                    body,
+                    topFit.part(),
+                    evidenceLabel + " 1위 케이스로 " + topFit.part().name()
+                            + " 제품을 확인했습니다. 알려진 GPU·CPU 쿨러·파워 장착 수치가 나빠지는 후보는 제외했습니다."
+            );
         }
 
         int currentCaseCapScore = currentCaseCap.maxScore();
@@ -3526,7 +3603,7 @@ public class BuildChatService {
                 .comparingInt(CaseImprovementCandidate::score).reversed()
                 .thenComparing(Comparator.comparingInt(CaseImprovementCandidate::caseCapScore).reversed())
                 .thenComparingInt(candidate -> candidate.part().price() == null ? Integer.MAX_VALUE : candidate.part().price()));
-        List<CaseImprovementCandidate> top = candidates.stream().limit(3).toList();
+        CaseImprovementCandidate top = candidates.stream().findFirst().orElse(null);
 
         String correction = airflowRequested && currentAirflowStrong && "LOW_CASE_CLEARANCE".equals(currentCaseCap.code())
                 ? "현재 케이스는 통풍형으로 확인되어 통풍 부족으로 감점된 상태가 아닙니다. "
@@ -3536,27 +3613,55 @@ public class BuildChatService {
         response.put("simulation", null);
         response.remove("clarification");
         response.remove("quickReplyCommands");
-        if (top.isEmpty()) {
+        if (top == null) {
             response.put("message", correction + "현재 점수 제한 원인은 " + currentCaseCap.reason()
                     + " 현재 내부 자산 중 이 제한을 해소하면서 종합 점수를 실제로 높이고 자동 검증까지 통과하는 케이스는 없습니다.");
             response.put("quickReplies", List.of("현재 견적에서 다른 개선점 설명해줘"));
             return true;
         }
 
-        response.put("message", correction + "현재 점수 제한 원인은 " + currentCaseCap.reason()
-                + " 현재 종합 점수 " + currentScore + "점보다 실제로 높아지고 자동 검증을 통과한 케이스 TOP"
-                + top.size() + "입니다. " + caseImprovementListText(top)
-                + " 원하는 제품을 선택하면 교체 미리보기를 보여드립니다.");
-        setPartRecommendationQuickReplies(response, "CASE", top.stream()
-                .map(candidate -> new BuildChatFeasibilityService.PartOption(
-                        candidate.part().publicId(),
-                        candidate.part().name(),
-                        candidate.part().price(),
-                        null,
-                        null,
-                        null
-                ))
-                .toList());
+        return applyVerifiedCaseImprovementPreview(
+                response,
+                body,
+                top.part(),
+                correction + "현재 점수 제한 원인은 " + currentCaseCap.reason()
+                        + " 현재 종합 점수 " + currentScore + "점보다 실제로 높아지고 자동 검증을 통과한 1위 케이스는 "
+                        + top.part().name() + "입니다."
+        );
+    }
+
+    private boolean applyVerifiedCaseImprovementPreview(
+            Map<String, Object> targetResponse,
+            Map<String, Object> body,
+            PartCandidate replacement,
+            String introduction
+    ) {
+        // 추천 문장 자체는 일반 미리보기 경로에서 후보 탐색으로 간주되어 차단된다. 여기서는 이미
+        // 현재 draft 전체에 후보를 가상 적용해 1위를 확정했으므로, exact 선택과 같은 내부 body로만
+        // 변환해 검증된 변경 카드를 만든다. 공개 사용자 원문이나 대화 문맥은 바꾸지 않는다.
+        // '추천' 문형은 적용 동의가 아니다 — size FAIL을 해소하는 서버 검증 단일 복구안
+        // (AUTO_APPLY_VERIFIED_REPAIR)만 명령형 요청을 적용 동의로 보고, 개선 추천은 1위 후보
+        // 큐레이션을 유지하되 미리보기 카드 + "이 변경안 적용해줘" 확인 뒤에만 반영한다.
+        Map<String, Object> verifiedSelectionBody = new LinkedHashMap<>(body);
+        verifiedSelectionBody.put("message", replacement.name() + " 견적에 담아줘");
+        Optional<Map<String, Object>> generated = directReplacementPreview(
+                verifiedSelectionBody,
+                replacement,
+                introduction
+        );
+        if (generated.isEmpty()) {
+            return false;
+        }
+        Map<String, Object> response = generated.get();
+        List<Map<String, Object>> previews = objectMaps(response.get("builds"));
+        if (previews.size() != 1) {
+            return false;
+        }
+        Map<String, Object> verifiedImprovement = new LinkedHashMap<>(previews.get(0));
+        verifiedImprovement.put("summary", "현재 케이스보다 장착 여유가 개선되고 전체 자동 검증을 통과한 1위 변경안입니다. 카드의 적용 버튼을 눌러야 실제 견적에 반영됩니다.");
+        response.put("builds", List.of(verifiedImprovement));
+        targetResponse.clear();
+        targetResponse.putAll(response);
         return true;
     }
 
@@ -3850,33 +3955,6 @@ public class BuildChatService {
         return List.of("현재 견적의 호환 문제 설명해줘");
     }
 
-    private static String caseImprovementListText(List<CaseImprovementCandidate> candidates) {
-        StringBuilder builder = new StringBuilder();
-        for (int index = 0; index < candidates.size(); index += 1) {
-            CaseImprovementCandidate candidate = candidates.get(index);
-            if (index > 0) {
-                builder.append(" ");
-            }
-            builder.append(index + 1).append(") ").append(candidate.part().name())
-                    .append(" — ").append(String.format("%,d원", candidate.part().price()))
-                    .append(" (예상 종합 ").append(candidate.score()).append("점)");
-        }
-        return builder.toString();
-    }
-
-    private static String caseFitImprovementListText(List<CaseFitCandidate> candidates) {
-        StringBuilder builder = new StringBuilder();
-        for (int index = 0; index < candidates.size(); index += 1) {
-            CaseFitCandidate candidate = candidates.get(index);
-            if (index > 0) {
-                builder.append(" ");
-            }
-            builder.append(index + 1).append(") ").append(candidate.part().name())
-                    .append(" — ").append(String.format("%,d원", candidate.part().price()));
-        }
-        return builder.toString();
-    }
-
     private static CaseFitProfile caseFitProfile(List<Map<String, Object>> toolResults) {
         Map<String, Object> details = toolResults.stream()
                 .filter(result -> "size".equals(text(result.get("tool"))))
@@ -4163,7 +4241,8 @@ public class BuildChatService {
         if (containsAnyNormalized(normalized, "영상", "편집", "프리미어", "렌더", "블렌더", "3d")) {
             tags.add("VIDEO_EDIT");
         }
-        if (containsAnyNormalized(normalized, "게임", "게이밍", "qhd", "fhd", "4k", "배그", "발로란트", "오버워치", "로스트아크", "롤", "디아블로", "fps")) {
+        if (containsAnyNormalized(normalized, "게임", "게이밍", "qhd", "fhd", "4k", "배그", "배틀그라운드", "battleground", "pubg",
+                "발로란트", "오버워치", "로스트아크", "롤", "디아블로", "fps")) {
             tags.add("GAMING");
         }
         if (containsAnyNormalized(normalized, "개발", "코딩", "도커", "docker", "ide")) {
@@ -4186,6 +4265,594 @@ public class BuildChatService {
             return "개발용";
         }
         return "사무용";
+    }
+
+    private Optional<Map<String, Object>> targetFpsGpuPreviewResponse(
+            Map<String, Object> body,
+            String message
+    ) {
+        Integer targetFps = targetFps(message);
+        String normalized = normalizeCommand(message);
+        boolean stableTarget = containsAnyNormalized(normalized, "안정", "최저프레임", "1%low", "원퍼센트로우");
+        String targetPhrase = stableTarget
+                ? "1% low " + targetFps + "FPS 이상"
+                : "평균 " + targetFps + "FPS 이상";
+        boolean directChange = containsAnyNormalized(normalized,
+                "바꿔줘", "변경해줘", "교체해줘", "업그레이드해줘", "올려줘", "맞춰줘");
+        if (targetFps == null || !directChange || !"GPU".equals(detectPartCategory(message))) {
+            return Optional.empty();
+        }
+        String gameKey = gameKeyFromText(message);
+        String resolution = resolutionFromText(message);
+        if (gameKey == null || resolution == null) {
+            Map<String, Object> clarification = fastResponse(
+                    "GENERAL",
+                    gameKey == null
+                            ? "목표 FPS를 비교할 게임을 알려주세요. 게임별 벤치마크 근거가 달라 임의로 고르지 않았습니다."
+                            : "목표 FPS를 비교할 해상도를 알려주세요. 같은 GPU도 FHD·QHD·4K 결과가 달라 임의로 고르지 않았습니다.",
+                    List.of()
+            );
+            clarification.put("quickReplies", gameKey == null
+                    ? List.of(
+                            "배그 QHD에서 " + targetPhrase + " 나오는 GPU로 바꿔줘",
+                            "오버워치2 QHD에서 " + targetPhrase + " 나오는 GPU로 바꿔줘")
+                    : List.of(
+                            gameDisplayName(gameKey) + " FHD에서 " + targetPhrase + " 나오는 GPU로 바꿔줘",
+                            gameDisplayName(gameKey) + " QHD에서 " + targetPhrase + " 나오는 GPU로 바꿔줘",
+                            gameDisplayName(gameKey) + " 4K에서 " + targetPhrase + " 나오는 GPU로 바꿔줘"));
+            clarification.put("clarification", MockData.map(
+                    "missingSlots", List.of(gameKey == null ? "game" : "resolution"),
+                    "originalMessage", message
+            ));
+            return Optional.of(clarification);
+        }
+
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
+        if (draftItems.isEmpty()) {
+            return Optional.empty();
+        }
+        PartCandidate currentCpu = draftItems.stream()
+                .map(this::draftPartCandidate)
+                .filter(part -> "CPU".equals(part.category()))
+                .findFirst()
+                .orElse(null);
+        PartCandidate currentGpu = draftItems.stream()
+                .map(this::draftPartCandidate)
+                .filter(part -> "GPU".equals(part.category()))
+                .findFirst()
+                .orElse(null);
+        if (currentGpu == null) {
+            return Optional.empty();
+        }
+
+        // 혼합문 지명 존중: "RTX 5090으로 바꿔줘. 배그 QHD 140FPS는 나와야 해"처럼 목표 FPS와
+        // 지명 모델이 함께 오면 지명 모델을 후보 필터로 존중한다. 지명 모델이 근거상 목표에 못
+        // 미치면 조용히 다른 모델로 바꾸지 않고 정직하게 안내한다(아래 selectedPart == null 분기).
+        String namedGpuClass = targetGpuClass(message);
+        boolean namedDifferentFromCurrent = namedGpuClass != null
+                && !namedGpuClass.equals(hardwareClass(currentGpu));
+
+        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, message, gameKey, resolution, stableTarget);
+        if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= targetFps) {
+            Map<String, Object> alreadyMet = fastResponse(
+                    "GENERAL",
+                    currentGpu.name() + "은(는) " + currentEvidence.metricLabel() + " 기준 약 "
+                            + formatFps(currentEvidence.value()) + "FPS로 확인되어 요청한 " + targetFps
+                            + "FPS 기준을 이미 충족합니다. 불필요한 교체 미리보기는 만들지 않았습니다.",
+                    List.of()
+            );
+            alreadyMet.put("quickReplies", List.of("현재 GPU보다 한 단계 높은 후보 보여줘", "현재 견적 점수 설명해줘"));
+            return Optional.of(alreadyMet);
+        }
+
+        // 후보는 pricePartCandidates의 현재가 오름차순을 그대로 사용한다. 같은 GPU class의 FPS seed는
+        // 한 번만 조회하고, 목표와 Tool 검증을 모두 통과한 첫 후보에서 멈춰 100개 후보 N+1을 피한다.
+        Map<String, Optional<FpsTargetEvidence>> evidenceByGpuClass = new LinkedHashMap<>();
+        PartCandidate selectedPart = null;
+        PartCandidate selectedSupportingPsu = null;
+        FpsTargetEvidence selectedEvidence = null;
+        int fpsEligibleCandidateCount = 0;
+        List<Map<String, Object>> firstBlockingToolResults = List.of();
+        for (PartCandidate candidate : pricePartCandidates("GPU", 100)) {
+            if (Objects.equals(candidate.publicId(), currentGpu.publicId())) {
+                continue;
+            }
+            String candidateClass = hardwareClass(candidate);
+            if (candidateClass == null) {
+                continue;
+            }
+            // 지명 모델이 있으면 그 모델(hardware class)만 후보로 본다 — 최저가 충족 후보로
+            // 대체하지 않는다.
+            if (namedGpuClass != null && !namedGpuClass.equals(candidateClass)) {
+                continue;
+            }
+            FpsTargetEvidence evidence = evidenceByGpuClass.computeIfAbsent(
+                    candidateClass,
+                    ignored -> Optional.ofNullable(targetFpsEvidence(
+                            currentCpu, candidate, message, gameKey, resolution, stableTarget))
+            ).orElse(null);
+            if (evidence == null || evidence.value() < targetFps) {
+                continue;
+            }
+            fpsEligibleCandidateCount += 1;
+            DraftReplacementValidation validation = validateDraftReplacement(draftItems, "GPU", candidate);
+            if (validation == null) {
+                continue;
+            }
+            if (hasBlockingToolFailure(validation.toolResults())) {
+                if (firstBlockingToolResults.isEmpty()) {
+                    firstBlockingToolResults = validation.toolResults();
+                }
+                if (hasOnlyBlockingToolFailure(validation.toolResults(), "power")) {
+                    Optional<PartCandidate> supportingPsu = supportingPsuForGpu(draftItems, candidate);
+                    if (supportingPsu.isPresent()) {
+                        selectedPart = candidate;
+                        selectedSupportingPsu = supportingPsu.get();
+                        selectedEvidence = evidence;
+                        break;
+                    }
+                }
+                continue;
+            }
+            selectedPart = candidate;
+            selectedEvidence = evidence;
+            break;
+        }
+
+        if (selectedPart == null || selectedEvidence == null) {
+            if (fpsEligibleCandidateCount > 0 && hasBlockingToolFailure(firstBlockingToolResults)) {
+                Map<String, Object> blockingResult = firstBlockingToolResults.stream()
+                        .filter(result -> "FAIL".equals(text(result.get("status"))))
+                        .findFirst()
+                        .orElse(Map.of());
+                String blockingTool = firstText(text(blockingResult.get("tool")), "compatibility");
+                String blockingSummary = firstText(
+                        text(blockingResult.get("summary")),
+                        "현재 견적의 호환성 검증을 먼저 해결해야 합니다."
+                );
+                Map<String, Object> blocked = fastResponse(
+                        "GENERAL",
+                        gameDisplayName(gameKey) + " " + resolution + "에서 " + targetFps
+                                + "FPS 근거를 충족하는 GPU 후보는 확인했습니다. 다만 " + blockingSummary
+                                + " 이 문제를 해결하기 전에는 안전한 변경안을 적용할 수 없습니다.",
+                        List.of("PART_CONSTRAINT_NOT_FOUND")
+                );
+                blocked.put("quickReplies", blockingRepairQuickReplies(blockingTool));
+                return Optional.of(blocked);
+            }
+            if (namedGpuClass != null) {
+                // 지명 모델이 목표에 못 미치거나 근거가 없으면 임의 모델로 바꾸지 않고 사실대로
+                // 안내한다. 대안은 지명 없이 목표 FPS를 충족하는 후보 탐색 칩으로 제시한다.
+                String namedLabel = namedGpuClass.replace("RTX_", "RTX ").replace('_', ' ');
+                FpsTargetEvidence namedEvidence = evidenceByGpuClass
+                        .getOrDefault(namedGpuClass, Optional.empty())
+                        .orElse(null);
+                Map<String, Object> namedResponse;
+                if (namedEvidence != null && namedEvidence.value() < targetFps) {
+                    namedResponse = fastResponse(
+                            "GENERAL",
+                            "지정하신 " + namedLabel + "은(는) " + gameDisplayName(gameKey) + " " + resolution + " "
+                                    + namedEvidence.metricLabel() + " 약 " + formatFps(namedEvidence.value())
+                                    + "FPS로 확인되어 목표 " + targetFps + "FPS에 못 미칩니다. "
+                                    + "지정 모델을 임의로 다른 모델로 바꾸지 않았습니다.",
+                            List.of()
+                    );
+                } else {
+                    namedResponse = fastResponse(
+                            "GENERAL",
+                            "지정하신 " + namedLabel + "의 " + gameDisplayName(gameKey) + " " + resolution
+                                    + " FPS 근거를 현재 판매 중인 부품에서 확인하지 못해 목표 " + targetFps
+                                    + "FPS 충족 여부를 검증할 수 없습니다. 임의로 다른 모델을 고르지 않았습니다.",
+                            List.of("PART_CONSTRAINT_NOT_FOUND")
+                    );
+                }
+                namedResponse.put("quickReplies", List.of(
+                        gameDisplayName(gameKey) + " " + resolution + "에서 " + targetPhrase + " 나오는 GPU로 바꿔줘",
+                        namedLabel + "(으)로 그대로 바꿔줘"));
+                return Optional.of(namedResponse);
+            }
+            Map<String, Object> unavailable = fastResponse(
+                    "GENERAL",
+                    gameDisplayName(gameKey) + " " + resolution + "에서 " + targetFps
+                            + "FPS 기준을 충족하면서 현재 견적의 자동 검증도 통과하는 GPU를 찾지 못했습니다. "
+                            + "해상도나 목표 FPS를 조정해 다시 확인해 주세요.",
+                    List.of("PART_CONSTRAINT_NOT_FOUND")
+            );
+            unavailable.put("quickReplies", List.of(
+                    gameDisplayName(gameKey) + " " + resolution + "에서 " + Math.max(60, targetFps - 20)
+                            + "FPS를 안정적으로 노릴 GPU 변경안 보여줘",
+                    "현재 견적에 호환되는 상위 GPU 후보 보여줘"));
+            return Optional.of(unavailable);
+        }
+
+        String evidenceText = gameDisplayName(gameKey) + " " + resolution + " "
+                + selectedEvidence.metricLabel() + " 약 " + formatFps(selectedEvidence.value()) + "FPS";
+        if (selectedSupportingPsu != null) {
+            LinkedHashMap<String, PartCandidate> replacements = new LinkedHashMap<>();
+            replacements.put("GPU", selectedPart);
+            replacements.put("PSU", selectedSupportingPsu);
+            return coordinatedReplacementPreview(
+                    draftItems,
+                    replacements,
+                    evidenceText + " 근거를 충족하는 GPU를 찾았습니다. 현재 파워만으로는 전력 검증을 통과하지 못해, "
+                            + "필요한 파워까지 함께 바꾸는 안전한 변경안을 준비했습니다."
+            );
+        }
+        return directReplacementPreview(
+                body,
+                selectedPart,
+                evidenceText + " 근거와 현재 견적의 호환성·전력·장착 검증을 통과한 GPU 변경안을 준비했습니다."
+        );
+    }
+
+    private Optional<Map<String, Object>> compatibleCaseRepairPreviewResponse(
+            Map<String, Object> body,
+            String message
+    ) {
+        String normalized = normalizeCommand(message);
+        boolean directChange = containsAnyNormalized(normalized, "바꿔줘", "변경해줘", "교체해줘", "맞춰줘");
+        boolean compatibilityRequest = containsAnyNormalized(normalized,
+                "호환", "장착되는", "장착가능", "들어가는", "맞는케이스", "문제없는케이스");
+        if (!directChange || !compatibilityRequest || !"CASE".equals(detectPartCategory(message))) {
+            return Optional.empty();
+        }
+        List<Map<String, Object>> draftItems = objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"));
+        if (draftItems.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean autoApplyVerifiedRepair = hasCurrentCaseSizeFailure(draftItems);
+        Set<String> currentCaseIds = draftItems.stream()
+                .map(this::draftPartCandidate)
+                .filter(part -> "CASE".equals(part.category()))
+                .map(PartCandidate::publicId)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<CompatibleCaseCandidate> candidates = new ArrayList<>();
+        for (PartCandidate candidate : pricePartCandidates("CASE", 100)) {
+            if (currentCaseIds.contains(candidate.publicId())) {
+                continue;
+            }
+            DraftReplacementValidation validation = validateDraftReplacement(draftItems, "CASE", candidate);
+            if (validation == null || hasBlockingToolFailure(validation.toolResults())) {
+                continue;
+            }
+            candidates.add(new CompatibleCaseCandidate(
+                    candidate,
+                    caseFitProfile(validation.toolResults()),
+                    scoreValue(validation.compositeScore())
+            ));
+        }
+        candidates.sort(Comparator
+                .comparingInt((CompatibleCaseCandidate candidate) -> candidate.fit().minimumKnownHeadroom()).reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (CompatibleCaseCandidate candidate) -> candidate.fit().totalKnownHeadroom()).reversed())
+                .thenComparing(Comparator.comparingInt(CompatibleCaseCandidate::score).reversed())
+                .thenComparingInt(candidate -> candidate.part().price() == null
+                        ? Integer.MAX_VALUE : candidate.part().price()));
+
+        if (candidates.isEmpty()) {
+            Map<String, Object> unavailable = fastResponse(
+                    "GENERAL",
+                    "현재 구성의 호환성·전력·장착 검증을 모두 통과하는 다른 케이스를 현재 판매 중인 부품에서 찾지 못했습니다. "
+                            + "문제 원인을 먼저 확인하거나 GPU·쿨러 조건을 조정해 주세요.",
+                    List.of("PART_CONSTRAINT_NOT_FOUND")
+            );
+            unavailable.put("quickReplies", List.of("현재 견적의 호환 문제 설명해줘", "현재 케이스 그대로 둘게"));
+            return Optional.of(unavailable);
+        }
+
+        CompatibleCaseCandidate selected = candidates.get(0);
+        return directReplacementPreview(
+                body,
+                selected.part(),
+                "현재 구성의 호환성·전력·장착 검증을 통과한 케이스 변경안을 준비했습니다.",
+                autoApplyVerifiedRepair
+        );
+    }
+
+    private boolean hasCurrentCaseSizeFailure(List<Map<String, Object>> draftItems) {
+        List<ToolBuildPart> currentParts = draftItems.stream()
+                .map(item -> toolPart(draftPartCandidate(item), draftQuantity(item)))
+                .toList();
+        BuildEvaluationService.BuildEvaluation evaluation = buildEvaluationService.evaluate(
+                currentParts,
+                null,
+                "CASE",
+                "size"
+        );
+        return evaluation.toolResults().stream()
+                .anyMatch(result -> "size".equals(text(result.get("tool")))
+                        && "FAIL".equals(text(result.get("status"))));
+    }
+
+    private Optional<Map<String, Object>> directReplacementPreview(
+            Map<String, Object> body,
+            PartCandidate replacement,
+            String introduction
+    ) {
+        return directReplacementPreview(body, replacement, introduction, false);
+    }
+
+    private Optional<Map<String, Object>> directReplacementPreview(
+            Map<String, Object> body,
+            PartCandidate replacement,
+            String introduction,
+            boolean autoApplyVerifiedRepair
+    ) {
+        AiChatEngineResponse directSelection = new AiChatEngineResponse(
+                introduction,
+                AiChatIntent.BUILD_MODIFY,
+                List.of(),
+                List.of(),
+                List.of(new AiChatEngineResponse.PartRecommendation(
+                        replacement.publicId(),
+                        replacement.category(),
+                        replacement.name(),
+                        replacement.manufacturer(),
+                        replacement.price() == null ? 0 : replacement.price(),
+                        replacement.attributes()
+                )),
+                Map.of(
+                        "draftEdit", Map.of("operation", "REPLACE", "category", replacement.category()),
+                        "exactPartSelection", true,
+                        "serverVerifiedSelection", true
+                ),
+                List.of(),
+                List.of(),
+                null
+        );
+        Map<String, Object> response = fastResponse("PART", introduction, List.of());
+        applyDraftEditPreview(response, directSelection, body);
+        List<Map<String, Object>> previews = objectMaps(response.get("builds"));
+        if (!previews.isEmpty() && autoApplyVerifiedRepair) {
+            Map<String, Object> verifiedRepair = new LinkedHashMap<>(previews.get(0));
+            verifiedRepair.put("badges", distinct(List.of(
+                    "DRAFT_EDIT_PREVIEW",
+                    "AUTO_APPLY_VERIFIED_REPAIR"
+            )));
+            verifiedRepair.put("summary", "현재 장착 문제를 해소하고 자동 검증을 통과한 단일 복구안입니다. 지금 견적에 자동으로 반영합니다.");
+            response.put("builds", List.of(verifiedRepair));
+            response.put("message", text(response.get("message"))
+                    .replace("아래 미리보기 카드에서 적용할 수 있습니다.",
+                            "현재 장착 문제를 해소하는 검증된 단일 복구안으로 자동 반영합니다."));
+            response.put("quickReplies", List.of());
+        } else if (!previews.isEmpty()) {
+            response.put("quickReplies", List.of("이 변경안 적용해줘", "현재 견적 그대로 둘게"));
+        }
+        return Optional.of(response);
+    }
+
+    private DraftReplacementValidation validateDraftReplacement(
+            List<Map<String, Object>> draftItems,
+            String category,
+            PartCandidate replacement
+    ) {
+        return validateDraftReplacements(draftItems, Map.of(category, replacement), category);
+    }
+
+    private DraftReplacementValidation validateDraftReplacements(
+            List<Map<String, Object>> draftItems,
+            Map<String, PartCandidate> replacements,
+            String focusCategory
+    ) {
+        List<ToolBuildPart> previewParts = new ArrayList<>();
+        Set<String> replacedCategories = new LinkedHashSet<>();
+        for (Map<String, Object> item : draftItems) {
+            PartCandidate current = draftPartCandidate(item);
+            PartCandidate replacement = replacements.get(current.category());
+            if (replacement != null) {
+                if (replacedCategories.add(current.category())) {
+                    previewParts.add(toolPart(replacement, draftQuantity(item)));
+                }
+                continue;
+            }
+            previewParts.add(toolPart(current, draftQuantity(item)));
+        }
+        for (Map.Entry<String, PartCandidate> entry : replacements.entrySet()) {
+            if (replacedCategories.add(entry.getKey())) {
+                previewParts.add(toolPart(entry.getValue(), defaultQuantity(entry.getValue())));
+            }
+        }
+        BuildEvaluationService.BuildEvaluation evaluation = buildEvaluationService.evaluate(
+                previewParts,
+                null,
+                focusCategory,
+                "GPU".equals(focusCategory) ? "performance" : "size"
+        );
+        return new DraftReplacementValidation(evaluation.toolResults(), evaluation.compositeScore());
+    }
+
+    private Optional<PartCandidate> supportingPsuForGpu(
+            List<Map<String, Object>> draftItems,
+            PartCandidate gpu
+    ) {
+        PartCandidate currentPsu = draftItems.stream()
+                .map(this::draftPartCandidate)
+                .filter(part -> "PSU".equals(part.category()))
+                .findFirst()
+                .orElse(null);
+        Integer currentCapacityValue = currentPsu == null
+                ? null
+                : firstAttributeNumber(currentPsu, "capacityW", "wattage");
+        int currentCapacity = currentCapacityValue == null ? 0 : currentCapacityValue;
+        Integer vendorRequiredCapacityValue = firstAttributeNumber(gpu, "requiredSystemPowerW");
+        int vendorRequiredCapacity = vendorRequiredCapacityValue == null ? 0 : vendorRequiredCapacityValue;
+        String requiredConnector = firstText(text(gpu.attributes().get("powerConnector")), "");
+        for (PartCandidate psu : pricePartCandidates("PSU", 100)) {
+            if (currentPsu != null && Objects.equals(currentPsu.publicId(), psu.publicId())) {
+                continue;
+            }
+            Integer capacityValue = firstAttributeNumber(psu, "capacityW", "wattage");
+            int capacity = capacityValue == null ? 0 : capacityValue;
+            if (capacity <= currentCapacity || capacity < vendorRequiredCapacity
+                    || !supportsGpuConnector(requiredConnector, text(psu.attributes().get("gpuConnector")))) {
+                continue;
+            }
+            LinkedHashMap<String, PartCandidate> replacements = new LinkedHashMap<>();
+            replacements.put("GPU", gpu);
+            replacements.put("PSU", psu);
+            DraftReplacementValidation validation = validateDraftReplacements(draftItems, replacements, "GPU");
+            if (validation != null && !hasBlockingToolFailure(validation.toolResults())) {
+                return Optional.of(psu);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Map<String, Object>> coordinatedReplacementPreview(
+            List<Map<String, Object>> draftItems,
+            LinkedHashMap<String, PartCandidate> replacements,
+            String introduction
+    ) {
+        List<PartCandidate> previewParts = new ArrayList<>();
+        Map<String, Integer> quantities = new LinkedHashMap<>();
+        List<Map<String, Object>> items = new ArrayList<>();
+        List<String> changes = new ArrayList<>();
+        Set<String> replacedCategories = new LinkedHashSet<>();
+        int beforeTotal = 0;
+        for (Map<String, Object> item : draftItems) {
+            PartCandidate current = draftPartCandidate(item);
+            int quantity = draftQuantity(item);
+            beforeTotal += Math.max(0, current.price() == null ? 0 : current.price()) * quantity;
+            PartCandidate replacement = replacements.get(current.category());
+            if (replacement != null) {
+                if (replacedCategories.add(current.category())) {
+                    previewParts.add(replacement);
+                    quantities.put(replacement.publicId(), quantity);
+                    items.add(partItem(replacement, "목표 성능과 자동 검증을 통과한 변경 부품", quantity));
+                    changes.add(categoryLabel(current.category()) + " " + current.name() + " → " + replacement.name());
+                }
+                continue;
+            }
+            previewParts.add(current);
+            quantities.put(current.publicId(), quantity);
+            items.add(partItem(current, null, quantity));
+        }
+        for (Map.Entry<String, PartCandidate> entry : replacements.entrySet()) {
+            if (replacedCategories.add(entry.getKey())) {
+                PartCandidate replacement = entry.getValue();
+                int quantity = defaultQuantity(replacement);
+                previewParts.add(replacement);
+                quantities.put(replacement.publicId(), quantity);
+                items.add(partItem(replacement, "목표 성능과 자동 검증을 통과한 변경 부품", quantity));
+                changes.add(categoryLabel(entry.getKey()) + " 추가: " + replacement.name());
+            }
+        }
+        int afterTotal = previewParts.stream()
+                .mapToInt(part -> Math.max(0, part.price() == null ? 0 : part.price())
+                        * quantities.getOrDefault(part.publicId(), defaultQuantity(part)))
+                .sum();
+        List<String> previewWarnings = new ArrayList<>();
+        List<Map<String, Object>> previewToolResults = toolResults(previewParts, quantities, afterTotal, previewWarnings);
+        previewWarnings.addAll(toolWarnings(previewToolResults));
+        if (hasBlockingToolFailure(previewToolResults)) {
+            return Optional.empty();
+        }
+        Map<String, Object> preview = MockData.map(
+                "id", "ai-coordinated-draft-edit-preview-" + Math.abs(items.hashCode()),
+                "tier", "draft-edit",
+                "label", "변경 미리보기",
+                "title", "GPU·파워 변경 미리보기",
+                "summary", "목표 FPS와 현재 견적의 호환성·전력·장착 검증을 통과한 연계 변경안입니다. 적용 버튼을 눌러야 실제 견적에 반영됩니다.",
+                "recommendedFor", List.of("목표 FPS", "전력 보완", "자동 검증"),
+                "totalPrice", afterTotal,
+                "badges", List.of("DRAFT_EDIT_PREVIEW"),
+                "budgetWon", afterTotal,
+                "budgetLabel", formatBudgetLabel(afterTotal),
+                "tierLabel", "변경 미리보기",
+                "appliedPartCategories", new ArrayList<>(replacements.keySet()),
+                "items", items,
+                "toolResults", previewToolResults,
+                "warnings", distinct(previewWarnings),
+                "confidence", confidence(previewToolResults, previewWarnings),
+                "evidenceIds", List.of()
+        );
+        int delta = afterTotal - beforeTotal;
+        String deltaText = delta == 0
+                ? "총액 변화는 없습니다."
+                : "총액은 " + String.format("%,d원", beforeTotal) + " → " + String.format("%,d원", afterTotal)
+                        + " (" + (delta > 0 ? "+" : "-") + String.format("%,d원", Math.abs(delta)) + ")입니다.";
+        Map<String, Object> response = fastResponse("PART", introduction, List.of());
+        response.put("message", introduction + " 교체 내용: " + String.join(", ", changes) + ". "
+                + deltaText + " 아래 미리보기 카드에서 적용할 수 있습니다.");
+        response.put("builds", List.of(preview));
+        response.put("quickReplies", List.of("이 변경안 적용해줘", "현재 견적 그대로 둘게"));
+        response.put("warnings", distinct(previewWarnings));
+        return Optional.of(response);
+    }
+
+    private static boolean hasOnlyBlockingToolFailure(List<Map<String, Object>> toolResults, String expectedTool) {
+        List<Map<String, Object>> failures = toolResults.stream()
+                .filter(result -> "FAIL".equals(text(result.get("status"))))
+                .toList();
+        return !failures.isEmpty() && failures.stream()
+                .allMatch(result -> expectedTool.equals(text(result.get("tool"))));
+    }
+
+    private static boolean supportsGpuConnector(String gpuConnector, String psuConnector) {
+        String required = normalizeCommand(gpuConnector).replace("-", "");
+        if (!required.contains("12v2x6") && !required.contains("12vhpwr")) {
+            return true;
+        }
+        String available = normalizeCommand(psuConnector).replace("-", "");
+        return available.contains("12v2x6") || available.contains("12vhpwr") || available.contains("pcie51");
+    }
+
+    private static List<String> blockingRepairQuickReplies(String blockingTool) {
+        return switch (firstText(blockingTool, "")) {
+            case "power" -> List.of("현재 견적에 맞는 파워 추천해줘", "현재 견적의 전력 문제 설명해줘");
+            case "size" -> List.of("호환되는 케이스로 바꿔줘", "현재 견적의 장착 문제 설명해줘");
+            case "compatibility" -> List.of("현재 견적의 호환 문제 설명해줘", "호환되는 부품으로 변경안 보여줘");
+            default -> List.of("현재 견적의 문제 설명해줘", "현재 견적에 호환되는 상위 GPU 후보 보여줘");
+        };
+    }
+
+    private FpsTargetEvidence targetFpsEvidence(
+            PartCandidate cpu,
+            PartCandidate gpu,
+            String message,
+            String gameKey,
+            String resolution,
+            boolean stableTarget
+    ) {
+        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, message)) {
+            if (!gameKey.equals(text(row.get("game_key"))) || !resolution.equals(text(row.get("resolution")))) {
+                continue;
+            }
+            Double value = doubleValue(row.get(stableTarget ? "one_percent_low_fps" : "avg_fps"));
+            if (value != null) {
+                return new FpsTargetEvidence(value, stableTarget ? "1% low" : "평균", text(row.get("source_name")));
+            }
+        }
+        return null;
+    }
+
+    private static Integer targetFps(String message) {
+        if (message == null) {
+            return null;
+        }
+        Matcher matcher = TARGET_FPS_PATTERN.matcher(message);
+        if (!matcher.find()) {
+            return null;
+        }
+        int value = Integer.parseInt(matcher.group(1));
+        return value >= 30 && value <= 500 ? value : null;
+    }
+
+    private static String gameDisplayName(String gameKey) {
+        return switch (firstText(gameKey, "")) {
+            case "pubg" -> "배틀그라운드";
+            case "lost-ark" -> "로스트아크";
+            case "valorant" -> "발로란트";
+            case "overwatch-2" -> "오버워치 2";
+            case "cyberpunk-2077" -> "사이버펑크 2077";
+            default -> gameKey;
+        };
+    }
+
+    private static String formatFps(double value) {
+        return value == Math.rint(value) ? String.valueOf((int) value) : String.format(Locale.ROOT, "%.1f", value);
     }
 
     private Optional<Map<String, Object>> exactSingletonPartPreviewResponse(
@@ -4752,6 +5419,12 @@ public class BuildChatService {
             BuildChatIntentDecision previousDecision
     ) {
         String normalized = normalizeCommand(message);
+        // 고장 증상 호소("게임이 자꾸 끊켜", "자꾸 꺼져요")는 그 자체로 새 AS 진단 대화다 —
+        // 직전 추천/미리보기 원문과 합성하면 라우터가 부품 변경 경로로 가로채 증상마다
+        // 케이스 교체안이 반복 제시되는 핑퐁이 생긴다(실사용 재현).
+        if (!"GENERAL".equals(inferSupportSymptomCategory(message))) {
+            return true;
+        }
         if (detectPartCategory(message) != null
                 && containsAnyNormalized(
                         normalized,
@@ -4969,6 +5642,100 @@ public class BuildChatService {
             build.put("title", tier.title() + " 견적 완성 조합");
             build.put("tierLabel", tier.title());
         }
+    }
+
+    private Optional<Map<String, Object>> minimumFeasibleBuildResponse(
+            Map<String, Object> request,
+            String message
+    ) {
+        if (!isMinimumFeasibleBuildRequest(message)) {
+            return Optional.empty();
+        }
+        // 완성-의도 veto: "나머지는 최소 비용으로 채워줘"처럼 담긴 부품을 유지한 채 견적을
+        // 완성하려는 요청은 최소 3안 전량 재계산으로 가로채지 않는다. 이 게이트를 건너뛰면
+        // 아래 draftCompletionFastResponse(담긴 부품 고정 + 빈 카테고리 채움)가 받는다.
+        // 드래프트가 비어 있으면 유지할 부품이 없으므로 완성 마커가 있어도 최소 3안을 만든다.
+        // "최소 견적으로 맞춰줘"는 완성 마커가 없어 드래프트가 있어도 기존대로 최소 3안(데모 보존).
+        if (hasDraftCompletionIntentMarker(message)
+                && !objectMaps(objectMap(request.get("currentQuoteDraft")).get("items")).isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<GreedyBuild> minimum = minimumFeasibleCompleteBuild();
+        if (minimum.isEmpty()) {
+            Map<String, Object> unavailable = fastResponse(
+                    "GENERAL",
+                    "현재 판매 중인 부품만으로 자동 검증을 통과한 완성 PC의 최소 구성을 만들지 못했습니다. "
+                            + "부품 재고가 갱신된 뒤 다시 확인하거나 예산 범위를 직접 알려주세요.",
+                    List.of("BUDGET_BELOW_MINIMUM")
+            );
+            unavailable.put("quickReplies", List.of("200만원 게이밍 PC 추천해줘", "300만원 게이밍 PC 추천해줘"));
+            return Optional.of(unavailable);
+        }
+
+        GreedyBuild minimumBuild = minimum.get();
+        int minimumTotal = totalPrice(minimumBuild.parts(), 1);
+        LinkedHashMap<String, Map<String, Object>> byComposition = new LinkedHashMap<>();
+        Map<String, Object> floor = budgetFallbackBuildMap(
+                TIERS.get(0),
+                minimumBuild.parts(),
+                new BudgetIntent(minimumTotal, "MIN", false, false),
+                1,
+                minimumBuild.toolResults(),
+                minimumBuild.warnings(),
+                List.of()
+        );
+        floor.put("title", "검증된 최소 구성");
+        floor.put("summary", "현재 판매 중인 부품으로 만들 수 있는 가장 저렴한 완성 조합입니다.");
+        byComposition.put(buildItemsKey(floor), floor);
+
+        List<String> warnings = new ArrayList<>();
+        for (Map<String, Object> build : nearBudgetLadderBuilds(
+                minimumTotal, "MIN", List.of(), warnings, new BuildChatGuardStats())) {
+            byComposition.putIfAbsent(buildItemsKey(build), build);
+            if (byComposition.size() >= 3) {
+                break;
+            }
+        }
+        // 가격 간격이 큰 자산에서도 3안을 채울 수 있도록 상향 목표만 넓힌다. 최소가라는 하한은
+        // 유지하며, 모든 후보는 아래 greedyTargetBuild와 Tool 전체 검증을 다시 통과한다.
+        for (double ratio : List.of(1.75, 2.0, 2.5, 3.0)) {
+            if (byComposition.size() >= 3) {
+                break;
+            }
+            int target = (int) Math.min(Integer.MAX_VALUE, Math.floor(minimumTotal * ratio));
+            for (Map<String, Object> build : singleTargetLadderBuilds(target, "MIN", minimumTotal, List.of())) {
+                byComposition.putIfAbsent(buildItemsKey(build), build);
+            }
+        }
+
+        List<Map<String, Object>> builds = new ArrayList<>(byComposition.values());
+        builds.sort(Comparator.comparingInt(build -> numberValue(build.get("totalPrice"))));
+        for (int index = 0; index < builds.size(); index += 1) {
+            Tier tier = TIERS.get(Math.min(index, TIERS.size() - 1));
+            Map<String, Object> build = builds.get(index);
+            build.put("tier", tier.id());
+            build.put("label", tier.label());
+            build.put("tierLabel", tier.title());
+            if (index > 0) {
+                build.put("title", tier.title() + " 최소 견적 대안");
+                build.put("summary", "최소 구성보다 선택 폭과 성능 여유를 높인 자동 검증 통과 조합입니다.");
+            }
+        }
+        builds = builds.stream().limit(3).toList();
+        String usage = usageLabel(inferUsageTags(message));
+        Map<String, Object> response = fastResponse(
+                "BUDGET",
+                usage + " 용도를 반영해 자동 검증을 통과한 최소 구성부터 추천 견적 " + builds.size()
+                        + "개를 만들었습니다. 확인된 최소 완성가는 약 " + formatBudgetLabel(minimumTotal) + "입니다.",
+                builds,
+                warnings
+        );
+        if (builds.size() < 3) {
+            List<String> responseWarnings = new ArrayList<>(stringList(response.get("warnings")));
+            responseWarnings.add("MINIMUM_BUILD_VARIANTS_LIMITED");
+            response.put("warnings", distinct(responseWarnings));
+        }
+        return Optional.of(response);
     }
 
     private Optional<Map<String, Object>> deterministicFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
@@ -6478,6 +7245,18 @@ public class BuildChatService {
     }
 
     private record CaseFitCandidate(PartCandidate part, CaseFitProfile fit) {
+    }
+
+    private record CompatibleCaseCandidate(PartCandidate part, CaseFitProfile fit, int score) {
+    }
+
+    private record FpsTargetEvidence(double value, String metricLabel, String sourceName) {
+    }
+
+    private record DraftReplacementValidation(
+            List<Map<String, Object>> toolResults,
+            Map<String, Object> compositeScore
+    ) {
     }
 
     private record CaseFitProfile(Integer gpuHeadroomMm, Integer coolerHeadroomMm, Integer psuHeadroomMm) {

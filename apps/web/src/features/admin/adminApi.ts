@@ -4,6 +4,24 @@ export type AdminDashboard = {
   agentRunning: number;
   openTickets: number;
   priceJobsRunning: number;
+  todayRevenue: number;
+  weekRevenue: number;
+  previousWeekRevenue: number;
+  revenueTrend: Array<{
+    date: string;
+    label: string;
+    revenue: number;
+  }>;
+  orderStatus: Array<{
+    status: string;
+    label: string;
+    count: number;
+  }>;
+  asStatus: Array<{
+    status: string;
+    label: string;
+    count: number;
+  }>;
   degraded: boolean;
   generatedAt?: string;
 };
@@ -393,6 +411,13 @@ export type AdminTicket = AdminAsTicket;
 
 export type AdminTicketsResponse = {
   items: AdminAsTicket[];
+};
+
+export type AdminAsTicketDeleteResponse = {
+  id: string;
+  deleted: boolean;
+  deletedAt: string;
+  supportChatRoomId?: string | null;
 };
 
 export type AdminAsTicketUpdateRequest = {
@@ -1032,6 +1057,12 @@ export function updateAdminTicket(ticketId: string, payload: AdminAsTicketUpdate
   return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload)
+  });
+}
+
+export function deleteAdminTicket(ticketId: string) {
+  return api<AdminAsTicketDeleteResponse>(`/api/admin/as-tickets/${ticketId}`, {
+    method: 'DELETE'
   });
 }
 

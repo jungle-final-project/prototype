@@ -17,57 +17,66 @@ import org.springframework.web.server.ResponseStatusException;
 public class CurrentUserService {
     private final JdbcTemplate jdbcTemplate;
     private final JwtTokenService jwtTokenService;
-    // JWT subject → CurrentUser 단기 캐시. 모든 인증 요청(트래픽 대다수)이 JWT 검증 뒤 users SELECT를
-    // 반복하던 것을 제거한다 — parts/home 응답 캐시가 히트해도 이 조회만은 남아 DB를 치던 마지막 조각.
-    // role 변경·소프트 삭제가 최대 TTL만큼 늦게 반영되는 창이 생기므로 TTL은 짧게 유지하고,
-    // 프로필 변경 경로는 evictCachedUser()로 즉시 무효화한다.
     private final ReadThroughTtlCache<String, CurrentUser> userCache;
 
     @Autowired
     public CurrentUserService(
             JdbcTemplate jdbcTemplate,
             JwtTokenService jwtTokenService,
-            @Value("${buildgraph.auth.user-cache.ttl-seconds:30}") long userCacheTtlSeconds
+            @Value("${buildgraph.auth.user-cache.ttl-seconds:300}") long userCacheTtlSeconds,
+            @Value("${buildgraph.auth.user-cache.jitter-seconds:60}") long userCacheJitterSeconds,
+            @Value("${buildgraph.auth.user-cache.max-size:4096}") int userCacheMaxSize
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.jwtTokenService = jwtTokenService;
-        this.userCache = new ReadThroughTtlCache<>(Duration.ofSeconds(userCacheTtlSeconds), 4096);
+        this.userCache = new ReadThroughTtlCache<>(
+                Duration.ofSeconds(userCacheTtlSeconds),
+                Duration.ofSeconds(userCacheJitterSeconds),
+                userCacheMaxSize
+        );
     }
 
-    // 편의 생성자(테스트용): 캐시 꺼짐 — 기존 단건 조회 동작 그대로.
-    public CurrentUserService(JdbcTemplate jdbcTemplate, JwtTokenService jwtTokenService) {
-        this(jdbcTemplate, jwtTokenService, 0L);
+    CurrentUserService(JdbcTemplate jdbcTemplate, JwtTokenService jwtTokenService) {
+        this(jdbcTemplate, jwtTokenService, 0L, 0L, 4096);
+    }
+
+    CurrentUserService(JdbcTemplate jdbcTemplate, JwtTokenService jwtTokenService, long userCacheTtlSeconds) {
+        this(jdbcTemplate, jwtTokenService, userCacheTtlSeconds, 0L, 4096);
     }
 
     public CurrentUser requireUser(String authorization) {
         String token = bearerToken(authorization);
         JWTClaimsSet claims = verifyJwt(token);
-        // 미존재/삭제 사용자는 loader가 401을 던져 캐시에 남지 않는다(부정 캐시 없음).
         return userCache.get(claims.getSubject(), () -> findByPublicId(claims.getSubject()));
     }
 
-    /** 사용자 표시 정보·권한을 바꾸는 mutation 직후 호출 — TTL을 기다리지 않고 즉시 반영한다. */
     public void evictCachedUser(String publicId) {
-        if (publicId != null) {
+        if (publicId != null && !publicId.isBlank()) {
             userCache.remove(publicId);
         }
     }
 
     public CurrentUser requireAdmin(String authorization) {
         CurrentUser user = requireUser(authorization);
+        String freshRole = findRoleByInternalId(user.internalId());
+        if (!"ADMIN".equals(freshRole)) {
+            evictCachedUser(user.id());
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin permission is required.");
+        }
         if (!"ADMIN".equals(user.role())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
+            evictCachedUser(user.id());
+            return findByPublicId(user.id());
         }
         return user;
     }
 
     private String bearerToken(String authorization) {
         if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login is required.");
         }
         String token = authorization.substring("Bearer ".length()).trim();
         if (token.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login is required.");
         }
         return token;
     }
@@ -76,7 +85,7 @@ public class CurrentUserService {
         try {
             return jwtTokenService.verifyAccessToken(token);
         } catch (IllegalArgumentException exception) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.", exception);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login is required.", exception);
         }
     }
 
@@ -95,7 +104,20 @@ public class CurrentUserService {
                 .stream()
                 .findFirst()
                 .map(this::currentUser)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "등록된 사용자를 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found."));
+    }
+
+    private String findRoleByInternalId(Long internalId) {
+        return jdbcTemplate.queryForList("""
+                        SELECT role
+                        FROM users
+                        WHERE id = ?
+                          AND deleted_at IS NULL
+                        """, internalId)
+                .stream()
+                .findFirst()
+                .map(row -> DbValueMapper.string(row, "role"))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found."));
     }
 
     private CurrentUser currentUser(Map<String, Object> row) {

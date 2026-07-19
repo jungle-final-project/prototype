@@ -7,8 +7,9 @@ import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.agent.AiProfileConfig;
 import com.buildgraph.prototype.agent.PartReplacementRanker;
 import com.buildgraph.prototype.agent.PartRouteResolver;
-import com.buildgraph.prototype.part.PartAliasReviewService;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.catalog.PartAliasReviewService;
+import com.buildgraph.prototype.part.query.PartQuery;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.recommendation.CandidateReranker;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -24,6 +25,7 @@ class BuildChatServiceWiringTest {
             )
             .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
             .withBean(ToolCheckService.class, () -> mock(ToolCheckService.class))
+            .withBean(PartQuery.class, () -> mock(PartQuery.class))
             .withBean(AiChatEngine.class, () -> mock(AiChatEngine.class))
             .withBean(AiProfileConfig.class, () -> mock(AiProfileConfig.class))
             .withBean(PartAliasReviewService.class, () -> mock(PartAliasReviewService.class))

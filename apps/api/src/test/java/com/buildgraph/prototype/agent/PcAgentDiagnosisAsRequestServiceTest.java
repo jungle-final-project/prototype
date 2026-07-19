@@ -170,16 +170,19 @@ class PcAgentDiagnosisAsRequestServiceTest {
     }
 
     @Test
-    void rejectsAnotherTicketWhenTheUserAlreadyHasAnActiveSupportChat() {
+    void createsAnotherTicketWhenTheUserAlreadyHasAnActiveSupportChat() {
         StubJdbcTemplate jdbc = new StubJdbcTemplate();
-        jdbc.activeSupportRows = List.of(Map.of(
-                "as_ticket_id", "existing-ticket",
-                "support_chat_room_id", "existing-room"
-        ));
 
-        assertCode(() -> service(jdbc, eligibleBroker()).create(PRINCIPAL, validRequest(), DIAGNOSIS_ID),
-                "CONFLICT_STATE");
-        assertThat(jdbc.insertCount).isZero();
+        Map<String, Object> response = service(jdbc, eligibleBroker()).create(
+                PRINCIPAL,
+                validRequest(),
+                DIAGNOSIS_ID
+        );
+
+        assertThat(response)
+                .containsEntry("requestId", "ticket-public-id")
+                .containsEntry("supportChatRoomId", "support-room-1");
+        assertThat(jdbc.insertCount).isEqualTo(1);
     }
 
     @Test
@@ -352,7 +355,6 @@ class PcAgentDiagnosisAsRequestServiceTest {
 
     private static final class StubJdbcTemplate extends JdbcTemplate {
         private List<Map<String, Object>> existingRows = List.of();
-        private List<Map<String, Object>> activeSupportRows = List.of();
         private List<Map<String, Object>> ledgerRows = List.of();
         private List<Map<String, Object>> resultRows = List.of();
         private int consentCount = 1;
@@ -371,9 +373,6 @@ class PcAgentDiagnosisAsRequestServiceTest {
             }
             if (sql.contains("FROM users")) {
                 return List.of(Map.of("id", 20L));
-            }
-            if (sql.contains("FROM support_chat_rooms")) {
-                return activeSupportRows;
             }
             if (sql.contains("FROM pc_agent_diagnosis_results")) {
                 return resultRows;

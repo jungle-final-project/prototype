@@ -78,6 +78,15 @@ export type RecommendationEventRequest = {
   eventPayload?: Record<string, unknown>;
 };
 
+export type RecommendationEventBulkRequest = {
+  events: RecommendationEventRequest[];
+};
+
+export type RecommendationEventBulkAcceptedResponse = {
+  accepted: boolean;
+  queued: number;
+};
+
 export type PartSearchParams = {
   category?: string;
   q?: string;

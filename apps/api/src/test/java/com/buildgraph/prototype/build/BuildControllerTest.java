@@ -5,11 +5,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.buildgraph.prototype.common.MockData;
@@ -20,13 +22,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.server.ResponseStatusException;
 
+// build-chat은 전용 풀에서 비동기(DeferredResult) 처리하므로, 실제 실행기 빈을 로드하고
+// async가 시작된 뒤 asyncDispatch로 결과를 받는다.
 @WebMvcTest(BuildController.class)
+@Import(AiChatAsyncExecutor.class)
 class BuildControllerTest {
     private static final String USER_TOKEN = "Bearer jwt-user-token";
     private static final CurrentUserService.CurrentUser USER = new CurrentUserService.CurrentUser(
@@ -71,6 +78,47 @@ class BuildControllerTest {
                 .andExpect(jsonPath("$.message").value("로그인이 필요합니다."));
 
         verifyNoInteractions(buildChatService);
+    }
+    @Test
+    void buildChatForwardsVerifiedMockHeadersToService() throws Exception {
+        when(buildChatService.chat(
+                anyMap(),
+                eq("BUILD_CHAT_FAST"),
+                eq(USER),
+                eq("MOCK"),
+                eq("secret")
+        )).thenReturn(Map.of(
+                "answerType", "GENERAL",
+                "message", "mock response",
+                "builds", List.of(),
+                "warnings", List.of()
+        ));
+
+        MvcResult started = mockMvc.perform(post("/api/ai/build-chat")
+                        .header("Authorization", USER_TOKEN)
+                        .header("X-BuildGraph-AI-Profile", "BUILD_CHAT_FAST")
+                        .header("X-BuildGraph-AI-Mode", "MOCK")
+                        .header("X-BuildGraph-Test-Key", "secret")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": "mock request"
+                                }
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(started))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("mock response"));
+
+        verify(buildChatService).chat(
+                anyMap(),
+                eq("BUILD_CHAT_FAST"),
+                eq(USER),
+                eq("MOCK"),
+                eq("secret")
+        );
     }
 
     @Test
@@ -164,7 +212,7 @@ class BuildControllerTest {
                 "partRecommendation", null
         ));
 
-        mockMvc.perform(post("/api/ai/build-chat")
+        MvcResult started = mockMvc.perform(post("/api/ai/build-chat")
                         .header("Authorization", USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -172,6 +220,10 @@ class BuildControllerTest {
                                   "message": "200만원 PC 추천"
                                 }
                                 """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(started))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.answerType").value("BUDGET"))
                 .andExpect(jsonPath("$.builds[0].title").value("200만원 균형형"))
@@ -197,7 +249,7 @@ class BuildControllerTest {
                 )
         ));
 
-        mockMvc.perform(post("/api/ai/build-chat")
+        MvcResult started = mockMvc.perform(post("/api/ai/build-chat")
                         .header("Authorization", USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -219,6 +271,10 @@ class BuildControllerTest {
                                   ]
                                 }
                                 """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(started))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.answerType").value("PART"))
                 .andExpect(jsonPath("$.partRecommendation.category").value("GPU"));

@@ -1,5 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0f172a"/>
-  <path d="M17 20h17c8 0 13 5 13 12s-5 12-13 12H17V20z" fill="#2563eb"/>
-  <path d="M25 28h9c3 0 5 2 5 4s-2 4-5 4h-9v-8z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="307" height="347" viewBox="0 0 307 347" role="img" aria-labelledby="title desc">
+  <title id="title">White uppercase D</title>
+  <desc id="desc">A bold white uppercase D on an orange background.</desc>
+  <rect width="307" height="347" fill="#e36226"/>
+  <path
+    fill="#ffffff"
+    fill-rule="evenodd"
+    d="M58 44h85c73.1 0 118 47.7 118 125.5S216.1 295 143 295H58V44Zm50 45v161h33c45.9 0 72-29.7 72-80.5S186.9 89 141 89h-33Z"
+  />
 </svg>

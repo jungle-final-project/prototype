@@ -15,7 +15,7 @@ import com.buildgraph.prototype.agent.AgentJobPublisher;
 import com.buildgraph.prototype.agent.AgentTraceService;
 import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.List;
 import java.util.Map;

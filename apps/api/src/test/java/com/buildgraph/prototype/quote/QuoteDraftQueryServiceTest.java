@@ -3,6 +3,7 @@ package com.buildgraph.prototype.quote;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -16,13 +17,17 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.server.ResponseStatusException;
 
 class QuoteDraftQueryServiceTest {
     private static final String USER_TOKEN = "Bearer jwt-user-token";
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final CurrentUserService currentUserService = mock(CurrentUserService.class);
-    private final QuoteDraftQueryService quoteDraftQueryService = new QuoteDraftQueryService(jdbcTemplate, currentUserService);
+    // TransactionTemplate은 mock PTM 위에서 콜백을 그대로 실행한다(getTransaction/commit은 no-op).
+    private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    private final QuoteDraftQueryService quoteDraftQueryService =
+            new QuoteDraftQueryService(jdbcTemplate, currentUserService, transactionManager);
 
     @Test
     void applyAiBuildFailsBeforeDraftMutationWhenPartIdIsInvalid() {
@@ -54,6 +59,8 @@ class QuoteDraftQueryServiceTest {
                 draftItem("draft-item-cpu", "part-cpu-ai", "CPU", "Ryzen AI CPU", 420000),
                 draftItem("draft-item-gpu", "part-gpu-ai", "GPU", "RTX AI GPU", 890000)
         ));
+        when(jdbcTemplate.queryForList(argThat((String sql) -> sql != null && sql.contains("RETURNING")), eq(700L)))
+                .thenReturn(List.of(activeDraft()));
 
         Map<String, Object> draft = quoteDraftQueryService.applyAiBuild(USER_TOKEN, Map.of(
                 "buildId", "ai-2000000-balanced",
@@ -68,6 +75,57 @@ class QuoteDraftQueryServiceTest {
         assertThat(draft.get("totalPrice")).isEqualTo(1_310_000);
         assertThat(draft.get("itemCount")).isEqualTo(2);
         assertThat((List<?>) draft.get("items")).hasSize(2);
+    }
+
+    @Test
+    void putItemUpsertsSameCategoryWithSingleAtomicStatementAndConvergesToLastPart() {
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
+        when(jdbcTemplate.queryForList(anyString(), eq("part-cpu-a"))).thenReturn(List.of(part("part-cpu-a", 101L, "CPU", "CPU A", 400000)));
+        when(jdbcTemplate.queryForList(anyString(), eq("part-cpu-b"))).thenReturn(List.of(part("part-cpu-b", 102L, "CPU", "CPU B", 450000)));
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("draft-item-cpu", "part-cpu-b", "CPU", "CPU B", 450000)
+        ));
+        when(jdbcTemplate.queryForList(argThat((String sql) -> sql != null && sql.contains("RETURNING")), eq(700L)))
+                .thenReturn(List.of(activeDraft()));
+
+        quoteDraftQueryService.putItem(USER_TOKEN, "part-cpu-a", Map.of());
+        Map<String, Object> draft = quoteDraftQueryService.putItem(USER_TOKEN, "part-cpu-b", Map.of());
+
+        // UPDATE 0행→INSERT 수동 2단 업서트가 아니라 단일 ON CONFLICT 문이어야
+        // 동시 PUT 2건이 둘 다 INSERT로 가서 23505(→500)로 터질 창이 없다.
+        verify(jdbcTemplate).update(
+                argThat((String sql) -> sql.contains("ON CONFLICT (quote_draft_id, category)") && sql.contains("DO UPDATE")),
+                eq(700L), eq(101L), eq("CPU"), eq(1), eq(400000));
+        verify(jdbcTemplate).update(
+                argThat((String sql) -> sql.contains("ON CONFLICT (quote_draft_id, category)") && sql.contains("DO UPDATE")),
+                eq(700L), eq(102L), eq("CPU"), eq(1), eq(450000));
+        List<?> items = (List<?>) draft.get("items");
+        assertThat(items).hasSize(1);
+        assertThat(((Map<?, ?>) items.get(0)).get("partId")).isEqualTo("part-cpu-b");
+    }
+
+    @Test
+    void putItemJoinsWinnerDraftWhenConcurrentCreateLosesInsertRace() {
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
+        when(jdbcTemplate.queryForList(anyString(), eq("part-cpu-a"))).thenReturn(List.of(part("part-cpu-a", 101L, "CPU", "CPU A", 400000)));
+        // 1) 활성 드래프트 없음 → 2) ON CONFLICT DO NOTHING이 빈 결과(경쟁 패배) → 3) 재조회로 승자 드래프트 합류
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L)))
+                .thenReturn(List.of(), List.of(activeDraft()), List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(Long.class), eq(1004L))).thenReturn(List.of());
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("draft-item-cpu", "part-cpu-a", "CPU", "CPU A", 400000)
+        ));
+        when(jdbcTemplate.queryForList(argThat((String sql) -> sql != null && sql.contains("RETURNING")), eq(700L)))
+                .thenReturn(List.of(activeDraft()));
+
+        Map<String, Object> draft = quoteDraftQueryService.putItem(USER_TOKEN, "part-cpu-a", Map.of());
+
+        assertThat(draft.get("status")).isEqualTo("ACTIVE");
+        // 예외 없이 승자 드래프트(700)에 업서트되어야 한다.
+        verify(jdbcTemplate).update(
+                argThat((String sql) -> sql.contains("ON CONFLICT (quote_draft_id, category)")),
+                eq(700L), eq(101L), eq("CPU"), eq(1), eq(400000));
     }
 
     private CurrentUserService.CurrentUser currentUser() {

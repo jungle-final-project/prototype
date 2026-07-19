@@ -9,28 +9,29 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.common.MockData;
-import com.buildgraph.prototype.part.ToolCheckService;
+import com.buildgraph.prototype.part.query.PartQuery;
+import com.buildgraph.prototype.part.tool.ToolBuildPart;
+import com.buildgraph.prototype.part.tool.ToolCheckService;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 class BuildEvaluationServiceTest {
     @Test
     void evaluatesRecommendationSnapshotWithoutRepeatingToolCheck() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        PartQuery partQuery = mock(PartQuery.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
         BuildEvaluationService service = new BuildEvaluationService(
-                jdbcTemplate,
+                partQuery,
                 toolCheckService,
                 new BuildCompositeScoreService(),
                 new BuildScoreAdviceService()
         );
-        List<com.buildgraph.prototype.part.ToolBuildPart> parts = List.of(
-                new com.buildgraph.prototype.part.ToolBuildPart(
+        List<com.buildgraph.prototype.part.tool.ToolBuildPart> parts = List.of(
+                new com.buildgraph.prototype.part.tool.ToolBuildPart(
                         1L, "cpu-1", "CPU", "AMD Ryzen 7 9700X", "AMD", 500_000,
                         Map.of("cores", 8, "threads", 16), 1),
-                new com.buildgraph.prototype.part.ToolBuildPart(
+                new com.buildgraph.prototype.part.tool.ToolBuildPart(
                         2L, "gpu-1", "GPU", "RTX 5060", "NVIDIA", 500_000,
                         Map.of("gpuClass", "RTX_5060", "vramGb", 8), 1)
         );
@@ -51,26 +52,23 @@ class BuildEvaluationServiceTest {
     }
 
     @Test
-    void currentDraftParsesPostgresJsonAttributesBeforeRunningTools() {
-        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+    void currentDraftUsesPartQueryBeforeRunningTools() {
+        PartQuery partQuery = mock(PartQuery.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
-        when(jdbcTemplate.queryForList(org.mockito.ArgumentMatchers.anyString(), eq(42L)))
-                .thenReturn(List.of(Map.of("internal_id", 7L)));
-        when(jdbcTemplate.queryForList(org.mockito.ArgumentMatchers.anyString(), eq(7L)))
-                .thenReturn(List.of(Map.of(
-                        "internal_id", 31L,
-                        "part_id", "psu-1500",
-                        "category", "PSU",
-                        "name", "Corsair HX1500i",
-                        "manufacturer", "Corsair",
-                        "current_price", 700_000,
-                        "quantity", 1,
-                        "attributes", "{\"capacityW\":1500,\"wattage\":1500,\"toolReady\":true}"
-                )));
+        when(partQuery.partsByActiveDraftUserId(42L)).thenReturn(List.of(new ToolBuildPart(
+                31L,
+                "psu-1500",
+                "PSU",
+                "Corsair HX1500i",
+                "Corsair",
+                700_000,
+                Map.of("capacityW", 1500, "wattage", 1500, "toolReady", true),
+                1
+        )));
         when(toolCheckService.checkBuild(anyList(), anyInt())).thenAnswer(invocation -> {
             List<?> parts = invocation.getArgument(0);
-            com.buildgraph.prototype.part.ToolBuildPart psu =
-                    (com.buildgraph.prototype.part.ToolBuildPart) parts.get(0);
+            com.buildgraph.prototype.part.tool.ToolBuildPart psu =
+                    (com.buildgraph.prototype.part.tool.ToolBuildPart) parts.get(0);
             assertThat(psu.attributes())
                     .containsEntry("capacityW", 1500)
                     .containsEntry("wattage", 1500);
@@ -83,7 +81,7 @@ class BuildEvaluationServiceTest {
             ));
         });
         BuildEvaluationService service = new BuildEvaluationService(
-                jdbcTemplate,
+                partQuery,
                 toolCheckService,
                 new BuildCompositeScoreService(),
                 new BuildScoreAdviceService()

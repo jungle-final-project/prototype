@@ -570,28 +570,62 @@ async function mockHomePartsApi(page: Page) {
     'home-case-frame',
     'home-cooler-phantom'
   ];
-  await page.route('**/api/recommendations/home-parts**', async (route) => {
-    const items = recommendedOrder
-      .map((id, index) => {
-        const part = homeParts.find((candidate) => candidate.id === id);
-        if (!part) return null;
-        return {
-          recommendationId: `home-part-${part.id}`,
-          rankPosition: index,
-          part,
-          scoreSource: 'FALLBACK',
-          reasonTags: ['benchmark', 'image']
-        };
-      })
-      .filter(Boolean);
+  const recommendedItems = recommendedOrder
+    .map((id, index) => {
+      const part = homeParts.find((candidate) => candidate.id === id);
+      if (!part) return null;
+      return {
+        recommendationId: `home-part-${part.id}`,
+        rankPosition: index,
+        part,
+        scoreSource: 'FALLBACK',
+        reasonTags: ['benchmark', 'image']
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const recommendedParts = {
+    items: recommendedItems,
+    generatedAt: '2026-07-03T10:00:00Z',
+    fallbackUsed: true
+  };
+  const categoryParts = categories.reduce<Record<string, typeof homeParts>>((acc, category) => {
+    acc[category] = homeParts.filter((part) => part.category === category);
+    return acc;
+  }, {});
+  const homeResponse = {
+    categoryParts,
+    recommendedParts
+  };
+
+  await page.route('**/api/home', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        items,
-        generatedAt: '2026-07-03T10:00:00Z',
-        fallbackUsed: true
-      })
+      body: JSON.stringify(homeResponse)
+    });
+  });
+
+  await page.route('**/api/public/home', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(homeResponse)
+    });
+  });
+
+  await page.route('**/api/recommendations/home-parts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(recommendedParts)
+    });
+  });
+
+  await page.route('**/api/recommendation-events/bulk', async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ accepted: true })
     });
   });
 
@@ -1478,6 +1512,7 @@ test('adds a selected RAM recommendation directly and leaves a compatibility not
       contentType: 'application/json',
       body: JSON.stringify({
         ...buildGraphResponse(),
+        compositeScore: { score: 0, maxScore: 1000, grade: 'F', label: '확인 필요', summary: '메모리 슬롯 초과', components: [], caps: [] },
         toolResults: [{ tool: 'compatibility', status: 'FAIL', confidence: 'HIGH', summary: '메모리 슬롯 수를 초과했습니다.' }]
       })
     });
@@ -1514,7 +1549,9 @@ test('adds a selected RAM recommendation directly and leaves a compatibility not
 
   await expect.poll(() => putBodies).toEqual([{ quantity: 3 }]);
   const messages = page.getByTestId('ai-chat-messages');
-  await expect(messages).toContainText('RAM 후보 A 추가됨. 현재 수량: 3개입니다.');
+  // 담기 확인문은 점수 영수증으로 대체돼도 "어떤 상품이 몇 개가 됐는지"를 첫 줄에 그대로 남긴다.
+  await expect(messages).toContainText('RAM 후보 A 추가됨 · 현재 수량 3개');
+  await expect(messages).toContainText('변경은 반영됐지만 호환성 또는 장착 문제로 종합 점수는 0점입니다.');
   await expect(messages).toContainText('현재 견적에 호환성 확인이 필요한 항목이 있습니다.');
   // 추천 칩은 LLM으로 다시 보내지 않고 기존 quote draft item API만 호출한다.
   expect(buildChatCalls).toBe(1);
@@ -1829,6 +1866,7 @@ test('renders a temporary chatbot build detail and saves it to a persisted build
   const latestBuilds = budgetBuilds(2_000_000);
   const temporaryBuild = latestBuilds[1];
   const saveRequests: unknown[] = [];
+  const buildGraphRequests = await mockBuildGraphApi(page);
   await page.route('**/api/builds/from-chat', async (route) => {
     const requestBody = JSON.parse(route.request().postData() ?? '{}');
     saveRequests.push(requestBody);
@@ -1874,6 +1912,29 @@ test('renders a temporary chatbot build detail and saves it to a persisted build
   await expect(page.getByRole('heading', { name: `추천 견적 결과 / ${temporaryBuild.title}` })).toBeVisible();
   await expect(page.getByText('저장 전 AI 챗봇 추천')).toBeVisible();
   await expect(page.getByRole('link', { name: temporaryBuild.items[0].name })).toBeVisible();
+  const partsPanel = page.getByRole('heading', { name: '구성 부품' }).locator('..').locator('..').locator('..');
+  const partsTable = partsPanel.getByRole('table');
+  await expect(partsTable.getByRole('columnheader', { name: '호환성' })).toBeVisible();
+  await expect(partsTable.getByText('활성', { exact: true })).toHaveCount(0);
+  const gpuItem = temporaryBuild.items.find((item) => item.category === 'GPU');
+  const gpuRow = partsTable.getByRole('row').filter({ hasText: gpuItem?.name ?? 'GPU' });
+  await expect(gpuRow.getByText('주의', { exact: true })).toBeVisible();
+  await expect.poll(() => buildGraphRequests.length).toBeGreaterThan(0);
+  expect(buildGraphRequests[0]).toMatchObject({
+    source: 'AI_BUILD',
+    items: expect.arrayContaining([
+      expect.objectContaining({ category: 'GPU', partId: gpuItem?.partId, quantity: gpuItem?.quantity })
+    ])
+  });
+  await expect(page.getByRole('heading', { name: '검증 결과' })).toHaveCount(0);
+  const summaryPanel = page.getByRole('heading', { name: '견적 요약 / 액션' }).locator('..').locator('..').locator('..');
+  await expect(partsPanel.getByText('검증 요약', { exact: true })).toBeVisible();
+  await expect(partsPanel.getByText('1/1 통과', { exact: true })).toBeVisible();
+  await expect(summaryPanel.getByText('검증 요약', { exact: true })).toHaveCount(0);
+  const [partsBox, summaryBox] = await Promise.all([partsPanel.boundingBox(), summaryPanel.boundingBox()]);
+  expect(partsBox).not.toBeNull();
+  expect(summaryBox).not.toBeNull();
+  expect(Math.abs((partsBox?.height ?? 0) - (summaryBox?.height ?? 0))).toBeLessThanOrEqual(1);
   await page.getByRole('button', { name: '견적 저장' }).click();
 
   await expect.poll(() => saveRequests.length).toBe(1);
@@ -2577,6 +2638,26 @@ test.describe('AI 챗봇 응답 대기 표시', () => {
 
     await expect(panel).toContainText(last); // 전체가 즉시 노출
     await expect(panel.getByTestId('ai-message-sentence')).toHaveCount(0); // 문장 span 없이 통짜 렌더
+  });
+
+  test('긴 설명과 번호 후보를 읽기 좋은 문단과 줄바꿈으로 표시한다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await mockBuildChat(page, {
+      delayMs: 50,
+      message: '조건을 만족하는 케이스 TOP3입니다. 1) 첫 번째 케이스 — 100,000원 2) 두 번째 케이스 — 120,000원 3) 세 번째 케이스 — 140,000원 담고 싶은 부품이 있으면 말씀해 주세요.'
+    });
+    const { panel, input, send } = await openAssistant(page);
+
+    await input.fill('케이스 추천해줘');
+    await send.click();
+
+    const paragraphs = panel.getByTestId('ai-chat-message-assistant').last().getByTestId('ai-message-paragraph');
+    await expect(paragraphs).toHaveCount(5);
+    await expect(paragraphs.nth(0)).toHaveText('조건을 만족하는 케이스 TOP3입니다.');
+    await expect(paragraphs.nth(1)).toHaveText('1) 첫 번째 케이스 — 100,000원');
+    await expect(paragraphs.nth(2)).toHaveText('2) 두 번째 케이스 — 120,000원');
+    await expect(paragraphs.nth(3)).toHaveText('3) 세 번째 케이스 — 140,000원');
+    await expect(paragraphs.nth(4)).toHaveText('담고 싶은 부품이 있으면 말씀해 주세요.');
   });
 
   test('카드형(견적) 답변은 카드가 하나씩 순차로 노출된다', async ({ page }) => {
