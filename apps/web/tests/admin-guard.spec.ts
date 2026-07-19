@@ -1249,6 +1249,94 @@ test('shows degraded alert on admin dashboard when dashboard API reports degrade
   await expect(page.locator('main')).not.toContainText('undefined');
 });
 
+test('admin reviews a remote-support AS ticket through guarded workflow actions', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+
+  let ticket = {
+    id: 'ticket-remote-001',
+    userId: 'user-001',
+    status: 'OPEN',
+    analysisStatus: 'RULE_READY',
+    reviewStatus: 'REQUIRED',
+    supportDecision: 'VISIT_REQUIRED',
+    riskLevel: 'LOW',
+    symptom: '게임 실행 후 화면이 멈춥니다.',
+    requestType: 'PHYSICAL_INSPECTION',
+    diagnosisTitle: '원격 확인 가능한 드라이버 오류',
+    diagnosisSummary: '그래픽 드라이버 재시작 기록이 반복되었습니다.',
+    diagnosisResult: {
+      resolutionType: 'REMOTE_SUPPORT',
+      suspectedCauses: ['그래픽 드라이버 충돌'],
+      recommendedActions: ['원격으로 드라이버 상태 확인'],
+      unsupportedChecks: ['그래픽카드 물리 손상 확인']
+    },
+    diagnosisEvidence: [{ component: 'gpu', metricType: 'driver_reset', value: 3 }],
+    diagnosedAt: '2026-07-19T01:00:00Z',
+    assignedAdminId: null as string | null,
+    causeCandidates: [{ summary: '그래픽 드라이버 충돌 가능성' }],
+    upgradeCandidates: [],
+    adminNote: null as string | null,
+    reviewedAt: null as string | null,
+    createdAt: '2026-07-19T00:30:00Z'
+  };
+  await page.route('**/api/admin/as-tickets/ticket-remote-001**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'POST' && path.endsWith('/assign-to-me')) {
+      ticket = { ...ticket, status: 'ASSIGNED', reviewStatus: 'IN_REVIEW', assignedAdminId: 'admin-001' };
+    } else if (route.request().method() === 'POST' && path.endsWith('/approve-remote-support')) {
+      const payload = route.request().postDataJSON() as { adminNote?: string };
+      ticket = {
+        ...ticket,
+        status: 'IN_PROGRESS',
+        reviewStatus: 'APPROVED',
+        supportDecision: 'REMOTE_POSSIBLE',
+        assignedAdminId: 'admin-001',
+        adminNote: payload.adminNote ?? null,
+        reviewedAt: '2026-07-19T01:30:00Z'
+      };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ticket) });
+  });
+
+  await page.goto('/admin/as-tickets/ticket-remote-001');
+
+  await expect(page.getByRole('heading', { name: '접수 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '사용자 요청' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Agent 진단' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '판단 근거' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '관리자 검토' })).toBeVisible();
+  await expect(page.locator('#admin-ticket-status')).toHaveCount(0);
+  await expect(page.locator('#admin-ticket-review-status')).toHaveCount(0);
+  await expect(page.locator('#admin-ticket-support-decision')).toHaveCount(0);
+  await expect(page.locator('#admin-ticket-risk-level')).toHaveCount(0);
+  await expect(page.locator('main')).not.toContainText('RULE_READY');
+  await expect(page.locator('main')).not.toContainText('REQUIRED');
+  await expect(page.locator('main')).not.toContainText('LOW');
+  await expect(page.locator('main')).toContainText('규칙 진단 완료');
+  await expect(page.locator('main')).toContainText('검토 필요');
+  await expect(page.locator('main')).toContainText('낮음');
+  await expect(page.getByRole('button', { name: '원격 지원 승인' })).toBeVisible();
+  await page.getByRole('button', { name: '내게 배정' }).click();
+  await expect(page.locator('main')).toContainText('admin-001');
+  await page.getByLabel('관리자 메모').fill('원격 점검을 승인합니다.');
+  await page.getByRole('button', { name: '원격 지원 승인' }).click();
+
+  await expect(page.getByRole('heading', { name: '처리 결과' })).toBeVisible();
+  await expect(page.locator('main')).toContainText('원격 지원 가능');
+  await expect(page.locator('main')).toContainText('승인됨');
+  await expect(page.locator('main')).toContainText('원격 점검을 승인합니다.');
+  await expect(page.getByRole('button', { name: '원격 지원 승인' })).toHaveCount(0);
+});
+
 test('keeps admin dashboard usable when recent assembly request API fails', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');

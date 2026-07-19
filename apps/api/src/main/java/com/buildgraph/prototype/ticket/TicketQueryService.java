@@ -33,7 +33,6 @@ public class TicketQueryService {
     private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH");
     private static final Set<String> VISIT_TIME_SLOTS = Set.of("MORNING", "AFTERNOON", "EVENING");
     private static final Set<String> DIAGNOSTIC_ACCURACIES = Set.of("ACCURATE", "PARTIAL", "MISSED", "UNKNOWN");
-
     private final JdbcTemplate jdbcTemplate;
 
     public TicketQueryService(JdbcTemplate jdbcTemplate) {
@@ -198,7 +197,116 @@ public class TicketQueryService {
     }
 
     public Map<String, Object> adminTicket(String id) {
-        return ticket(id);
+        return jdbcTemplate.queryForList(ticketSql() + " WHERE t.deleted_at IS NULL AND t.public_id = ?::uuid", id)
+                .stream()
+                .findFirst()
+                .map(this::adminTicketMap)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    @Transactional
+    public Map<String, Object> assignToCurrentAdmin(String id, CurrentUserService.CurrentUser admin) {
+        requireAdminActor(admin);
+        Map<String, Object> current = ticketActionRow(id);
+        requireActionableTicket(current);
+        requireAvailableAssignment(current, admin);
+
+        Long assignedAdminId = longValue(current, "assigned_admin_id");
+        String status = DbValueMapper.string(current, "status");
+        String reviewStatus = DbValueMapper.string(current, "review_status");
+        boolean alreadyApplied = admin.internalId().equals(assignedAdminId)
+                && !"OPEN".equals(status)
+                && !"REQUIRED".equals(reviewStatus);
+        if (!alreadyApplied) {
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET assigned_admin_id = ?,
+                        status = CASE WHEN status = 'OPEN' THEN 'ASSIGNED' ELSE status END,
+                        review_status = CASE WHEN review_status = 'REQUIRED' THEN 'IN_REVIEW' ELSE review_status END,
+                        updated_at = now()
+                    WHERE id = ?
+                    """, admin.internalId(), longValue(current, "internal_id"));
+            auditTicketAction(id, current, admin, "AS_TICKET_ASSIGNED_TO_SELF", "ASSIGNED");
+        }
+        return adminTicket(id);
+    }
+
+    @Transactional
+    public Map<String, Object> requestMoreInformation(
+            String id,
+            String adminNote,
+            CurrentUserService.CurrentUser admin
+    ) {
+        requireAdminActor(admin);
+        String note = adminNote == null ? null : adminNote.trim();
+        if (note == null || note.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "추가 정보 요청 사유를 입력해 주세요.");
+        }
+        Map<String, Object> current = ticketActionRow(id);
+        requireActionableTicket(current);
+        requireReviewNotCompleted(current);
+        requireAvailableAssignment(current, admin);
+
+        boolean alreadyApplied = admin.internalId().equals(longValue(current, "assigned_admin_id"))
+                && "IN_PROGRESS".equals(DbValueMapper.string(current, "status"))
+                && "IN_REVIEW".equals(DbValueMapper.string(current, "review_status"))
+                && "NEEDS_MORE_INFO".equals(DbValueMapper.string(current, "support_decision"))
+                && note.equals(DbValueMapper.string(current, "admin_note"));
+        if (!alreadyApplied) {
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET assigned_admin_id = ?,
+                        status = 'IN_PROGRESS',
+                        review_status = 'IN_REVIEW',
+                        support_decision = 'NEEDS_MORE_INFO',
+                        admin_note = ?,
+                        reviewed_at = NULL,
+                        updated_at = now()
+                    WHERE id = ?
+                    """, admin.internalId(), note, longValue(current, "internal_id"));
+            auditTicketAction(id, current, admin, "AS_TICKET_MORE_INFO_REQUESTED", "NEEDS_MORE_INFO");
+        }
+        return adminTicket(id);
+    }
+
+    @Transactional
+    public Map<String, Object> approveRemoteSupport(
+            String id,
+            String adminNote,
+            CurrentUserService.CurrentUser admin
+    ) {
+        requireAdminActor(admin);
+        Map<String, Object> current = ticketActionRow(id);
+        requireAvailableAssignment(current, admin);
+
+        boolean alreadyApplied = admin.internalId().equals(longValue(current, "assigned_admin_id"))
+                && "IN_PROGRESS".equals(DbValueMapper.string(current, "status"))
+                && "APPROVED".equals(DbValueMapper.string(current, "review_status"))
+                && "REMOTE_POSSIBLE".equals(DbValueMapper.string(current, "support_decision"));
+        if (alreadyApplied) {
+            return adminTicket(id);
+        }
+
+        requireActionableTicket(current);
+        requireReviewNotCompleted(current);
+        if (!isRemoteSupportCandidate(current) || hasOutOfScopeBlockingFactor(current)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "현재 진단 및 지원 결정에서는 원격 지원을 승인할 수 없습니다.");
+        }
+
+        String note = adminNote == null || adminNote.isBlank() ? null : adminNote.trim();
+        jdbcTemplate.update("""
+                UPDATE as_tickets
+                SET assigned_admin_id = ?,
+                    status = 'IN_PROGRESS',
+                    review_status = 'APPROVED',
+                    support_decision = 'REMOTE_POSSIBLE',
+                    admin_note = COALESCE(?, admin_note),
+                    reviewed_at = now(),
+                    updated_at = now()
+                WHERE id = ?
+                """, admin.internalId(), note, longValue(current, "internal_id"));
+        auditTicketAction(id, current, admin, "AS_TICKET_REMOTE_SUPPORT_APPROVED", "REMOTE_POSSIBLE");
+        return adminTicket(id);
     }
 
     @Transactional
@@ -611,7 +719,7 @@ public class TicketQueryService {
         saveRemoteSupportIfRequested(id, request, admin);
         saveVisitSupportIfRequested(current, request);
         auditTicketUpdate(id, current, request, admin);
-        return ticket(id);
+        return admin == null ? ticket(id) : adminTicket(id);
     }
 
     private Map<String, Object> ticketRow(String id) {
@@ -634,6 +742,117 @@ public class TicketQueryService {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> ticketActionRow(String id) {
+        return jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               assigned_admin_id,
+                               status,
+                               review_status,
+                               support_decision,
+                               request_type,
+                               diagnosis_result,
+                               support_routing,
+                               admin_note
+                        FROM as_tickets
+                        WHERE deleted_at IS NULL
+                          AND public_id = ?::uuid
+                        FOR UPDATE
+                        """, id)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private static void requireAdminActor(CurrentUserService.CurrentUser admin) {
+        if (admin == null || !"ADMIN".equals(admin.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
+        }
+    }
+
+    private static void requireActionableTicket(Map<String, Object> current) {
+        String status = DbValueMapper.string(current, "status");
+        if (!Set.of("OPEN", "ASSIGNED", "IN_PROGRESS").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "완료되거나 종료된 AS 티켓은 다시 처리할 수 없습니다.");
+        }
+    }
+
+    private static void requireReviewNotCompleted(Map<String, Object> current) {
+        String reviewStatus = DbValueMapper.string(current, "review_status");
+        if (Set.of("APPROVED", "REJECTED").contains(reviewStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 관리자 검토가 완료된 AS 티켓입니다.");
+        }
+    }
+
+    private static void requireAvailableAssignment(
+            Map<String, Object> current,
+            CurrentUserService.CurrentUser admin
+    ) {
+        Long assignedAdminId = longValue(current, "assigned_admin_id");
+        if (assignedAdminId != null && !assignedAdminId.equals(admin.internalId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "다른 관리자가 담당 중인 AS 티켓입니다.");
+        }
+    }
+
+    private static boolean isRemoteSupportCandidate(Map<String, Object> current) {
+        if ("REMOTE_POSSIBLE".equals(DbValueMapper.string(current, "support_decision"))) {
+            return true;
+        }
+        if ("REMOTE_SUPPORT".equals(DbValueMapper.string(current, "request_type"))) {
+            return true;
+        }
+        Object diagnosisValue = DbValueMapper.json(current, "diagnosis_result", Map.of());
+        if (diagnosisValue instanceof Map<?, ?> diagnosis
+                && "REMOTE_SUPPORT".equals(stringOrNull(diagnosis.get("resolutionType")))) {
+            return true;
+        }
+        Object routingValue = DbValueMapper.json(current, "support_routing", Map.of());
+        if (!(routingValue instanceof Map<?, ?> routing)) {
+            return false;
+        }
+        return "REMOTE_SUPPORT".equals(stringOrNull(routing.get("recommendedService")))
+                || "REMOTE_POSSIBLE".equals(stringOrNull(routing.get("recommendedDecision")))
+                || "REMOTE_POSSIBLE".equals(stringOrNull(routing.get("supportDecision")));
+    }
+
+    private void auditTicketAction(
+            String ticketId,
+            Map<String, Object> current,
+            CurrentUserService.CurrentUser admin,
+            String action,
+            String outcome
+    ) {
+        jdbcTemplate.update("""
+                INSERT INTO admin_audit_logs (
+                  actor_user_id,
+                  action,
+                  target_type,
+                  target_id,
+                  metadata
+                )
+                VALUES (
+                  ?,
+                  ?,
+                  'as_tickets',
+                  ?,
+                  jsonb_build_object(
+                    'beforeStatus', CAST(? AS text),
+                    'beforeReviewStatus', CAST(? AS text),
+                    'beforeSupportDecision', CAST(? AS text),
+                    'outcome', CAST(? AS text)
+                  )
+                )
+                """,
+                admin.internalId(),
+                action,
+                ticketId,
+                DbValueMapper.string(current, "status"),
+                DbValueMapper.string(current, "review_status"),
+                DbValueMapper.string(current, "support_decision"),
+                outcome
+        );
     }
 
     private void saveRemoteSupportIfRequested(
@@ -946,6 +1165,7 @@ public class TicketQueryService {
                        t.diagnosis_title,
                        t.diagnosis_summary,
                        t.evidence_summary AS diagnosis_evidence,
+                       t.diagnosis_result,
                        t.diagnosed_at,
                        lu.public_id::text AS log_upload_id,
                        lu.summary AS uploaded_log_summary,
@@ -984,7 +1204,9 @@ public class TicketQueryService {
                        t.feedback_created_at,
                        t.diagnostic_accuracy,
                        t.resolved_at,
+                       t.reviewed_at,
                        t.created_at,
+                       t.updated_at,
                        rs.session_url AS remote_support_link,
                        rs.status AS remote_support_status,
                        vr.public_id::text AS visit_support_id,
@@ -1075,8 +1297,16 @@ public class TicketQueryService {
                 "visitPreferredDate", row.get("visit_preferred_date"),
                 "visitTimeSlot", DbValueMapper.string(row, "visit_time_slot"),
                 "resolvedAt", DbValueMapper.timestamp(row, "resolved_at"),
-                "createdAt", DbValueMapper.timestamp(row, "created_at")
+                "reviewedAt", DbValueMapper.timestamp(row, "reviewed_at"),
+                "createdAt", DbValueMapper.timestamp(row, "created_at"),
+                "updatedAt", DbValueMapper.timestamp(row, "updated_at")
         );
+    }
+
+    private Map<String, Object> adminTicketMap(Map<String, Object> row) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>(ticketMap(row));
+        result.put("diagnosisResult", DbValueMapper.json(row, "diagnosis_result", Map.of()));
+        return result;
     }
 
     private Map<String, Object> asTrainingLabel(Map<String, Object> row) {

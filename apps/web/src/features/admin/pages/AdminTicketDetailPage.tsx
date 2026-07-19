@@ -2,41 +2,28 @@ import { FormEvent, useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AdminShell, DataTable, Panel, StateMessage, StatusBadge } from '../../../components/ui';
+import { AdminShell, DataTable, Panel, StateMessage, StatusBadge, statusLabel } from '../../../components/ui';
 import { formatSeoulDateTime } from '../../../lib/dateTime';
-import { createAsRecommendationFeedback, getAdminTicket, updateAdminTicket } from '../adminApi';
-import type { AdminAsTicket, AsTicketStatus } from '../adminApi';
+import {
+  approveAdminTicketRemoteSupport,
+  assignAdminTicketToMe,
+  createAsRecommendationFeedback,
+  getAdminTicket,
+  requestAdminTicketMoreInfo
+} from '../adminApi';
+import type { AdminAsTicket } from '../adminApi';
 
-const STATUS_OPTIONS: AsTicketStatus[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'CANCELLED'];
-const REVIEW_OPTIONS = ['', 'NOT_REQUIRED', 'REQUIRED', 'IN_REVIEW', 'APPROVED', 'REJECTED'];
-const SUPPORT_DECISION_OPTIONS = [
-  '',
-  'SELF_SOLVABLE',
-  'REMOTE_POSSIBLE',
-  'VISIT_REQUIRED',
-  'REPAIR_OR_REPLACE',
-  'NEEDS_MORE_INFO',
-  'MONITOR_ONLY',
-  'UNSUPPORTED'
-];
-const RISK_OPTIONS = ['', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-const DIAGNOSTIC_ACCURACY_OPTIONS = ['', 'ACCURATE', 'PARTIAL', 'MISSED', 'UNKNOWN'];
 const FAILURE_CATEGORY_OPTIONS = ['RECOMMENDATION_BUILD', 'PART_SELECTION', 'COMPATIBILITY', 'PERFORMANCE', 'USER_ENVIRONMENT', 'AGENT_LOG_ONLY', 'OTHER'];
 const SEVERITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const CATEGORY_OPTIONS = ['', 'CPU', 'GPU', 'RAM', 'MOTHERBOARD', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
 
+type ReviewAction = 'ASSIGN_TO_ME' | 'REQUEST_MORE_INFO' | 'APPROVE_REMOTE_SUPPORT';
+
 export function AdminTicketDetailPage() {
   const { ticketId = '' } = useParams();
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState<AsTicketStatus>('OPEN');
-  const [assignedAdminId, setAssignedAdminId] = useState('');
   const [adminNote, setAdminNote] = useState('');
-  const [reviewStatus, setReviewStatus] = useState('');
-  const [supportDecision, setSupportDecision] = useState('');
-  const [riskLevel, setRiskLevel] = useState('');
-  const [diagnosticAccuracy, setDiagnosticAccuracy] = useState('');
-  const [remoteSupportLink, setRemoteSupportLink] = useState('');
-  const [autoResponseAllowed, setAutoResponseAllowed] = useState(false);
+  const [lastAction, setLastAction] = useState<ReviewAction | null>(null);
   const [failureCategory, setFailureCategory] = useState('RECOMMENDATION_BUILD');
   const [severity, setSeverity] = useState('MEDIUM');
   const [relatedPartId, setRelatedPartId] = useState('');
@@ -51,19 +38,10 @@ export function AdminTicketDetailPage() {
     queryFn: () => getAdminTicket(ticketId),
     enabled: Boolean(ticketId)
   });
-
   useEffect(() => {
     const ticket = ticketQuery.data;
     if (ticket) {
-      setStatus(ticket.status);
-      setAssignedAdminId(ticket.assignedAdminId ?? '');
       setAdminNote(ticket.adminNote ?? '');
-      setReviewStatus(ticket.reviewStatus ?? '');
-      setSupportDecision(ticket.supportDecision ?? '');
-      setRiskLevel(ticket.riskLevel ?? '');
-      setDiagnosticAccuracy(ticket.diagnosticAccuracy ?? '');
-      setRemoteSupportLink(ticket.remoteSupportLink ?? '');
-      setAutoResponseAllowed(Boolean(ticket.autoResponseAllowed));
       setFailureCategory(ticket.asTrainingLabel?.failureCategory ?? 'RECOMMENDATION_BUILD');
       setSeverity(ticket.asTrainingLabel?.severity ?? 'MEDIUM');
       setRelatedPartId(ticket.asTrainingLabel?.relatedPartId ?? '');
@@ -73,18 +51,16 @@ export function AdminTicketDetailPage() {
     }
   }, [ticketQuery.data]);
 
-  const updateMutation = useMutation({
-    mutationFn: () => updateAdminTicket(ticketId, {
-      status,
-      assignedAdminId: assignedAdminId.trim() || undefined,
-      adminNote: adminNote.trim() || undefined,
-      reviewStatus: reviewStatus || undefined,
-      supportDecision: supportDecision || undefined,
-      riskLevel: riskLevel || undefined,
-      diagnosticAccuracy: diagnosticAccuracy || undefined,
-      remoteSupportLink: remoteSupportLink.trim() || undefined,
-      autoResponseAllowed
-    }),
+  const reviewMutation = useMutation({
+    mutationFn: (action: ReviewAction) => {
+      if (action === 'ASSIGN_TO_ME') {
+        return assignAdminTicketToMe(ticketId);
+      }
+      if (action === 'REQUEST_MORE_INFO') {
+        return requestAdminTicketMoreInfo(ticketId, adminNote.trim());
+      }
+      return approveAdminTicketRemoteSupport(ticketId, adminNote.trim() || undefined);
+    },
     onSuccess: (updatedTicket) => {
       queryClient.setQueryData(['admin-as-ticket', ticketId], updatedTicket);
       queryClient.invalidateQueries({ queryKey: ['admin-as-tickets'] });
@@ -110,9 +86,9 @@ export function AdminTicketDetailPage() {
     }
   });
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    updateMutation.mutate();
+  function runReviewAction(action: ReviewAction) {
+    setLastAction(action);
+    reviewMutation.mutate(action);
   }
 
   function submitFeedback(event: FormEvent) {
@@ -138,141 +114,71 @@ export function AdminTicketDetailPage() {
     );
   }
 
+  const reviewCompleted = isReviewCompleted(ticket);
+  const remoteApprovalAvailable = canApproveRemoteSupport(ticket);
+
   return (
     <AdminShell title="AS 티켓 상세">
-      <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
-        <div data-testid="admin-as-ticket-overview">
-          <Panel title="AS 티켓 확인" subtitle={ticket.id}>
-            <DataTable
-              columns={['항목', '내용']}
-              rows={ticketDetailRows(ticket)}
-              nowrapColumns={['항목']}
-            />
-            <Link className="mt-5 inline-block text-sm font-bold text-brand-blue" to="/admin/as-tickets">목록으로 돌아가기</Link>
+      <div className="grid min-w-0 gap-4 min-[1000px]:grid-cols-[minmax(0,1fr)_340px]">
+        <div data-testid="admin-as-ticket-overview" className="min-w-0 space-y-4">
+          <Panel title="접수 정보" subtitle={ticket.id}>
+            <DataTable columns={['항목', '내용']} rows={receiptRows(ticket)} nowrapColumns={['항목']} />
+          </Panel>
+          <Panel title="사용자 요청" subtitle="사용자가 접수한 증상과 요청 내용을 확인합니다.">
+            <DataTable columns={['항목', '내용']} rows={userRequestRows(ticket)} nowrapColumns={['항목']} />
+          </Panel>
+          <Panel title="Agent 진단" subtitle="PC Agent가 저장한 진단 결과를 그대로 표시합니다.">
+            <DataTable columns={['항목', '내용']} rows={agentDiagnosisRows(ticket)} nowrapColumns={['항목']} />
+          </Panel>
+          <Panel title="판단 근거" subtitle="수집된 근거와 진단 결과에 실제로 포함된 판단 자료입니다.">
+            <DataTable columns={['항목', '내용']} rows={evidenceRows(ticket)} nowrapColumns={['항목']} />
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <AgentLogSamplesToggle ticket={ticket} />
+            </div>
+          </Panel>
+          <Link className="inline-block text-sm font-bold text-brand-blue" to="/admin/as-tickets">목록으로 돌아가기</Link>
+        </div>
+
+        <div className="min-w-0 min-[1000px]:sticky min-[1000px]:top-4 min-[1000px]:self-start">
+          <Panel title={reviewCompleted ? '처리 결과' : '관리자 검토'} subtitle={reviewCompleted ? '완료된 검토 결과입니다.' : '필요한 업무 행동만 선택해 처리합니다.'}>
+            {reviewCompleted ? (
+              <DataTable columns={['항목', '내용']} rows={reviewResultRows(ticket)} nowrapColumns={['항목']} />
+            ) : (
+              <div className="space-y-4">
+                <DataTable columns={['항목', '현재 값']} rows={reviewReadOnlyRows(ticket)} nowrapColumns={['항목']} />
+                <div>
+                  <label htmlFor="admin-ticket-note" className="mb-1 block text-xs font-bold text-slate-600">관리자 메모</label>
+                  <textarea
+                    id="admin-ticket-note"
+                    className="h-28 w-full resize-y rounded border border-slate-300 p-3 text-sm"
+                    placeholder="추가 정보 요청 시 요청 사유를 반드시 입력하세요."
+                    value={adminNote}
+                    onChange={(event) => setAdminNote(event.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <button type="button" disabled={reviewMutation.isPending} onClick={() => runReviewAction('ASSIGN_TO_ME')} className="rounded border border-brand-blue px-4 py-3 text-sm font-bold text-brand-blue disabled:opacity-50">
+                    내게 배정
+                  </button>
+                  <button type="button" disabled={reviewMutation.isPending || !adminNote.trim()} onClick={() => runReviewAction('REQUEST_MORE_INFO')} className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 disabled:opacity-50">
+                    추가 정보 요청
+                  </button>
+                  {remoteApprovalAvailable ? (
+                    <button type="button" disabled={reviewMutation.isPending} onClick={() => runReviewAction('APPROVE_REMOTE_SUPPORT')} className="rounded bg-brand-blue px-4 py-3 text-sm font-bold text-white disabled:bg-slate-400">
+                      원격 지원 승인
+                    </button>
+                  ) : (
+                    <p className="rounded bg-slate-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-500">현재 Agent 권장 처리에서는 원격 지원 승인을 제공하지 않습니다.</p>
+                  )}
+                </div>
+                {reviewMutation.isSuccess ? <StateMessage type="success" title={reviewActionLabel(lastAction)} body="업무 상태가 일관되게 반영되었습니다." /> : null}
+                {reviewMutation.isError ? <StateMessage type="warn" title="처리 실패" body={reviewMutation.error instanceof Error ? reviewMutation.error.message : '현재 상태에서는 요청한 업무를 처리할 수 없습니다.'} /> : null}
+              </div>
+            )}
           </Panel>
         </div>
 
-        <Panel title="지원 결정 저장" subtitle="처리 상태, 담당자, 검토 상태, 지원 결정을 저장합니다.">
-          <form onSubmit={submit} className="space-y-4">
-            <div>
-              <label htmlFor="admin-ticket-status" className="mb-1 block text-xs font-bold text-slate-600">상태</label>
-              <select
-                id="admin-ticket-status"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                value={status}
-                onChange={(event) => setStatus(event.target.value as AsTicketStatus)}
-              >
-                {STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="admin-ticket-assignee" className="mb-1 block text-xs font-bold text-slate-600">담당자 public id</label>
-              <input
-                id="admin-ticket-assignee"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                placeholder="비워두면 현재 관리자"
-                value={assignedAdminId}
-                onChange={(event) => setAssignedAdminId(event.target.value)}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="admin-ticket-review-status" className="mb-1 block text-xs font-bold text-slate-600">검토 상태</label>
-              <select
-                id="admin-ticket-review-status"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                value={reviewStatus}
-                onChange={(event) => setReviewStatus(event.target.value)}
-              >
-                {REVIEW_OPTIONS.map((option) => <option key={option || 'keep-review'} value={option}>{option || '기존 값 유지'}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="admin-ticket-support-decision" className="mb-1 block text-xs font-bold text-slate-600">지원 결정</label>
-              <select
-                id="admin-ticket-support-decision"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                value={supportDecision}
-                onChange={(event) => setSupportDecision(event.target.value)}
-              >
-                {SUPPORT_DECISION_OPTIONS.map((option) => <option key={option || 'keep-decision'} value={option}>{option || '기존 값 유지'}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="admin-ticket-risk-level" className="mb-1 block text-xs font-bold text-slate-600">위험도</label>
-              <select
-                id="admin-ticket-risk-level"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                value={riskLevel}
-                onChange={(event) => setRiskLevel(event.target.value)}
-              >
-                {RISK_OPTIONS.map((option) => <option key={option || 'keep-risk'} value={option}>{option || '기존 값 유지'}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="admin-ticket-diagnostic-accuracy" className="mb-1 block text-xs font-bold text-slate-600">진단 적중 여부</label>
-              <select
-                id="admin-ticket-diagnostic-accuracy"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                value={diagnosticAccuracy}
-                onChange={(event) => setDiagnosticAccuracy(event.target.value)}
-              >
-                {DIAGNOSTIC_ACCURACY_OPTIONS.map((option) => <option key={option || 'keep-accuracy'} value={option}>{option || '기존 값 유지'}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="admin-ticket-remote-link" className="mb-1 block text-xs font-bold text-slate-600">원격지원 링크</label>
-              <input
-                id="admin-ticket-remote-link"
-                className="h-11 w-full rounded border border-slate-300 px-3 text-sm"
-                placeholder="Quick Assist 또는 원격지원 안내 링크"
-                value={remoteSupportLink}
-                onChange={(event) => setRemoteSupportLink(event.target.value)}
-              />
-            </div>
-
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <input type="checkbox" checked={autoResponseAllowed} onChange={(event) => setAutoResponseAllowed(event.target.checked)} />
-              자동 응답 허용
-            </label>
-
-            <div>
-              <label htmlFor="admin-ticket-note" className="mb-1 block text-xs font-bold text-slate-600">관리자 메모</label>
-              <textarea
-                id="admin-ticket-note"
-                className="h-28 w-full rounded border border-slate-300 p-3 text-sm"
-                value={adminNote}
-                onChange={(event) => setAdminNote(event.target.value)}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                disabled={updateMutation.isPending}
-                onClick={() => { setStatus('ASSIGNED'); setAssignedAdminId(''); }}
-                className="rounded border border-brand-blue px-4 py-3 text-sm font-bold text-brand-blue disabled:opacity-50"
-              >
-                담당자 배정
-              </button>
-              <button disabled={updateMutation.isPending} className="rounded bg-brand-blue px-4 py-3 text-sm font-bold text-white disabled:bg-slate-400">
-                {updateMutation.isPending ? '결정 저장 중' : '결정 저장'}
-              </button>
-            </div>
-            {updateMutation.isSuccess ? <StateMessage type="success" title="결정 저장 완료" body="AS 티켓 상태와 관리자 조치 내용을 저장했습니다." /> : null}
-            {updateMutation.isError ? <StateMessage type="warn" title="저장 실패" body="허용되지 않는 상태 전이이거나 담당자 ID가 유효하지 않습니다." /> : null}
-          </form>
-        </Panel>
-
-        <Panel title="로그 요약" subtitle="raw 로그가 아니라 서버가 만든 학습용 요약 피처입니다.">
-          <DataTable columns={['항목', '내용']} rows={logSummaryRows(ticket)} />
-        </Panel>
-
+        <div className="min-w-0 min-[1000px]:col-span-2">
         <Panel title="추천 학습 피드백" subtitle="관리자 확정 라벨입니다. 티켓 상태나 원인 후보를 자동 변경하지 않습니다.">
           <form onSubmit={submitFeedback} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
@@ -284,7 +190,7 @@ export function AdminTicketDetailPage() {
                   value={failureCategory}
                   onChange={(event) => setFailureCategory(event.target.value)}
                 >
-                  {FAILURE_CATEGORY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                  {FAILURE_CATEGORY_OPTIONS.map((option) => <option key={option} value={option}>{failureCategoryLabel(option)}</option>)}
                 </select>
               </div>
               <div>
@@ -295,7 +201,7 @@ export function AdminTicketDetailPage() {
                   value={severity}
                   onChange={(event) => setSeverity(event.target.value)}
                 >
-                  {SEVERITY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                  {SEVERITY_OPTIONS.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
                 </select>
               </div>
             </div>
@@ -365,31 +271,69 @@ export function AdminTicketDetailPage() {
             {feedbackMutation.isError ? <StateMessage type="warn" title="피드백 저장 실패" body="연결 부품/견적 ID 또는 라벨 값이 올바른지 확인해 주세요." /> : null}
           </form>
         </Panel>
+        </div>
       </div>
     </AdminShell>
   );
 }
 
-function ticketDetailRows(ticket: AdminAsTicket) {
+function receiptRows(ticket: AdminAsTicket) {
   return [
     { '항목': '상태', '내용': <StatusBadge status={ticket.status} /> },
-    { '항목': '에이전트 로그', '내용': <AgentLogSamplesToggle ticket={ticket} /> },
-    { '항목': '분석 상태', '내용': ticket.analysisStatus ?? '-' },
-    { '항목': '검토 상태', '내용': ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
-    { '항목': '지원 결정', '내용': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
-    { '항목': '추천 서비스', '내용': recommendedSupportLabel(ticket) },
-    { '항목': '추천 신뢰도', '내용': routingConfidence(ticket) },
-    { '항목': '위험도', '내용': ticket.riskLevel ?? '-' },
-    { '항목': '진단 적중 여부', '내용': ticket.diagnosticAccuracy ?? '-' },
-    { '항목': '자동 응답', '내용': ticket.autoResponseAllowed ? '허용' : '차단' },
-    { '항목': '제목/증상', '내용': ticket.title ?? firstLine(ticket.symptom) },
-    { '항목': '상세 설명', '내용': ticket.description ?? ticket.detailDescription ?? ticket.symptom },
+    { '항목': '접수 시각', '내용': formatDateTime(ticket.createdAt) },
     { '항목': '사용자', '내용': ticket.userEmail ?? ticket.userName ?? ticket.userId ?? '-' },
-    { '항목': '문제 발생 구간', '내용': incidentWindowSummary(ticket) },
-    { '항목': '담당자', '내용': ticket.assignedAdminId ?? '미배정' },
+    { '항목': '담당자', '내용': ticket.assignedAdminId ? shortId(ticket.assignedAdminId) : '미배정' }
+  ];
+}
+
+function userRequestRows(ticket: AdminAsTicket) {
+  return [
+    { '항목': '제목 또는 증상', '내용': ticket.title ?? ticket.diagnosisTitle ?? firstLine(ticket.symptom) },
+    { '항목': '상세 설명', '내용': ticket.description ?? ticket.detailDescription ?? ticket.symptom },
+    { '항목': '요청한 지원 방식', '내용': requestTypeLabel(ticket) }
+  ];
+}
+
+function agentDiagnosisRows(ticket: AdminAsTicket) {
+  return [
+    { '항목': '진단 결과', '내용': ticket.diagnosisSummary ?? logSummary(ticket) },
+    { '항목': '권장 처리', '내용': recommendedSupportLabel(ticket) },
+    { '항목': '위험도', '내용': ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
+    { '항목': '분석 상태', '내용': ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : '-' },
+    { '항목': '진단 시각', '내용': formatDateTime(ticket.diagnosedAt) },
+    { '항목': '문제 발생 구간', '내용': incidentWindowSummary(ticket) }
+  ];
+}
+
+function evidenceRows(ticket: AdminAsTicket) {
+  const diagnosisResult = objectValue(ticket.diagnosisResult);
+  const routing = objectValue(ticket.supportRouting);
+  return [
+    { '항목': 'evidence', '내용': structuredList(ticket.diagnosisEvidence ?? valueList(diagnosisResult?.evidence)) },
+    { '항목': 'suspected causes', '내용': structuredList(valueList(diagnosisResult?.suspectedCauses).length > 0 ? valueList(diagnosisResult?.suspectedCauses) : ticket.causeCandidates) },
+    { '항목': 'recommended actions', '내용': structuredList(valueList(diagnosisResult?.recommendedActions).length > 0 ? valueList(diagnosisResult?.recommendedActions) : valueList(routing?.recommendedActions)) },
+    { '항목': 'unsupported checks', '내용': structuredList(valueList(diagnosisResult?.unsupportedChecks)) }
+  ];
+}
+
+function reviewReadOnlyRows(ticket: AdminAsTicket) {
+  return [
+    { '항목': 'Agent 권장 처리', '현재 값': recommendedSupportLabel(ticket) },
+    { '항목': '사용자 요청 지원', '현재 값': requestTypeLabel(ticket) },
+    { '항목': '위험도', '현재 값': ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
+    { '항목': '검토 상태', '현재 값': ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
+    { '항목': '담당자', '현재 값': ticket.assignedAdminId ? shortId(ticket.assignedAdminId) : '미배정' }
+  ];
+}
+
+function reviewResultRows(ticket: AdminAsTicket) {
+  return [
+    { '항목': '처리 결정', '내용': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
+    { '항목': '검토 결과', '내용': ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
+    { '항목': '담당 관리자', '내용': ticket.assignedAdminId ? shortId(ticket.assignedAdminId) : '미배정' },
+    { '항목': '처리 시각', '내용': formatDateTime(ticket.reviewedAt ?? ticket.resolvedAt ?? ticket.updatedAt) },
     { '항목': '관리자 메모', '내용': ticket.adminNote ?? '-' },
-    { '항목': '생성일', '내용': formatDateTime(ticket.createdAt) },
-    { '항목': '해결일', '내용': formatDateTime(ticket.resolvedAt) }
+    { '항목': '현재 처리 상태', '내용': <StatusBadge status={ticket.status} /> }
   ];
 }
 
@@ -560,20 +504,11 @@ function logSummary(ticket: AdminAsTicket) {
   return ticket.logUploadId ? `업로드된 로그 있음: ${shortId(ticket.logUploadId)}` : '연결된 로그 없음';
 }
 
-function logSummaryRows(ticket: AdminAsTicket) {
-  return [
-    { '항목': '요약 ID', '내용': ticket.logSummaryId ?? '-' },
-    { '항목': '요약', '내용': logSummary(ticket) },
-    { '항목': '핵심 요약', '내용': compactJson(ticket.logSummaryPayload) },
-    { '항목': '학습 피처', '내용': compactJson(ticket.logFeaturePayload) },
-    { '항목': '위험 플래그', '내용': compactJson(ticket.logRiskFlags) },
-    { '항목': '지원 라우팅', '내용': compactJson(ticket.supportRouting) },
-    { '항목': 'AI 진단 요청', '내용': compactJson(ticket.aiDiagnosisRequest) },
-    { '항목': '현재 라벨', '내용': ticket.asTrainingLabel ? compactJson(ticket.asTrainingLabel) : '-' }
-  ];
-}
-
 function recommendedSupportLabel(ticket: AdminAsTicket) {
+  const resolutionType = textValue(objectValue(ticket.diagnosisResult)?.resolutionType);
+  if (resolutionType) {
+    return supportServiceLabel(resolutionType);
+  }
   const routing = objectValue(ticket.supportRouting);
   const explicitLabel = textValue(routing?.recommendedServiceLabel);
   if (explicitLabel) {
@@ -589,13 +524,21 @@ function recommendedSupportLabel(ticket: AdminAsTicket) {
 function supportServiceLabel(service: string) {
   switch (service) {
     case 'REMOTE_SUPPORT':
-      return '원격지원 신청';
+      return '원격 지원';
     case 'VISIT_SUPPORT':
-      return '방문지원 신청';
+    case 'PHYSICAL_INSPECTION':
+      return '방문 점검';
     case 'DIAGNOSIS_ONLY':
-      return '우선 진단만 받기';
+      return '진단 결과 확인';
+    case 'SELF_SERVICE':
+    case 'SELF_SOLVABLE':
+      return '사용자 자가 조치';
+    case 'MONITOR_ONLY':
+      return '경과 관찰';
+    case 'UNKNOWN':
+      return '권장 처리 미확정';
     default:
-      return service;
+      return statusLabel(service);
   }
 }
 
@@ -613,9 +556,89 @@ function serviceLabelForDecision(decision?: string | null) {
   }
 }
 
-function routingConfidence(ticket: AdminAsTicket) {
-  const confidence = textValue(objectValue(ticket.supportRouting)?.confidence);
-  return confidence ? <StatusBadge status={confidence} /> : '-';
+function requestTypeLabel(ticket: AdminAsTicket) {
+  if (ticket.requestType) {
+    return supportServiceLabel(ticket.requestType);
+  }
+  const routing = objectValue(ticket.supportRouting);
+  const requestedService = textValue(routing?.requestedService) ?? textValue(routing?.recommendedService);
+  return requestedService ? supportServiceLabel(requestedService) : '지원 방식 미지정';
+}
+
+function isReviewCompleted(ticket: AdminAsTicket) {
+  return ['APPROVED', 'REJECTED'].includes(ticket.reviewStatus ?? '')
+    || ['RESOLVED', 'CLOSED', 'CANCELLED'].includes(ticket.status);
+}
+
+function canApproveRemoteSupport(ticket: AdminAsTicket) {
+  if (ticket.supportDecision === 'REMOTE_POSSIBLE' || ticket.requestType === 'REMOTE_SUPPORT') {
+    return true;
+  }
+  const diagnosisResult = objectValue(ticket.diagnosisResult);
+  if (textValue(diagnosisResult?.resolutionType) === 'REMOTE_SUPPORT') {
+    return true;
+  }
+  const routing = objectValue(ticket.supportRouting);
+  return textValue(routing?.recommendedService) === 'REMOTE_SUPPORT'
+    || textValue(routing?.recommendedDecision) === 'REMOTE_POSSIBLE'
+    || textValue(routing?.supportDecision) === 'REMOTE_POSSIBLE';
+}
+
+function reviewActionLabel(action: ReviewAction | null) {
+  switch (action) {
+    case 'ASSIGN_TO_ME':
+      return '담당자 배정 완료';
+    case 'REQUEST_MORE_INFO':
+      return '추가 정보 요청 완료';
+    case 'APPROVE_REMOTE_SUPPORT':
+      return '원격 지원 승인 완료';
+    default:
+      return '처리 완료';
+  }
+}
+
+function valueList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function structuredList(items: unknown[]) {
+  if (items.length === 0) {
+    return '-';
+  }
+  return (
+    <ul className="space-y-1.5">
+      {items.map((item, index) => (
+        <li key={`${textValue(item) ?? compactValue(item)}-${index}`} className="break-words text-sm leading-5 text-slate-700">
+          <span aria-hidden="true" className="mr-2 text-slate-400">•</span>
+          {textValue(item) ?? compactValue(item)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function compactValue(value: unknown) {
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value ?? '-');
+}
+
+function failureCategoryLabel(value: string) {
+  const labels: Record<string, string> = {
+    RECOMMENDATION_BUILD: '추천 견적',
+    PART_SELECTION: '부품 선택',
+    COMPATIBILITY: '호환성',
+    PERFORMANCE: '성능',
+    USER_ENVIRONMENT: '사용자 환경',
+    AGENT_LOG_ONLY: 'Agent 로그만',
+    OTHER: '기타'
+  };
+  return labels[value] ?? value;
 }
 
 function incidentWindowSummary(ticket: AdminAsTicket) {

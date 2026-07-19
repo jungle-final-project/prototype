@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -414,6 +415,69 @@ class AdminControllerTest {
         verify(ticketQueryService).update("ticket-public-id", Map.of("status", "CLOSED"), ADMIN);
         verify(supportChatWebSocketHandler).broadcastRoomUpdate("00000000-0000-4000-8000-000000009001");
         verify(adminSupportChatQueueWebSocketHandler).broadcastQueuePatch("00000000-0000-4000-8000-000000009001");
+    }
+
+    @Test
+    void adminTicketActionsUseAuthenticatedAdminInsteadOfRequestAssignee() throws Exception {
+        when(ticketQueryService.assignToCurrentAdmin("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "id", "ticket-public-id",
+                "status", "ASSIGNED",
+                "reviewStatus", "IN_REVIEW",
+                "assignedAdminId", ADMIN.id()
+        ));
+        when(ticketQueryService.requestMoreInformation("ticket-public-id", "재현 시각을 알려 주세요.", ADMIN)).thenReturn(Map.of(
+                "id", "ticket-public-id",
+                "status", "IN_PROGRESS",
+                "reviewStatus", "IN_REVIEW",
+                "supportDecision", "NEEDS_MORE_INFO",
+                "adminNote", "재현 시각을 알려 주세요."
+        ));
+        when(ticketQueryService.approveRemoteSupport("ticket-public-id", "원격 확인 승인", ADMIN)).thenReturn(Map.of(
+                "id", "ticket-public-id",
+                "status", "IN_PROGRESS",
+                "reviewStatus", "APPROVED",
+                "supportDecision", "REMOTE_POSSIBLE",
+                "assignedAdminId", ADMIN.id()
+        ));
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/assign-to-me")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assignedAdminId").value(ADMIN.id()));
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/request-more-info")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                { "adminNote": "재현 시각을 알려 주세요." }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.supportDecision").value("NEEDS_MORE_INFO"));
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/approve-remote-support")
+                        .header("Authorization", ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                { "adminNote": "원격 확인 승인" }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewStatus").value("APPROVED"))
+                .andExpect(jsonPath("$.supportDecision").value("REMOTE_POSSIBLE"));
+
+        verify(ticketQueryService).assignToCurrentAdmin("ticket-public-id", ADMIN);
+        verify(ticketQueryService).requestMoreInformation("ticket-public-id", "재현 시각을 알려 주세요.", ADMIN);
+        verify(ticketQueryService).approveRemoteSupport("ticket-public-id", "원격 확인 승인", ADMIN);
+    }
+
+    @Test
+    void normalUserCannotExecuteAdminTicketReviewAction() throws Exception {
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/approve-remote-support")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(ticketQueryService);
     }
 
     @Test
