@@ -23,7 +23,7 @@ public class HomeController {
 
     @GetMapping("/home")
     Map<String, Object> home(@RequestHeader(value = "Authorization", required = false) String authorization) {
-        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
-        return authenticatedHomeService.home(user);
+        currentUserService.requireAuthenticatedSubject(authorization);
+        return authenticatedHomeService.home();
     }
 }

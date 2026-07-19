@@ -50,6 +50,11 @@ public class CurrentUserService {
         return userCache.get(claims.getSubject(), () -> findByPublicId(claims.getSubject()));
     }
 
+    public String requireAuthenticatedSubject(String authorization) {
+        String token = bearerToken(authorization);
+        return verifyJwt(token).getSubject();
+    }
+
     public void evictCachedUser(String publicId) {
         if (publicId != null && !publicId.isBlank()) {
             userCache.remove(publicId);
