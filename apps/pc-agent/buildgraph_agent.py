@@ -669,24 +669,6 @@ def collect_session_windows_graphics_snapshot(
     return live_provider()
 
 
-def discard_persisted_demo_session(
-    diagnosis_store: DiagnosisSessionStore,
-    metrics_store: MetricsStore,
-    diagnosis_log_store: DiagnosisLogStore,
-    diagnosis_result_store: DiagnosisResultStore,
-) -> bool:
-    session = diagnosis_store.session
-    if not isinstance(session, DiagnosisSession) or session.request.mode != DEMO_DATA_MODE:
-        return False
-    reset_diagnosis_session_state(
-        diagnosis_store,
-        metrics_store,
-        diagnosis_log_store,
-        diagnosis_result_store,
-    )
-    return True
-
-
 def diagnosis_event_sync_detail(
     snapshot: DiagnosisRunSnapshot,
     event: Any,
@@ -8273,12 +8255,6 @@ def run_background(
         metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
         diagnosis_log_store = DiagnosisLogStore(app_data_dir() / "diagnosis-progress-state.json")
         diagnosis_result_store = DiagnosisResultStore(app_data_dir() / "diagnosis-result-state.json")
-        discard_persisted_demo_session(
-            diagnosis_store,
-            metrics_store,
-            diagnosis_log_store,
-            diagnosis_result_store,
-        )
         move_terminal_session_to_idle(diagnosis_store, diagnosis_log_store.snapshot)
         diagnosis_rule_engine = DiagnosisRuleEngine()
         diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}

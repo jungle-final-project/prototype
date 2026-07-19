@@ -995,43 +995,23 @@ class AgentGoal1112Test(unittest.TestCase):
         live_provider.assert_called_once_with()
         self.assertEqual(2, demo_provider.call_count)
 
-    def test_persisted_demo_session_is_discarded_but_live_session_is_preserved(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for mode, expected_discarded in (("DEMO", True), ("LIVE", False)):
-                with self.subTest(mode=mode):
-                    suffix = mode.casefold()
-                    diagnosis_store = agent.DiagnosisSessionStore(root / f"session-{suffix}.json")
-                    request = DiagnosisRequest(
-                        f"diagnosis-{suffix}", "device-1", "증상", ("gpu",),
-                        "2026-07-13T00:00:00Z", "2026-07-13T00:02:00Z", mode,
-                    )
-                    diagnosis_store.accept(DiagnosisSession(request))
-                    metrics_store = agent.MetricsStore(root / f"metrics-{suffix}.json")
-                    metrics_store.begin(request.diagnosis_id, mode)
-                    diagnosis_log_store = agent.DiagnosisLogStore(root / f"progress-{suffix}.json")
-                    diagnosis_log_store.replace(agent.DiagnosisRunSnapshot(
-                        diagnosis_id=request.diagnosis_id,
-                        mode=mode,
-                        state="COLLECTING",
-                    ))
-                    result_store = agent.DiagnosisResultStore(root / f"result-{suffix}.json")
+    def test_active_live_and_demo_sessions_are_both_restorable(self) -> None:
+        for mode in ("LIVE", "DEMO"):
+            with self.subTest(mode=mode):
+                request = DiagnosisRequest(
+                    f"diagnosis-{mode.casefold()}", "device-1", "증상", ("gpu",),
+                    "2026-07-13T00:00:00Z", "2026-07-13T00:02:00Z", mode,
+                )
+                session = DiagnosisSession(request, agent_state="RUNNING")
+                diagnosis = agent.DiagnosisRunSnapshot(
+                    diagnosis_id=request.diagnosis_id,
+                    mode=mode,
+                    state="DIAGNOSING",
+                )
 
-                    discarded = agent.discard_persisted_demo_session(
-                        diagnosis_store,
-                        metrics_store,
-                        diagnosis_log_store,
-                        result_store,
-                    )
+                self.assertIs(session, agent.active_viewer_session(session, diagnosis))
 
-                    self.assertEqual(expected_discarded, discarded)
-                    if expected_discarded:
-                        self.assertIsNone(diagnosis_store.session)
-                        self.assertIsNone(metrics_store.snapshot.diagnosis_id)
-                        self.assertIsNone(diagnosis_log_store.snapshot.diagnosis_id)
-                    else:
-                        self.assertEqual(request.diagnosis_id, diagnosis_store.session.request.diagnosis_id)
-                        self.assertEqual(request.diagnosis_id, metrics_store.snapshot.diagnosis_id)
+        self.assertNotIn("discard_persisted_demo_session", inspect.getsource(agent.run_background))
 
     def test_demo_scenario_metadata_remains_internal_without_large_page_badge(self) -> None:
         source = inspect.getsource(agent.show_log_viewer)
