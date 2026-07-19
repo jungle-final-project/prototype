@@ -7,6 +7,7 @@ import com.buildgraph.prototype.agent.SupportGuidanceDraft;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
 import com.buildgraph.prototype.agent.AiChatIntent;
 import com.buildgraph.prototype.agent.AiChatAction;
+import com.buildgraph.prototype.agent.AiChatActionType;
 import com.buildgraph.prototype.common.DbValueMapper;
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.agent.PartReplacementRanker;
@@ -1411,7 +1412,7 @@ public class BuildChatService {
         List<Map<String, Object>> builds = engineBuilds(engineResponse, rawBudgetIntent, warnings, guardStats);
         warnings.addAll(buildWarnings(builds));
         warnings.addAll(stringList(engineResponse.parsedContext().get("warnings")));
-        return MockData.map(
+        Map<String, Object> response = MockData.map(
                 "answerType", answerType(engineResponse.intent()),
                 "message", engineResponse.assistantMessage(),
                 "builds", builds,
@@ -1419,6 +1420,39 @@ public class BuildChatService {
                 "evidenceIds", engineResponse.evidenceIds(),
                 "agentSessionId", engineResponse.agentSessionId()
         );
+        List<Map<String, Object>> navigationActions = navigationActions(engineResponse);
+        if (!navigationActions.isEmpty()) {
+            response.put("actions", navigationActions);
+        }
+        return response;
+    }
+
+    /**
+     * 엔진이 해상한 화면 이동만 응답으로 내보낸다. 이게 빠져 있으면 "상세페이지로 이동할게요"라고
+     * 답해 놓고 아무 일도 일어나지 않는다 — 문구는 LLM이 쓰고 실제 이동은 이 route가 하기 때문이다.
+     * 캐시를 거친 응답과 갓 만든 응답의 모양이 같도록 record가 아니라 평범한 map으로 만든다.
+     */
+    private List<Map<String, Object>> navigationActions(AiChatEngineResponse engineResponse) {
+        List<AiChatAction> actions = engineResponse.actions();
+        if (actions == null || actions.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (AiChatAction action : actions) {
+            if (action == null || action.type() != AiChatActionType.OPEN_ROUTE) {
+                continue;
+            }
+            String route = text(objectMap(action.payload()).get("route"));
+            if (route == null) {
+                continue;
+            }
+            result.add(MockData.map(
+                    "type", AiChatActionType.OPEN_ROUTE.name(),
+                    "label", firstText(action.label(), "화면 이동"),
+                    "payload", MockData.map("route", route)
+            ));
+        }
+        return result;
     }
 
     private Optional<Map<String, Object>> performanceSimulationResponse(Map<String, Object> request, String message) {

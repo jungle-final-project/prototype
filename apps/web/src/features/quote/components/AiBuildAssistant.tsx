@@ -19,6 +19,7 @@ import {
   createAiMessageId,
   getAiStorageOwnerKey,
   mergeAiBuildHistory,
+  navigationRouteFrom,
   normalizeAiBuilds,
   normalizeAiRecommendedBuild,
   readAssistantSession,
@@ -558,6 +559,12 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       setSession(nextSession);
       saveAssistantSession(nextSession, ownerKey);
       setRevealMessageId(assistantMessage.id);
+      // "상세페이지로 이동할게요"라고 답했으면 실제로 이동한다. 답변은 이미 세션에 저장했으므로
+      // 이동한 화면에서도 그대로 남는다(위 카테고리 즉시 이동 경로와 같은 방식).
+      const navigationRoute = navigationRouteFrom(response);
+      if (navigationRoute) {
+        navigate(navigationRoute);
+      }
       const verifiedRepairBuild = responseBuilds?.length === 1
         && isVerifiedAutoApplyBuild(responseBuilds[0])
         ? responseBuilds[0]

@@ -1800,6 +1800,124 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredPartDetailRouteRewritesTheDetailPagePromiseWhenOnlyAListCanBeShown() {
+        // 취급하지 않는 모델명(9700X3D)을 상세로 요청하면 상세 화면을 못 만든다.
+        // 그런데도 "상세페이지로 이동할게요"라고 답한 뒤 후보 목록으로 보내면 약속과 도착지가 어긋난다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 상세페이지로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload())
+                        .containsEntry("route", "/self-quote?category=CPU&q=9700x3d"));
+        assertThat(response.assistantMessage())
+                .doesNotContain("상세페이지")
+                .contains("9700x3d")
+                .contains("CPU 후보 목록");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredPartDetailRouteKeepsAnHonestListMessageUntouched() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "GPU 목록으로 이동하겠습니다.",
+                  "selectedCategory": "GPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "GPU",
+                    "partQuery": "5090",
+                    "confidence": "HIGH",
+                    "reason": "상품 후보가 여러 개일 수 있습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "5090 보여줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).isEqualTo("GPU 목록으로 이동하겠습니다.");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredPartDetailRouteAvoidsAmbiguousProductAutoNavigation() {
         stubBuildChatPlan("""
                 {

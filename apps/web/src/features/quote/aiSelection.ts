@@ -346,10 +346,19 @@ export type AiBoardFocus = {
   label: string;
 };
 
+/** 답변이 "이동할게요"라고 약속한 화면. 서버가 실제 상품·카테고리로 해상한 내부 경로만 담긴다. */
+export type AiChatNavigationAction = {
+  type: 'OPEN_ROUTE';
+  label: string;
+  payload: { route: string };
+};
+
 export type AiBuildChatResponse = {
   answerType: AiChatAnswerType;
   message: string;
   builds: AiRecommendedBuild[];
+  /** 화면 이동 명령. 이게 없으면 답변 문구가 이동을 약속해도 아무 일도 일어나지 않는다. */
+  actions?: AiChatNavigationAction[];
   simulation?: AiPerformanceSimulation | null;
   buildAssessment?: AiBuildAssessment | null;
   supportGuidance?: AiSupportGuidance | null;
@@ -365,6 +374,17 @@ export type AiBuildChatResponse = {
   boardFocus?: AiBoardFocus | null;
   clarification?: { missingSlots: string[]; originalMessage: string } | null;
 };
+
+/**
+ * 답변에 실려 온 이동 경로를 꺼낸다. 앱 내부 절대경로가 아니면 버린다 —
+ * 프로토콜 상대 경로(`//다른주소`)나 외부 URL로 사용자를 내보내지 않기 위한 방어선이다.
+ */
+export function navigationRouteFrom(response: AiBuildChatResponse): string | null {
+  const route = response.actions?.find((action) => action.type === 'OPEN_ROUTE')?.payload?.route;
+  if (typeof route !== 'string') return null;
+  const trimmed = route.trim();
+  return trimmed.startsWith('/') && !trimmed.startsWith('//') ? trimmed : null;
+}
 
 export const PART_CATEGORY_LABELS: Record<PartCategory, string> = {
   CPU: 'CPU',

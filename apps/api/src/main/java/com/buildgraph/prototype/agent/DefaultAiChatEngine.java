@@ -122,6 +122,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final List<String> BUILD_CATEGORIES = List.of(
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
     );
+    /** 상품 상세를 요청받았지만 하나로 특정하지 못해 카테고리 후보 목록으로 대신 보냈다는 표식. */
+    private static final String PART_DETAIL_LIST_FALLBACK = "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK";
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
@@ -260,6 +262,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
+            assistantMessage = correctedRouteMessage(assistantMessage, routeIntent);
         }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
         Map<String, Object> supportIntent = normalizeSupportIntent(objectMap(plan.get("supportIntent")));
@@ -892,6 +895,26 @@ public class DefaultAiChatEngine implements AiChatEngine {
         );
     }
 
+    /**
+     * "상세페이지로 이동할게요"라고 답해 놓고 실제로는 상품을 하나로 특정하지 못해 후보 목록으로 보내는 경우,
+     * 문구가 약속한 화면과 실제 도착지가 어긋난다. 그 어긋남이 있을 때만 사실대로 다시 쓴다 —
+     * LLM이 처음부터 "목록으로 이동"이라고 답했으면 손대지 않는다.
+     */
+    private static String correctedRouteMessage(String assistantMessage, EngineRouteIntent routeIntent) {
+        if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason())
+                || assistantMessage == null
+                || !assistantMessage.contains("상세")) {
+            return assistantMessage;
+        }
+        String category = text(routeIntent.context().get("category"));
+        String partQuery = text(routeIntent.context().get("partQuery"));
+        String label = category == null ? "부품" : categoryLabel(category);
+        String head = partQuery == null
+                ? "찾으시는 상품을 하나로 특정하지 못했어요. "
+                : "'" + partQuery + "'에 정확히 맞는 상품을 하나로 특정하지 못했어요. ";
+        return head + label + " 후보 목록에서 확인해 주세요.";
+    }
+
     private EngineRouteIntent normalizeRouteIntent(Map<String, Object> source, String selectedCategory) {
         if (!Boolean.TRUE.equals(source.get("shouldNavigate"))) {
             return null;
@@ -915,7 +938,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         };
         if (route == null && "PART_DETAIL".equals(routeType) && category != null) {
             route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), category);
-            reason = firstText(reason, "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK");
+            // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
+            // LLM이 써 준 reason 대신 이 표식을 남긴다.
+            reason = PART_DETAIL_LIST_FALLBACK;
         }
         if (!isAllowedRoute(route)) {
             return null;

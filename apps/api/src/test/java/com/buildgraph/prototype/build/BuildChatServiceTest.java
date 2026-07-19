@@ -18,6 +18,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buildgraph.prototype.agent.AiChatAction;
+import com.buildgraph.prototype.agent.AiChatActionType;
 import com.buildgraph.prototype.agent.AiChatEngine;
 import com.buildgraph.prototype.agent.AiChatEngineRequest;
 import com.buildgraph.prototype.agent.AiChatEngineResponse;
@@ -409,6 +410,80 @@ class BuildChatServiceTest {
                         .contains("그래픽 드라이버 충돌"));
         assertThat(response).doesNotContainKeys("actions", "causeCandidates", "riskLevel", "supportDecision");
         verify(aiChatEngine).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
+    }
+
+    @Test
+    void resolvedNavigationRouteReachesTheClientInsteadOfOnlyBeingPromisedInText() {
+        // 제보 재현: "9800X3D 상세페이지로 이동해줘"에 "이동할게요"라고 답만 하고 실제로는 이동하지 않았다.
+        // 엔진이 상품을 특정해 만든 route가 응답 조립에서 통째로 빠져 프론트가 따라갈 것이 없었기 때문이다.
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "9800X3D 상세페이지로 이동할게요.",
+                        AiChatIntent.ASK_FOLLOW_UP,
+                        List.of(new AiChatAction(
+                                AiChatActionType.OPEN_ROUTE,
+                                "상품 상세 보기",
+                                Map.of(
+                                        "route", "/parts/a75d6544-2296-4c4c-a7cd-64596e66f6d7",
+                                        "reason", "LLM_ROUTE_INTENT"
+                                )
+                        )),
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "9800X3D 상세페이지로 이동해줘"));
+
+        assertThat(response.get("actions")).asList()
+                .singleElement()
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("type", "OPEN_ROUTE")
+                .containsEntry("label", "상품 상세 보기")
+                .satisfies(action -> assertThat(action.get("payload"))
+                        .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                        .containsEntry("route", "/parts/a75d6544-2296-4c4c-a7cd-64596e66f6d7"));
+    }
+
+    @Test
+    void answersWithoutAResolvedRouteCarryNoNavigationField() {
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "어떤 용도로 쓰실 PC인가요?",
+                        AiChatIntent.ASK_FOLLOW_UP,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "9800X3D 상세페이지로 이동해줘"));
+
+        assertThat(response).doesNotContainKey("actions");
     }
 
     @Test
