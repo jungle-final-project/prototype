@@ -1,5 +1,5 @@
 import { api } from '../../lib/api';
-import type { AgentActivationTokenDto, AgentLogUploadDto, AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto } from './types';
+import type { AgentActivationTokenDto, AgentLogUploadDto, AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, RemoteSupportStateDto } from './types';
 
 export type UploadAgentLogMetadata = {
   rangeStartedAt?: string;
@@ -99,6 +99,17 @@ export function requestRemoteSupport(ticketId: string, request: RemoteSupportReq
   return api<AsTicketDto>(`/api/as-tickets/${ticketId}/remote-support-requests`, {
     method: 'POST',
     body: JSON.stringify(request)
+  });
+}
+
+export function getRemoteSupportState(ticketId: string) {
+  return api<RemoteSupportStateDto>(`/api/as-tickets/${ticketId}/remote-support`);
+}
+
+export function registerRemoteSupportAccessCode(ticketId: string, accessCode: string) {
+  return api<RemoteSupportStateDto>(`/api/as-tickets/${ticketId}/remote-support/access-code`, {
+    method: 'PUT',
+    body: JSON.stringify({ accessCode })
   });
 }
 

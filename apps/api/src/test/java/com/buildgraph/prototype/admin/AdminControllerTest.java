@@ -477,7 +477,61 @@ class AdminControllerTest {
                         .content("{}"))
                 .andExpect(status().isForbidden());
 
+        mockMvc.perform(get("/api/admin/as-tickets/ticket-public-id/remote-support/access-code")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/remote-support/start")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/remote-support/complete")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isForbidden());
+
         verifyNoInteractions(ticketQueryService);
+    }
+
+    @Test
+    void assignedAdminCanReadCodeAndRecordRemoteSupportLifecycle() throws Exception {
+        when(ticketQueryService.adminRemoteSupport("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "status", "CODE_READY",
+                "maskedAccessCode", "•• 3456",
+                "accessCodeRegistered", true
+        ));
+        when(ticketQueryService.remoteAccessCodeForAdmin("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "accessCode", "123456"
+        ));
+        when(ticketQueryService.startRemoteSupport("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "status", "IN_PROGRESS",
+                "accessCodeRegistered", true
+        ));
+        when(ticketQueryService.completeRemoteSupport("ticket-public-id", ADMIN)).thenReturn(Map.of(
+                "status", "COMPLETED",
+                "accessCodeRegistered", false
+        ));
+
+        mockMvc.perform(get("/api/admin/as-tickets/ticket-public-id/remote-support")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.maskedAccessCode").value("•• 3456"))
+                .andExpect(jsonPath("$.accessCode").doesNotExist());
+
+        mockMvc.perform(get("/api/admin/as-tickets/ticket-public-id/remote-support/access-code")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessCode").value("123456"));
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/remote-support/start")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("IN_PROGRESS"));
+
+        mockMvc.perform(post("/api/admin/as-tickets/ticket-public-id/remote-support/complete")
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.accessCode").doesNotExist());
     }
 
     @Test

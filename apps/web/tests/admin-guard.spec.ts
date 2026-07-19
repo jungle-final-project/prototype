@@ -1288,8 +1288,42 @@ test('admin reviews a remote-support AS ticket through guarded workflow actions'
     reviewedAt: null as string | null,
     createdAt: '2026-07-19T00:30:00Z'
   };
+  let remoteSupport = {
+    status: 'WAITING_FOR_CODE',
+    provider: 'CHROME_REMOTE_DESKTOP',
+    accessCodeRegistered: false,
+    maskedAccessCode: null as string | null,
+    accessCodeRegisteredAt: null as string | null,
+    startedAt: null as string | null,
+    completedAt: null as string | null
+  };
+
   await page.route('**/api/admin/as-tickets/ticket-remote-001**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'GET' && path.endsWith('/remote-support/access-code')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ accessCode: '123456789' }) });
+      return;
+    }
+    if (route.request().method() === 'GET' && path.endsWith('/remote-support')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    if (route.request().method() === 'POST' && path.endsWith('/remote-support/start')) {
+      remoteSupport = { ...remoteSupport, status: 'IN_PROGRESS', startedAt: '2026-07-19T02:00:00Z' };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    if (route.request().method() === 'POST' && path.endsWith('/remote-support/complete')) {
+      remoteSupport = {
+        ...remoteSupport,
+        status: 'COMPLETED',
+        accessCodeRegistered: false,
+        maskedAccessCode: null,
+        completedAt: '2026-07-19T03:00:00Z'
+      };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
     if (route.request().method() === 'POST' && path.endsWith('/assign-to-me')) {
       ticket = { ...ticket, status: 'ASSIGNED', reviewStatus: 'IN_REVIEW', assignedAdminId: 'admin-001' };
     } else if (route.request().method() === 'POST' && path.endsWith('/approve-remote-support')) {
@@ -1335,6 +1369,191 @@ test('admin reviews a remote-support AS ticket through guarded workflow actions'
   await expect(page.locator('main')).toContainText('승인됨');
   await expect(page.locator('main')).toContainText('원격 점검을 승인합니다.');
   await expect(page.getByRole('button', { name: '원격 지원 승인' })).toHaveCount(0);
+  await expect(page.getByText('사용자가 일회용 지원 코드를 등록하기를 기다리고 있습니다.')).toBeVisible();
+});
+
+test('admin starts and completes a code-ready Chrome Remote Desktop session', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-admin-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' })
+    });
+  });
+
+  const ticket = {
+    id: 'ticket-code-ready-001',
+    userId: 'user-001',
+    status: 'IN_PROGRESS',
+    analysisStatus: 'RULE_READY',
+    reviewStatus: 'APPROVED',
+    supportDecision: 'REMOTE_POSSIBLE',
+    riskLevel: 'LOW',
+    symptom: '게임 실행 후 화면이 멈춥니다.',
+    requestType: 'PHYSICAL_INSPECTION',
+    diagnosisTitle: '원격 확인 가능한 드라이버 오류',
+    diagnosisSummary: '그래픽 드라이버 재시작 기록이 반복되었습니다.',
+    diagnosisResult: {
+      resolutionType: 'REMOTE_SUPPORT',
+      suspectedCauses: ['그래픽 드라이버 충돌'],
+      recommendedActions: ['원격으로 드라이버 상태 확인'],
+      unsupportedChecks: ['그래픽카드 물리 손상 확인']
+    },
+    diagnosisEvidence: [{ component: 'gpu', metricType: 'driver_reset', value: 3 }],
+    diagnosedAt: '2026-07-19T01:00:00Z',
+    assignedAdminId: 'admin-001',
+    causeCandidates: [{ summary: '그래픽 드라이버 충돌 가능성' }],
+    upgradeCandidates: [],
+    adminNote: '원격 점검을 승인합니다.',
+    reviewedAt: '2026-07-19T01:30:00Z',
+    createdAt: '2026-07-19T00:30:00Z'
+  };
+  let remoteSupport = {
+    status: 'CODE_READY',
+    provider: 'CHROME_REMOTE_DESKTOP',
+    accessCodeRegistered: true,
+    maskedAccessCode: '••••• 6789' as string | null,
+    accessCodeRegisteredAt: '2026-07-19T01:45:00Z',
+    startedAt: null as string | null,
+    completedAt: null as string | null
+  };
+
+  await page.route('**/api/admin/as-tickets/ticket-code-ready-001**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'GET' && path.endsWith('/remote-support/access-code')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ accessCode: '123456789' }) });
+      return;
+    }
+    if (route.request().method() === 'GET' && path.endsWith('/remote-support')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    if (route.request().method() === 'POST' && path.endsWith('/remote-support/start')) {
+      remoteSupport = { ...remoteSupport, status: 'IN_PROGRESS', startedAt: '2026-07-19T02:00:00Z' };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    if (route.request().method() === 'POST' && path.endsWith('/remote-support/complete')) {
+      remoteSupport = {
+        ...remoteSupport,
+        status: 'COMPLETED',
+        accessCodeRegistered: false,
+        maskedAccessCode: null,
+        completedAt: '2026-07-19T03:00:00Z'
+      };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ticket) });
+  });
+
+  await page.goto('/admin/as-tickets/ticket-code-ready-001');
+  await expect(page.getByRole('heading', { name: '처리 결과' })).toBeVisible();
+  await expect(page.locator('main')).toContainText('원격 점검을 승인합니다.');
+  const chromeRemoteLink = page.getByRole('link', { name: 'Chrome Remote Desktop 열기' });
+  await expect(chromeRemoteLink).toHaveAttribute('href', 'https://remotedesktop.google.com/support');
+  await expect(chromeRemoteLink).toHaveAttribute('target', '_blank');
+  await expect(chromeRemoteLink).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(page.locator('main')).toContainText('••••• 6789');
+  await expect(page.getByRole('button', { name: '코드 복사' })).toBeVisible();
+  await page.getByRole('button', { name: '지원 시작' }).click();
+  await expect(page.locator('main')).toContainText('원격 지원 진행 중');
+  await page.getByRole('button', { name: '지원 완료' }).click();
+  await expect(page.locator('main')).toContainText('저장된 일회용 지원 코드가 제거되었습니다.');
+  await expect(page.getByRole('button', { name: '코드 복사' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '지원 시작' })).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator('main')).toContainText('원격 지원 완료');
+  await expect(page.getByRole('button', { name: '코드 복사' })).toHaveCount(0);
+});
+
+test('user registers a Chrome Remote Desktop code only after remote support approval', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.token', 'jwt-user-token');
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'user-001', email: 'user@example.com', role: 'USER' })
+    });
+  });
+
+  let ticket = {
+    id: 'ticket-user-remote-001',
+    status: 'IN_PROGRESS',
+    analysisStatus: 'RULE_READY',
+    reviewStatus: 'REQUIRED',
+    supportDecision: 'REMOTE_POSSIBLE',
+    riskLevel: 'LOW',
+    symptom: '그래픽 드라이버 오류',
+    causeCandidates: [],
+    upgradeCandidates: [],
+    createdAt: '2026-07-19T00:30:00Z'
+  };
+  let remoteSupport = {
+    status: 'WAITING_FOR_CODE',
+    provider: 'CHROME_REMOTE_DESKTOP',
+    accessCodeRegistered: false,
+    accessCodeRegisteredAt: null as string | null,
+    startedAt: null as string | null,
+    completedAt: null as string | null
+  };
+
+  await page.route('**/api/as-tickets/ticket-user-remote-001**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'PUT' && path.endsWith('/remote-support/access-code')) {
+      remoteSupport = {
+        ...remoteSupport,
+        status: 'CODE_READY',
+        accessCodeRegistered: true,
+        accessCodeRegisteredAt: '2026-07-19T01:30:00Z'
+      };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    if (route.request().method() === 'GET' && path.endsWith('/remote-support')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(remoteSupport) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ticket) });
+  });
+
+  await page.goto('/support/ticket-user-remote-001');
+  await expect(page.getByRole('heading', { name: '원격 지원이 승인되었습니다' })).toHaveCount(0);
+
+  ticket = { ...ticket, reviewStatus: 'APPROVED' };
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '원격 지원이 승인되었습니다' })).toBeVisible();
+  const chromeRemoteLink = page.getByRole('link', { name: 'Chrome Remote Desktop 열기' });
+  await expect(chromeRemoteLink).toHaveAttribute('href', 'https://remotedesktop.google.com/support');
+  await expect(chromeRemoteLink).toHaveAttribute('target', '_blank');
+  await expect(chromeRemoteLink).toHaveAttribute('rel', 'noopener noreferrer');
+
+  await page.getByLabel('지원 코드').fill('123-456 789');
+  await page.getByRole('button', { name: '지원 코드 등록' }).click();
+  await expect(page.locator('main')).toContainText('지원 코드 등록 완료');
+  await expect(page.locator('main')).not.toContainText('123456789');
+
+  remoteSupport = { ...remoteSupport, status: 'IN_PROGRESS', startedAt: '2026-07-19T02:00:00Z' };
+  await page.reload();
+  await expect(page.locator('main')).toContainText('원격 지원 진행 중');
+  await expect(page.getByLabel('지원 코드')).toHaveCount(0);
+
+  remoteSupport = {
+    ...remoteSupport,
+    status: 'COMPLETED',
+    accessCodeRegistered: false,
+    completedAt: '2026-07-19T03:00:00Z'
+  };
+  await page.reload();
+  await expect(page.locator('main')).toContainText('원격 지원 완료');
+  await expect(page.getByLabel('지원 코드')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '새 코드 등록' })).toHaveCount(0);
 });
 
 test('keeps admin dashboard usable when recent assembly request API fails', async ({ page }) => {

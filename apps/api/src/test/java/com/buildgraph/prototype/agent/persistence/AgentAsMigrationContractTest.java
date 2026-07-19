@@ -12,6 +12,7 @@ class AgentAsMigrationContractTest {
     private static final Path LOG_SUMMARY_MIGRATION = Path.of("src/main/resources/db/migration/V100__pc_agent_log_summary_routing.sql");
     private static final Path FINAL_SCENARIO_MIGRATION = Path.of("src/main/resources/db/migration/V101__final_support_scenario_additive_contract.sql");
     private static final Path REVIEWED_AT_MIGRATION = Path.of("src/main/resources/db/migration/V126__as_ticket_reviewed_at.sql");
+    private static final Path CHROME_REMOTE_SUPPORT_MIGRATION = Path.of("src/main/resources/db/migration/V127__chrome_remote_support_access_code.sql");
 
     @Test
     void migrationCreatesGoldModeAgentTablesInParentChildOrder() throws Exception {
@@ -129,6 +130,22 @@ class AgentAsMigrationContractTest {
                 .contains("ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ")
                 .doesNotContain("REMOTE_SUPPORT_LINK")
                 .doesNotContain("QUICK_ASSIST");
+    }
+
+    @Test
+    void chromeRemoteSupportMigrationAddsEphemeralCodeFieldsAndStates() throws Exception {
+        String sql = Files.readString(CHROME_REMOTE_SUPPORT_MIGRATION)
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        assertThat(sql)
+                .contains("ADD COLUMN IF NOT EXISTS access_code TEXT")
+                .contains("ADD COLUMN IF NOT EXISTS access_code_registered_at TIMESTAMPTZ")
+                .contains("CHROME_REMOTE_DESKTOP")
+                .contains("WAITING_FOR_CODE")
+                .contains("CODE_READY")
+                .doesNotContain("session_url =")
+                .doesNotContain("CREATE TABLE");
     }
 
     private static String normalizedSql() throws Exception {

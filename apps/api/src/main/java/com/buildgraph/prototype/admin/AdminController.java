@@ -212,6 +212,42 @@ public class AdminController {
         return broadcastTicketUpdate(ticketQueryService.approveRemoteSupport(id, adminNote, admin));
     }
 
+    @GetMapping("/as-tickets/{id}/remote-support")
+    Map<String, Object> remoteTicketSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.adminRemoteSupport(id, admin);
+    }
+
+    @GetMapping("/as-tickets/{id}/remote-support/access-code")
+    Map<String, Object> remoteTicketSupportAccessCode(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.remoteAccessCodeForAdmin(id, admin);
+    }
+
+    @PostMapping("/as-tickets/{id}/remote-support/start")
+    Map<String, Object> startRemoteTicketSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.startRemoteSupport(id, admin);
+    }
+
+    @PostMapping("/as-tickets/{id}/remote-support/complete")
+    Map<String, Object> completeRemoteTicketSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.completeRemoteSupport(id, admin);
+    }
+
     @DeleteMapping("/as-tickets/{id}")
     Map<String, Object> deleteTicket(
             @PathVariable String id,

@@ -4,6 +4,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -137,6 +138,40 @@ class TicketControllerTest {
                 "reason", "드라이버 오류를 원격으로 확인해 주세요.",
                 "contactPhone", "010-1234-5678"
         ), USER);
+    }
+
+    @Test
+    void userCanReadRemoteSupportStateAndRegisterAccessCode() throws Exception {
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(USER);
+        when(ticketQueryService.userRemoteSupport("ticket-public-id", USER)).thenReturn(Map.of(
+                "status", "WAITING_FOR_CODE",
+                "provider", "CHROME_REMOTE_DESKTOP",
+                "accessCodeRegistered", false
+        ));
+        when(ticketQueryService.registerRemoteAccessCode("ticket-public-id", "123-456 789", USER)).thenReturn(Map.of(
+                "status", "CODE_READY",
+                "provider", "CHROME_REMOTE_DESKTOP",
+                "accessCodeRegistered", true
+        ));
+
+        mockMvc.perform(get("/api/as-tickets/ticket-public-id/remote-support")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("WAITING_FOR_CODE"))
+                .andExpect(jsonPath("$.accessCode").doesNotExist());
+
+        mockMvc.perform(put("/api/as-tickets/ticket-public-id/remote-support/access-code")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                { "accessCode": "123-456 789" }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CODE_READY"))
+                .andExpect(jsonPath("$.accessCode").doesNotExist());
+
+        verify(ticketQueryService).userRemoteSupport("ticket-public-id", USER);
+        verify(ticketQueryService).registerRemoteAccessCode("ticket-public-id", "123-456 789", USER);
     }
 
     @Test

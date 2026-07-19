@@ -7,23 +7,30 @@ import { formatSeoulDateTime } from '../../../lib/dateTime';
 import {
   approveAdminTicketRemoteSupport,
   assignAdminTicketToMe,
+  completeAdminTicketRemoteSupport,
   createAsRecommendationFeedback,
   getAdminTicket,
-  requestAdminTicketMoreInfo
+  getAdminTicketRemoteAccessCode,
+  getAdminTicketRemoteSupport,
+  requestAdminTicketMoreInfo,
+  startAdminTicketRemoteSupport
 } from '../adminApi';
-import type { AdminAsTicket } from '../adminApi';
+import type { AdminAsTicket, AdminRemoteSupportState } from '../adminApi';
 
 const FAILURE_CATEGORY_OPTIONS = ['RECOMMENDATION_BUILD', 'PART_SELECTION', 'COMPATIBILITY', 'PERFORMANCE', 'USER_ENVIRONMENT', 'AGENT_LOG_ONLY', 'OTHER'];
 const SEVERITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const CATEGORY_OPTIONS = ['', 'CPU', 'GPU', 'RAM', 'MOTHERBOARD', 'STORAGE', 'PSU', 'CASE', 'COOLER'];
 
 type ReviewAction = 'ASSIGN_TO_ME' | 'REQUEST_MORE_INFO' | 'APPROVE_REMOTE_SUPPORT';
+type RemoteSupportAction = 'START' | 'COMPLETE';
+const CHROME_REMOTE_DESKTOP_SUPPORT_URL = 'https://remotedesktop.google.com/support';
 
 export function AdminTicketDetailPage() {
   const { ticketId = '' } = useParams();
   const queryClient = useQueryClient();
   const [adminNote, setAdminNote] = useState('');
   const [lastAction, setLastAction] = useState<ReviewAction | null>(null);
+  const [remoteSupportNotice, setRemoteSupportNotice] = useState('');
   const [failureCategory, setFailureCategory] = useState('RECOMMENDATION_BUILD');
   const [severity, setSeverity] = useState('MEDIUM');
   const [relatedPartId, setRelatedPartId] = useState('');
@@ -38,6 +45,15 @@ export function AdminTicketDetailPage() {
     queryFn: () => getAdminTicket(ticketId),
     enabled: Boolean(ticketId)
   });
+  const remoteSupportApproved = ticketQuery.data?.reviewStatus === 'APPROVED'
+    && ticketQuery.data.supportDecision === 'REMOTE_POSSIBLE';
+  const remoteSupportQuery = useQuery({
+    queryKey: ['admin-as-ticket-remote-support', ticketId],
+    queryFn: () => getAdminTicketRemoteSupport(ticketId),
+    enabled: Boolean(ticketId && remoteSupportApproved),
+    refetchInterval: 5_000
+  });
+
   useEffect(() => {
     const ticket = ticketQuery.data;
     if (ticket) {
@@ -66,6 +82,30 @@ export function AdminTicketDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['admin-as-tickets'] });
       queryClient.invalidateQueries({ queryKey: ['admin-audit-logs-recent'] });
     }
+  });
+
+  const copyAccessCodeMutation = useMutation({
+    mutationFn: async () => {
+      const response = await getAdminTicketRemoteAccessCode(ticketId);
+      if (!navigator.clipboard) {
+        throw new Error('이 브라우저에서는 클립보드 복사를 사용할 수 없습니다.');
+      }
+      await navigator.clipboard.writeText(response.accessCode);
+    },
+    onSuccess: () => setRemoteSupportNotice('지원 코드를 클립보드에 복사했습니다.'),
+    onError: (cause) => setRemoteSupportNotice(cause instanceof Error ? cause.message : '지원 코드를 복사하지 못했습니다.')
+  });
+
+  const remoteSupportMutation = useMutation({
+    mutationFn: (action: RemoteSupportAction) => action === 'START'
+      ? startAdminTicketRemoteSupport(ticketId)
+      : completeAdminTicketRemoteSupport(ticketId),
+    onSuccess: (state, action) => {
+      queryClient.setQueryData(['admin-as-ticket-remote-support', ticketId], state);
+      queryClient.invalidateQueries({ queryKey: ['admin-as-ticket', ticketId] });
+      setRemoteSupportNotice(action === 'START' ? '원격 지원 시작을 기록했습니다.' : '원격 지원 완료와 코드 제거를 기록했습니다.');
+    },
+    onError: (cause) => setRemoteSupportNotice(cause instanceof Error ? cause.message : '원격지원 상태를 변경하지 못했습니다.')
   });
 
   const feedbackMutation = useMutation({
@@ -176,6 +216,21 @@ export function AdminTicketDetailPage() {
               </div>
             )}
           </Panel>
+          {remoteSupportApproved ? (
+            <div className="mt-4">
+              <AdminRemoteSupportPanel
+                state={remoteSupportQuery.data}
+                isLoading={remoteSupportQuery.isLoading}
+                isError={remoteSupportQuery.isError}
+                notice={remoteSupportNotice}
+                isCopying={copyAccessCodeMutation.isPending}
+                isUpdating={remoteSupportMutation.isPending}
+                onCopy={() => copyAccessCodeMutation.mutate()}
+                onStart={() => remoteSupportMutation.mutate('START')}
+                onComplete={() => remoteSupportMutation.mutate('COMPLETE')}
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className="min-w-0 min-[1000px]:col-span-2">
@@ -275,6 +330,90 @@ export function AdminTicketDetailPage() {
       </div>
     </AdminShell>
   );
+}
+
+function AdminRemoteSupportPanel({
+  state,
+  isLoading,
+  isError,
+  notice,
+  isCopying,
+  isUpdating,
+  onCopy,
+  onStart,
+  onComplete
+}: {
+  state?: AdminRemoteSupportState;
+  isLoading: boolean;
+  isError: boolean;
+  notice: string;
+  isCopying: boolean;
+  isUpdating: boolean;
+  onCopy: () => void;
+  onStart: () => void;
+  onComplete: () => void;
+}) {
+  return (
+    <Panel title="원격 지원 연결" subtitle="실제 연결과 화면 공유 승인은 Chrome Remote Desktop에서 수행합니다.">
+      {isLoading ? <StateMessage type="info" title="연결 상태 확인 중" body="사용자의 지원 코드 등록 상태를 불러오고 있습니다." /> : null}
+      {isError ? <StateMessage type="warn" title="연결 상태 조회 실패" body="담당 관리자 배정과 티켓 상태를 확인해 주세요." /> : null}
+      {!isLoading && !isError && state?.status ? (
+        <div data-testid="admin-remote-support-panel" className="space-y-3">
+          <StatusBadge status={state.status} />
+          <p className="text-sm font-bold text-slate-900">{adminRemoteSupportTitle(state.status)}</p>
+          <p className="text-xs font-semibold leading-5 text-slate-600">{adminRemoteSupportDescription(state.status)}</p>
+          {state.status === 'CODE_READY' && state.maskedAccessCode ? (
+            <div className="rounded border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-bold text-slate-500">마스킹된 지원 코드</p>
+              <p className="mt-1 font-mono text-lg font-black tracking-wider text-slate-950">{state.maskedAccessCode}</p>
+            </div>
+          ) : null}
+          <a
+            href={CHROME_REMOTE_DESKTOP_SUPPORT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex rounded border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-brand-blue hover:bg-slate-50"
+          >
+            Chrome Remote Desktop 열기
+          </a>
+          {state.status === 'CODE_READY' ? (
+            <div className="grid gap-2">
+              <button className="rounded border border-brand-blue px-3 py-2 text-sm font-bold text-brand-blue disabled:opacity-50" disabled={isCopying || isUpdating} onClick={onCopy}>
+                {isCopying ? '복사 중...' : '코드 복사'}
+              </button>
+              <button className="rounded bg-brand-blue px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400" disabled={isCopying || isUpdating} onClick={onStart}>
+                {isUpdating ? '처리 중...' : '지원 시작'}
+              </button>
+              <p className="text-[11px] font-semibold leading-4 text-slate-500">Chrome Remote Desktop에서 실제 연결을 확인한 뒤 지원 시작을 기록해 주세요.</p>
+            </div>
+          ) : null}
+          {state.status === 'IN_PROGRESS' ? (
+            <button className="w-full rounded bg-slate-950 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400" disabled={isUpdating} onClick={onComplete}>
+              {isUpdating ? '완료 처리 중...' : '지원 완료'}
+            </button>
+          ) : null}
+          {state.startedAt ? <p className="text-xs font-semibold text-slate-600">지원 시작: {formatSeoulDateTime(state.startedAt)}</p> : null}
+          {state.completedAt ? <p className="text-xs font-semibold text-slate-600">지원 완료: {formatSeoulDateTime(state.completedAt)}</p> : null}
+          {state.status === 'COMPLETED' ? <p className="text-xs font-bold text-emerald-700">저장된 일회용 지원 코드가 제거되었습니다.</p> : null}
+          {notice ? <p role="status" className="rounded bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{notice}</p> : null}
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+function adminRemoteSupportTitle(status?: string | null) {
+  if (status === 'CODE_READY') return '지원 코드 등록 완료';
+  if (status === 'IN_PROGRESS') return '원격 지원 진행 중';
+  if (status === 'COMPLETED') return '원격 지원 완료';
+  return '지원 코드 등록 대기';
+}
+
+function adminRemoteSupportDescription(status?: string | null) {
+  if (status === 'CODE_READY') return '코드를 복사한 뒤 Chrome Remote Desktop에서 연결을 시도해 주세요.';
+  if (status === 'IN_PROGRESS') return 'Chrome Remote Desktop에서 진행 중인 지원을 마친 뒤 완료를 기록해 주세요.';
+  if (status === 'COMPLETED') return '원격지원 업무가 완료됐으며 코드 복사와 시작 기능은 비활성화되었습니다.';
+  return '사용자가 일회용 지원 코드를 등록하기를 기다리고 있습니다.';
 }
 
 function receiptRows(ticket: AdminAsTicket) {
