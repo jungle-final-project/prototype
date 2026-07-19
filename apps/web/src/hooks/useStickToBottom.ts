@@ -24,7 +24,12 @@ export function useStickToBottom(options?: { thresholdPx?: number }) {
     }
   }, []);
 
+  // 이미 붙어 있는 노드가 다시 들어오면 아무 것도 하지 않는다 — 재부착마다 바닥으로 끌어내리면
+  // 사용자가 위로 올려 읽던 위치가 리렌더 때마다 초기화된다(#255 회귀의 방어선).
+  const attachedRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useCallback((node: HTMLDivElement | null) => {
+    if (attachedRef.current === node) return;
+    attachedRef.current = node;
     setContainer(node);
     if (!node) return;
     // 새 표면이 열리면 최신 내용부터 보여준다(기존 동작 유지).
