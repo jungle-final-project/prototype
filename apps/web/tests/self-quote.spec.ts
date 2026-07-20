@@ -1821,7 +1821,10 @@ test('keeps desktop candidate results scrollable and compact at a 150 percent zo
   const candidateList = panel.getByTestId('slot-candidate-list');
   await expect(panel).toBeVisible();
   await expect(panel).toHaveCSS('position', 'fixed');
-  await expect(panel.getByTestId('candidate-panel-description')).toBeHidden();
+  // 제목 아래 설명문은 없앴다 — 검색이 제목 바로 밑에 붙어야 후보가 위로 올라온다.
+  await expect(panel.getByTestId('candidate-panel-description')).toHaveCount(0);
+  // 필터는 기본 접힘 — 펼치기 전에는 컨트롤이 화면에 없다.
+  await expect(panel.getByTestId('candidate-manufacturer')).toBeHidden();
   await expect(panel.getByTestId('slot-candidate-panel-handle')).toHaveCSS('padding-top', '8px');
   await expect(panel.getByTestId('candidate-panel-search')).toHaveCSS('padding-top', '6px');
   await expect(panel.getByTestId('candidate-panel-filters')).toHaveCSS('padding-top', '6px');
@@ -3814,8 +3817,9 @@ test('opens the candidate panel from a slot and requests QUOTE_DRAFT_CURRENT com
   await expect(failCard.getByText('장착 불가', { exact: true })).toBeVisible();
   await expect(failCard.getByText('파워 용량이 부족합니다.')).toBeVisible();
   // 담기 버튼은 활성 — 비호환도 담아서 왜 안 되는지 보드에서 확인하는 UX.
-  await expect(panel.getByRole('button', { name: /실패 GPU 후보 담기/ })).toBeEnabled();
-  await expect(panel.getByText('장착 불가 후보도 담아서 사유를 확인할 수 있어요')).toBeVisible();
+  // "장착 불가여도 담을 수 있다"는 안내문을 헤더에서 뺐다(제목 아래를 검색에 내줬다) —
+  // 그 사실은 이제 문장이 아니라 동작이 말한다: FAIL 카드에 사유가 붙고 담기 버튼이 살아 있다(윗줄).
+  await expect(panel.getByText('장착 불가 후보도 담아서 사유를 확인할 수 있어요')).toHaveCount(0);
 
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
@@ -3908,6 +3912,9 @@ test('filters candidates by manufacturer, price range, and hides incompatible', 
   await expect(panel).toBeVisible();
   await expect(panel.locator('[data-compat="FAIL"]')).toHaveCount(1);
 
+  // 필터는 기본 접힘 — 조작하려면 먼저 펼친다.
+  await panel.getByTestId('candidate-filters-toggle').click();
+
   // 장착 불가 숨기기(client-side): FAIL 후보만 사라지고, 다시 끄면 돌아온다.
   await panel.getByTestId('candidate-hide-fail').check();
   await expect(panel.locator('[data-compat="FAIL"]')).toHaveCount(0);
@@ -3968,7 +3975,8 @@ test('opens candidate quick view and wishlists a candidate', async ({ page }) =>
   await expect(page.getByTestId('part-quick-view')).toHaveCount(0);
   await expect(firstCard.getByTestId('candidate-wishlist')).toHaveAttribute('aria-pressed', 'true');
 
-  // '찜만' 필터: 찜한 후보만 남는다.
+  // '찜만' 필터: 찜한 후보만 남는다. 필터는 기본 접힘이라 먼저 펼친다.
+  await panel.getByTestId('candidate-filters-toggle').click();
   await panel.getByTestId('candidate-only-wishlist').check();
   await expect(panel.getByText('지포스 RTX 5070')).toBeVisible();
   await expect(panel.getByText('라데온 RX 9070')).toHaveCount(0);

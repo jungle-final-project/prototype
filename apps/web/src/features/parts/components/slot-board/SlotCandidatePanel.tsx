@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Eye, Heart, Search, X } from 'lucide-react';
+import { Eye, Heart, Search, SlidersHorizontal, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
@@ -79,6 +79,11 @@ export function SlotCandidatePanel({
   const [maxPrice, setMaxPrice] = useState<number | undefined>(undefined);
   const [hideFail, setHideFail] = useState(false);
   const [onlyWishlist, setOnlyWishlist] = useState(false);
+  // 필터는 기본 접힘 — 제목 바로 아래 검색, 그 밑은 바로 후보가 되도록 자리를 비운다.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilterCount = [manufacturer, minPriceInput, maxPriceInput].filter(Boolean).length
+    + (onlyWishlist ? 1 : 0)
+    + (hideFail ? 1 : 0);
   // 데스크톱 패널: 포탈+fixed로 띄워 헤더 드래그(보드 밖 허용, 화면 이탈만 방지)·꼭지점 리사이즈.
   // 모바일 바텀시트는 고정. 한 번 옮겨두면 슬롯을 바꾸거나 닫았다 열어도 그 자리를 지키고,
   // 핸들 더블클릭으로만 초기 위치·크기로 되돌린다.
@@ -278,9 +283,9 @@ export function SlotCandidatePanel({
         onDoubleClick={resetPanelPlacement}
         className={`slot-candidate-panel__header flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3 ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'} select-none lg:touch-none`}
       >
+        {/* 제목 아래에는 아무것도 두지 않는다 — 바로 검색이 오도록 비워 후보 목록을 위로 끌어올린다. */}
         <div className="min-w-0">
           <h2 className="text-base font-black text-commerce-ink">{slot.label} 부품 목록</h2>
-          <p data-testid="candidate-panel-description" className="slot-candidate-panel__description mt-0.5 text-[11px] font-bold text-slate-500">현재 견적 기준 호환 검사 · 장착 불가 후보도 담아서 사유를 확인할 수 있어요</p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center rounded-md border border-commerce-line bg-white px-2 py-1">
@@ -335,9 +340,31 @@ export function SlotCandidatePanel({
         </div>
       </div>
 
-      {/* 필터: 제조사·가격대(기존 GET /api/parts 파라미터 재사용) + 장착 불가 숨기기(client-side, 기본 꺼짐). */}
+      {/* 필터: 제조사·가격대(기존 GET /api/parts 파라미터 재사용) + 장착 불가 숨기기(client-side, 기본 꺼짐).
+          기본 접힘 — 대부분은 검색과 목록만 쓰므로, 펼쳐 두면 후보가 그만큼 아래로 밀린다.
+          걸어 둔 필터가 있으면 접힌 상태에서도 개수를 배지로 보여 준다(숨겨진 필터가 결과를 줄이는 것을 모르면 안 된다). */}
       <div data-testid="candidate-panel-filters" className="slot-candidate-panel__filters shrink-0 border-b border-commerce-line px-4 py-2.5">
-        <div className="slot-candidate-panel__filter-controls flex flex-wrap items-center gap-x-2 gap-y-2">
+        <button
+          type="button"
+          data-testid="candidate-filters-toggle"
+          aria-expanded={filtersOpen}
+          aria-controls="candidate-filter-controls"
+          onClick={() => setFiltersOpen((open) => !open)}
+          className="flex items-center gap-1.5 rounded-md border border-commerce-line bg-white px-2 py-1 text-xs font-bold text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
+        >
+          <SlidersHorizontal size={13} aria-hidden="true" />
+          필터
+          {activeFilterCount > 0 ? (
+            <span data-testid="candidate-filters-active-count" className="rounded-full bg-brand-blue px-1.5 text-[10px] font-black text-white">{activeFilterCount}</span>
+          ) : null}
+        </button>
+        {/* hidden 속성 대신 조건부 렌더 — 이 요소는 display:flex라 UA의 [hidden]{display:none}을 이겨서
+            hidden을 걸어도 그대로 보인다. */}
+        {filtersOpen ? (
+        <div
+          id="candidate-filter-controls"
+          className="slot-candidate-panel__filter-controls mt-2 flex flex-wrap items-center gap-x-2 gap-y-2"
+        >
           <select
             aria-label="제조사 필터"
             data-testid="candidate-manufacturer"
@@ -393,6 +420,7 @@ export function SlotCandidatePanel({
             장착 불가 숨기기
           </label>
         </div>
+        ) : null}
       </div>
 
       {/* 담은 부품은 후보 피드와 독립된 관리 행으로 유지한다. RAM/SSD 수량과 제거를 여기서 바로 조작한다. */}
