@@ -177,7 +177,7 @@ export function AdminTicketDetailPage() {
           <Panel title="Agent 진단" subtitle="PC Agent가 저장한 진단 결과를 그대로 표시합니다.">
             <DataTable columns={['항목', '내용']} rows={agentDiagnosisRows(ticket)} minWidth={0} nowrapColumns={['항목']} />
           </Panel>
-          <Panel title="판단 근거" subtitle="수집된 근거와 진단 결과에 실제로 포함된 판단 자료입니다.">
+          <Panel title="판단 근거" subtitle="핵심 진단 요약을 먼저 확인하고 원시 데이터는 필요할 때만 펼쳐봅니다.">
             <DataTable columns={['항목', '내용']} rows={evidenceRows(ticket)} minWidth={0} nowrapColumns={['항목']} />
             <div className="mt-4 border-t border-slate-100 pt-4">
               <AgentLogSamplesToggle ticket={ticket} />
@@ -492,14 +492,46 @@ function agentDiagnosisRows(ticket: AdminAsTicket) {
 }
 
 function evidenceRows(ticket: AdminAsTicket) {
-  const diagnosisResult = objectValue(ticket.diagnosisResult);
-  const routing = objectValue(ticket.supportRouting);
   return [
-    { '항목': 'evidence', '내용': structuredList(ticket.diagnosisEvidence ?? valueList(diagnosisResult?.evidence)) },
-    { '항목': 'suspected causes', '내용': structuredList(valueList(diagnosisResult?.suspectedCauses).length > 0 ? valueList(diagnosisResult?.suspectedCauses) : ticket.causeCandidates) },
-    { '항목': 'recommended actions', '내용': structuredList(valueList(diagnosisResult?.recommendedActions).length > 0 ? valueList(diagnosisResult?.recommendedActions) : valueList(routing?.recommendedActions)) },
-    { '항목': 'unsupported checks', '내용': structuredList(valueList(diagnosisResult?.unsupportedChecks)) }
+    { '항목': '장치 근거', '내용': diagnosisDeviceEvidenceSummary(ticket) },
+    { '항목': '진단 제목', '내용': ticket.diagnosisTitle ?? '-' },
+    { '항목': '진단 요약', '내용': ticket.diagnosisSummary ?? '-' },
+    { '항목': '위험도', '내용': ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
+    { '항목': '시스템 권장 처리', '내용': diagnosisRecommendedActionSummary(ticket) }
   ];
+}
+
+function diagnosisRecommendedActionSummary(ticket: AdminAsTicket) {
+  const diagnosisResult = objectValue(ticket.diagnosisResult);
+  const actions = valueList(diagnosisResult?.recommendedActions).length > 0
+    ? valueList(diagnosisResult?.recommendedActions)
+    : valueList(objectValue(ticket.supportRouting)?.recommendedActions);
+  const readableActions = actions
+    .map(textValue)
+    .filter((value): value is string => Boolean(value));
+  return [recommendedSupportLabel(ticket), ...readableActions].join(' / ');
+}
+
+function diagnosisDeviceEvidenceSummary(ticket: AdminAsTicket) {
+  const diagnosisResult = objectValue(ticket.diagnosisResult);
+  const evidence = ticket.diagnosisEvidence ?? valueList(diagnosisResult?.evidence);
+  const problemDevice = evidence
+    .map(objectValue)
+    .find((item) => {
+      if (!item || textValue(item.metricType) !== 'display_device_status') {
+        return false;
+      }
+      const value = objectValue(item.value);
+      return typeof value?.problemCode === 'number' && value.problemCode !== 0;
+    });
+  const value = objectValue(problemDevice?.value);
+  const deviceName = textValue(value?.deviceName);
+  const problemCode = typeof value?.problemCode === 'number' ? value.problemCode : null;
+  if (!deviceName || problemCode === null) {
+    return '확정된 Windows PnP problem code 근거가 없습니다.';
+  }
+  const status = textValue(problemDevice?.status);
+  return `${deviceName}에서 Windows PnP problem code ${problemCode}이 확인됐습니다.${status ? ` 장치 상태: ${status}.` : ''}`;
 }
 
 function reviewReadOnlyRows(ticket: AdminAsTicket) {
@@ -808,49 +840,6 @@ function reviewActionLabel(action: ReviewAction | null) {
 
 function valueList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
-}
-
-function structuredList(items: unknown[]) {
-  if (items.length === 0) {
-    return '-';
-  }
-  return (
-    <ul className="min-w-0 space-y-2" data-testid="structured-evidence-list">
-      {items.map((item, index) => {
-        const formatted = structuredJson(item);
-        return (
-          <li key={`${textValue(item) ?? compactValue(item)}-${index}`} className="min-w-0">
-            {formatted ? (
-              <pre className="max-h-56 max-w-full overflow-auto rounded-md border border-slate-700 bg-slate-950 p-3 text-xs leading-5 text-slate-100"><code>{formatted}</code></pre>
-            ) : (
-              <p className="break-words text-sm leading-6 text-slate-700">
-                <span aria-hidden="true" className="mr-2 text-slate-400">•</span>
-                {textValue(item) ?? compactValue(item)}
-              </p>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function structuredJson(value: unknown) {
-  if (value && typeof value === 'object') {
-    return prettyJson(value);
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const candidate = value.trim();
-  if (!(candidate.startsWith('{') || candidate.startsWith('['))) {
-    return null;
-  }
-  try {
-    return prettyJson(JSON.parse(candidate));
-  } catch {
-    return null;
-  }
 }
 
 function compactValue(value: unknown) {
