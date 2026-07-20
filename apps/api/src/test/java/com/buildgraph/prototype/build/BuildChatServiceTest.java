@@ -4689,8 +4689,11 @@ class BuildChatServiceTest {
                         "partId", "gpu-current", "category", "GPU", "name", "RTX 5090", "quantity", 1)))), user);
 
         assertThat(response.get("answerType")).isEqualTo("PART");
-        assertThat(response.get("message")).asString().contains("파워 대표 후보 TOP3", "1200W PSU A");
-        assertThat(response.get("quickReplies")).asList().hasSize(3);
+        assertThat(response.get("message")).asString().contains("파워 추천 TOP3", "1200W PSU A");
+        // 이 테스트의 검증력이 문구 하나에 실려 있었다(칩은 개수만 셌다) — 문구가 바뀌면 같이 무너진다.
+        // 어떤 후보를 어떤 순서로 골랐는지를 칩으로 고정해, 문안이 또 바뀌어도 판정이 남게 한다.
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly("1200W PSU A 견적에 담아줘", "1200W PSU B 견적에 담아줘", "1000W PSU C 견적에 담아줘");
         verifyNoInteractions(aiChatEngine);
     }
 

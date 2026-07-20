@@ -3445,8 +3445,10 @@ public class BuildChatService {
                     ? "고성능 요청을 기준으로 현재 견적에서 자동 검증을 통과한 " + categoryLabel + " 후보 TOP"
                             + options.size() + "입니다. 상위 후보라도 현재 조합에서 장착·전력·호환 검사를 통과하지 못하면 제외했습니다. "
                             + topListText(options) + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요."
-                    : "추가 조건이 없어 현재 견적과 호환되는 " + categoryLabel + " 대표 후보 TOP"
-                            + options.size() + "를 보여드립니다. " + topListText(options)
+                    // "추가 조건이 없어"로 시작하면 사용자가 뭘 덜 말해서 어쩔 수 없이 보여준다는 변명으로 읽힌다.
+                    // 실제로는 내부 자산에서 호환까지 확인해 고른 추천이다 — 그렇게 말한다.
+                    : "내부 자산 기준으로 현재 견적과 호환되는 " + categoryLabel + " 추천 TOP"
+                            + options.size() + "입니다. " + topListText(options)
                             + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.";
             response.put("message", listing);
             setPartRecommendationQuickReplies(body, response, constraint.category(), options);
@@ -4180,8 +4182,8 @@ public class BuildChatService {
         // 패널을 띄울 수 있는 클라이언트에게는 말풍선을 짧게 준다 — 같은 상품 목록이 채팅과 패널에
         // 두 번 나오면 어느 쪽을 봐야 할지 헷갈린다. 패널이 없는 구버전 클라이언트는 종전 문장 그대로다.
         if (supportsPartCandidatePanel(body)) {
-            response.put("message", CATEGORY_LABELS.getOrDefault(category, "부품")
-                    + " 추천 후보 " + options.size() + "개를 부품 목록에 띄웠어요.");
+            response.put("message", "내부 자산 기준으로 고른 " + CATEGORY_LABELS.getOrDefault(category, "부품")
+                    + " 추천 " + options.size() + "개를 부품 목록에 띄웠어요.");
         }
         List<String> labels = options.stream().map(option -> option.name() + " 견적에 담아줘").toList();
         response.put("quickReplies", labels);
