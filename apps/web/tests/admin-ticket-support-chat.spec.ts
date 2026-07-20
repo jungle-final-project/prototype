@@ -249,6 +249,28 @@ test('ticket detail embeds the support chat in place of the decision form and se
   await expect(chat.getByPlaceholder('관리자 답변을 입력하세요')).toHaveValue('');
 });
 
+test('keeps the ticket detail readable without page-level horizontal scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 625, height: 800 });
+  await mockAdmin(page);
+  await mockTicket(page);
+  await mockChat(page, {
+    room: chatRoom(),
+    messages: baseMessages()
+  });
+
+  await page.goto(`/admin/as-tickets/${TICKET_ID}`);
+
+  await expect(page.getByTestId('admin-ticket-issue-spotlight')).toHaveCount(0);
+  await expect(page.getByTestId('admin-ticket-receipt')).toContainText('권장 처리');
+  await expect(page.getByTestId('admin-ticket-support-chat')).toBeVisible();
+  const pageHasHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(pageHasHorizontalOverflow).toBe(false);
+  const chatMessage = page.getByText('게임 실행 후 온도가 95도까지 올라갑니다.', { exact: true });
+  await expect(chatMessage).toBeVisible();
+  const chatFontSize = await chatMessage.evaluate((element) => Number.parseFloat(window.getComputedStyle(element).fontSize));
+  expect(chatFontSize).toBeGreaterThanOrEqual(15);
+});
+
 test('starts the existing Chrome remote support flow from chat and sends the official link', async ({ page }) => {
   let postedMessage: Record<string, unknown> | undefined;
   await mockAdmin(page);

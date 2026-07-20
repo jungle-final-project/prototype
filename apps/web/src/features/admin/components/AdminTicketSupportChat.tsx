@@ -220,9 +220,10 @@ export function AdminTicketSupportChat({ ticketId, remoteSupport }: { ticketId: 
       <Panel
         title="상담방"
         subtitle="이 AS 티켓의 사용자 상담방입니다. 방문 예약과 상담방 삭제는 상담방 관리에서 처리합니다."
+        className="shadow-sm"
         action={(
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Link className="shrink-0 text-xs font-bold text-brand-blue hover:underline" to="/admin/support-chat-sessions">상담방 관리로 이동</Link>
+            <Link className="shrink-0 text-sm font-bold text-brand-blue hover:underline" to="/admin/support-chat-sessions">상담방 관리로 이동</Link>
           </div>
         )}
       >
@@ -236,15 +237,15 @@ export function AdminTicketSupportChat({ ticketId, remoteSupport }: { ticketId: 
         {sessionId && detailQuery.data ? (
           <>
             <div className="mb-2 flex items-center justify-end">
-              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-black ${connectionClass(socketStatus)}`}>
+              <span className={`rounded-full border px-2.5 py-1 text-xs font-black ${connectionClass(socketStatus)}`}>
                 {socketStatusLabel(socketStatus)}
               </span>
             </div>
-            <div className="h-[340px] overflow-hidden rounded-md border border-slate-200 bg-slate-50 sm:h-[380px] lg:h-[440px]">
+            <div className="h-[380px] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 sm:h-[420px] xl:h-[500px]">
               <div
                 ref={messagesRef}
                 data-testid="admin-ticket-support-chat-messages"
-                className="h-full overflow-y-auto p-4"
+                className="h-full overflow-y-auto p-4 sm:p-5"
                 onScroll={(event) => {
                   wasAtBottomRef.current = isNearBottom(event.currentTarget);
                 }}
@@ -265,7 +266,7 @@ export function AdminTicketSupportChat({ ticketId, remoteSupport }: { ticketId: 
                 <div className="space-y-2">
                   <div className="flex gap-2">
                     <input
-                      className="h-11 min-w-0 flex-1 rounded-md border border-slate-300 px-3 text-sm focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
+                      className="h-12 min-w-0 flex-1 rounded-md border border-slate-300 px-4 text-base font-semibold focus:border-brand-blue focus:outline-none focus:ring-4 focus:ring-blue-100"
                       placeholder="관리자 답변을 입력하세요"
                       value={message}
                       maxLength={2000}
@@ -277,13 +278,13 @@ export function AdminTicketSupportChat({ ticketId, remoteSupport }: { ticketId: 
                     <button
                       type="submit"
                       disabled={!canSend}
-                      className="inline-flex h-11 min-w-28 shrink-0 items-center justify-center gap-1 rounded-md bg-brand-blue px-4 text-sm font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                      className="inline-flex h-12 min-w-28 shrink-0 items-center justify-center gap-1.5 rounded-md bg-brand-blue px-4 text-sm font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                     >
                       <Send size={14} />
                       {sendMutation.isPending ? '전송 중' : '답변 전송'}
                     </button>
                   </div>
-                  <div className="flex items-center justify-between text-[11px]">
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-xs leading-5">
                     <span className={`font-bold ${sendError ? 'text-rose-700' : 'text-slate-500'}`} role={sendError ? 'alert' : undefined}>
                       {sendError ?? 'Enter 키로 즉시 전송합니다. 전송 후 입력창은 자동으로 비워집니다.'}
                     </span>
@@ -300,7 +301,7 @@ export function AdminTicketSupportChat({ ticketId, remoteSupport }: { ticketId: 
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-black text-slate-950">Chrome 원격 지원</p>
-                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">
+                    <p className="mt-1 text-sm font-semibold leading-6 text-slate-700">
                       {remoteSupportStatusDescription(remoteSupport.status, remoteSupport.canRequest)}
                     </p>
                   </div>
