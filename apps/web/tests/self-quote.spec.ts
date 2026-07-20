@@ -528,7 +528,7 @@ test('AI part location focus spotlights all 8 categories across fused, motherboa
   expect(draftMutationMethods).toHaveLength(0);
   expect(buildChatBodies).toHaveLength(focusCases.length + 1);
   for (const body of buildChatBodies) {
-    expect(body.uiContext).toEqual({ surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] });
+    expect(body.uiContext).toEqual({ surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL'] });
   }
 
   await page.getByTestId('slot-board-ai-focus-clear').click();
@@ -4502,6 +4502,76 @@ test('opens the candidate panel from the category deep link', async ({ page }) =
   await panel.getByRole('button', { name: '후보 패널 닫기' }).click();
   await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
   await expect(page).toHaveURL('/self-quote');
+});
+
+// 챗봇에 "케이스 추천해줘" → 서버가 partRecommendation을 내려주면 그 카테고리 부품 목록이 열리고,
+// AI가 고른 순서가 목록 맨 위에 온다. 상품 나열은 말풍선이 아니라 이 패널이 맡는다.
+test('챗봇 부품 추천은 부품 목록 패널을 열고 추천 순서를 맨 위에 올린다', async ({ page }) => {
+  await loginAsUser(page);
+  // 챗봇은 authUser로 대화 저장소 주인을 정한다 — 없으면 보내기 자체가 막힌다.
+  await page.addInitScript(() => {
+    localStorage.setItem('buildgraph.authUser', JSON.stringify({
+      id: 'user-part-recommend', email: 'user@example.com', name: 'Part Recommend User', role: 'USER'
+    }));
+  });
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullDraft) });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    // 서버 정렬은 가격순이라 추천 2순위가 목록 3번째로 온다 — 프론트가 다시 올려야 한다.
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          candidatePart('case-other', 'CASE', '무관한 케이스'),
+          candidatePart('case-pick-1', 'CASE', '추천 케이스 1'),
+          candidatePart('case-pick-2', 'CASE', '추천 케이스 2')
+        ],
+        page: 0,
+        size: 20,
+        total: 3
+      })
+    });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'PART',
+        message: '내부 자산 기준으로 고른 케이스 추천 2개를 부품 목록에 띄웠어요.',
+        builds: [],
+        warnings: [],
+        partRecommendation: {
+          category: 'CASE',
+          options: [
+            { partId: 'case-pick-1', name: '추천 케이스 1', price: 90000 },
+            { partId: 'case-pick-2', name: '추천 케이스 2', price: 120000 }
+          ]
+        }
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill('케이스 추천해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  // 패널이 그 카테고리로 열린다 — 사용자가 슬롯을 누르지 않았는데도.
+  const panel = page.getByTestId('slot-candidate-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('heading', { name: '케이스 부품 목록' })).toBeVisible();
+  await expect(page).toHaveURL('/self-quote?category=CASE');
+
+  // 추천이 서버 정렬을 제치고 위로 온다.
+  const names = panel.getByTestId('slot-candidate-list').locator('[data-testid="slot-candidate-card"]');
+  await expect(names.first()).toContainText('추천 케이스 1');
+
+  // 검색을 시작하면 추천 고정을 그만둔다 — 그때부터 목록의 주인은 사용자다.
+  await panel.getByTestId('candidate-search').fill('무관한');
+  await expect(panel.getByText('무관한 케이스')).toBeVisible();
 });
 
 test('redirects logged-out slot board access to login', async ({ page }) => {

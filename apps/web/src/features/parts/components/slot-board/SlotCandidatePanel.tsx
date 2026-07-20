@@ -7,6 +7,7 @@ import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay'
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
+import { readAiPartPicks } from '../../../quote/aiSelection';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { FLOATING_CONTROL_STRIP_HEIGHT, isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 import { useBoardDrag, useIsDesktop } from './useBoardDrag';
@@ -81,6 +82,11 @@ export function SlotCandidatePanel({
   const [onlyWishlist, setOnlyWishlist] = useState(false);
   // 필터는 기본 접힘 — 제목 바로 아래 검색, 그 밑은 바로 후보가 되도록 자리를 비운다.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // 챗봇이 이 카테고리로 추천해 열었다면 그 순서가 남아 있다. 슬롯을 바꾸면 다시 읽는다.
+  const [aiPickedPartIds, setAiPickedPartIds] = useState<string[]>(() => readAiPartPicks(slot.category));
+  useEffect(() => {
+    setAiPickedPartIds(readAiPartPicks(slot.category));
+  }, [slot.category]);
   const activeFilterCount = [manufacturer, minPriceInput, maxPriceInput].filter(Boolean).length
     + (onlyWishlist ? 1 : 0)
     + (hideFail ? 1 : 0);
@@ -225,8 +231,18 @@ export function SlotCandidatePanel({
     if (onlyWishlist) {
       list = list.filter((part) => wishlist.has(part.id));
     }
+    // 챗봇이 골라 준 후보를 그 순서대로 맨 위로 올린다. 사용자가 검색어를 치는 순간 그만둔다 —
+    // 그때부터는 "챗봇이 추천한 것"이 아니라 "내가 찾는 것"이 목록의 주인이다.
+    if (aiPickedPartIds.length > 0 && !q) {
+      const rank = new Map(aiPickedPartIds.map((partId, index) => [partId, index]));
+      list = [...list].sort((left, right) => {
+        const leftRank = rank.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+        const rightRank = rank.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+        return leftRank - rightRank;
+      });
+    }
     return list;
-  }, [visibleParts, hideFail, onlyWishlist, wishlist]);
+  }, [visibleParts, hideFail, onlyWishlist, wishlist, aiPickedPartIds, q]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -482,6 +498,7 @@ export function SlotCandidatePanel({
             return (
               <article
                 key={part.id}
+                data-testid="slot-candidate-card"
                 data-compat={part.compatibility?.status ?? 'NONE'}
                 data-recommended={part.recommendation?.recommended ? 'true' : 'false'}
                 className={`flex items-center gap-3 rounded-md border p-2.5 ${

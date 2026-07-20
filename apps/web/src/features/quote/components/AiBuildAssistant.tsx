@@ -21,6 +21,8 @@ import {
   getAiStorageOwnerKey,
   mergeAiBuildHistory,
   navigationRouteFrom,
+  partRecommendationFrom,
+  rememberAiPartPicks,
   normalizeAiBuilds,
   type AiQuickReplyKind,
   normalizeAiRecommendedBuild,
@@ -562,9 +564,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         message: nextPrompt,
         currentBuilds: recentBuildsForChatContext(baseSession),
         currentQuoteDraft,
+        // PART_CANDIDATE_PANEL은 두 화면 모두 선언한다 — 홈에서 물어도 셀프견적으로 옮겨
+        // 패널을 열기 때문이다. 이 신호가 있어야 서버가 상품 나열을 패널에 넘기고 말풍선을 줄인다.
         uiContext: surface === 'self-quote'
-          ? { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] }
-          : { surface: 'HOME', capabilities: [] },
+          ? { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL'] }
+          : { surface: 'HOME', capabilities: ['PART_CANDIDATE_PANEL'] },
         assessmentContext,
         // 칩은 직전 질문에 대한 "답"이 아니라 "선택"이다 — 원문 에코를 함께 보내면 서버가 두 문장을
         // 합성해 상품명이 묻힌다. 서버에도 같은 가드가 있지만 보내지 않는 쪽이 계약상 정확하다.
@@ -634,6 +638,21 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         // 눌러야 하는 히스토리가 쌓인다. 경로가 같아도 검색어(q)가 다르면 다른 화면이므로 이동한다.
         if (navigationRoute !== currentRouteKey(locationRef.current)) {
           navigate(navigationRoute);
+        }
+      }
+      // 부품 추천이면 상품 나열을 부품 목록 패널에 넘긴다(말풍선은 서버가 이미 줄여서 보냈다).
+      // 홈에서 물었어도 같은 경로로 셀프견적에 보낸다 — 채팅 기록은 세션에 남아 그쪽에서 이어진다.
+      // 이동과 같은 가드를 태운다: 늦게 온 답이 사용자가 이미 떠난 화면을 끌고 가면 안 된다.
+      const partRecommendation = partRecommendationFrom(response);
+      if (partRecommendation && canFollowNavigation(requestId, sentFromPathname)) {
+        // 추천 순서는 화면 이동을 건너뛰지 못한다 — 옮겨 가며 이 컴포넌트가 언마운트되기 때문이다.
+        rememberAiPartPicks(partRecommendation);
+        const candidatePanelRoute = `/self-quote?category=${partRecommendation.category}`;
+        if (!isEmbedded) {
+          setOpen(false);
+        }
+        if (candidatePanelRoute !== currentRouteKey(locationRef.current)) {
+          navigate(candidatePanelRoute);
         }
       }
       const verifiedRepairBuild = responseBuilds?.length === 1
