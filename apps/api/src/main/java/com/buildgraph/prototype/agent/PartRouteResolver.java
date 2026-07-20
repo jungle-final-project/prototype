@@ -70,6 +70,11 @@ public class PartRouteResolver {
         String category = firstText(categoryFrom(selectedCategory), inferCategory(message));
         String partQuery = extractPartQuery(message);
         String route = resolvePartDetailRoute(partQuery, category);
+        if (route == null && category != null) {
+            // 카테고리 추정이 틀리면(예: 'FRAME'이 든 케이스명) 이름이 정확히 일치하는 상품조차 못 찾는다.
+            // 카테고리 없이 한 번 더 — 단일 정확 일치만 통과하므로 여전히 안전하다.
+            route = resolvePartDetailRoute(partQuery, null);
+        }
         if (route != null) {
             return Optional.of(new ResolvedRoute(
                     route,
@@ -78,15 +83,8 @@ public class PartRouteResolver {
                     "FAST_PART_DETAIL_ROUTE"
             ));
         }
-        if (category != null) {
-            String filterRoute = resolveCategoryFilterRoute(partQuery, category);
-            return Optional.of(new ResolvedRoute(
-                    filterRoute,
-                    categoryLabel(category) + " 후보 보기",
-                    categoryLabel(category) + " 후보 화면으로 이동했습니다.",
-                    "FAST_PART_DETAIL_FILTER_ROUTE"
-            ));
-        }
+        // 목록 대체 이동은 이 경로에서 하지 않는다. 상품을 하나로 특정했을 때만 결정적으로 이동하고,
+        // 못 특정하면 빈 값을 돌려 기존 LLM 경로(후보 칩 되묻기 → 목록 폴백)가 그대로 담당하게 한다.
         return Optional.empty();
     }
 
@@ -106,18 +104,6 @@ public class PartRouteResolver {
             return "/self-quote?category=" + safeCategory;
         }
         return "/self-quote?category=" + safeCategory + "&q=" + URLEncoder.encode(searchTerm, StandardCharsets.UTF_8);
-    }
-
-    public String resolveCategoryFilterRoute(String partQuery, String category) {
-        String safeCategory = categoryFrom(category);
-        if (safeCategory == null) {
-            return null;
-        }
-        String query = firstText(extractPartQuery(partQuery), null);
-        if (query == null) {
-            return "/self-quote?category=" + safeCategory;
-        }
-        return "/self-quote?category=" + safeCategory + "&q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
     }
 
     public String resolvePartDetailRoute(String partQuery, String category) {
@@ -316,12 +302,17 @@ public class PartRouteResolver {
     }
 
     private static boolean hasProductRouteIntent(String normalized) {
-        return containsAnyNormalized(normalized, "상세", "상품페이지", "제품페이지", "제품상세", "상품상세", "보여", "열어", "이동", "페이지")
+        // 결정적 경로는 '화면을 옮겨 달라'가 문장에 명시된 경우로만 좁힌다. 맨 '상세'·'보여'는
+        // "상세 스펙 알려줘"·"성능 보여줘"처럼 답변을 원하는 문장까지 끌어와 LLM 몫을 뺏는다.
+        return containsAnyNormalized(normalized, "상세페이지", "상품페이지", "제품페이지", "제품상세", "상품상세", "이동", "열어", "페이지")
                 && !containsAnyNormalized(normalized, "추천해", "추천좀", "추천", "견적추천", "pc추천");
     }
 
     private static boolean hasActionMutationIntent(String normalized) {
-        return containsAnyNormalized(normalized, "담아", "넣어", "적용", "추가", "빼", "삭제", "제거", "바꿔", "교체", "수량", "변경", "가격알림");
+        return containsAnyNormalized(normalized, "담아", "넣어", "적용", "추가", "빼", "삭제", "제거", "바꿔", "교체", "수량", "변경", "가격알림",
+                // BuildChatIntentRouter의 mutation 어휘와 맞춘다 — 거기서 UNSUPPORTED로 떨어진
+                // 드래프트 조작 명령이 이동 게이트로 새지 않게.
+                "올려줘", "올려주", "내려줘", "낮춰", "줄여", "늘려");
     }
 
     public static boolean hasConcreteProductHint(String message) {
@@ -473,20 +464,6 @@ public class PartRouteResolver {
         }
         String normalized = value.trim().toUpperCase(Locale.ROOT);
         return CATEGORIES.contains(normalized) ? normalized : null;
-    }
-
-    private static String categoryLabel(String category) {
-        return switch (category) {
-            case "CPU" -> "CPU";
-            case "MOTHERBOARD" -> "메인보드";
-            case "RAM" -> "RAM";
-            case "GPU" -> "GPU";
-            case "STORAGE" -> "SSD";
-            case "PSU" -> "파워";
-            case "CASE" -> "케이스";
-            case "COOLER" -> "쿨러";
-            default -> "부품";
-        };
     }
 
     private static String firstText(String first, String fallback) {

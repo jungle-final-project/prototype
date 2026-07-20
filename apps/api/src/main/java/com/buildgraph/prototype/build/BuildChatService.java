@@ -466,6 +466,36 @@ public class BuildChatService {
                     "redisMs=" + redisMs);
             return withConversationTransition(response, recommendationConversationTransition);
         }
+        // 결정적 이동: "{정확한 상품명} 상세페이지로 이동해"류를 LLM 없이 즉시 처리한다.
+        // 라우터가 UNSUPPORTED로 본 턴에서만 시도한다 — 견적 추천·시뮬·점수설명·보드포커스·되묻기는
+        // 이미 위에서 각자 경로로 빠졌으므로, 여기서는 구조적으로 '이동만' 가로챌 수 있다.
+        // 상품을 하나로 특정했을 때만 이동하고, 못 하면 조용히 기존 LLM 경로로 떨어진다.
+        if (partRouteResolver != null && intentDecision.intent() == BuildChatIntent.UNSUPPORTED) {
+            Optional<PartRouteResolver.ResolvedRoute> fastRoute;
+            try {
+                fastRoute = partRouteResolver.resolveFastRoute(message, text(body.get("selectedCategory")));
+            } catch (RuntimeException error) {
+                // 이동 해상은 부가 기능이다 — DB가 흔들려도 대화를 끊지 않고 LLM 경로로 넘긴다.
+                log.warn("Build Chat deterministic route resolution failed, falling back to LLM path", error);
+                fastRoute = Optional.empty();
+            }
+            if (fastRoute.isPresent()) {
+                PartRouteResolver.ResolvedRoute resolved = fastRoute.get();
+                Map<String, Object> response = fastResponse("GENERAL", resolved.message(), List.of());
+                // navigationActions()가 만드는 모양과 정확히 같게 — 프론트가 두 경로를 구분하지 않게 한다.
+                response.put("actions", List.of(MockData.map(
+                        "type", AiChatActionType.OPEN_ROUTE.name(),
+                        "label", resolved.label(),
+                        "payload", MockData.map("route", resolved.route())
+                )));
+                // 이동한 턴은 완결 응답이라 되묻기 에코도 다음 행동 칩도 붙이지 않는다.
+                // 캐시에도 넣지 않는다 — 이미 DB 조회만으로 끝나 아낄 LLM 비용이 없고,
+                // /parts/{uuid}를 캐싱하면 비활성화된 상품 경로를 TTL 동안 계속 내보낸다.
+                logBuildChatPath("FAST_PART_DETAIL_ROUTE", startedNanos, userId, requestedAiProfile, false,
+                        BuildChatGuardStats.empty(), "redisMs=" + redisMs);
+                return response;
+            }
+        }
         Optional<Map<String, Object>> fastPartRecommendation = deterministicPartRecommendationResponse(body, message, user);
         if (fastPartRecommendation.isPresent()) {
             Map<String, Object> response = fastPartRecommendation.get();
