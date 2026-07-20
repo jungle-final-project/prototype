@@ -418,6 +418,8 @@ export type AiPartRecommendation = {
 };
 
 const AI_PART_PICKS_KEY = 'buildgraph.aiPartPicks';
+/** 추천 순서가 바뀌었다는 신호. 패널이 이미 그 카테고리로 열려 있으면 주소가 안 바뀌어 이 신호로만 안다. */
+export const AI_PART_PICKS_CHANGED_EVENT = 'buildgraph:ai-part-picks-changed';
 
 /** 답변에 실려 온 추천 결과를 꺼낸다. 카테고리가 우리가 아는 8개가 아니면 버린다. */
 export function partRecommendationFrom(response: AiBuildChatResponse): AiPartRecommendation | null {
@@ -435,21 +437,37 @@ export function partRecommendationFrom(response: AiBuildChatResponse): AiPartRec
  * 메모리로는 전달할 수 없다. URL에 UUID를 나열하면 주소가 100자를 넘어 지저분해진다.
  * sessionStorage는 이 저장소가 이미 챗봇→화면 전달에 쓰는 방식이다(견적 비교 패널).
  */
-export function rememberAiPartPicks(recommendation: AiPartRecommendation) {
+export function rememberAiPartPicks(
+  recommendation: AiPartRecommendation,
+  ownerKey: string | null = getAiStorageOwnerKey()
+) {
+  // 이 순서는 "이 사용자의 현재 견적 기준으로 고른 결과"다 — 같은 탭에서 계정이 바뀌면
+  // 남의 견적으로 뽑힌 순서가 된다. 다른 AI 저장소와 같이 소유자별로 쪼갠다.
+  const storageKey = getScopedAiStorageKey(AI_PART_PICKS_KEY, ownerKey);
+  if (!storageKey) return;
   try {
-    sessionStorage.setItem(AI_PART_PICKS_KEY, JSON.stringify({
+    sessionStorage.setItem(storageKey, JSON.stringify({
       category: recommendation.category,
       partIds: recommendation.options.map((option) => option.partId)
     }));
   } catch {
     // sessionStorage 접근 불가(프라이빗 모드 등)면 추천 순서만 포기한다 — 패널은 그대로 열린다.
+    return;
   }
+  // 패널이 이미 그 카테고리로 열려 있으면 주소가 안 바뀌어 리마운트도 이펙트도 없다.
+  // 이 신호가 없으면 챗봇은 "띄웠어요"라고 말하는데 목록은 한 글자도 안 바뀐다.
+  window.dispatchEvent(new Event(AI_PART_PICKS_CHANGED_EVENT));
 }
 
 /** 그 카테고리로 남겨 둔 추천 순서. 다른 카테고리를 열었으면 빈 배열이다. */
-export function readAiPartPicks(category: PartCategory): string[] {
+export function readAiPartPicks(
+  category: PartCategory,
+  ownerKey: string | null = getAiStorageOwnerKey()
+): string[] {
+  const storageKey = getScopedAiStorageKey(AI_PART_PICKS_KEY, ownerKey);
+  if (!storageKey) return [];
   try {
-    const raw = sessionStorage.getItem(AI_PART_PICKS_KEY);
+    const raw = sessionStorage.getItem(storageKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as { category?: string; partIds?: unknown };
     if (parsed.category !== category || !Array.isArray(parsed.partIds)) return [];
@@ -457,6 +475,21 @@ export function readAiPartPicks(category: PartCategory): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * 추천 고정을 푼다. 사용자가 정렬을 직접 바꾸면 목록의 주인은 사용자다 —
+ * 지우지 않으면 다시 열 때 이미 지나간 추천이 조용히 되살아난다.
+ */
+export function clearAiPartPicks(ownerKey: string | null = getAiStorageOwnerKey()) {
+  const storageKey = getScopedAiStorageKey(AI_PART_PICKS_KEY, ownerKey);
+  if (!storageKey) return;
+  try {
+    sessionStorage.removeItem(storageKey);
+  } catch {
+    return;
+  }
+  window.dispatchEvent(new Event(AI_PART_PICKS_CHANGED_EVENT));
 }
 
 export const PART_CATEGORY_LABELS: Record<PartCategory, string> = {

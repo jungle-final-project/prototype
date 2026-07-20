@@ -7,7 +7,7 @@ import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay'
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
-import { readAiPartPicks } from '../../../quote/aiSelection';
+import { AI_PART_PICKS_CHANGED_EVENT, clearAiPartPicks, readAiPartPicks } from '../../../quote/aiSelection';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { FLOATING_CONTROL_STRIP_HEIGHT, isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 import { useBoardDrag, useIsDesktop } from './useBoardDrag';
@@ -16,6 +16,10 @@ import { useBoardDrag, useIsDesktop } from './useBoardDrag';
 const PERF_COMPARABLE = new Set(['CPU', 'GPU']);
 
 const CANDIDATE_PAGE_SIZE = 20;
+
+// 챗봇 추천을 찾으러 당겨 올 최대 장수(20건×10 = 200건). 카테고리 하나가 이보다 크면
+// 추천이 목록에 없을 수 있지만, 열자마자 수십 번 요청하는 편보다 낫다.
+const AI_PICK_AUTOLOAD_PAGE_LIMIT = 10;
 
 // 데스크톱 패널 초기 위치·크기: 보드 스테이지 좌측에 떠 있던 기존 배치를 재현하되,
 // 헤더 제거 리디자인 이후 스테이지 좌상단에 사는 플로팅 컨트롤(문제 칩·다음 가이드·AI 강조)을
@@ -85,7 +89,12 @@ export function SlotCandidatePanel({
   // 챗봇이 이 카테고리로 추천해 열었다면 그 순서가 남아 있다. 슬롯을 바꾸면 다시 읽는다.
   const [aiPickedPartIds, setAiPickedPartIds] = useState<string[]>(() => readAiPartPicks(slot.category));
   useEffect(() => {
-    setAiPickedPartIds(readAiPartPicks(slot.category));
+    const sync = () => setAiPickedPartIds(readAiPartPicks(slot.category));
+    sync();
+    // 패널이 이미 그 카테고리로 열려 있으면 챗봇이 다시 추천해도 주소가 안 바뀐다 —
+    // 리마운트도 카테고리 변경도 없으므로 이 신호로만 새 순서를 안다.
+    window.addEventListener(AI_PART_PICKS_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(AI_PART_PICKS_CHANGED_EVENT, sync);
   }, [slot.category]);
   const activeFilterCount = [manufacturer, minPriceInput, maxPriceInput].filter(Boolean).length
     + (onlyWishlist ? 1 : 0)
@@ -209,6 +218,16 @@ export function SlotCandidatePanel({
   });
 
   const pages = useMemo(() => data?.pages ?? [], [data]);
+  // 챗봇 추천은 목록에 실려 있어야 위로 올릴 수 있다. 그런데 목록은 기본 가격순 20건씩이라
+  // 비싼 추천(최상위 GPU 등)은 첫 장에 없다 — 그대로 두면 "부품 목록에 띄웠어요"가 거짓말이 된다.
+  // 추천이 다 실릴 때까지만 다음 장을 당겨 오고, 못 찾아도 정해진 장수에서 멈춘다(무한 당김 방지).
+  const loadedPartIds = useMemo(() => new Set(pages.flatMap((page) => page.items.map((item) => item.id))), [pages]);
+  useEffect(() => {
+    if (aiPickedPartIds.length === 0 || q) return;
+    if (!hasNextPage || isFetchingNextPage || pages.length >= AI_PICK_AUTOLOAD_PAGE_LIMIT) return;
+    if (aiPickedPartIds.every((partId) => loadedPartIds.has(partId))) return;
+    void fetchNextPage();
+  }, [aiPickedPartIds, q, hasNextPage, isFetchingNextPage, pages.length, loadedPartIds, fetchNextPage]);
   // 멘토 피드백: 비호환 후보를 숨기지 않는다 — 전부 보여주되 FAIL은 회색 비활성 + 사유를 표시해
   // 사용자가 "왜 안 되는지"를 알 수 있게 한다.
   const visibleParts = useMemo(() => pages.flatMap((page) => page.items), [pages]);
@@ -319,7 +338,15 @@ export function SlotCandidatePanel({
             <select
               aria-label="후보 정렬 기준"
               value={sort}
-              onChange={(event) => setSort(event.target.value as PartSearchParams['sort'])}
+              onChange={(event) => {
+                setSort(event.target.value as PartSearchParams['sort']);
+                // 정렬을 직접 바꿨으면 목록의 주인은 사용자다 — AI 추천 고정을 놓는다.
+                // 놓지 않으면 '가격 높은순'을 골라도 맨 위 몇 줄만 그 정렬을 안 따라
+                // 정렬이 고장 난 것처럼 보인다.
+                if (aiPickedPartIds.length > 0) {
+                  clearAiPartPicks();
+                }
+              }}
               className="bg-transparent text-xs font-bold text-slate-700 outline-none"
             >
               <option value="compatibility">호환 가능 우선</option>
