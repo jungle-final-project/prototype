@@ -2034,6 +2034,91 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredPartDetailAsksWhichProductInChatWhenOnlyAFewCandidatesMatch() {
+        // 후보가 둘뿐이면 목록 화면까지 옮길 이유가 없다 — 채팅에서 바로 고르게 한다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9800X3D 상세페이지로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9800X3D",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        when(jdbcTemplate.queryForList(
+                anyString(),
+                eq("CPU"),
+                eq("9800X3D"),
+                eq("9800X3D"),
+                eq("9800X3D")
+        )).thenReturn(List.of(
+                Map.of(
+                        "id", "11111111-1111-4111-8111-111111111111",
+                        "category", "CPU",
+                        "name", "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩)",
+                        "manufacturer", "AMD"
+                ),
+                Map.of(
+                        "id", "22222222-2222-4222-8222-222222222222",
+                        "category", "CPU",
+                        "name", "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티",
+                        "manufacturer", "AMD"
+                )
+        ));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9800X3D 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        // 화면 이동은 하지 않는다 — 고르고 나서 옮긴다.
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .isEmpty();
+        assertThat(response.parsedContext().get("routeChoiceChips"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.list(String.class))
+                .containsExactly(
+                        "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해",
+                        "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티 상세페이지로 이동해");
+        assertThat(response.assistantMessage())
+                .isEqualTo("'9800X3D'에 해당하는 상품이 2개예요. 어느 쪽인지 골라 주세요.");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredPartDetailRouteAvoidsAmbiguousProductAutoNavigation() {
         stubBuildChatPlan("""
                 {
@@ -2090,6 +2175,24 @@ class DefaultAiChatEngineTest {
                         "category", "GPU",
                         "name", "MSI GeForce RTX 5090 SUPRIM 32GB",
                         "manufacturer", "MSI"
+                ),
+                Map.of(
+                        "id", "00000000-0000-4000-8000-000000005092",
+                        "category", "GPU",
+                        "name", "GIGABYTE GeForce RTX 5090 AORUS MASTER 32GB",
+                        "manufacturer", "GIGABYTE"
+                ),
+                Map.of(
+                        "id", "00000000-0000-4000-8000-000000005093",
+                        "category", "GPU",
+                        "name", "ZOTAC GeForce RTX 5090 SOLID 32GB",
+                        "manufacturer", "ZOTAC"
+                ),
+                Map.of(
+                        "id", "00000000-0000-4000-8000-000000005094",
+                        "category", "GPU",
+                        "name", "PALIT GeForce RTX 5090 GameRock 32GB",
+                        "manufacturer", "PALIT"
                 )
         ));
 
@@ -2103,10 +2206,12 @@ class DefaultAiChatEngineTest {
                 1L
         ));
 
+        // 특정 상품을 임의로 고르지 않는다. 후보가 칩으로 되묻기엔 너무 많으므로 후보 목록 화면으로 보낸다.
         assertThat(response.actions())
                 .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
                 .singleElement()
                 .satisfies(action -> assertThat(action.payload()).containsEntry("route", "/self-quote?category=GPU&q=5090"));
+        assertThat(response.parsedContext()).doesNotContainKey("routeChoiceChips");
         verifyNoJdbcWrites();
     }
 

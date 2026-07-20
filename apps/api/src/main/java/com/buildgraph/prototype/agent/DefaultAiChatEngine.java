@@ -126,6 +126,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
     );
     /** 상품 상세를 요청받았지만 하나로 특정하지 못해 카테고리 후보 목록으로 대신 보냈다는 표식. */
     private static final String PART_DETAIL_LIST_FALLBACK = "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK";
+    /** 채팅에서 되물어 고르게 할 최대 후보 수. 이보다 많으면 칩 대신 후보 목록 화면으로 보낸다. */
+    private static final int MAX_ROUTE_CHOICE_CHIPS = 4;
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
@@ -261,10 +263,16 @@ public class DefaultAiChatEngine implements AiChatEngine {
             parsedContext.put("partConstraint", partConstraint);
         }
         String assistantMessage = firstText(text(plan.get("assistantMessage")), null);
-        EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
+        RoutePlan routePlan = planRoute(objectMap(plan.get("routeIntent")), selectedCategory);
+        EngineRouteIntent routeIntent = routePlan.routeIntent();
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
             assistantMessage = correctedRouteMessage(assistantMessage, routeIntent);
+        }
+        if (!routePlan.choiceChips().isEmpty()) {
+            // 화면을 옮기는 대신 채팅에서 고르게 하는 턴 — 칩과 되묻기 문구가 LLM 원문을 대신한다.
+            parsedContext.put("routeChoiceChips", routePlan.choiceChips());
+            assistantMessage = firstText(routePlan.message(), assistantMessage);
         }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
         Map<String, Object> supportIntent = normalizeSupportIntent(objectMap(plan.get("supportIntent")));
@@ -928,33 +936,51 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return compact.contains("상세페이지") || compact.contains("상품페이지") || compact.contains("제품페이지");
     }
 
-    private EngineRouteIntent normalizeRouteIntent(Map<String, Object> source, String selectedCategory) {
+    private RoutePlan planRoute(Map<String, Object> source, String selectedCategory) {
         if (!Boolean.TRUE.equals(source.get("shouldNavigate"))) {
-            return null;
+            return RoutePlan.NONE;
         }
         if (!"HIGH".equals(text(source.get("confidence")))) {
-            return null;
+            return RoutePlan.NONE;
         }
         String routeType = text(source.get("routeType"));
         String category = firstText(categoryFrom(text(source.get("category"))), selectedCategory);
         String reason = firstText(text(source.get("reason")), "LLM_ROUTE_INTENT");
-        String route = switch (routeType == null ? "NONE" : routeType) {
-            case "CATEGORY" -> category == null ? null : "/self-quote?category=" + category;
-            case "SELF_QUOTE" -> "/self-quote";
-            case "MY_QUOTES" -> "/my/quotes";
-            case "REQUIREMENT_NEW" -> "/requirements/new";
-            case "SUPPORT_NEW" -> "/support/new";
-            case "SUPPORT_AI_CHAT" -> "/support/ai-chat";
-            case "CHECKOUT" -> "/checkout";
-            case "PART_DETAIL" -> partRouteResolver.resolvePartDetailRoute(text(source.get("partQuery")), category);
-            default -> null;
-        };
+        String partQuery = text(source.get("partQuery"));
+        List<String> choices = List.of();
+        String route = null;
+        if ("PART_DETAIL".equals(routeType)) {
+            PartRouteResolver.PartDetailResolution resolution = partRouteResolver.resolvePartDetail(partQuery, category);
+            route = resolution.route();
+            choices = resolution.choices();
+        } else {
+            route = switch (routeType == null ? "NONE" : routeType) {
+                case "CATEGORY" -> category == null ? null : "/self-quote?category=" + category;
+                case "SELF_QUOTE" -> "/self-quote";
+                case "MY_QUOTES" -> "/my/quotes";
+                case "REQUIREMENT_NEW" -> "/requirements/new";
+                case "SUPPORT_NEW" -> "/support/new";
+                case "SUPPORT_AI_CHAT" -> "/support/ai-chat";
+                case "CHECKOUT" -> "/checkout";
+                default -> null;
+            };
+        }
+        // 후보가 두어 개뿐이면 화면을 옮기지 않고 채팅에서 바로 고르게 한다 —
+        // 두 개 중 하나 고르는 일에 목록 화면까지 이동시킬 이유가 없다.
+        if (route == null && choices.size() >= 2 && choices.size() <= MAX_ROUTE_CHOICE_CHIPS) {
+            return RoutePlan.choices(
+                    choices.stream().map(name -> name + " 상세페이지로 이동해").toList(),
+                    partQuery == null
+                            ? "말씀하신 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
+                            : "'" + partQuery + "'에 해당하는 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
+            );
+        }
         if (route == null && "PART_DETAIL".equals(routeType)) {
             // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
             // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
-            String listCategory = firstText(category, PartRouteResolver.inferCategory(text(source.get("partQuery"))));
+            String listCategory = firstText(category, PartRouteResolver.inferCategory(partQuery));
             if (listCategory != null) {
-                route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), listCategory);
+                route = partRouteResolver.resolveCategoryFilterRoute(partQuery, listCategory);
                 category = listCategory;
                 // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
                 // LLM이 써 준 reason 대신 이 표식을 남긴다.
@@ -962,17 +988,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
             }
         }
         if (!isAllowedRoute(route)) {
-            return null;
+            return RoutePlan.NONE;
         }
-        return new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
+        return RoutePlan.route(new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
                 "shouldNavigate", true,
                 "routeType", routeType,
                 "category", category,
-                "partQuery", text(source.get("partQuery")),
+                "partQuery", partQuery,
                 "confidence", text(source.get("confidence")),
                 "resolvedRoute", route,
                 "reason", reason
-        ));
+        )));
     }
 
     private static Map<String, Object> normalizeBoardFocusIntent(Map<String, Object> source) {
@@ -3653,6 +3679,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
     }
 
     private record EngineRouteIntent(String route, String label, String reason, Map<String, Object> context) {
+    }
+
+    /**
+     * 이동 요청 처리 결과. 셋 중 하나다 — 바로 이동(routeIntent), 채팅에서 되묻기(choiceChips), 아무것도 아님.
+     */
+    private record RoutePlan(EngineRouteIntent routeIntent, List<String> choiceChips, String message) {
+        static final RoutePlan NONE = new RoutePlan(null, List.of(), null);
+
+        static RoutePlan route(EngineRouteIntent routeIntent) {
+            return new RoutePlan(routeIntent, List.of(), null);
+        }
+
+        static RoutePlan choices(List<String> chips, String message) {
+            return new RoutePlan(null, chips, message);
+        }
     }
 
     private record PartQueryConstraints(

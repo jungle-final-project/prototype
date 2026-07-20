@@ -1424,6 +1424,12 @@ public class BuildChatService {
         if (!navigationActions.isEmpty()) {
             response.put("actions", navigationActions);
         }
+        // 상품을 하나로 특정하지 못했지만 후보가 두어 개뿐이면, 화면을 옮기는 대신 채팅에서 고르게 한다.
+        // 칩 문구가 그대로 다음 질문이 되어 상세 이동 경로를 다시 탄다.
+        List<String> routeChoiceChips = stringList(engineResponse.parsedContext().get("routeChoiceChips"));
+        if (!routeChoiceChips.isEmpty()) {
+            response.put("quickReplies", routeChoiceChips);
+        }
         return response;
     }
 

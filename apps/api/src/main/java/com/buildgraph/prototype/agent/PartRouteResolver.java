@@ -67,14 +67,22 @@ public class PartRouteResolver {
     }
 
     public String resolvePartDetailRoute(String partQuery, String category) {
+        return resolvePartDetail(partQuery, category).route();
+    }
+
+    /**
+     * 상품 상세 경로를 해상한다. 하나로 특정하지 못하면 route는 null이고, 대신 질의에 걸린 후보를 함께 돌려준다 —
+     * 후보가 두어 개뿐이면 목록 화면으로 보내는 대신 채팅에서 바로 골라 달라고 되물을 수 있기 때문이다.
+     */
+    public PartDetailResolution resolvePartDetail(String partQuery, String category) {
         String query = firstText(partQuery, null);
         if (query == null) {
-            return null;
+            return PartDetailResolution.NONE;
         }
         String safeCategory = categoryFrom(category);
         List<Map<String, Object>> rawExactRows = exactRawRows(query.trim(), safeCategory);
         if (rawExactRows.size() == 1) {
-            return "/parts/" + DbValueMapper.string(rawExactRows.get(0), "id");
+            return PartDetailResolution.detail(rawExactRows.get(0));
         }
         if (UUID_TEXT.matcher(query.trim()).matches()) {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
@@ -85,20 +93,20 @@ public class PartRouteResolver {
                               AND deleted_at IS NULL
                             LIMIT 1
                             """, query.trim());
-            return rows.size() == 1 ? "/parts/" + DbValueMapper.string(rows.get(0), "id") : null;
+            return rows.size() == 1 ? PartDetailResolution.detail(rows.get(0)) : PartDetailResolution.NONE;
         }
 
         String normalizedQuery = normalizePartRouteText(query);
         if (normalizedQuery.length() < 3) {
-            return null;
+            return PartDetailResolution.NONE;
         }
         List<Map<String, Object>> normalizedExactRows = exactNormalizedRows(normalizedQuery, safeCategory);
         if (normalizedExactRows.size() == 1) {
-            return "/parts/" + DbValueMapper.string(normalizedExactRows.get(0), "id");
+            return PartDetailResolution.detail(normalizedExactRows.get(0));
         }
         String searchTerm = routeSearchTerm(normalizedQuery);
         if (searchTerm == null) {
-            return null;
+            return PartDetailResolution.NONE;
         }
         List<Map<String, Object>> rows = safeCategory == null
                 ? jdbcTemplate.queryForList("""
@@ -132,19 +140,20 @@ public class PartRouteResolver {
                 .filter(row -> isExactPartRouteMatch(normalizedQuery, row))
                 .toList();
         if (exactMatches.size() == 1) {
-            return "/parts/" + DbValueMapper.string(exactMatches.get(0), "id");
+            return PartDetailResolution.detail(exactMatches.get(0));
         }
         List<Map<String, Object>> strictMatches = rows.stream()
                 .filter(row -> isHighConfidencePartRouteMatch(normalizedQuery, row))
                 .toList();
         if (strictMatches.size() == 1) {
-            return "/parts/" + DbValueMapper.string(strictMatches.get(0), "id");
+            return PartDetailResolution.detail(strictMatches.get(0));
         }
         List<String> tokens = routeTokens(normalizedQuery);
         if (tokens.size() == 1 && isStrongModelToken(tokens.get(0)) && rows.size() == 1) {
-            return "/parts/" + DbValueMapper.string(rows.get(0), "id");
+            return PartDetailResolution.detail(rows.get(0));
         }
-        return null;
+        // 하나로 못 좁혔다 — 무엇이 걸렸는지 후보로 넘겨, 호출자가 되묻기와 목록 이동 중에 고르게 한다.
+        return PartDetailResolution.choices(rows);
     }
 
     private List<Map<String, Object>> exactRawRows(String query, String safeCategory) {
@@ -389,6 +398,23 @@ public class PartRouteResolver {
 
     private static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    /** 상품 상세 해상 결과. route가 있으면 한 상품으로 특정된 것이고, 없으면 choices가 무엇이 걸렸는지 알려 준다. */
+    public record PartDetailResolution(String route, List<String> choices) {
+        static final PartDetailResolution NONE = new PartDetailResolution(null, List.of());
+
+        static PartDetailResolution detail(Map<String, Object> row) {
+            return new PartDetailResolution("/parts/" + DbValueMapper.string(row, "id"), List.of());
+        }
+
+        static PartDetailResolution choices(List<Map<String, Object>> rows) {
+            return new PartDetailResolution(null, rows.stream()
+                    .map(row -> DbValueMapper.string(row, "name"))
+                    .filter(name -> name != null && !name.isBlank())
+                    .distinct()
+                    .toList());
+        }
     }
 
     public record ResolvedRoute(String route, String label, String message, String reason) {
