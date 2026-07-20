@@ -86,6 +86,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
             확신이 낮거나 복합 명령이면 routeIntent.shouldNavigate=false, routeType=NONE, confidence=LOW로 두십시오.
+            반대로 shouldNavigate=true로 둘 때는 반드시 confidence=HIGH로 두십시오. HIGH가 아니면 이동이 실행되지 않아,
+            “이동할게요”라고 답해 놓고 화면이 그대로인 상태가 됩니다. PART_DETAIL이면 category도 함께 채우십시오.
             uiContext.surface=SELF_QUOTE이고 capabilities에 BOARD_PART_FOCUS가 있을 때, 사용자가 현재 구성도에서 부품의 물리적 위치를 묻는 순수 위치 질문이면 boardFocusIntent를 구조화하십시오.
             위치 질문은 “RAM 위치가 어디야”, “CPU와 RAM 자리 표시해줘”, “M.2 슬롯이 어디 있어”처럼 부품과 공간 의도가 함께 있는 경우입니다.
             추천·가격·구매·교체·담기·삭제·성능 비교가 섞인 요청은 위치 강조가 아니며 boardFocusIntent.shouldFocus=false로 두십시오.
@@ -947,11 +949,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
             case "PART_DETAIL" -> partRouteResolver.resolvePartDetailRoute(text(source.get("partQuery")), category);
             default -> null;
         };
-        if (route == null && "PART_DETAIL".equals(routeType) && category != null) {
-            route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), category);
-            // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
-            // LLM이 써 준 reason 대신 이 표식을 남긴다.
-            reason = PART_DETAIL_LIST_FALLBACK;
+        if (route == null && "PART_DETAIL".equals(routeType)) {
+            // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
+            // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
+            String listCategory = firstText(category, PartRouteResolver.inferCategory(text(source.get("partQuery"))));
+            if (listCategory != null) {
+                route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), listCategory);
+                category = listCategory;
+                // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
+                // LLM이 써 준 reason 대신 이 표식을 남긴다.
+                reason = PART_DETAIL_LIST_FALLBACK;
+            }
         }
         if (!isAllowedRoute(route)) {
             return null;
