@@ -118,6 +118,9 @@ public class AsTicketEntity extends PublicIdEntity {
     @Column(name = "resolved_at")
     private Instant resolvedAt;
 
+    @Column(name = "reviewed_at")
+    private Instant reviewedAt;
+
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 

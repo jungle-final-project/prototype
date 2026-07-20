@@ -128,12 +128,24 @@ export type AsTicketDto = {
   adminNote?: string | null;
   remoteSupportLink?: string | null;
   remoteSupportStatus?: string | null;
+  remoteAccessCodeRegisteredAt?: string | null;
+  remoteSupportStartedAt?: string | null;
+  remoteSupportCompletedAt?: string | null;
   visitSupportRequired?: boolean | null;
   visitSupportStatus?: string | null;
   visitPreferredDate?: string | null;
   visitTimeSlot?: string | null;
   resolvedAt?: string | null;
   createdAt?: string;
+};
+
+export type RemoteSupportStateDto = {
+  status?: 'WAITING_FOR_CODE' | 'CODE_READY' | 'IN_PROGRESS' | 'COMPLETED' | string | null;
+  provider?: string | null;
+  accessCodeRegistered: boolean;
+  accessCodeRegisteredAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
 };
 
 export type SupportChatContact = {

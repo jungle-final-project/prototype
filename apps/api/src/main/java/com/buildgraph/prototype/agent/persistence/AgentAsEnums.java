@@ -106,6 +106,7 @@ enum RiskLevel {
 
 enum RemoteSupportProvider {
     EXTERNAL_LINK,
+    CHROME_REMOTE_DESKTOP,
     ANYDESK,
     TEAMVIEWER,
     ZOOM,
@@ -115,6 +116,8 @@ enum RemoteSupportProvider {
 enum RemoteSupportStatus {
     REQUESTED,
     LINK_SENT,
+    WAITING_FOR_CODE,
+    CODE_READY,
     IN_PROGRESS,
     COMPLETED,
     CANCELLED

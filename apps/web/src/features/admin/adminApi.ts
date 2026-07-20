@@ -352,11 +352,11 @@ export type AdminAsTicket = {
   riskLevel?: RiskLevel | string | null;
   autoResponseAllowed?: boolean | null;
   symptom: string;
+  requestType?: string | null;
+  requestNumber?: string | null;
   title?: string | null;
   description?: string | null;
   detailDescription?: string | null;
-  requestNumber?: string | null;
-  requestType?: string | null;
   diagnosisId?: string | null;
   diagnosisMode?: string | null;
   diagnosisTitle?: string | null;
@@ -398,13 +398,27 @@ export type AdminAsTicket = {
   adminNote?: string | null;
   remoteSupportLink?: string | null;
   remoteSupportStatus?: string | null;
+  remoteAccessCodeRegisteredAt?: string | null;
+  remoteSupportStartedAt?: string | null;
+  remoteSupportCompletedAt?: string | null;
   visitSupportRequired?: boolean | null;
   visitSupportStatus?: string | null;
   visitPreferredDate?: string | null;
   visitTimeSlot?: string | null;
   resolvedAt?: string | null;
+  reviewedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type AdminRemoteSupportState = {
+  status?: 'WAITING_FOR_CODE' | 'CODE_READY' | 'IN_PROGRESS' | 'COMPLETED' | string | null;
+  provider?: string | null;
+  accessCodeRegistered: boolean;
+  maskedAccessCode?: string | null;
+  accessCodeRegisteredAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
 };
 
 export type AdminTicket = AdminAsTicket;
@@ -1057,6 +1071,46 @@ export function updateAdminTicket(ticketId: string, payload: AdminAsTicketUpdate
   return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload)
+  });
+}
+
+export function assignAdminTicketToMe(ticketId: string) {
+  return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}/assign-to-me`, {
+    method: 'POST'
+  });
+}
+
+export function requestAdminTicketMoreInfo(ticketId: string, adminNote: string) {
+  return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}/request-more-info`, {
+    method: 'POST',
+    body: JSON.stringify({ adminNote })
+  });
+}
+
+export function approveAdminTicketRemoteSupport(ticketId: string, adminNote?: string) {
+  return api<AdminAsTicket>(`/api/admin/as-tickets/${ticketId}/approve-remote-support`, {
+    method: 'POST',
+    body: JSON.stringify({ adminNote: adminNote?.trim() || undefined })
+  });
+}
+
+export function getAdminTicketRemoteSupport(ticketId: string) {
+  return api<AdminRemoteSupportState>(`/api/admin/as-tickets/${ticketId}/remote-support`);
+}
+
+export function getAdminTicketRemoteAccessCode(ticketId: string) {
+  return api<{ accessCode: string }>(`/api/admin/as-tickets/${ticketId}/remote-support/access-code`);
+}
+
+export function startAdminTicketRemoteSupport(ticketId: string) {
+  return api<AdminRemoteSupportState>(`/api/admin/as-tickets/${ticketId}/remote-support/start`, {
+    method: 'POST'
+  });
+}
+
+export function completeAdminTicketRemoteSupport(ticketId: string) {
+  return api<AdminRemoteSupportState>(`/api/admin/as-tickets/${ticketId}/remote-support/complete`, {
+    method: 'POST'
   });
 }
 

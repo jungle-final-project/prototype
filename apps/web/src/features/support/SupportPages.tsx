@@ -8,10 +8,10 @@ import { getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { downloadAgentPackage } from './agentDownload';
 import { prepareSupportLogFile } from './logFileProcessing';
-import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getRemoteSupportState, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, registerRemoteSupportAccessCode, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
 import type { PcAgentDiagnosisResultDto } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
-import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate, SupportChatContact } from './types';
+import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate, RemoteSupportStateDto, SupportChatContact } from './types';
 import { diagnosisStatus, usePcAgentDiagnosisPolling } from './usePcAgentDiagnosisPolling';
 import type { PcAgentDiagnosisPollingState } from './usePcAgentDiagnosisPolling';
 
@@ -20,6 +20,7 @@ type AgentDownloadState = 'idle' | 'issuing' | 'done' | 'error';
 type AgentDiagnosisRequestState = 'idle' | 'requesting' | 'accepted' | 'rejected' | 'error';
 type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
+const CHROME_REMOTE_DESKTOP_SUPPORT_URL = 'https://remotedesktop.google.com/support';
 type ExistingSupportChat = {
   asTicketId: string;
   supportChatRoomId?: string | null;
@@ -1029,12 +1030,21 @@ export function SupportTicketPage() {
   const queryClient = useQueryClient();
   const [remoteRequestReason, setRemoteRequestReason] = useState('원격지원으로 화면을 함께 확인하고 싶습니다.');
   const [remoteRequestError, setRemoteRequestError] = useState('');
+  const [remoteAccessCode, setRemoteAccessCode] = useState('');
+  const [remoteAccessCodeError, setRemoteAccessCodeError] = useState('');
   const [feedbackRating, setFeedbackRating] = useState('5');
   const [feedbackComment, setFeedbackComment] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
   const { data: ticket, isError, isLoading } = useQuery({
     queryKey: ['support-ticket', ticketId],
     queryFn: () => getSupportTicket(ticketId),
+    refetchInterval: 5_000
+  });
+  const remoteSupportApproved = ticket?.reviewStatus === 'APPROVED' && ticket.supportDecision === 'REMOTE_POSSIBLE';
+  const remoteSupportQuery = useQuery({
+    queryKey: ['support-ticket-remote-support', ticketId],
+    queryFn: () => getRemoteSupportState(ticketId),
+    enabled: Boolean(ticketId && remoteSupportApproved),
     refetchInterval: 5_000
   });
   const remoteRequestMutation = useMutation({
@@ -1058,6 +1068,26 @@ export function SupportTicketPage() {
         return;
       }
       setRemoteRequestError('원격지원 요청을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+  });
+  const remoteAccessCodeMutation = useMutation({
+    mutationFn: () => registerRemoteSupportAccessCode(ticketId, remoteAccessCode),
+    onSuccess: (state) => {
+      setRemoteAccessCode('');
+      setRemoteAccessCodeError('');
+      queryClient.setQueryData(['support-ticket-remote-support', ticketId], state);
+      queryClient.invalidateQueries({ queryKey: ['support-ticket', ticketId] });
+    },
+    onError: (cause) => {
+      if (cause instanceof ApiError && cause.status === 400) {
+        setRemoteAccessCodeError('지원 코드는 숫자로 입력해 주세요. 공백과 하이픈은 자동으로 정리됩니다.');
+        return;
+      }
+      if (cause instanceof ApiError && cause.status === 409) {
+        setRemoteAccessCodeError('현재 원격지원 상태에서는 코드를 등록할 수 없습니다. 새로고침 후 상태를 확인해 주세요.');
+        return;
+      }
+      setRemoteAccessCodeError('지원 코드를 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     }
   });
   const feedbackMutation = useMutation({
@@ -1111,14 +1141,18 @@ export function SupportTicketPage() {
           <div className="mt-5">
             <DataTable columns={['항목', '값']} rows={ticketDecisionRows(ticket)} />
           </div>
-          {ticket.remoteSupportLink ? (
-            <div className="mt-5 rounded border border-blue-200 bg-blue-50 p-4">
-              <p className="text-sm font-bold text-blue-900">Quick Assist 안내</p>
-              <p className="mt-2 break-all text-sm leading-6 text-blue-800">{ticket.remoteSupportLink}</p>
-              <p className="mt-2 text-xs text-blue-700">원격 연결 전 사용자 추가 확인이 필요합니다. Quick Assist는 사용자가 직접 코드를 입력해 연결합니다.</p>
-            </div>
-          ) : null}
-          {!ticket.remoteSupportLink ? (
+          {remoteSupportApproved ? (
+            <UserRemoteSupportPanel
+              state={remoteSupportQuery.data}
+              isLoading={remoteSupportQuery.isLoading}
+              isError={remoteSupportQuery.isError}
+              accessCode={remoteAccessCode}
+              accessCodeError={remoteAccessCodeError}
+              isSubmitting={remoteAccessCodeMutation.isPending}
+              onAccessCodeChange={setRemoteAccessCode}
+              onSubmit={() => remoteAccessCodeMutation.mutate()}
+            />
+          ) : (
             <form
               className="mt-5 rounded border border-slate-200 bg-slate-50 p-4"
               onSubmit={(event) => {
@@ -1144,7 +1178,7 @@ export function SupportTicketPage() {
                 {remoteRequestMutation.isPending ? '요청 저장 중...' : '원격지원 요청'}
               </button>
             </form>
-          ) : null}
+          )}
           <form
             className="mt-5 rounded border border-slate-200 bg-white p-4"
             onSubmit={(event) => {
@@ -1189,6 +1223,96 @@ export function SupportTicketPage() {
       </div>
     </Screen>
   );
+}
+
+function UserRemoteSupportPanel({
+  state,
+  isLoading,
+  isError,
+  accessCode,
+  accessCodeError,
+  isSubmitting,
+  onAccessCodeChange,
+  onSubmit
+}: {
+  state?: RemoteSupportStateDto;
+  isLoading: boolean;
+  isError: boolean;
+  accessCode: string;
+  accessCodeError: string;
+  isSubmitting: boolean;
+  onAccessCodeChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  if (isLoading) {
+    return <div className="mt-5"><StateMessage type="info" title="원격 지원 연결 확인 중" body="승인된 원격지원 상태를 불러오고 있습니다." /></div>;
+  }
+  if (isError || !state?.status) {
+    return <div className="mt-5"><StateMessage type="warn" title="원격 지원 상태 조회 실패" body="잠시 후 다시 시도해 주세요." /></div>;
+  }
+
+  const canRegisterCode = state.status === 'WAITING_FOR_CODE' || state.status === 'CODE_READY';
+  return (
+    <section aria-labelledby="user-remote-support-title" className="mt-5 rounded border border-blue-200 bg-blue-50 p-4">
+      <h3 id="user-remote-support-title" className="text-base font-black text-blue-950">{userRemoteSupportTitle(state.status)}</h3>
+      <p className="mt-2 text-sm leading-6 text-blue-900">{userRemoteSupportDescription(state.status)}</p>
+      <a
+        href={CHROME_REMOTE_DESKTOP_SUPPORT_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-4 inline-flex rounded border border-blue-300 bg-white px-4 py-2 text-sm font-bold text-brand-blue hover:bg-blue-100"
+      >
+        Chrome Remote Desktop 열기
+      </a>
+      {state.status === 'CODE_READY' ? <p className="mt-3 text-sm font-bold text-emerald-700">지원 코드 등록 완료 · 관리자가 연결을 준비하고 있습니다.</p> : null}
+      {state.status === 'IN_PROGRESS' ? (
+        <p className="mt-3 text-xs font-semibold leading-5 text-blue-800">Chrome Remote Desktop 화면에서 현재 공유 상태를 직접 확인할 수 있습니다.</p>
+      ) : null}
+      {canRegisterCode ? (
+        <form
+          className="mt-4 border-t border-blue-200 pt-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <label htmlFor="remote-access-code" className="mb-2 block text-sm font-bold text-blue-950">지원 코드</label>
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+            <input
+              id="remote-access-code"
+              className="h-11 min-w-0 flex-1 rounded border border-blue-300 bg-white px-3 text-sm"
+              value={accessCode}
+              onChange={(event) => onAccessCodeChange(event.target.value)}
+              autoComplete="off"
+              inputMode="numeric"
+              placeholder={state.status === 'CODE_READY' ? '새 일회용 코드로 교체' : '일회용 지원 코드 입력'}
+              disabled={isSubmitting}
+            />
+            <button className="h-11 rounded bg-brand-blue px-4 text-sm font-bold text-white disabled:bg-slate-400" disabled={isSubmitting || !accessCode.trim()}>
+              {isSubmitting ? '등록 중...' : state.status === 'CODE_READY' ? '새 코드 등록' : '지원 코드 등록'}
+            </button>
+          </div>
+          {accessCodeError ? <p className="mt-2 text-xs font-semibold text-red-600">{accessCodeError}</p> : null}
+        </form>
+      ) : null}
+      {state.startedAt ? <p className="mt-3 text-xs font-semibold text-blue-800">지원 시작: {formatSeoulTime(state.startedAt)}</p> : null}
+      {state.completedAt ? <p className="mt-1 text-xs font-semibold text-blue-800">지원 완료: {formatSeoulTime(state.completedAt)}</p> : null}
+    </section>
+  );
+}
+
+function userRemoteSupportTitle(status?: string | null) {
+  if (status === 'CODE_READY') return '지원 코드 등록 완료';
+  if (status === 'IN_PROGRESS') return '원격 지원 진행 중';
+  if (status === 'COMPLETED') return '원격 지원 완료';
+  return '원격 지원이 승인되었습니다';
+}
+
+function userRemoteSupportDescription(status?: string | null) {
+  if (status === 'CODE_READY') return '관리자가 연결을 준비하고 있습니다. 코드가 만료되었다면 새 코드를 등록해 주세요.';
+  if (status === 'IN_PROGRESS') return '관리자가 원격 지원을 진행하고 있습니다.';
+  if (status === 'COMPLETED') return '원격 지원이 완료되었으며 등록했던 일회용 지원 코드는 제거되었습니다.';
+  return 'Chrome Remote Desktop에서 일회용 지원 코드를 생성한 뒤 등록해 주세요.';
 }
 
 function AgentDiagnosisPanel({ ticket }: { ticket: AsTicketDto }) {
