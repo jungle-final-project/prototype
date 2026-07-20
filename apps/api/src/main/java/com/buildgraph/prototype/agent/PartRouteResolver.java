@@ -152,11 +152,51 @@ public class PartRouteResolver {
         if (normalizedExactRows.size() == 1) {
             return PartDetailResolution.detail(normalizedExactRows.get(0));
         }
-        String searchTerm = routeSearchTerm(normalizedQuery);
+        // 검색어 후보를 순서대로 받아 걸리는 것이 나올 때까지 물어본다. 하나만 골라 두면
+        // "최신 메인보드"에서 '최신'(상품명에 없는 수식어)만 써 보고 0건으로 끝나, 종전에 목록으로
+        // 가던 카테고리 둘러보기가 "그런 상품이 없어요"로 막힌다.
+        String searchTerm = null;
+        List<Map<String, Object>> rows = List.of();
+        for (String candidate : routeSearchTerms(normalizedQuery)) {
+            rows = partRouteRows(candidate, safeCategory);
+            searchTerm = candidate;
+            if (!rows.isEmpty()) {
+                break;
+            }
+        }
         if (searchTerm == null) {
             return PartDetailResolution.NONE;
         }
-        List<Map<String, Object>> rows = safeCategory == null
+        return resolveFromRows(normalizedQuery, rows, searchTerm);
+    }
+
+    private PartDetailResolution resolveFromRows(
+            String normalizedQuery,
+            List<Map<String, Object>> rows,
+            String searchTerm
+    ) {
+        List<Map<String, Object>> exactMatches = rows.stream()
+                .filter(row -> isExactPartRouteMatch(normalizedQuery, row))
+                .toList();
+        if (exactMatches.size() == 1) {
+            return PartDetailResolution.detail(exactMatches.get(0));
+        }
+        List<Map<String, Object>> strictMatches = rows.stream()
+                .filter(row -> isHighConfidencePartRouteMatch(normalizedQuery, row))
+                .toList();
+        if (strictMatches.size() == 1) {
+            return PartDetailResolution.detail(strictMatches.get(0));
+        }
+        List<String> tokens = routeTokens(normalizedQuery);
+        if (tokens.size() == 1 && rows.size() == 1 && isSingleTokenDetailMatch(tokens.get(0), rows.get(0))) {
+            return PartDetailResolution.detail(rows.get(0));
+        }
+        // 하나로 못 좁혔다 — 무엇이 걸렸는지 후보로 넘겨, 호출자가 되묻기와 목록 이동 중에 고르게 한다.
+        return PartDetailResolution.choices(rows, searchTerm);
+    }
+
+    private List<Map<String, Object>> partRouteRows(String searchTerm, String safeCategory) {
+        return safeCategory == null
                 ? jdbcTemplate.queryForList("""
                                 SELECT public_id::text AS id, category, name, manufacturer
                                 FROM parts
@@ -184,24 +224,6 @@ public class PartRouteResolver {
                                 ORDER BY price DESC, id ASC
                                 LIMIT 50
                                 """, safeCategory, searchTerm, searchTerm, searchTerm);
-        List<Map<String, Object>> exactMatches = rows.stream()
-                .filter(row -> isExactPartRouteMatch(normalizedQuery, row))
-                .toList();
-        if (exactMatches.size() == 1) {
-            return PartDetailResolution.detail(exactMatches.get(0));
-        }
-        List<Map<String, Object>> strictMatches = rows.stream()
-                .filter(row -> isHighConfidencePartRouteMatch(normalizedQuery, row))
-                .toList();
-        if (strictMatches.size() == 1) {
-            return PartDetailResolution.detail(strictMatches.get(0));
-        }
-        List<String> tokens = routeTokens(normalizedQuery);
-        if (tokens.size() == 1 && rows.size() == 1 && isSingleTokenDetailMatch(tokens.get(0), rows.get(0))) {
-            return PartDetailResolution.detail(rows.get(0));
-        }
-        // 하나로 못 좁혔다 — 무엇이 걸렸는지 후보로 넘겨, 호출자가 되묻기와 목록 이동 중에 고르게 한다.
-        return PartDetailResolution.choices(rows, searchTerm);
     }
 
     private List<Map<String, Object>> exactRawRows(String query, String safeCategory) {
@@ -381,21 +403,27 @@ public class PartRouteResolver {
      * 통째로 나온다. 두 글자를 받아 주는 이유: 한글 브랜드는 두 글자가 흔해(삼성·인텔·조텍)
      * 세 글자 하한만 두면 '삼성 램'이 통째로 미해상이 되어 "그런 상품이 없어요"가 나간다.
      */
-    private static String routeSearchTerm(String normalizedQuery) {
+    private static List<String> routeSearchTerms(String normalizedQuery) {
         List<String> tokens = routeTokens(normalizedQuery);
-        return firstToken(tokens, token -> token.length() >= 3
-                        && token.matches(".*\\d.*") && token.matches(".*[A-Z].*"))
-                .or(() -> firstToken(tokens, token -> token.length() >= 3 && token.matches(".*\\d.*")))
-                .or(() -> firstToken(tokens, token -> token.length() >= 3 && !isCategoryWordToken(token)))
-                .or(() -> firstToken(tokens, token -> token.length() >= 2 && !isCategoryWordToken(token)))
-                // 남은 게 카테고리 이름뿐이면 그걸로라도 찾는다 — '메인보드 보여줘'처럼 카테고리를
-                // 둘러보려는 요청까지 미해상으로 떨어뜨리면 종전에 되던 길이 막힌다.
-                .or(() -> firstToken(tokens, token -> token.length() >= 3))
-                .orElse(null);
-    }
-
-    private static Optional<String> firstToken(List<String> tokens, java.util.function.Predicate<String> filter) {
-        return tokens.stream().filter(filter).findFirst();
+        List<java.util.function.Predicate<String>> tiers = List.of(
+                token -> token.length() >= 3 && token.matches(".*\\d.*") && token.matches(".*[A-Z].*"),
+                token -> token.length() >= 3 && token.matches(".*\\d.*"),
+                token -> token.length() >= 3 && !isCategoryWordToken(token),
+                token -> token.length() >= 2 && !isCategoryWordToken(token),
+                // 카테고리 이름을 맨 뒤에 둔다. 앞 후보가 하나도 안 걸릴 때는 여기까지 내려와야
+                // '최신 메인보드'가 메인보드 목록으로 간다 — '최신'만 써 보고 포기하면
+                // 종전에 되던 카테고리 둘러보기가 "그런 상품이 없어요"로 막힌다.
+                token -> token.length() >= 3
+        );
+        List<String> candidates = new java.util.ArrayList<>();
+        for (java.util.function.Predicate<String> tier : tiers) {
+            tokens.stream()
+                    .filter(tier)
+                    .findFirst()
+                    .filter(token -> !candidates.contains(token))
+                    .ifPresent(candidates::add);
+        }
+        return List.copyOf(candidates);
     }
 
     private static boolean isRouteStopToken(String token) {

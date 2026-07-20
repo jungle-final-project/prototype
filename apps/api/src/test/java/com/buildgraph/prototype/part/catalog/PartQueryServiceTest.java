@@ -240,6 +240,9 @@ class PartQueryServiceTest {
 
         String sql = idsSql.getValue();
         assertThat(sql).contains("p.attributes #- '{externalSources,naver,sourceProductKey}'");
+        // `#-`는 부분 함수다 — 해당 경로가 객체가 아닌 행이 하나만 있어도 목록과 total이 통째로 500이 된다.
+        // 타입을 먼저 물어보는 가드 없이 경로 삭제만 쓰면 안 된다.
+        assertThat(sql).contains("jsonb_typeof(p.attributes #> '{externalSources,naver}') = 'object'");
         // attributes를 통째로 훑는 옛 술어가 남아 있으면 상품ID가 다시 건초더미에 들어온다.
         assertThat(sql).doesNotContain("p.attributes::text");
         // 나머지 검색 대상은 그대로다 — 제품명·제조사·스펙·검색 키워드는 계속 걸려야 한다.

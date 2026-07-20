@@ -969,7 +969,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (!isCategoryListRoute(routeIntent.route()) || !promisesDetailPage(assistantMessage)) {
             return assistantMessage;
         }
-        String category = text(routeIntent.context().get("category"));
+        // 카테고리는 컨텍스트가 아니라 route에서 되읽는다 — route는 화이트리스트 정규식을 이미 통과했고,
+        // 컨텍스트 값은 클라이언트가 보낸 selectedCategory가 검증 없이 반사될 수 있는 자리다.
+        String category = routeCategory(routeIntent.route());
         if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason())) {
             // 서버가 후보를 세어 보지 않은 턴이다. 몇 개가 걸렸는지 모르면서 "후보 목록에서 확인해 주세요"라고
             // 하면 없는 후보를 있다고 말하는 셈이라, 도착지만 바로잡고 후보 수는 말하지 않는다.
@@ -985,9 +987,14 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return head + label + " 후보 목록에서 확인해 주세요.";
     }
 
-    /** 도착지가 부품 목록 화면인가. 상품 상세(/parts/{id})는 약속과 도착지가 어긋나지 않으므로 대상이 아니다. */
+    /**
+     * 도착지가 특정 카테고리의 부품 목록인가. 상품 상세(/parts/{id})는 약속과 도착지가 어긋나지 않고,
+     * 카테고리 없는 셀프견적(/self-quote)은 "무슨 목록"인지 말할 근거가 없어 둘 다 대상이 아니다.
+     * 후자를 포함하면 문구는 "파워 목록으로 이동할게요"라고 하고 버튼은 "셀프 견적 열기", 도착 화면은
+     * 카테고리 없는 셀프견적이 되어 셋이 서로 다른 곳을 가리킨다.
+     */
     private static boolean isCategoryListRoute(String route) {
-        return route != null && route.startsWith("/self-quote");
+        return route != null && route.startsWith("/self-quote?category=");
     }
 
     /** 이동하려 했으나 갈 곳을 해상하지 못했을 때, 이동을 약속하는 대신 사실대로 되묻는 문구. */

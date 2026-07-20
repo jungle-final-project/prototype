@@ -2195,6 +2195,29 @@ class DefaultAiChatEngineTest {
         verifyNoJdbcWrites();
     }
 
+    // 머지 전 검수에서 잡힌 회귀: "최신 메인보드"는 '최신'(상품명에 없는 수식어)이 두 글자 후보로
+    // 먼저 뽑혀 0건으로 끝났다. 검색어 후보를 하나만 확정하면 그걸로 못 찾았을 때 되돌아갈 길이 없다 —
+    // 후보를 순서대로 물어 카테고리 이름까지 내려가야 종전처럼 목록으로 간다.
+    @Test
+    void llmRequiredPartDetailRetriesWithTheCategoryNounWhenTheFirstSearchTermFindsNothing() {
+        stubBuildChatPlan(partDetailPlan("최신 메인보드 상세페이지로 이동할게요.", "MOTHERBOARD", "최신 메인보드"));
+        when(jdbcTemplate.queryForList(anyString(), eq("MOTHERBOARD"), eq("최신"), eq("최신"), eq("최신")))
+                .thenReturn(List.of());
+        when(jdbcTemplate.queryForList(anyString(), eq("MOTHERBOARD"), eq("메인보드"), eq("메인보드"), eq("메인보드")))
+                .thenReturn(candidateRows("MOTHERBOARD", "메인보드", 6));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "최신 메인보드 상세페이지로 이동해", "HOME", null, null, null, Map.of(), 1L));
+
+        assertThat(response.assistantMessage()).doesNotContain("찾을 수 있는 상품이 없어요");
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload().get("route"))
+                        .isEqualTo("/self-quote?category=MOTHERBOARD"));
+        verifyNoJdbcWrites();
+    }
+
     // 퇴행 가드: 카테고리 이름 하나뿐인 요청은 그걸로라도 찾아 목록으로 보낸다.
     // 카테고리 이름을 검색어에서 통째로 빼면 '메인보드 보여줘'가 미해상으로 떨어져 종전 길이 막힌다.
     @Test
