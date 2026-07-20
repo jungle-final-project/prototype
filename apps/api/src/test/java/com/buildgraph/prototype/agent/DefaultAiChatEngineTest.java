@@ -2062,6 +2062,64 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredNavigationKeepsPromisingDetailPageWithoutThePageWord() {
+        // "제품 상세로 이동할게요"처럼 '페이지'라는 낱말 없이 상세를 약속하는 문구도 교정 대상이다 —
+        // 안 잡으면 약속은 상세, 도착은 목록이 된다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 제품 상세로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 제품 상세로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).contains("CPU 후보 목록");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredNavigationThatResolvesNowhereStopsPromisingToNavigate() {
         // 실서버 재현: "커세어 상세페이지로 이동해줘"는 브랜드명뿐이라 상품도 카테고리도 특정되지 않는다.
         // 예전에는 route만 조용히 사라지고 LLM이 쓴 "이동할게요"가 그대로 나가 아무 일도 안 일어났다.
