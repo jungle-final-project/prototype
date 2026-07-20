@@ -8,7 +8,7 @@ import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
-import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
+import { FLOATING_CONTROL_STRIP_HEIGHT, isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 import { useBoardDrag, useIsDesktop } from './useBoardDrag';
 
 // CPU·GPU만 벤치마크 점수가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 버튼을 숨긴다.
@@ -20,7 +20,7 @@ const CANDIDATE_PAGE_SIZE = 20;
 // 헤더 제거 리디자인 이후 스테이지 좌상단에 사는 플로팅 컨트롤(문제 칩·다음 가이드·AI 강조)을
 // 가리지 않도록 그 아래(+56px)에서 시작한다. 패널은 body 포탈이라 z-index로는 스트립을 못 이긴다.
 // 포탈(document.body) + position:fixed라 보드 밖으로도 드래그할 수 있다.
-const PANEL_TOP_OFFSET_FOR_FLOATING_CONTROLS = 56;
+const PANEL_TOP_OFFSET_FOR_FLOATING_CONTROLS = FLOATING_CONTROL_STRIP_HEIGHT;
 
 function panelInitialRect() {
   const fallback = { left: 24, top: 96, width: 420, height: 560 };
