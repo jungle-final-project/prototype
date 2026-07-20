@@ -100,10 +100,15 @@ export function SlotCandidatePanel({
     dragStyle,
     isDragging,
     startDrag: startPanelDrag,
-    resetDrag
+    resetDrag,
+    rememberedSize
   } = useBoardDrag<HTMLElement>({
     persistKey: 'slot-candidate-panel',
-    anchor: { left: initialRect.left, top: initialRect.top }
+    anchor: { left: initialRect.left, top: initialRect.top },
+    // 자리와 크기는 새로고침·다음 방문까지 남긴다. 부품 카테고리별로 쪼개지 않는다 —
+    // 사용자는 "부품 목록 창"을 하나로 인식하고, CPU에서 맞춘 자리를 케이스에서도 그대로 쓴다.
+    remember: 'local',
+    rememberSize: true
   });
   // URL로 페이지와 함께 마운트되면 첫 렌더 시점엔 보드가 아직 DOM에 없다 —
   // 커밋 직후(페인트 전) 실제 스테이지 위치로 다시 잰다.
@@ -288,7 +293,12 @@ export function SlotCandidatePanel({
         role="dialog"
         aria-label={`${slot.label} 부품 목록`}
         style={isDesktop
-          ? { width: initialRect.width, height: initialRect.height, ...dragStyle }
+          ? {
+              // 사용자가 맞춰 둔 크기가 있으면 그걸 쓴다(화면 밖으로 커지는 건 max-w/h 클래스가 막는다).
+              width: rememberedSize?.width ?? initialRect.width,
+              height: rememberedSize?.height ?? initialRect.height,
+              ...dragStyle
+            }
           : dragStyle}
         className="panel slot-candidate-panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:inset-auto lg:z-[55] lg:max-h-[92vh] lg:min-h-[280px] lg:w-auto lg:min-w-[320px] lg:max-w-[92vw] lg:rounded-xl lg:border lg:border-commerce-line lg:shadow-xl lg:[resize:both]"
       >
