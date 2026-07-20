@@ -274,6 +274,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
             parsedContext.put("routeChoiceChips", routePlan.choiceChips());
             assistantMessage = firstText(routePlan.message(), assistantMessage);
         }
+        if (routePlan.unresolved()) {
+            // 이동 의도는 있었는데 갈 곳이 없었다. 문구를 문자열로 판단하지 않고 이 상태로만 교정한다 —
+            // 문자열로 보면 이동을 약속하지 않은 평범한 답변까지 갈아치우게 된다.
+            assistantMessage = firstText(routePlan.message(), assistantMessage);
+        }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
         Map<String, Object> supportIntent = normalizeSupportIntent(objectMap(plan.get("supportIntent")));
         if (!supportIntent.isEmpty()) {
@@ -924,6 +929,14 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return head + label + " 후보 목록에서 확인해 주세요.";
     }
 
+    /** 이동하려 했으나 갈 곳을 해상하지 못했을 때, 이동을 약속하는 대신 사실대로 되묻는 문구. */
+    private static String unresolvedRouteMessage(String partQuery) {
+        String query = text(PartRouteResolver.extractPartQuery(partQuery));
+        return query == null
+                ? "찾으시는 화면을 특정하지 못했어요. 어떤 부품인지 정확한 제품명으로 알려주시면 바로 열어드릴게요."
+                : "'" + query + "'로 찾을 수 있는 상품이 없어요. 정확한 제품명을 알려주시면 바로 열어드릴게요.";
+    }
+
     /**
      * "상세페이지"라는 약속만 잡는다. 그냥 "상세"로 판단하면 "상세 스펙을 알려드릴게요"처럼
      * 이동을 약속하지 않은 정상 답변까지 통째로 갈아치운다.
@@ -988,7 +1001,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
             }
         }
         if (!isAllowedRoute(route)) {
-            return RoutePlan.NONE;
+            // 이동하려 했는데 갈 곳을 못 찾았다. 여기서 NONE을 돌려주면 LLM이 쓴 "이동할게요"가 그대로 나가
+            // 답만 하고 화면은 그대로인 상태가 된다 — 되묻기로 사실을 알린다.
+            return RoutePlan.unresolved(unresolvedRouteMessage(partQuery));
         }
         return RoutePlan.route(new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
                 "shouldNavigate", true,
@@ -3684,15 +3699,23 @@ public class DefaultAiChatEngine implements AiChatEngine {
     /**
      * 이동 요청 처리 결과. 셋 중 하나다 — 바로 이동(routeIntent), 채팅에서 되묻기(choiceChips), 아무것도 아님.
      */
-    private record RoutePlan(EngineRouteIntent routeIntent, List<String> choiceChips, String message) {
-        static final RoutePlan NONE = new RoutePlan(null, List.of(), null);
+    private record RoutePlan(EngineRouteIntent routeIntent, List<String> choiceChips, String message, boolean unresolved) {
+        static final RoutePlan NONE = new RoutePlan(null, List.of(), null, false);
 
         static RoutePlan route(EngineRouteIntent routeIntent) {
-            return new RoutePlan(routeIntent, List.of(), null);
+            return new RoutePlan(routeIntent, List.of(), null, false);
         }
 
         static RoutePlan choices(List<String> chips, String message) {
-            return new RoutePlan(null, chips, message);
+            return new RoutePlan(null, chips, message, false);
+        }
+
+        /**
+         * 이동하려 했지만 어디로 갈지 끝내 해상하지 못한 상태. "이동 의도 없음"(NONE)과 반드시 구분해야 한다 —
+         * 둘을 같은 값으로 두면 "이동할게요"라고 답해 놓고 아무 일도 안 일어나는 턴을 잡아낼 수 없다.
+         */
+        static RoutePlan unresolved(String message) {
+            return new RoutePlan(null, List.of(), message, true);
         }
     }
 

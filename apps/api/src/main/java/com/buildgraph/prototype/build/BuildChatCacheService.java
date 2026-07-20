@@ -188,9 +188,11 @@ public class BuildChatCacheService {
         }
         fingerprint.put("versions", dataVersions());
         String json = OBJECT_MAPPER.writeValueAsString(fingerprint);
-        // v67: 응답에 화면 이동(actions)이 추가됨 — 옛 캐시가 살아 있으면 배포 직후 최대 TTL 동안
-        // actions 없는 응답이 돌아와 "이동할게요"라고 답만 하는 예전 증상이 재현된다.
-        return "buildgraph:build-chat:v67:" + sha256(json);
+        // 같은 요청에 대한 응답 본문·필드가 달라지는 변경은 반드시 이 번호를 올린다 —
+        // 안 올리면 옛 응답이 TTL(600초) 동안 그대로 재생돼 배포한 수정이 없던 일이 된다.
+        // v67: 응답에 화면 이동(actions) 추가.
+        // v68: 후보 2~4건이면 이동 대신 칩으로 되묻도록 응답 모양이 바뀜(#264) + 이동 해상 실패 시 문구 교정.
+        return "buildgraph:build-chat:v68:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {
