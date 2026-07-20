@@ -2435,7 +2435,8 @@ test('shows the measured fit reason in the board banner and sends the same Tool 
   await page.goto('/self-quote');
 
   const banner = page.getByTestId('slot-board-problem-banner');
-  await expect(banner).toContainText('\uC8FC\uC758 \uD544\uC694 2\uAC74');
+  // \uCE69\uC740 \uAC74\uC218 \uB098\uC5F4\uC774 \uC544\uB2C8\uB77C \uBB38\uC7A5\uC73C\uB85C \uB9D0\uD55C\uB2E4 \u2014 \uD45C\uC9C0\uD310\uCC98\uB7FC \uC77D\uD600 \uADF8\uB0E5 \uC9C0\uB098\uCE58\uB294 \uAC83\uC744 \uB9C9\uB294\uB2E4.
+  await expect(banner).toContainText('\uC8FC\uC758 \uD544\uC694 \uAC74\uC218\uAC00 2\uAC74 \uC788\uC2B5\uB2C8\uB2E4');
   await expect(banner).not.toHaveText('높이 157mm');
   await banner.click();
   const problemList = page.getByTestId('slot-board-problem-list');
