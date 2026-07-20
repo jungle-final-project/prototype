@@ -5482,7 +5482,11 @@ public class BuildChatService {
         // 대상 부품이 원문에 있으면 그 자체로 완결된 요청이다. detectPartCategory는 카테고리 어휘만 알아서
         // "9800X3D 상세페이지로 이동해"처럼 모델명만 있는 문장을 놓쳤고, 그러면 직전 되묻기 원문과 합성돼
         // 이동이 통째로 삼켜졌다(실측 재현). 아래 SIMULATE_REPLACEMENT 분기와 같은 관용구로 맞춘다.
-        if ((detectPartCategory(message) != null || PartRouteResolver.inferCategory(message) != null)
+        if ((detectPartCategory(message) != null
+                        || PartRouteResolver.inferCategory(message) != null
+                        // 카테고리 어휘가 없어도 제조사·모델명이 원문에 있으면 그 자체로 완결된 요청이다.
+                        // (예: "커세어 FRAME 4000D 상세페이지로 이동해" — 카테고리 단어가 한 개도 없다)
+                        || PartRouteResolver.hasConcreteProductHint(message))
                 && containsAnyNormalized(
                         normalized,
                         "추천", "바꿔", "교체", "담아", "넣어", "추가",

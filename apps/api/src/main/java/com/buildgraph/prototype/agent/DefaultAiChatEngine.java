@@ -962,8 +962,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String partQuery = text(source.get("partQuery"));
         List<String> choices = List.of();
         String route = null;
+        // 목록으로 대신 보낼 때 q에 실을 토큰이 이 안에 있다 — 블록 밖에서도 읽을 수 있게 끌어올린다.
+        PartRouteResolver.PartDetailResolution resolution = null;
         if ("PART_DETAIL".equals(routeType)) {
-            PartRouteResolver.PartDetailResolution resolution = partRouteResolver.resolvePartDetail(partQuery, category);
+            resolution = partRouteResolver.resolvePartDetail(partQuery, category);
             route = resolution.route();
             choices = resolution.choices();
         } else {
@@ -988,12 +990,15 @@ public class DefaultAiChatEngine implements AiChatEngine {
                             : "'" + partQuery + "'에 해당하는 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
             );
         }
-        if (route == null && "PART_DETAIL".equals(routeType)) {
+        // 보여 줄 후보가 하나라도 있을 때만 목록으로 보낸다. 0건이면 화면을 옮겨 봐야 무관한 상품만 잔뜩 보여 주는 꼴이라,
+        // 아래 unresolved 경로로 떨어뜨려 "그런 상품이 없다"고 사실대로 되묻는다.
+        if (route == null && "PART_DETAIL".equals(routeType) && !resolution.choices().isEmpty()) {
             // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
             // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
             String listCategory = firstText(category, PartRouteResolver.inferCategory(partQuery));
             if (listCategory != null) {
-                route = partRouteResolver.resolveCategoryFilterRoute(partQuery, listCategory);
+                // q에는 리졸버가 실제로 걸어 본 토큰만 싣는다 — 원문을 그대로 실으면 도착 목록이 0건이 된다.
+                route = partRouteResolver.categoryFilterRoute(listCategory, resolution);
                 category = listCategory;
                 // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
                 // LLM이 써 준 reason 대신 이 표식을 남긴다.
