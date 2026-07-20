@@ -1827,7 +1827,11 @@ test('keeps desktop candidate results scrollable and compact at a 150 percent zo
   await expect(panel.getByTestId('candidate-manufacturer')).toBeHidden();
   await expect(panel.getByTestId('slot-candidate-panel-handle')).toHaveCSS('padding-top', '8px');
   await expect(panel.getByTestId('candidate-panel-search')).toHaveCSS('padding-top', '6px');
+  // 필터 행은 접혀 있으면 아예 없다(토글은 헤더의 정렬 옆) — 펼쳤을 때의 여백을 본다.
+  await expect(panel.getByTestId('candidate-panel-filters')).toHaveCount(0);
+  await panel.getByTestId('candidate-filters-toggle').click();
   await expect(panel.getByTestId('candidate-panel-filters')).toHaveCSS('padding-top', '6px');
+  await panel.getByTestId('candidate-filters-toggle').click();
   await expect(panel.getByTestId('candidate-panel-selected')).toHaveCSS('padding-top', '6px');
 
   const metrics = await candidateList.evaluate((element) => {

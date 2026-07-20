@@ -355,6 +355,21 @@ export function SlotCandidatePanel({
               <option value="name">이름순</option>
             </select>
           </label>
+          {/* 필터는 정렬 옆에 둔다 — 접혀 있을 때 줄 하나를 통째로 쓰던 걸 없애 후보를 위로 끌어올린다. */}
+          <button
+            type="button"
+            data-testid="candidate-filters-toggle"
+            aria-expanded={filtersOpen}
+            aria-controls="candidate-filter-controls"
+            onClick={() => setFiltersOpen((open) => !open)}
+            className="flex items-center gap-1.5 rounded-md border border-commerce-line bg-white px-2 py-1 text-xs font-bold text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
+          >
+            <SlidersHorizontal size={13} aria-hidden="true" />
+            필터
+            {activeFilterCount > 0 ? (
+              <span data-testid="candidate-filters-active-count" className="rounded-full bg-brand-blue px-1.5 text-[10px] font-black text-white">{activeFilterCount}</span>
+            ) : null}
+          </button>
           <button
             type="button"
             aria-label="후보 패널 닫기"
@@ -396,27 +411,12 @@ export function SlotCandidatePanel({
       {/* 필터: 제조사·가격대(기존 GET /api/parts 파라미터 재사용) + 장착 불가 숨기기(client-side, 기본 꺼짐).
           기본 접힘 — 대부분은 검색과 목록만 쓰므로, 펼쳐 두면 후보가 그만큼 아래로 밀린다.
           걸어 둔 필터가 있으면 접힌 상태에서도 개수를 배지로 보여 준다(숨겨진 필터가 결과를 줄이는 것을 모르면 안 된다). */}
+      {/* 토글 버튼은 헤더의 정렬 옆으로 옮겼다 — 접혀 있으면 이 행 자체가 사라진다. */}
+      {filtersOpen ? (
       <div data-testid="candidate-panel-filters" className="slot-candidate-panel__filters shrink-0 border-b border-commerce-line px-4 py-2.5">
-        <button
-          type="button"
-          data-testid="candidate-filters-toggle"
-          aria-expanded={filtersOpen}
-          aria-controls="candidate-filter-controls"
-          onClick={() => setFiltersOpen((open) => !open)}
-          className="flex items-center gap-1.5 rounded-md border border-commerce-line bg-white px-2 py-1 text-xs font-bold text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
-        >
-          <SlidersHorizontal size={13} aria-hidden="true" />
-          필터
-          {activeFilterCount > 0 ? (
-            <span data-testid="candidate-filters-active-count" className="rounded-full bg-brand-blue px-1.5 text-[10px] font-black text-white">{activeFilterCount}</span>
-          ) : null}
-        </button>
-        {/* hidden 속성 대신 조건부 렌더 — 이 요소는 display:flex라 UA의 [hidden]{display:none}을 이겨서
-            hidden을 걸어도 그대로 보인다. */}
-        {filtersOpen ? (
         <div
           id="candidate-filter-controls"
-          className="slot-candidate-panel__filter-controls mt-2 flex flex-wrap items-center gap-x-2 gap-y-2"
+          className="slot-candidate-panel__filter-controls flex flex-wrap items-center gap-x-2 gap-y-2"
         >
           <select
             aria-label="제조사 필터"
@@ -473,8 +473,8 @@ export function SlotCandidatePanel({
             장착 불가 숨기기
           </label>
         </div>
-        ) : null}
       </div>
+      ) : null}
 
       {/* 담은 부품은 후보 피드와 독립된 관리 행으로 유지한다. RAM/SSD 수량과 제거를 여기서 바로 조작한다. */}
       {draftItems.length > 0 ? (
