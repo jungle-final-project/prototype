@@ -204,7 +204,9 @@ public class BuildChatCacheService {
         //      패널을 띄울 수 있는 클라이언트에게는 TOP 목록 문장 대신 짧은 안내가 나간다.
         // v73: 여러 카테고리를 한꺼번에 묻는 문장("케이스랑 파워 추천해줘")은 partRecommendation을
         //      싣지 않고 말풍선 나열을 유지한다 — 종전에는 한쪽만 골라 패널로 넘겼다.
-        return "buildgraph:build-chat:v73:" + sha256(json);
+        // v74: 기준 없는 부품 추천은 그 자리에 이미 부품이 있으면 나열 대신 되묻는다
+        //      (담긴 것보다 못한 후보가 "호환되는 추천"으로 올라오던 문제).
+        return "buildgraph:build-chat:v74:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

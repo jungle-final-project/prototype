@@ -3994,6 +3994,76 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void barePartRecommendationRequestIsRecognizedOnlyWhenNoCriteriaRemain() {
+        // 되묻기는 이 좁은 경우에만 — 카테고리와 추천 동사 말고는 아무 말도 없을 때.
+        assertThat(BuildChatService.isBarePartRecommendationRequest("gpu 추천해줘")).isTrue();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("그래픽카드 추천")).isTrue();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("케이스 좀 추천해주세요")).isTrue();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("파워 후보 보여줘")).isTrue();
+
+        // 사용자가 방향을 줬으면 그대로 나열한다.
+        assertThat(BuildChatService.isBarePartRecommendationRequest("통풍 좋은 케이스 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("100만원대 gpu 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("가성비 gpu 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("조용한 쿨러 추천해줘")).isFalse();
+        // 애초에 추천 요청이 아닌 문장은 건드리지 않는다(변경·수량 조작 경로 보호).
+        assertThat(BuildChatService.isBarePartRecommendationRequest("램 수량 두 개로 바꿔줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("지금 견적 나머지 채워줘")).isFalse();
+    }
+
+    @Test
+    void buildChatAsksForCriteriaWhenRecommendingAPartTheDraftAlreadyHas() {
+        // "gpu 추천해줘" — 기준이 하나도 없는데 이미 RTX 5080이 담겨 있다. 후보 정렬은 호환·가격만
+        // 보므로 그냥 나열하면 더 못한 5060 Ti가 "현재 견적과 호환되는 추천"으로 올라온다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                return List.of(
+                        Map.of("id", "gpu-cheap", "name", "RTX 5060 Ti 16GB", "price", 660_000,
+                                "capacity_gb", 0, "vram_gb", 16, "wattage_w", 0));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "GPU 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "GPU")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "gpu 추천해줘",
+                "uiContext", Map.of("capabilities", List.of("PART_CANDIDATE_PANEL")),
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("gpu-current", "GPU", "MSI 지포스 RTX 5080", 1, Map.of("vramGb", 16))))));
+
+        // 나열하지 않는다 — 패널도 열지 않는다.
+        assertThat(response.get("partRecommendation")).isNull();
+        assertThat(response.get("message")).asString()
+                .contains("RTX 5080")
+                .contains("어떤 기준");
+        // 칩은 실제로 다른 결과를 내는 경로만 준다.
+        assertThat(response.get("quickReplies")).asList()
+                .contains("가성비 GPU 추천해줘", "제일 저렴한 GPU 추천해줘");
+        // 다음 짧은 답이 원 요청과 합쳐지도록 원문을 에코한다.
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("originalMessage", "gpu 추천해줘");
+    }
+
+    @Test
     void buildChatKeepsBubbleListingWhenUserAsksForTwoCategoriesAtOnce() {
         // "케이스랑 파워 추천해줘" — 패널은 한 번에 한 카테고리만 연다. 한쪽만 띄워 놓고
         // "띄웠어요"라고 답하면 나머지 한쪽은 물어본 적 없는 것처럼 사라진다.

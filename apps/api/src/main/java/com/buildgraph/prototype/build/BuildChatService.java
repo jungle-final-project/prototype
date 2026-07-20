@@ -3401,6 +3401,16 @@ public class BuildChatService {
             boolean valueFocused = containsAnyNormalized(normalizedMessage, "가성비", "가격대비");
             boolean lowestPriceFocused = containsAnyNormalized(
                     normalizedMessage, "최저가", "가장싼", "제일싼", "저렴한", "가격낮은");
+            // 기준이 하나도 없는데 그 자리에 이미 부품이 있으면 나열하지 않고 되묻는다.
+            // 후보 정렬은 호환성과 가격만 보고 성능은 보지 않아, 그냥 나열하면 담긴 RTX 5080보다
+            // 못한 5060 Ti가 "현재 견적과 호환되는 추천"으로 올라온다 — 사용자는 그걸 추천 근거로 읽는다.
+            // 슬롯이 비어 있으면 종전대로 나열한다(채우는 게 목적이라 기준이 없어도 도움이 된다).
+            Map<String, Object> currentCategoryItem = draftItemInCategory(body, constraint.category());
+            if (isBarePartRecommendationRequest(message) && currentCategoryItem != null) {
+                respondAskRecommendationCriteria(response, warnings, constraint.category(), categoryLabel,
+                        currentCategoryItem, message);
+                return;
+            }
             List<BuildChatFeasibilityService.PartOption> orderedOptions = valueFocused
                     ? feasibilityService.bestValueFirst(
                             constraint.category(), PART_RECOMMENDATION_CANDIDATE_POOL_SIZE)
@@ -4156,6 +4166,84 @@ public class BuildChatService {
                 numberValue(details.get("coolerHeadroomMm")),
                 numberValue(details.get("psuHeadroomMm"))
         );
+    }
+
+    /**
+     * "gpu 추천해줘"처럼 카테고리와 추천 동사 말고는 아무 기준도 없는 요청인가.
+     * 되묻기는 이 좁은 경우에만 한다 — "통풍 좋은 케이스 추천해줘"는 방향이 있고,
+     * "램 수량 두 개로 바꿔줘"는 애초에 추천 요청이 아니다. 남는 말이 있으면 종전대로 나열한다.
+     */
+    static boolean isBarePartRecommendationRequest(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        if (firstKeywordIndex(normalized, List.of("추천", "후보", "골라")) < 0) {
+            return false;
+        }
+        String remainder = normalized;
+        for (CategoryKeywords category : RECOMMENDATION_TARGET_CATEGORIES) {
+            for (String keyword : category.keywords()) {
+                remainder = remainder.replace(keyword, " ");
+            }
+        }
+        // 추천 동사와 붙는 조사·어미만 걷어낸다. 그러고도 남는 말이 있으면 사용자가 준 기준이다.
+        remainder = remainder
+                .replaceAll("추천|후보|골라|해\\s*줘|해\\s*주세요|해줄래|알려\\s*줘|보여\\s*줘|주세요|좀|줘", " ")
+                .replaceAll("[의를을이가는은도만에서에]", " ")
+                .replaceAll("[\\s\\p{Punct}]+", "");
+        return remainder.isEmpty();
+    }
+
+    /** 현재 견적에서 그 카테고리에 담겨 있는 부품. 없으면 null. */
+    private static Map<String, Object> draftItemInCategory(Map<String, Object> body, String category) {
+        if (category == null) {
+            return null;
+        }
+        for (Map<String, Object> item : objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"))) {
+            if (category.equalsIgnoreCase(text(item.get("category")))) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 기준 없는 부품 추천에 되묻는다. 칩은 실제로 다른 결과를 내는 경로만 제안한다 —
+     * "더 좋은 걸로" 같은 칩은 지금 정렬(호환·가격)로는 같은 목록을 돌려주므로 넣지 않는다.
+     * 예산 칩은 담긴 부품 가격을 기준으로 만들어, 누르면 그 가격대에서 다시 고른다.
+     */
+    private static void respondAskRecommendationCriteria(
+            Map<String, Object> response,
+            List<String> warnings,
+            String category,
+            String categoryLabel,
+            Map<String, Object> currentItem,
+            String message
+    ) {
+        String currentName = text(currentItem.get("name"));
+        Integer currentPrice = firstNumber(
+                currentItem.get("currentPrice"), currentItem.get("price"),
+                currentItem.get("unitPriceAtAdd"), currentItem.get("lineTotal"));
+        response.put("answerType", "PART");
+        response.put("builds", List.of());
+        response.remove("partRecommendation");
+        response.put("message", (currentName.isBlank()
+                ? "지금 견적에 " + categoryLabel + "가 이미 담겨 있어요. "
+                : "지금 견적에는 " + currentName + "이(가) 담겨 있어요. ")
+                + "어떤 기준으로 골라 드릴까요? 예산이나 방향을 알려주시면 그 기준으로 다시 추천해 드릴게요.");
+        List<String> chips = new ArrayList<>();
+        if (currentPrice != null && currentPrice > 0) {
+            // 담긴 가격을 만원 단위로 올림해 그 예산대를 제안한다 — 누르면 예산 경로로 들어가
+            // 호환·가격순이 아니라 그 예산 안에서 고른다.
+            int band = Math.max(10, (int) Math.round(currentPrice / 10_000.0));
+            chips.add(band + "만원대 " + categoryLabel + " 추천해줘");
+        }
+        chips.add("가성비 " + categoryLabel + " 추천해줘");
+        chips.add("제일 저렴한 " + categoryLabel + " 추천해줘");
+        response.put("quickReplies", chips);
+        response.remove("quickReplyCommands");
+        // 다음 짧은 답("150만원")이 원 요청과 합쳐지도록 원문을 에코한다(무상태 후속).
+        response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+        warnings.add("PART_RECOMMENDATION_CRITERIA_MISSING");
+        response.put("warnings", distinct(warnings));
     }
 
     /**
