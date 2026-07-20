@@ -1840,6 +1840,8 @@ class DefaultAiChatEngineTest {
                   }
                 }
                 """);
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
 
         AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
                 "9700x3d 상세페이지로 이동해줘",
@@ -1851,11 +1853,12 @@ class DefaultAiChatEngineTest {
                 1L
         ));
 
+        // q에는 리졸버가 실제로 걸어 본 토큰이 들어간다(정규화된 대문자) — 원문을 통짜로 실으면 도착 목록이 0건이 된다.
         assertThat(response.actions())
                 .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
                 .singleElement()
                 .satisfies(action -> assertThat(action.payload())
-                        .containsEntry("route", "/self-quote?category=CPU&q=9700x3d"));
+                        .containsEntry("route", "/self-quote?category=CPU&q=9700X3D"));
         assertThat(response.assistantMessage())
                 .doesNotContain("상세페이지")
                 .contains("9700x3d")
@@ -1904,6 +1907,9 @@ class DefaultAiChatEngineTest {
                   }
                 }
                 """);
+        // category를 비워 보냈으므로 리졸버는 카테고리 없는 검색을 돈다(파라미터 3개).
+        when(jdbcTemplate.queryForList(anyString(), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
 
         AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
                 "9700x3d 상세페이지로 이동해줘",
@@ -1919,7 +1925,7 @@ class DefaultAiChatEngineTest {
                 .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
                 .singleElement()
                 .satisfies(action -> assertThat(action.payload())
-                        .containsEntry("route", "/self-quote?category=CPU&q=9700x3d"));
+                        .containsEntry("route", "/self-quote?category=CPU&q=9700X3D"));
         assertThat(response.assistantMessage()).contains("CPU 후보 목록");
         verifyNoJdbcWrites();
     }
@@ -1964,6 +1970,9 @@ class DefaultAiChatEngineTest {
                   }
                 }
                 """);
+
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
 
         AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
                 "9700x3d 스펙 알려줘",
@@ -2019,6 +2028,9 @@ class DefaultAiChatEngineTest {
                 }
                 """);
 
+        when(jdbcTemplate.queryForList(anyString(), eq("GPU"), eq("5090"), eq("5090"), eq("5090")))
+                .thenReturn(candidateRows("GPU", "5090", 5));
+
         AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
                 "5090 보여줘",
                 "HOME",
@@ -2030,6 +2042,80 @@ class DefaultAiChatEngineTest {
         ));
 
         assertThat(response.assistantMessage()).isEqualTo("GPU 목록으로 이동하겠습니다.");
+        verifyNoJdbcWrites();
+    }
+
+    /**
+     * 목록 대체 이동을 검증하려면 "보여 줄 후보가 있는" 상태를 만들어야 한다 —
+     * 후보가 0건이면 서버는 목록으로 보내지 않고 "그런 상품이 없다"고 되묻는다.
+     */
+    private List<Map<String, Object>> candidateRows(String category, String searchTerm, int count) {
+        List<Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (int index = 0; index < count; index += 1) {
+            rows.add(Map.of(
+                    "id", "00000000-0000-4000-8000-00000000000" + index,
+                    "category", category,
+                    "name", "TEST " + category + " 후보" + index + " " + searchTerm,
+                    "manufacturer", "TEST"));
+        }
+        return rows;
+    }
+
+    @Test
+    void llmRequiredNavigationKeepsPromisingDetailPageWithoutThePageWord() {
+        // "제품 상세로 이동할게요"처럼 '페이지'라는 낱말 없이 상세를 약속하는 문구도 교정 대상이다 —
+        // 안 잡으면 약속은 상세, 도착은 목록이 된다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 제품 상세로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 제품 상세로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).contains("CPU 후보 목록");
         verifyNoJdbcWrites();
     }
 
