@@ -288,8 +288,12 @@ public class BuildChatService {
             previousBody.put("message", clarificationOriginal);
             previousIntentDecision = intentRouter.decide(previousBody, clarificationOriginal);
         }
+        // 칩은 직전 되묻기의 "답"이 아니라 "선택"이다 — 원문("'9800X3D'에 해당하는 상품이 2개예요…")과
+        // 합성하면 상품명이 이전 질문에 묻혀 이동이 통째로 삼켜진다. 카테고리 어휘가 없는 상품명
+        // ("Noctua NH-D15 G2", "DeepCool AK620")은 inferCategory 폴백으로도 안 걸리므로 표식으로 끊는다.
         boolean selfContainedClarificationReply = clarificationFollowUp
-                && isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision);
+                && (BuildChatIntentRouter.isRouteChoiceSelection(rawBody)
+                        || isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision));
         boolean mergedClarificationReply = clarificationFollowUp && !selfContainedClarificationReply;
         Map<String, Object> body;
         String message;
@@ -466,6 +470,39 @@ public class BuildChatService {
                     "redisMs=" + redisMs);
             return withConversationTransition(response, recommendationConversationTransition);
         }
+        // 결정적 이동: "{정확한 상품명} 상세페이지로 이동해"류를 LLM 없이 즉시 처리한다.
+        // 라우터가 UNSUPPORTED로 본 턴에서만 시도한다 — 견적 추천·시뮬·점수설명·보드포커스·되묻기는
+        // 이미 위에서 각자 경로로 빠졌으므로, 여기서는 구조적으로 '이동만' 가로챌 수 있다.
+        // 상품을 하나로 특정했을 때만 이동하고, 못 하면 조용히 기존 LLM 경로로 떨어진다.
+        if (partRouteResolver != null && intentDecision.intent() == BuildChatIntent.UNSUPPORTED) {
+            Optional<PartRouteResolver.ResolvedRoute> fastRoute;
+            try {
+                fastRoute = partRouteResolver.resolveFastRoute(
+                        message,
+                        text(body.get("selectedCategory")),
+                        BuildChatIntentRouter.isRouteChoiceSelection(body));
+            } catch (RuntimeException error) {
+                // 이동 해상은 부가 기능이다 — DB가 흔들려도 대화를 끊지 않고 LLM 경로로 넘긴다.
+                log.warn("Build Chat deterministic route resolution failed, falling back to LLM path", error);
+                fastRoute = Optional.empty();
+            }
+            if (fastRoute.isPresent()) {
+                PartRouteResolver.ResolvedRoute resolved = fastRoute.get();
+                Map<String, Object> response = fastResponse("GENERAL", resolved.message(), List.of());
+                // navigationActions()가 만드는 모양과 정확히 같게 — 프론트가 두 경로를 구분하지 않게 한다.
+                response.put("actions", List.of(MockData.map(
+                        "type", AiChatActionType.OPEN_ROUTE.name(),
+                        "label", resolved.label(),
+                        "payload", MockData.map("route", resolved.route())
+                )));
+                // 이동한 턴은 완결 응답이라 되묻기 에코도 다음 행동 칩도 붙이지 않는다.
+                // 캐시에도 넣지 않는다 — 이미 DB 조회만으로 끝나 아낄 LLM 비용이 없고,
+                // /parts/{uuid}를 캐싱하면 비활성화된 상품 경로를 TTL 동안 계속 내보낸다.
+                logBuildChatPath("FAST_PART_DETAIL_ROUTE", startedNanos, userId, requestedAiProfile, false,
+                        BuildChatGuardStats.empty(), "redisMs=" + redisMs);
+                return response;
+            }
+        }
         Optional<Map<String, Object>> fastPartRecommendation = deterministicPartRecommendationResponse(body, message, user);
         if (fastPartRecommendation.isPresent()) {
             Map<String, Object> response = fastPartRecommendation.get();
@@ -615,6 +652,16 @@ public class BuildChatService {
         }
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
         Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
+        // "어느 상품인지" 되묻는 턴은 그 자체로 완결이다 — 질문 문구와 후보 칩이 한 짝이라, 아래 후처리
+        // (부품 제약 역제안·용도 예산 칩·폴백 조합·에코)가 하나라도 손대면 상품을 물어 놓고
+        // 예산 조합이나 "조건을 넓혀서 추천해줘" 칩을 보여 주게 된다. 여기서 잘라 낸다.
+        if (!stringList(engineResponse.parsedContext().get("routeChoiceChips")).isEmpty()) {
+            response.put("builds", List.of());
+            buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+            logBuildChatPath("LLM_ROUTE_CHOICE", startedNanos, userId, requestedAiProfile, false, guardStats,
+                    "redisMs=" + redisMs + " engineMs=" + engineMs);
+            return response;
+        }
         if (intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART) {
             List<String> focusCategories = llmBoardFocusCategories(engineResponse.parsedContext(), body);
             if (!focusCategories.isEmpty()) {
@@ -1438,6 +1485,10 @@ public class BuildChatService {
         List<String> routeChoiceChips = stringList(engineResponse.parsedContext().get("routeChoiceChips"));
         if (!routeChoiceChips.isEmpty()) {
             response.put("quickReplies", routeChoiceChips);
+            // 이 칩은 "상품 선택"이라는 뜻을 갖는다. 프론트가 다음 요청에 quickReplySource로 되보내면
+            // 라우터가 상품명 어휘를 읽지 않고 이동으로 확정한다. 라벨 문구는 그대로 둔다 —
+            // 칩 텍스트가 곧 다음 message이고, 사용자가 읽는 문장이기도 하기 때문이다.
+            response.put("quickReplyKind", "ROUTE_CHOICE");
         }
         return response;
     }
@@ -5482,7 +5533,11 @@ public class BuildChatService {
         // 대상 부품이 원문에 있으면 그 자체로 완결된 요청이다. detectPartCategory는 카테고리 어휘만 알아서
         // "9800X3D 상세페이지로 이동해"처럼 모델명만 있는 문장을 놓쳤고, 그러면 직전 되묻기 원문과 합성돼
         // 이동이 통째로 삼켜졌다(실측 재현). 아래 SIMULATE_REPLACEMENT 분기와 같은 관용구로 맞춘다.
-        if ((detectPartCategory(message) != null || PartRouteResolver.inferCategory(message) != null)
+        if ((detectPartCategory(message) != null
+                        || PartRouteResolver.inferCategory(message) != null
+                        // 카테고리 어휘가 없어도 제조사·모델명이 원문에 있으면 그 자체로 완결된 요청이다.
+                        // (예: "커세어 FRAME 4000D 상세페이지로 이동해" — 카테고리 단어가 한 개도 없다)
+                        || PartRouteResolver.hasConcreteProductHint(message))
                 && containsAnyNormalized(
                         normalized,
                         "추천", "바꿔", "교체", "담아", "넣어", "추가",

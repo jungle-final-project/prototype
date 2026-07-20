@@ -38,6 +38,13 @@ public class PcAgentDiagnosisRequestController {
         return service.create(currentUserService.requireUser(authorization), body);
     }
 
+    @GetMapping("/connection")
+    public Map<String, Object> connection(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        return service.connectionStatus(currentUserService.requireUser(authorization));
+    }
+
     @GetMapping("/{diagnosisId}")
     public Map<String, Object> get(
             @RequestHeader(value = "Authorization", required = false) String authorization,

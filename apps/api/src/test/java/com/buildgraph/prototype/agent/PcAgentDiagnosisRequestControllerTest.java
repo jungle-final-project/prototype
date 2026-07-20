@@ -43,6 +43,15 @@ class PcAgentDiagnosisRequestControllerTest {
     }
 
     @Test
+    void authenticatedUserCanCheckTheirOwnAgentConnection() {
+        when(currentUserService.requireUser("Bearer access-token")).thenReturn(USER);
+        when(requestService.connectionStatus(USER)).thenReturn(Map.of("connected", true));
+
+        assertThat(controller.connection("Bearer access-token")).containsEntry("connected", true);
+        verify(requestService).connectionStatus(USER);
+    }
+
+    @Test
     void authenticatedUserCanQueryOnlyTheirLatestDiagnosis() {
         when(currentUserService.requireUser("Bearer access-token")).thenReturn(USER);
         when(queryService.latest(USER)).thenReturn(Map.of(

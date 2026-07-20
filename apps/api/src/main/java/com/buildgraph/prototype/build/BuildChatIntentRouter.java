@@ -53,6 +53,16 @@ public class BuildChatIntentRouter {
         String partQuery = PartRouteResolver.extractPartQuery(message);
         boolean hasDraftItems = !objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty();
 
+        // 되묻기 칩이 보낸 문장은 새 요청이 아니라 "상품 하나를 고른 것"이다. 라벨은 DB 상품명 전문이라
+        // 어떤 어휘든 들어온다 — 실제 자산에 "게임PC 조립용 메인보드", "팬 1개 포함", "데스크톱 컴퓨터"가
+        // 그대로 있어 표층 어휘로 분류하면 견적 추천으로 새고, "어느 쪽인지 골라 주세요"에 답했는데
+        // 견적 카드가 나온다. 표식이 있으면 문장을 읽지 않고 이동 경로로 확정한다 —
+        // 상품명 사전을 늘려 막는 방식은 카탈로그가 갱신되면 다시 뚫린다.
+        if (isRouteChoiceSelection(body)) {
+            return decision(BuildChatIntent.UNSUPPORTED, "HIGH", "NONE", category, partQuery,
+                    "FAST_PART_DETAIL_ROUTE", "NONE", null, List.of("ROUTE_CHOICE_SELECTION"));
+        }
+
         if (isSimulationIntent(normalized, category)) {
             List<String> reasons = new ArrayList<>();
             if (partQuery == null && category != null) {
@@ -180,7 +190,7 @@ public class BuildChatIntentRouter {
 
         boolean explicitSymptom = containsAny(normalized,
                 "게임하다멈", "게임중멈", "화면멈", "컴퓨터멈", "pc멈", "프리징", "먹통",
-                "검은화면", "블랙스크린", "블루스크린", "갑자기꺼", "자꾸꺼", "재부팅",
+                "검은화면", "블랙스크린", "블루스크린", "화면이끊", "화면끊", "갑자기꺼", "자꾸꺼", "재부팅",
                 "부팅이안", "부팅안", "전원이안", "전원안들", "튕겨", "튕김", "크래시",
                 "프레임드랍", "화면깨", "과열", "너무뜨거", "온도가너무", "팬소리",
                 "디스크100", "저장공간부족", "인터넷이자꾸끊", "네트워크가끊", "소리가안", "소리안나",
@@ -622,6 +632,12 @@ public class BuildChatIntentRouter {
     private static boolean isMissingMonitorContext(String normalized) {
         return containsAny(normalized, "모니터")
                 && containsAny(normalized, "아직안", "안정", "못정", "미정", "모름");
+    }
+
+    /** 되묻기 칩이 보낸 턴인지. 프론트가 quickReplyKind=ROUTE_CHOICE 응답의 칩을 눌렀을 때만 실린다. */
+    static boolean isRouteChoiceSelection(Map<String, Object> request) {
+        Map<String, Object> body = request == null ? Map.of() : request;
+        return "ROUTE_CHOICE".equalsIgnoreCase(firstText(text(body.get("quickReplySource")), ""));
     }
 
     private static boolean standaloneContext(Map<String, Object> body) {

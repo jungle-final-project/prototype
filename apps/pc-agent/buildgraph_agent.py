@@ -192,6 +192,7 @@ LEGACY_DISPLAY_APP_NAMES = ("BuildGraphAgent", "PC Agent", "BuildGraph PC Agent"
 DOWNLOAD_FILE_PREFIX = DISPLAY_APP_NAME
 LEGACY_DOWNLOAD_FILE_PREFIXES = ("BuildGraphAgent",)
 APP_NAME = DISPLAY_APP_NAME
+PC_AGENT_URL_PROTOCOL = "buildgraph-pc-agent"
 APP_ASSET_DIR = "assets"
 AGENT_ICON_PNG = "specup-agent.png"
 AGENT_ICON_ICO = "specup-agent.ico"
@@ -667,24 +668,6 @@ def collect_session_windows_graphics_snapshot(
     if diagnosis_demo_scenario_id(session) == GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID:
         return demo_provider()
     return live_provider()
-
-
-def discard_persisted_demo_session(
-    diagnosis_store: DiagnosisSessionStore,
-    metrics_store: MetricsStore,
-    diagnosis_log_store: DiagnosisLogStore,
-    diagnosis_result_store: DiagnosisResultStore,
-) -> bool:
-    session = diagnosis_store.session
-    if not isinstance(session, DiagnosisSession) or session.request.mode != DEMO_DATA_MODE:
-        return False
-    reset_diagnosis_session_state(
-        diagnosis_store,
-        metrics_store,
-        diagnosis_log_store,
-        diagnosis_result_store,
-    )
-    return True
 
 
 def diagnosis_event_sync_detail(
@@ -2552,9 +2535,20 @@ class HardwareMetricCollector:
             return
         try:
             usage = self.psutil.disk_usage(disk_usage_root())
-            disk_usage = clamp_percent(getattr(usage, "percent", None))
-            disk_used = rounded_or_none(getattr(usage, "used", None))
             disk_total = rounded_or_none(getattr(usage, "total", None))
+            disk_free = rounded_or_none(getattr(usage, "free", None))
+            if (
+                disk_total is None
+                or disk_free is None
+                or disk_total <= 0
+                or disk_free < 0
+                or disk_free > disk_total
+            ):
+                disk_usage = None
+                disk_used = None
+            else:
+                disk_used = round(disk_total - disk_free, 1)
+                disk_usage = clamp_percent(disk_used / disk_total * 100.0)
         except Exception as exception:
             disk_usage = None
             disk_used = None
@@ -2564,11 +2558,11 @@ class HardwareMetricCollector:
             mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, reason)
             mark_unavailable(payload, reasons, DISK_TOTAL_BYTES_FIELDS, reason)
         if disk_usage is None:
-            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk_usage unavailable")
+            mark_unavailable(payload, reasons, DISK_USAGE_FIELDS, "psutil disk total/free bytes unavailable")
         else:
             set_metric_aliases(payload, DISK_USAGE_FIELDS, disk_usage)
         if disk_used is None:
-            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil disk used bytes unavailable")
+            mark_unavailable(payload, reasons, DISK_USED_BYTES_FIELDS, "psutil disk total/free bytes unavailable")
         else:
             set_metric_aliases(payload, DISK_USED_BYTES_FIELDS, disk_used)
         if disk_total is None:
@@ -3877,6 +3871,29 @@ def register_startup() -> Path:
     return path
 
 
+def protocol_launch_command() -> str:
+    if getattr(sys, "frozen", False):
+        return f'"{ensure_installed_executable()}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+
+
+def register_url_protocol() -> bool:
+    if os.name != "nt":
+        return False
+    import winreg
+
+    protocol_key = rf"Software\Classes\{PC_AGENT_URL_PROTOCOL}"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key) as key:
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, "URL:PCAgent Protocol")
+        winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\DefaultIcon") as key:
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, str(ensure_installed_executable()))
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\shell\open\command") as key:
+        # URI의 userId/diagnosisId는 받지 않는다. 무인자 실행은 서버 인증 WebSocket 요청만 처리한다.
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, protocol_launch_command())
+    return True
+
+
 def pid_file() -> Path:
     return app_data_dir() / "agent.pid"
 
@@ -4725,15 +4742,9 @@ def build_symptom_screen_state(screen_input: SymptomScreenInput) -> SymptomScree
         (snapshot.memory_used, snapshot.memory_total),
     )
     disk_storage_available = snapshot.disk_usage.availability == SENSOR_COLLECTED
-    disk_activity_available = snapshot.disk_activity.availability == SENSOR_COLLECTED
     disk_primary = snapshot.disk_usage if disk_storage_available else snapshot.disk_activity
     disk_label = "저장 공간" if disk_storage_available else "활성 시간"
     disk_status, disk_tone = component_status(disk_primary, (snapshot.disk_health,))
-    if disk_storage_available and disk_activity_available:
-        activity_status, activity_tone = component_status(snapshot.disk_activity)
-        tone_priority = {"default": 0, "warning": 1, "danger": 2}
-        if tone_priority.get(activity_tone, 0) > tone_priority.get(disk_tone, 0):
-            disk_status, disk_tone = activity_status, activity_tone
 
     memory_capacity = f"{memory_size_text(snapshot.memory_used)} / {memory_size_text(snapshot.memory_total)}"
     disk_details = (
@@ -8259,6 +8270,7 @@ def run_background(
             with error_log.open("a", encoding="utf-8") as file:
                 file.write(f"{datetime.now(KST).isoformat()} auto-register failed: {exception}\n")
         register_startup()
+        register_url_protocol()
         hide_console_window()
         write_pid()
         runtime = AgentRuntime()
@@ -8268,12 +8280,6 @@ def run_background(
         metrics_store = MetricsStore(app_data_dir() / "diagnosis-metrics-state.json")
         diagnosis_log_store = DiagnosisLogStore(app_data_dir() / "diagnosis-progress-state.json")
         diagnosis_result_store = DiagnosisResultStore(app_data_dir() / "diagnosis-result-state.json")
-        discard_persisted_demo_session(
-            diagnosis_store,
-            metrics_store,
-            diagnosis_log_store,
-            diagnosis_result_store,
-        )
         move_terminal_session_to_idle(diagnosis_store, diagnosis_log_store.snapshot)
         diagnosis_rule_engine = DiagnosisRuleEngine()
         diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}

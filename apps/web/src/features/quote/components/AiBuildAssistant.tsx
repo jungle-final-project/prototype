@@ -1,6 +1,6 @@
 import { type CSSProperties, type FormEvent, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowDown, ArrowRight, BarChart3, Bot, CheckCircle2, Download, LifeBuoy, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
 import { useLockedPageScroll } from '../../../hooks/useHiddenPageScrollbar';
 import { useStickToBottom } from '../../../hooks/useStickToBottom';
@@ -9,6 +9,7 @@ import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import type { QuoteDraft } from '../../parts/types';
 import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
+import { ensurePcAgentConnected } from '../../support/pcAgentLauncher';
 import { requestPcAgentDiagnosis } from '../../support/supportApi';
 import { AiChatPendingBubble } from './AiChatPendingBubble';
 import { applicationKindForBuild, startAiDraftApplicationFeedback } from './AiDraftApplicationFeedbackCoordinator';
@@ -21,6 +22,7 @@ import {
   mergeAiBuildHistory,
   navigationRouteFrom,
   normalizeAiBuilds,
+  type AiQuickReplyKind,
   normalizeAiRecommendedBuild,
   readAssistantSession,
   recentBuildsForChatContext,
@@ -140,8 +142,18 @@ function fastCategoryRouteIntent(message: string): PartCategory | null {
   return matches.length === 1 ? matches[0] : null;
 }
 
+/**
+ * 현재 주소를 서버가 내려주는 route 문자열과 같은 모양(`/경로?쿼리`)으로 만든다.
+ * '지금 있는 곳과 완전히 같은 곳'인지 한 곳에서만 판정하기 위한 기준선이다.
+ */
+function currentRouteKey(location: { pathname: string; search: string }) {
+  return `${location.pathname}${location.search}`;
+}
+
 export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoardFocus }: AiBuildAssistantProps) {
   const navigate = useNavigate();
+  // 늦게 도착한 응답이 화면을 낚아채지 않도록 '보낼 때 있던 화면'과 '지금 화면'을 비교한다.
+  const location = useLocation();
   const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const centerMessagesScrollRef = useRef<HTMLDivElement | null>(null);
@@ -173,6 +185,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [pending, setPending] = useState<{ id: string; excerpt: string } | null>(null);
   const [pendingVisible, setPendingVisible] = useState(false);
   const activeRequestRef = useRef<string | null>(null);
+  // 응답이 돌아온 '그 순간'의 사실들 — sendMessage는 await를 건너므로 클로저 값이 아니라 ref로 읽어야 한다.
+  // (1) 지금 화면 (2) 패널이 아직 열려 있는지 (3) 이 어시스턴트가 아직 살아 있는지.
+  const locationRef = useRef(location);
+  const openRef = useRef(open);
+  const assistantMountedRef = useRef(true);
   const pendingTimerRef = useRef<number | null>(null);
   // 방금 도착한 assistant 답변만 문장 단위로 순차 노출한다. 세션 복원/과거 메시지는 애니메이션하지 않는다.
   const [revealMessageId, setRevealMessageId] = useState<string | null>(null);
@@ -183,7 +200,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [pendingAutoApplyBuild, setPendingAutoApplyBuild] = useState<AiRecommendedBuild | null>(null);
   const autoApplyBuildRef = useRef<string | null>(null);
   const [runningQuickReplyCommandId, setRunningQuickReplyCommandId] = useState<string | null>(null);
-  const [pendingSubmit, setPendingSubmit] = useState<{ text: string; assessmentContext?: AiAssessmentContext } | null>(null);
+  const [pendingSubmit, setPendingSubmit] = useState<{
+    text: string;
+    assessmentContext?: AiAssessmentContext;
+    quickReplySource?: AiQuickReplyKind;
+  } | null>(null);
   const [centerScrollbar, setCenterScrollbar] = useState<CenterScrollbarState>({
     canScroll: false,
     visible: false,
@@ -283,6 +304,22 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       window.removeEventListener(SUPPORT_CHAT_OPEN_EVENT, closeForSupportChat);
     };
   }, [isDesktopAssistant, isEmbedded]);
+
+  useEffect(() => {
+    locationRef.current = location;
+  }, [location]);
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
+  // StrictMode 개발 이중 마운트에서도 살아나도록 본문에서 다시 true로 세운다.
+  useEffect(() => {
+    assistantMountedRef.current = true;
+    return () => {
+      assistantMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     setAiAssistantOpen(!isEmbedded && open);
@@ -404,7 +441,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     if (!pendingSubmit || isSending) return;
     const submission = pendingSubmit;
     setPendingSubmit(null);
-    void sendMessage(submission.text, submission.assessmentContext);
+    void sendMessage(submission.text, submission.assessmentContext, submission.quickReplySource);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSubmit, isSending]);
 
@@ -417,7 +454,21 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     await sendMessage(prompt);
   }
 
-  async function sendMessage(rawPrompt: string, assessmentContext?: AiAssessmentContext) {
+  // 서버가 내려준 이동을 '따라가도 되는가'를 상태로만 판정한다.
+  // 늦게 온 응답(다른 질문의 답 / 사용자가 닫은 뒤 / 다른 화면으로 간 뒤 / 언마운트 뒤)은
+  // 답변만 대화에 남기고 화면은 건드리지 않는다 — 답을 버리는 게 아니라 이동만 포기한다.
+  function canFollowNavigation(requestId: string, sentFromPathname: string) {
+    if (!assistantMountedRef.current) return false;
+    if (activeRequestRef.current !== requestId) return false;
+    if (!isEmbedded && !openRef.current) return false;
+    return locationRef.current.pathname === sentFromPathname;
+  }
+
+  async function sendMessage(
+    rawPrompt: string,
+    assessmentContext?: AiAssessmentContext,
+    quickReplySource?: AiQuickReplyKind
+  ) {
     const nextPrompt = rawPrompt.trim();
     if (!nextPrompt || isSending || applyingBuildId) return;
 
@@ -469,7 +520,10 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       setSession(nextSession);
       saveAssistantSession(nextSession, ownerKey);
       setPendingClarification(null);
-      navigate(`/self-quote?category=${fastCategory}`);
+      const fastRoute = `/self-quote?category=${fastCategory}`;
+      if (fastRoute !== currentRouteKey(location)) {
+        navigate(fastRoute);
+      }
       return;
     }
 
@@ -482,6 +536,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     // 300ms 타이머가 발화하기 전에 응답이 오면 finally가 타이머를 지워 버블이 뜨지 않는다.
     const requestId = createAiMessageId('pending');
     activeRequestRef.current = requestId;
+    // 이 질문을 보낼 때 사용자가 보고 있던 화면. 응답 시점에 이게 바뀌어 있으면 이동하지 않는다.
+    const sentFromPathname = location.pathname;
     const excerpt = nextPrompt.length > 30 ? `${nextPrompt.slice(0, 30)}…` : nextPrompt;
     setPending({ id: requestId, excerpt });
     setPendingVisible(false);
@@ -510,7 +566,12 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           ? { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] }
           : { surface: 'HOME', capabilities: [] },
         assessmentContext,
-        clarificationContext: pendingClarification ?? undefined
+        // 칩은 직전 질문에 대한 "답"이 아니라 "선택"이다 — 원문 에코를 함께 보내면 서버가 두 문장을
+        // 합성해 상품명이 묻힌다. 서버에도 같은 가드가 있지만 보내지 않는 쪽이 계약상 정확하다.
+        clarificationContext: quickReplySource === 'ROUTE_CHOICE'
+          ? undefined
+          : (pendingClarification ?? undefined),
+        quickReplySource
       });
       const boardFocus = normalizeBoardFocus(response.boardFocus);
       if (boardFocus && onBoardFocus) {
@@ -542,6 +603,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         supportGuidance: response.supportGuidance ?? undefined,
         warnings: response.warnings ?? [],
         quickReplies: response.quickReplies ?? undefined,
+        quickReplyKind: response.quickReplyKind ?? undefined,
         quickReplyCommands: response.quickReplyCommands ?? undefined
       };
       const nextSession = {
@@ -564,11 +626,15 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       // 패널을 먼저 닫아야 한다 — 중앙 모달은 fixed inset-0 전체화면이라 열린 채로 두면
       // 도착한 화면을 그대로 덮어, 사용자 눈에는 이동이 일어나지 않은 것과 똑같이 보인다.
       const navigationRoute = navigationRouteFrom(response);
-      if (navigationRoute) {
+      if (navigationRoute && canFollowNavigation(requestId, sentFromPathname)) {
         if (!isEmbedded) {
           setOpen(false);
         }
-        navigate(navigationRoute);
+        // 이미 그 주소에 서 있으면 다시 밀어 넣지 않는다 — 화면은 그대로인데 뒤로가기만 한 번 더
+        // 눌러야 하는 히스토리가 쌓인다. 경로가 같아도 검색어(q)가 다르면 다른 화면이므로 이동한다.
+        if (navigationRoute !== currentRouteKey(locationRef.current)) {
+          navigate(navigationRoute);
+        }
       }
       const verifiedRepairBuild = responseBuilds?.length === 1
         && isVerifiedAutoApplyBuild(responseBuilds[0])
@@ -709,10 +775,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const handleQuickReply = useCallback(async (
     reply: string,
     command?: AiQuickReplyCommand,
-    messageId?: string
+    messageId?: string,
+    quickReplyKind?: AiQuickReplyKind
   ) => {
     if (!command) {
-      setPendingSubmit({ text: reply });
+      setPendingSubmit({ text: reply, quickReplySource: quickReplyKind });
       return;
     }
     const commandId = `${messageId ?? 'quick-reply'}:${command.partId}`;
@@ -1348,7 +1415,12 @@ const ChatMessage = memo(function ChatMessage({
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
-  onQuickReply: (reply: string, command?: AiQuickReplyCommand, messageId?: string) => void;
+  onQuickReply: (
+    reply: string,
+    command?: AiQuickReplyCommand,
+    messageId?: string,
+    quickReplyKind?: AiQuickReplyKind
+  ) => void;
   runningQuickReplyCommandId: string | null;
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
@@ -1448,7 +1520,7 @@ const ChatMessage = memo(function ChatMessage({
                     key={reply}
                     type="button"
                     disabled={isRunning}
-                    onClick={() => onQuickReply(reply, command, message.id)}
+                    onClick={() => onQuickReply(reply, command, message.id, message.quickReplyKind)}
                     className={`${isLarge ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[11px]'} rounded-full border border-slate-200 bg-white font-black text-slate-600 shadow-sm transition hover:border-[#de6c2d] hover:text-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#de6c2d]/15 disabled:cursor-wait disabled:opacity-60`}
                   >
                     {isRunning ? '추가 중...' : reply}
@@ -1525,27 +1597,45 @@ function SupportGuidanceCard({
   const [downloadMessage, setDownloadMessage] = useState('');
   const [diagnosisState, setDiagnosisState] = useState<'idle' | 'requesting' | 'accepted' | 'rejected' | 'error'>('idle');
   const [diagnosisMessage, setDiagnosisMessage] = useState('');
+  const [diagnosisMode, setDiagnosisMode] = useState<'LIVE' | 'DEMO'>('LIVE');
+  const diagnosisRequestInFlight = useRef(false);
+  const diagnosisConnectionController = useRef<AbortController | null>(null);
   const canDownload = guidance.actions.some((action) => action.type === 'DOWNLOAD_PC_AGENT');
   const supportRoute = guidance.actions.find((action) => action.type === 'OPEN_SUPPORT_NEW')?.route ?? '/support/new';
 
+  useEffect(() => () => diagnosisConnectionController.current?.abort(), []);
+
   async function requestAgentDiagnosis() {
-    if (diagnosisState === 'requesting') return;
+    if (diagnosisRequestInFlight.current) return;
+    diagnosisRequestInFlight.current = true;
     setDiagnosisState('requesting');
     setDiagnosisMessage('');
+    const controller = new AbortController();
+    diagnosisConnectionController.current = controller;
     try {
+      const connected = await ensurePcAgentConnected(controller.signal);
+      if (!connected) {
+        setDiagnosisState('error');
+        setDiagnosisMessage('설치된 PC Agent를 실행했지만 연결되지 않았습니다. 실행 상태를 확인한 뒤 다시 시도해 주세요.');
+        return;
+      }
       const response = await requestPcAgentDiagnosis({
         symptom: symptom.trim(),
         requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
-        mode: 'LIVE'
-      });
+        mode: diagnosisMode
+      }, controller.signal);
       if (response.status === 'ACCEPTED') {
         setDiagnosisState('accepted');
         setDiagnosisMessage('설치된 PC Agent가 증상을 접수했습니다. PC 화면의 진단 창을 확인해 주세요.');
+        const destination = new URL(supportRoute, window.location.origin);
+        destination.searchParams.set('diagnosisId', response.diagnosisId);
+        navigate(`${destination.pathname}${destination.search}`);
       } else {
         setDiagnosisState('rejected');
         setDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
       }
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setDiagnosisState('error');
       if (cause instanceof ApiError && cause.code === 'AGENT_DISCONNECTED') {
         setDiagnosisMessage('실행 중인 PC Agent가 없습니다. 아래에서 다운로드해 실행한 뒤 다시 접수해 주세요.');
@@ -1554,6 +1644,11 @@ function SupportGuidanceCard({
       } else {
         setDiagnosisMessage('PC Agent 접수 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
       }
+    } finally {
+      if (diagnosisConnectionController.current === controller) {
+        diagnosisConnectionController.current = null;
+      }
+      diagnosisRequestInFlight.current = false;
     }
   }
 
@@ -1621,6 +1716,36 @@ function SupportGuidanceCard({
       <p className={`${isLarge ? 'mt-4 text-sm leading-6' : 'mt-3 text-[11px] leading-5'} rounded-md border border-cyan-100 bg-white px-3 py-2 font-semibold text-slate-600`}>
         위 항목은 입력한 증상에서 흔히 확인하는 가능성입니다. 원인 확정과 지원 방식은 PC Agent의 별도 진단 AI가 동의한 로그를 확인한 뒤 안내합니다.
       </p>
+
+      {symptom.trim() ? (
+        <div className={`${isLarge ? 'mt-4' : 'mt-3'} flex items-center gap-3`}>
+          <button
+            type="button"
+            role="switch"
+            aria-label="시연 모드"
+            aria-checked={diagnosisMode === 'DEMO'}
+            data-testid="ai-agent-demo-mode"
+            disabled={diagnosisState === 'requesting' || diagnosisState === 'accepted'}
+            onClick={() => setDiagnosisMode((current) => current === 'LIVE' ? 'DEMO' : 'LIVE')}
+            className={`${diagnosisMode === 'DEMO' ? 'bg-cyan-700' : 'bg-slate-300'} relative h-6 w-11 rounded-full transition focus:outline-none focus:ring-4 focus:ring-cyan-100 disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            <span
+              aria-hidden="true"
+              className={`${diagnosisMode === 'DEMO' ? 'translate-x-5' : 'translate-x-1'} absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow transition`}
+            />
+          </button>
+          <div>
+            <p className={`${isLarge ? 'text-sm' : 'text-xs'} font-black text-slate-700`}>
+              {diagnosisMode === 'DEMO' ? 'Code 43 시연 모드' : '실시간 측정'}
+            </p>
+            <p className={`${isLarge ? 'text-xs' : 'text-[10px]'} font-semibold text-slate-500`}>
+              {diagnosisMode === 'DEMO'
+                ? '다음 진단 한 건에만 시연 모드를 요청합니다.'
+                : '실제 PC 센서와 그래픽 장치 상태를 진단합니다.'}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-wrap`}>
         {symptom.trim() ? (
