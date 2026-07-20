@@ -1917,6 +1917,16 @@ public class BuildChatService {
     }
 
     private List<Map<String, Object>> simulationFpsEvidence(PartCandidate cpu, PartCandidate gpu, String message) {
+        return simulationFpsEvidence(cpu, gpu, gameKeyFromText(message), resolutionFromText(message));
+    }
+
+    /**
+     * 게임·해상도를 문장에서 다시 뽑지 않고 그대로 받는다. "더 부드럽게 바꿔줘"처럼 게임·해상도가
+     * 문장에 없고 화면 문맥에서 오는 요청도 같은 조회를 쓸 수 있어야 한다 — 문장을 넘기면
+     * game_key 필터가 통째로 빠져 LIMIT 4에 엉뚱한 행이 채워지고 근거를 못 찾는다.
+     */
+    private List<Map<String, Object>> simulationFpsEvidence(
+            PartCandidate cpu, PartCandidate gpu, String gameKey, String resolution) {
         if (gpu == null) {
             return List.of();
         }
@@ -1927,8 +1937,6 @@ public class BuildChatService {
         String cpuClass = hardwareClass(cpu);
         Long gpuId = gpu.internalId() == null ? -1L : gpu.internalId();
         Long cpuId = cpu == null || cpu.internalId() == null ? -1L : cpu.internalId();
-        String gameKey = gameKeyFromText(message);
-        String resolution = resolutionFromText(message);
         List<Object> params = new ArrayList<>();
         params.add(gpuId);
         params.add(gpuClass);
@@ -4721,7 +4729,7 @@ public class BuildChatService {
         boolean namedDifferentFromCurrent = namedGpuClass != null
                 && !namedGpuClass.equals(hardwareClass(currentGpu));
 
-        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, message, gameKey, resolution, stableTarget);
+        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, gameKey, resolution, stableTarget);
         if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= targetFps) {
             Map<String, Object> alreadyMet = fastResponse(
                     "GENERAL",
@@ -4758,7 +4766,7 @@ public class BuildChatService {
             FpsTargetEvidence evidence = evidenceByGpuClass.computeIfAbsent(
                     candidateClass,
                     ignored -> Optional.ofNullable(targetFpsEvidence(
-                            currentCpu, candidate, message, gameKey, resolution, stableTarget))
+                            currentCpu, candidate, gameKey, resolution, stableTarget))
             ).orElse(null);
             if (evidence == null || evidence.value() < targetFps) {
                 continue;
@@ -5197,15 +5205,18 @@ public class BuildChatService {
         };
     }
 
+    /**
+     * 이 게임·해상도에서의 예상 FPS 근거. 문장이 아니라 게임·해상도 값으로만 조회한다 —
+     * 화면 문맥에서 온 요청("더 부드럽게")도 같은 근거를 써야 하기 때문이다.
+     */
     private FpsTargetEvidence targetFpsEvidence(
             PartCandidate cpu,
             PartCandidate gpu,
-            String message,
             String gameKey,
             String resolution,
             boolean stableTarget
     ) {
-        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, message)) {
+        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, gameKey, resolution)) {
             if (!gameKey.equals(text(row.get("game_key"))) || !resolution.equals(text(row.get("resolution")))) {
                 continue;
             }
