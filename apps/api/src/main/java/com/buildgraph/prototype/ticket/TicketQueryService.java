@@ -33,6 +33,7 @@ public class TicketQueryService {
     private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH");
     private static final Set<String> VISIT_TIME_SLOTS = Set.of("MORNING", "AFTERNOON", "EVENING");
     private static final Set<String> DIAGNOSTIC_ACCURACIES = Set.of("ACCURATE", "PARTIAL", "MISSED", "UNKNOWN");
+    private static final int MAX_REMOTE_ACCESS_CODE_LENGTH = 32;
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -198,7 +199,221 @@ public class TicketQueryService {
     }
 
     public Map<String, Object> adminTicket(String id) {
-        return ticket(id);
+        return jdbcTemplate.queryForList(ticketSql() + " WHERE t.deleted_at IS NULL AND t.public_id = ?::uuid", id)
+                .stream()
+                .findFirst()
+                .map(this::adminTicketMap)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    @Transactional
+    public Map<String, Object> assignToCurrentAdmin(String id, CurrentUserService.CurrentUser admin) {
+        requireAdminActor(admin);
+        Map<String, Object> current = ticketActionRow(id);
+        requireActionableTicket(current);
+        requireAvailableAssignment(current, admin);
+
+        Long assignedAdminId = longValue(current, "assigned_admin_id");
+        String status = DbValueMapper.string(current, "status");
+        String reviewStatus = DbValueMapper.string(current, "review_status");
+        boolean alreadyApplied = admin.internalId().equals(assignedAdminId)
+                && !"OPEN".equals(status)
+                && !"REQUIRED".equals(reviewStatus);
+        if (!alreadyApplied) {
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET assigned_admin_id = ?,
+                        status = CASE WHEN status = 'OPEN' THEN 'ASSIGNED' ELSE status END,
+                        review_status = CASE WHEN review_status = 'REQUIRED' THEN 'IN_REVIEW' ELSE review_status END,
+                        updated_at = now()
+                    WHERE id = ?
+                    """, admin.internalId(), longValue(current, "internal_id"));
+            auditTicketAction(id, current, admin, "AS_TICKET_ASSIGNED_TO_SELF", "ASSIGNED");
+        }
+        return adminTicket(id);
+    }
+
+    @Transactional
+    public Map<String, Object> requestMoreInformation(
+            String id,
+            String adminNote,
+            CurrentUserService.CurrentUser admin
+    ) {
+        requireAdminActor(admin);
+        String note = adminNote == null ? null : adminNote.trim();
+        if (note == null || note.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "추가 정보 요청 사유를 입력해 주세요.");
+        }
+        Map<String, Object> current = ticketActionRow(id);
+        requireActionableTicket(current);
+        requireReviewNotCompleted(current);
+        requireAvailableAssignment(current, admin);
+
+        boolean alreadyApplied = admin.internalId().equals(longValue(current, "assigned_admin_id"))
+                && "IN_PROGRESS".equals(DbValueMapper.string(current, "status"))
+                && "IN_REVIEW".equals(DbValueMapper.string(current, "review_status"))
+                && "NEEDS_MORE_INFO".equals(DbValueMapper.string(current, "support_decision"))
+                && note.equals(DbValueMapper.string(current, "admin_note"));
+        if (!alreadyApplied) {
+            jdbcTemplate.update("""
+                    UPDATE as_tickets
+                    SET assigned_admin_id = ?,
+                        status = 'IN_PROGRESS',
+                        review_status = 'IN_REVIEW',
+                        support_decision = 'NEEDS_MORE_INFO',
+                        admin_note = ?,
+                        reviewed_at = NULL,
+                        updated_at = now()
+                    WHERE id = ?
+                    """, admin.internalId(), note, longValue(current, "internal_id"));
+            auditTicketAction(id, current, admin, "AS_TICKET_MORE_INFO_REQUESTED", "NEEDS_MORE_INFO");
+        }
+        return adminTicket(id);
+    }
+
+    @Transactional
+    public Map<String, Object> approveRemoteSupport(
+            String id,
+            String adminNote,
+            CurrentUserService.CurrentUser admin
+    ) {
+        requireAdminActor(admin);
+        Map<String, Object> current = ticketActionRow(id);
+        requireAvailableAssignment(current, admin);
+
+        boolean alreadyApplied = admin.internalId().equals(longValue(current, "assigned_admin_id"))
+                && "IN_PROGRESS".equals(DbValueMapper.string(current, "status"))
+                && "APPROVED".equals(DbValueMapper.string(current, "review_status"))
+                && "REMOTE_POSSIBLE".equals(DbValueMapper.string(current, "support_decision"));
+        if (alreadyApplied) {
+            prepareChromeRemoteSupportSession(id, admin);
+            return adminTicket(id);
+        }
+
+        requireActionableTicket(current);
+        requireReviewNotCompleted(current);
+        if (!isRemoteSupportCandidate(current) || hasOutOfScopeBlockingFactor(current)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "현재 진단 및 지원 결정에서는 원격 지원을 승인할 수 없습니다.");
+        }
+
+        String note = adminNote == null || adminNote.isBlank() ? null : adminNote.trim();
+        jdbcTemplate.update("""
+                UPDATE as_tickets
+                SET assigned_admin_id = ?,
+                    status = 'IN_PROGRESS',
+                    review_status = 'APPROVED',
+                    support_decision = 'REMOTE_POSSIBLE',
+                    admin_note = COALESCE(?, admin_note),
+                    reviewed_at = now(),
+                    updated_at = now()
+                WHERE id = ?
+                """, admin.internalId(), note, longValue(current, "internal_id"));
+        auditTicketAction(id, current, admin, "AS_TICKET_REMOTE_SUPPORT_APPROVED", "REMOTE_POSSIBLE");
+        prepareChromeRemoteSupportSession(id, admin);
+        return adminTicket(id);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> userRemoteSupport(String id, CurrentUserService.CurrentUser user) {
+        requireUserActor(user);
+        return remoteSupportDetails(remoteSupportReadRow(id, user.internalId()), false);
+    }
+
+    @Transactional
+    public Map<String, Object> registerRemoteAccessCode(
+            String id,
+            Object accessCode,
+            CurrentUserService.CurrentUser user
+    ) {
+        requireUserActor(user);
+        String normalizedCode = normalizeRemoteAccessCode(accessCode);
+        Map<String, Object> current = remoteSupportActionRow(id, user.internalId());
+        requireRemoteSupportApproved(current);
+        requireActiveTicketForRemoteSupport(current);
+        String remoteStatus = DbValueMapper.string(current, "remote_support_status");
+        if (!Set.of("WAITING_FOR_CODE", "CODE_READY", "REQUESTED", "LINK_SENT").contains(remoteStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "현재 원격지원 상태에서는 지원 코드를 등록할 수 없습니다.");
+        }
+        jdbcTemplate.update("""
+                UPDATE remote_support_sessions
+                SET provider = 'CHROME_REMOTE_DESKTOP',
+                    session_url = NULL,
+                    status = 'CODE_READY',
+                    access_code = ?,
+                    access_code_registered_at = now()
+                WHERE id = ?
+                """, normalizedCode, longValue(current, "remote_session_id"));
+        auditRemoteSupportAction(id, user, "REMOTE_SUPPORT_CODE_REGISTERED", remoteStatus, "CODE_READY");
+        return userRemoteSupport(id, user);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> adminRemoteSupport(String id, CurrentUserService.CurrentUser admin) {
+        requireAdminActor(admin);
+        Map<String, Object> current = remoteSupportReadRow(id, null);
+        requireAssignedAdmin(current, admin);
+        return remoteSupportDetails(current, true);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> remoteAccessCodeForAdmin(String id, CurrentUserService.CurrentUser admin) {
+        requireAdminActor(admin);
+        Map<String, Object> current = remoteSupportReadRow(id, null);
+        requireAssignedAdmin(current, admin);
+        String remoteStatus = DbValueMapper.string(current, "remote_support_status");
+        String accessCode = DbValueMapper.string(current, "remote_access_code");
+        if (!Set.of("CODE_READY", "IN_PROGRESS").contains(remoteStatus) || accessCode == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "복사할 수 있는 원격지원 코드가 없습니다.");
+        }
+        return MockData.map("accessCode", accessCode);
+    }
+
+    @Transactional
+    public Map<String, Object> startRemoteSupport(String id, CurrentUserService.CurrentUser admin) {
+        requireAdminActor(admin);
+        Map<String, Object> current = remoteSupportActionRow(id, null);
+        requireAssignedAdmin(current, admin);
+        requireRemoteSupportApproved(current);
+        requireActiveTicketForRemoteSupport(current);
+        String remoteStatus = DbValueMapper.string(current, "remote_support_status");
+        if ("IN_PROGRESS".equals(remoteStatus)) {
+            return remoteSupportDetails(current, true);
+        }
+        if (!"CODE_READY".equals(remoteStatus) || DbValueMapper.string(current, "remote_access_code") == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "지원 코드가 등록된 뒤 원격지원을 시작할 수 있습니다.");
+        }
+        jdbcTemplate.update("""
+                UPDATE remote_support_sessions
+                SET status = 'IN_PROGRESS',
+                    started_at = COALESCE(started_at, now())
+                WHERE id = ?
+                """, longValue(current, "remote_session_id"));
+        auditRemoteSupportAction(id, admin, "REMOTE_SUPPORT_STARTED", remoteStatus, "IN_PROGRESS");
+        return adminRemoteSupport(id, admin);
+    }
+
+    @Transactional
+    public Map<String, Object> completeRemoteSupport(String id, CurrentUserService.CurrentUser admin) {
+        requireAdminActor(admin);
+        Map<String, Object> current = remoteSupportActionRow(id, null);
+        requireAssignedAdmin(current, admin);
+        String remoteStatus = DbValueMapper.string(current, "remote_support_status");
+        if ("COMPLETED".equals(remoteStatus)) {
+            return remoteSupportDetails(current, true);
+        }
+        if (!"IN_PROGRESS".equals(remoteStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "진행 중인 원격지원만 완료할 수 있습니다.");
+        }
+        jdbcTemplate.update("""
+                UPDATE remote_support_sessions
+                SET status = 'COMPLETED',
+                    ended_at = COALESCE(ended_at, now()),
+                    ended_reason = COALESCE(ended_reason, 'ADMIN_COMPLETED'),
+                    access_code = NULL
+                WHERE id = ?
+                """, longValue(current, "remote_session_id"));
+        auditRemoteSupportAction(id, admin, "REMOTE_SUPPORT_COMPLETED", remoteStatus, "COMPLETED");
+        return adminRemoteSupport(id, admin);
     }
 
     @Transactional
@@ -248,9 +463,10 @@ public class TicketQueryService {
                 UPDATE remote_support_sessions
                 SET status = 'CANCELLED',
                     ended_at = COALESCE(ended_at, now()),
-                    ended_reason = COALESCE(ended_reason, 'AS_TICKET_DELETED')
+                    ended_reason = COALESCE(ended_reason, 'AS_TICKET_DELETED'),
+                    access_code = NULL
                 WHERE as_ticket_id = ?
-                  AND status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                  AND status IN ('REQUESTED', 'LINK_SENT', 'WAITING_FOR_CODE', 'CODE_READY', 'IN_PROGRESS')
                 """, ticketInternalId);
         jdbcTemplate.update("""
                 UPDATE visit_support_reservations
@@ -611,7 +827,7 @@ public class TicketQueryService {
         saveRemoteSupportIfRequested(id, request, admin);
         saveVisitSupportIfRequested(current, request);
         auditTicketUpdate(id, current, request, admin);
-        return ticket(id);
+        return admin == null ? ticket(id) : adminTicket(id);
     }
 
     private Map<String, Object> ticketRow(String id) {
@@ -634,6 +850,312 @@ public class TicketQueryService {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> ticketActionRow(String id) {
+        return jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               assigned_admin_id,
+                               status,
+                               review_status,
+                               support_decision,
+                               request_type,
+                               diagnosis_result,
+                               support_routing,
+                               admin_note
+                        FROM as_tickets
+                        WHERE deleted_at IS NULL
+                          AND public_id = ?::uuid
+                        FOR UPDATE
+                        """, id)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> remoteSupportReadRow(String id, Long userInternalId) {
+        String ownershipClause = userInternalId == null ? "" : " AND t.user_id = ?";
+        Object[] parameters = userInternalId == null ? new Object[]{id} : new Object[]{id, userInternalId};
+        return jdbcTemplate.queryForList(remoteSupportSql() + " WHERE t.public_id = ?::uuid AND t.deleted_at IS NULL" + ownershipClause, parameters)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private Map<String, Object> remoteSupportActionRow(String id, Long userInternalId) {
+        String ownershipClause = userInternalId == null ? "" : " AND t.user_id = ?";
+        Object[] parameters = userInternalId == null ? new Object[]{id} : new Object[]{id, userInternalId};
+        return jdbcTemplate.queryForList(
+                        remoteSupportSql() + " WHERE t.public_id = ?::uuid AND t.deleted_at IS NULL" + ownershipClause + " FOR UPDATE OF t",
+                        parameters
+                )
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "AS 티켓을 찾을 수 없습니다."));
+    }
+
+    private String remoteSupportSql() {
+        return """
+                SELECT t.id AS internal_id,
+                       t.status AS ticket_status,
+                       t.review_status,
+                       t.support_decision,
+                       t.assigned_admin_id,
+                       rs.id AS remote_session_id,
+                       rs.provider AS remote_support_provider,
+                       rs.status AS remote_support_status,
+                       rs.access_code AS remote_access_code,
+                       rs.access_code_registered_at,
+                       rs.started_at AS remote_support_started_at,
+                       rs.ended_at AS remote_support_completed_at
+                FROM as_tickets t
+                LEFT JOIN LATERAL (
+                  SELECT id,
+                         provider,
+                         status,
+                         access_code,
+                         access_code_registered_at,
+                         started_at,
+                         ended_at
+                  FROM remote_support_sessions
+                  WHERE as_ticket_id = t.id
+                  ORDER BY created_at DESC, id DESC
+                  LIMIT 1
+                ) rs ON true
+                """;
+    }
+
+    private void prepareChromeRemoteSupportSession(String ticketId, CurrentUserService.CurrentUser admin) {
+        jdbcTemplate.update("""
+                WITH target_ticket AS (
+                  SELECT t.id, lu.device_id
+                  FROM as_tickets t
+                  LEFT JOIN agent_log_uploads lu ON lu.id = t.log_upload_id
+                  WHERE t.public_id = ?::uuid
+                    AND t.deleted_at IS NULL
+                ),
+                latest AS (
+                  SELECT rs.id, rs.status
+                  FROM remote_support_sessions rs
+                  JOIN target_ticket tt ON tt.id = rs.as_ticket_id
+                  ORDER BY rs.created_at DESC, rs.id DESC
+                  LIMIT 1
+                ),
+                updated AS (
+                  UPDATE remote_support_sessions rs
+                  SET provider = 'CHROME_REMOTE_DESKTOP',
+                      session_url = NULL,
+                      status = CASE
+                        WHEN rs.status IN ('CODE_READY', 'IN_PROGRESS') THEN rs.status
+                        ELSE 'WAITING_FOR_CODE'
+                      END,
+                      access_code = CASE
+                        WHEN rs.status IN ('CODE_READY', 'IN_PROGRESS') THEN rs.access_code
+                        ELSE NULL
+                      END,
+                      requested_by_admin_id = ?
+                  WHERE rs.id = (SELECT id FROM latest)
+                    AND rs.status IN ('REQUESTED', 'LINK_SENT', 'WAITING_FOR_CODE', 'CODE_READY', 'IN_PROGRESS')
+                  RETURNING rs.id
+                )
+                INSERT INTO remote_support_sessions (
+                  as_ticket_id,
+                  device_id,
+                  provider,
+                  status,
+                  requested_by_admin_id
+                )
+                SELECT tt.id,
+                       tt.device_id,
+                       'CHROME_REMOTE_DESKTOP',
+                       'WAITING_FOR_CODE',
+                       ?
+                FROM target_ticket tt
+                WHERE NOT EXISTS (SELECT 1 FROM latest)
+                """, ticketId, admin.internalId(), admin.internalId());
+    }
+
+    private static void requireUserActor(CurrentUserService.CurrentUser user) {
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
+    }
+
+    private static void requireRemoteSupportApproved(Map<String, Object> current) {
+        boolean approved = "APPROVED".equals(DbValueMapper.string(current, "review_status"))
+                && "REMOTE_POSSIBLE".equals(DbValueMapper.string(current, "support_decision"));
+        if (!approved || current.get("remote_session_id") == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "원격지원 승인 후 지원 코드를 등록할 수 있습니다.");
+        }
+    }
+
+    private static void requireActiveTicketForRemoteSupport(Map<String, Object> current) {
+        if (!Set.of("OPEN", "ASSIGNED", "IN_PROGRESS").contains(DbValueMapper.string(current, "ticket_status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "완료되거나 종료된 AS 티켓에서는 원격지원을 진행할 수 없습니다.");
+        }
+    }
+
+    private static void requireAssignedAdmin(
+            Map<String, Object> current,
+            CurrentUserService.CurrentUser admin
+    ) {
+        Long assignedAdminId = longValue(current, "assigned_admin_id");
+        if (assignedAdminId == null || !assignedAdminId.equals(admin.internalId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "담당 관리자만 원격지원을 처리할 수 있습니다.");
+        }
+    }
+
+    private static String normalizeRemoteAccessCode(Object value) {
+        String raw = value == null ? "" : value.toString().trim();
+        String normalized = raw.replaceAll("[\\s-]+", "");
+        if (normalized.isBlank() || !normalized.matches("[0-9]+") || normalized.length() > MAX_REMOTE_ACCESS_CODE_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원 코드는 숫자와 구분 공백 또는 하이픈만 사용할 수 있습니다.");
+        }
+        return normalized;
+    }
+
+    private static Map<String, Object> remoteSupportDetails(Map<String, Object> row, boolean adminView) {
+        String accessCode = DbValueMapper.string(row, "remote_access_code");
+        Map<String, Object> result = MockData.map(
+                "status", DbValueMapper.string(row, "remote_support_status"),
+                "provider", DbValueMapper.string(row, "remote_support_provider"),
+                "accessCodeRegistered", accessCode != null,
+                "accessCodeRegisteredAt", DbValueMapper.timestamp(row, "access_code_registered_at"),
+                "startedAt", DbValueMapper.timestamp(row, "remote_support_started_at"),
+                "completedAt", DbValueMapper.timestamp(row, "remote_support_completed_at")
+        );
+        if (adminView) {
+            result.put("maskedAccessCode", maskRemoteAccessCode(accessCode));
+        }
+        return result;
+    }
+
+    private static String maskRemoteAccessCode(String accessCode) {
+        if (accessCode == null) {
+            return null;
+        }
+        if (accessCode.length() <= 4) {
+            return "•".repeat(accessCode.length());
+        }
+        return "•".repeat(accessCode.length() - 4) + " " + accessCode.substring(accessCode.length() - 4);
+    }
+
+    private static void requireAdminActor(CurrentUserService.CurrentUser admin) {
+        if (admin == null || !"ADMIN".equals(admin.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
+        }
+    }
+
+    private static void requireActionableTicket(Map<String, Object> current) {
+        String status = DbValueMapper.string(current, "status");
+        if (!Set.of("OPEN", "ASSIGNED", "IN_PROGRESS").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "완료되거나 종료된 AS 티켓은 다시 처리할 수 없습니다.");
+        }
+    }
+
+    private static void requireReviewNotCompleted(Map<String, Object> current) {
+        String reviewStatus = DbValueMapper.string(current, "review_status");
+        if (Set.of("APPROVED", "REJECTED").contains(reviewStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 관리자 검토가 완료된 AS 티켓입니다.");
+        }
+    }
+
+    private static void requireAvailableAssignment(
+            Map<String, Object> current,
+            CurrentUserService.CurrentUser admin
+    ) {
+        Long assignedAdminId = longValue(current, "assigned_admin_id");
+        if (assignedAdminId != null && !assignedAdminId.equals(admin.internalId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "다른 관리자가 담당 중인 AS 티켓입니다.");
+        }
+    }
+
+    private static boolean isRemoteSupportCandidate(Map<String, Object> current) {
+        if ("REMOTE_POSSIBLE".equals(DbValueMapper.string(current, "support_decision"))) {
+            return true;
+        }
+        if ("REMOTE_SUPPORT".equals(DbValueMapper.string(current, "request_type"))) {
+            return true;
+        }
+        Object diagnosisValue = DbValueMapper.json(current, "diagnosis_result", Map.of());
+        if (diagnosisValue instanceof Map<?, ?> diagnosis
+                && "REMOTE_SUPPORT".equals(stringOrNull(diagnosis.get("resolutionType")))) {
+            return true;
+        }
+        Object routingValue = DbValueMapper.json(current, "support_routing", Map.of());
+        if (!(routingValue instanceof Map<?, ?> routing)) {
+            return false;
+        }
+        return "REMOTE_SUPPORT".equals(stringOrNull(routing.get("recommendedService")))
+                || "REMOTE_POSSIBLE".equals(stringOrNull(routing.get("recommendedDecision")))
+                || "REMOTE_POSSIBLE".equals(stringOrNull(routing.get("supportDecision")));
+    }
+
+    private void auditTicketAction(
+            String ticketId,
+            Map<String, Object> current,
+            CurrentUserService.CurrentUser admin,
+            String action,
+            String outcome
+    ) {
+        jdbcTemplate.update("""
+                INSERT INTO admin_audit_logs (
+                  actor_user_id,
+                  action,
+                  target_type,
+                  target_id,
+                  metadata
+                )
+                VALUES (
+                  ?,
+                  ?,
+                  'as_tickets',
+                  ?,
+                  jsonb_build_object(
+                    'beforeStatus', CAST(? AS text),
+                    'beforeReviewStatus', CAST(? AS text),
+                    'beforeSupportDecision', CAST(? AS text),
+                    'outcome', CAST(? AS text)
+                  )
+                )
+                """,
+                admin.internalId(),
+                action,
+                ticketId,
+                DbValueMapper.string(current, "status"),
+                DbValueMapper.string(current, "review_status"),
+                DbValueMapper.string(current, "support_decision"),
+                outcome
+        );
+    }
+
+    private void auditRemoteSupportAction(
+            String ticketId,
+            CurrentUserService.CurrentUser actor,
+            String action,
+            String beforeStatus,
+            String afterStatus
+    ) {
+        jdbcTemplate.update("""
+                INSERT INTO admin_audit_logs (
+                  actor_user_id,
+                  action,
+                  target_type,
+                  target_id,
+                  metadata
+                )
+                VALUES (
+                  ?,
+                  ?,
+                  'remote_support_sessions',
+                  ?,
+                  jsonb_build_object(
+                    'beforeStatus', CAST(? AS text),
+                    'afterStatus', CAST(? AS text)
+                  )
+                )
+                """, actor.internalId(), action, ticketId, beforeStatus, afterStatus);
     }
 
     private void saveRemoteSupportIfRequested(
@@ -721,11 +1243,12 @@ public class TicketQueryService {
                 UPDATE remote_support_sessions rs
                 SET status = ?,
                     ended_at = COALESCE(ended_at, now()),
-                    ended_reason = COALESCE(ended_reason, ?)
+                    ended_reason = COALESCE(ended_reason, ?),
+                    access_code = NULL
                 FROM as_tickets t
                 WHERE rs.as_ticket_id = t.id
                   AND t.public_id = ?::uuid
-                  AND rs.status IN ('REQUESTED', 'LINK_SENT', 'IN_PROGRESS')
+                  AND rs.status IN ('REQUESTED', 'LINK_SENT', 'WAITING_FOR_CODE', 'CODE_READY', 'IN_PROGRESS')
                 """, remoteStatus, "TICKET_" + ticketStatus, ticketId);
     }
 
@@ -1003,9 +1526,14 @@ public class TicketQueryService {
                        t.feedback_created_at,
                        t.diagnostic_accuracy,
                        t.resolved_at,
+                       t.reviewed_at,
                        t.created_at,
+                       t.updated_at,
                        rs.session_url AS remote_support_link,
                        rs.status AS remote_support_status,
+                       rs.access_code_registered_at AS remote_access_code_registered_at,
+                       rs.started_at AS remote_support_started_at,
+                       rs.ended_at AS remote_support_completed_at,
                        vr.public_id::text AS visit_support_id,
                        vr.status AS visit_support_status,
                        vr.preferred_date AS visit_preferred_date,
@@ -1023,7 +1551,11 @@ public class TicketQueryService {
                  AND room.deleted_at IS NULL
                 LEFT JOIN users admin ON admin.id = t.assigned_admin_id
                 LEFT JOIN LATERAL (
-                  SELECT session_url, status
+                  SELECT session_url,
+                         status,
+                         access_code_registered_at,
+                         started_at,
+                         ended_at
                   FROM remote_support_sessions
                   WHERE as_ticket_id = t.id
                   ORDER BY created_at DESC, id DESC
@@ -1096,13 +1628,24 @@ public class TicketQueryService {
                 "diagnosticAccuracy", DbValueMapper.string(row, "diagnostic_accuracy"),
                 "remoteSupportLink", DbValueMapper.string(row, "remote_support_link"),
                 "remoteSupportStatus", DbValueMapper.string(row, "remote_support_status"),
+                "remoteAccessCodeRegisteredAt", DbValueMapper.timestamp(row, "remote_access_code_registered_at"),
+                "remoteSupportStartedAt", DbValueMapper.timestamp(row, "remote_support_started_at"),
+                "remoteSupportCompletedAt", DbValueMapper.timestamp(row, "remote_support_completed_at"),
                 "visitSupportRequired", row.get("visit_support_id") != null,
                 "visitSupportStatus", DbValueMapper.string(row, "visit_support_status"),
                 "visitPreferredDate", row.get("visit_preferred_date"),
                 "visitTimeSlot", DbValueMapper.string(row, "visit_time_slot"),
                 "resolvedAt", DbValueMapper.timestamp(row, "resolved_at"),
-                "createdAt", DbValueMapper.timestamp(row, "created_at")
+                "reviewedAt", DbValueMapper.timestamp(row, "reviewed_at"),
+                "createdAt", DbValueMapper.timestamp(row, "created_at"),
+                "updatedAt", DbValueMapper.timestamp(row, "updated_at")
         );
+    }
+
+    private Map<String, Object> adminTicketMap(Map<String, Object> row) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>(ticketMap(row));
+        result.put("diagnosisResult", DbValueMapper.json(row, "diagnosis_result", Map.of()));
+        return result;
     }
 
     private Map<String, Object> asTrainingLabel(Map<String, Object> row) {

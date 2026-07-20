@@ -196,7 +196,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     [noSampleTicket.id, noSampleTicket],
     [diagnosisOnlyTicket.id, diagnosisOnlyTicket]
   ]);
-  let decisionPatchPayload: Record<string, unknown> | undefined;
+  let reviewActionPayload: Record<string, unknown> | undefined;
   let remoteRequestPayload: Record<string, unknown> | undefined;
   let feedbackPayload: Record<string, unknown> | undefined;
   let deletedTicketId: string | undefined;
@@ -245,6 +245,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     const current = tickets.get(ticketId) ?? beforeDecisionTicket;
     const updated = {
       ...current,
+      requestType: 'REMOTE_SUPPORT',
       remoteSupportStatus: 'REQUESTED',
       reviewStatus: 'REQUIRED'
     };
@@ -290,20 +291,46 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
       });
       return;
     }
-    if (route.request().method() === 'PATCH') {
-      decisionPatchPayload = route.request().postDataJSON() as Record<string, unknown>;
-      const current = tickets.get(ticketId) ?? beforeDecisionTicket;
-      const updated = {
-        ...current,
-        ...decisionPatchPayload,
-        id: ticketId,
-        remoteSupportStatus: decisionPatchPayload.remoteSupportLink ? 'LINK_SENT' : current.remoteSupportStatus
-      };
-      tickets.set(ticketId, updated);
-      await fulfillTicket(route, updated);
-      return;
-    }
     await fulfillTicket(route, tickets.get(ticketId));
+  });
+  await page.route(/\/api\/admin\/as-tickets\/[^/]+\/approve-remote-support$/, async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const match = new URL(route.request().url()).pathname.match(/\/api\/admin\/as-tickets\/([^/]+)\/approve-remote-support$/);
+    const ticketId = match?.[1] ?? beforeDecisionTicket.id;
+    reviewActionPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const current = tickets.get(ticketId) ?? beforeDecisionTicket;
+    const updated = {
+      ...current,
+      id: ticketId,
+      status: 'IN_PROGRESS',
+      requestType: 'REMOTE_SUPPORT',
+      reviewStatus: 'APPROVED',
+      supportDecision: 'REMOTE_POSSIBLE',
+      assignedAdminId: 'admin-001',
+      adminNote: reviewActionPayload.adminNote,
+      reviewedAt: '2026-07-16T06:00:00Z',
+      remoteSupportStatus: 'WAITING_FOR_CODE'
+    };
+    tickets.set(ticketId, updated);
+    await fulfillTicket(route, updated);
+  });
+  await page.route(/\/api\/(?:admin\/)?as-tickets\/[^/]+\/remote-support$/, async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const match = new URL(route.request().url()).pathname.match(/\/api\/(?:admin\/)?as-tickets\/([^/]+)\/remote-support$/);
+    const ticket = tickets.get(match?.[1] ?? beforeDecisionTicket.id) ?? beforeDecisionTicket;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: ticket.remoteSupportStatus ?? 'REQUESTED',
+        provider: 'CHROME_REMOTE_DESKTOP',
+        accessCodeRegistered: false,
+        maskedAccessCode: null,
+        accessCodeRegisteredAt: null,
+        startedAt: null,
+        completedAt: null
+      })
+    });
   });
 
   // 티켓 상세에 상담방 채팅이 박히면서 관리자 채팅 API도 모킹한다.
@@ -427,27 +454,25 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   }
 
   await page.goto('/admin/as-tickets/qa-ticket-code43');
-  await expect(page.getByRole('main')).toContainText('9a0e3c21-6648-41e7-a88e-17be1761b806');
   await expect(page.getByRole('main')).toContainText('Intel Arc A350M / Code 43');
   await expect(page.getByRole('main')).toContainText('그래픽 드라이버 재설치 또는 이전 버전 롤백');
-  await expect(page.getByRole('main')).toContainText('Code 43 진단 완료');
+  await expect(page.getByRole('main')).toContainText('규칙 진단 완료');
   await expect(page.getByRole('main')).toContainText('원격지원 신청');
-  await expect(page.getByRole('main')).toContainText('지원 결정');
 
   await page.goto('/admin/as-tickets/qa-ticket-before');
-  // 지원 결정 저장 폼은 렌더링에서 빠지고 그 자리에 티켓 상담방 채팅이 나온다.
+  await expect(page.getByRole('main')).toContainText('관리자 검토');
+  await expect(page.getByRole('main')).toContainText('Agent 권장 처리');
+  // DB 필드 직접 수정 폼은 제거하고, 구조화된 검토 정보와 티켓 상담방을 함께 제공한다.
   await expect(page.getByRole('main')).not.toContainText('지원 결정 저장');
   await expect(page.getByTestId('admin-ticket-support-chat')).toBeVisible();
-  await expect(page.getByRole('main')).toContainText('추천 서비스');
+  await expect(page.getByRole('main')).toContainText('사용자 요청 지원');
   await expect(page.getByRole('main')).toContainText('우선 진단만 받기');
   await expect(page.getByRole('main')).toContainText('GPU 온도 상승 신호');
-  await expect(page.getByRole('main')).toContainText('GPU_THERMAL_SPIKE');
-  await expect(page.getByRole('main')).toContainText('CHECK_GPU_DRIVER');
 
   const ticketOverview = page.getByTestId('admin-as-ticket-overview');
   const overviewLabels = await ticketOverview.locator('tbody > tr > td:first-child').allTextContents();
-  expect(overviewLabels.slice(0, 3)).toEqual(['상태', '에이전트 로그', '분석 상태']);
-  await expect(ticketOverview.locator('tbody > tr:first-child > td:first-child')).toHaveCSS('white-space', 'nowrap');
+  expect(overviewLabels.slice(0, 4)).toEqual(['상태', '접수 시각', '사용자', '담당자']);
+  await expect(ticketOverview.getByRole('cell', { name: '상태', exact: true })).toHaveCSS('white-space', 'nowrap');
   for (const removedLabel of [
     '추천 근거 코드',
     '원격 조치 후보',
@@ -493,7 +518,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(diagnosisOverview.getByTestId('agent-log-samples-panel')).toContainText('nvidia-smi');
   await expect(page.getByRole('main')).toContainText('PC Agent 실시간 진단 근거 1건 연결됨');
 
-  // 결정 폼 대신 티켓 상담방 채팅으로 관리자가 직접 답변을 보낸다.
+  // 상담방 답변과 관리자 검토 액션은 서로의 상태를 덮어쓰지 않고 함께 동작한다.
   await page.goto('/admin/as-tickets/qa-ticket-before');
   const ticketChat = page.getByTestId('admin-ticket-support-chat');
   await expect(ticketChat).toContainText('게임 중 GPU 온도가 계속 올라갑니다.');
@@ -502,8 +527,19 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(ticketChat).toContainText('원격 지원 링크를 보내드렸습니다.');
   expect(chatMessagePayload).toMatchObject({ content: '원격 지원 링크를 보내드렸습니다.' });
   await expect(ticketChat.getByPlaceholder('관리자 답변을 입력하세요')).toHaveValue('');
+
+  await page.getByLabel('관리자 메모').fill('Remote support approved.');
+  await page.getByRole('button', { name: '원격 지원 승인' }).click();
+  await expect(page.getByRole('main')).toContainText('처리 결과');
+  await expect(page.getByRole('main')).toContainText('원격 지원 가능');
+  await expect(page.getByRole('main')).toContainText('지원 코드 등록 대기');
+  await expect(page.getByRole('main')).toContainText('Remote support approved.');
   await expect(page.getByRole('main')).not.toContainText('undefined');
-  await page.screenshot({ path: `${screenshotDir}/03-admin-ticket-chat.png`, fullPage: true });
+  expect(reviewActionPayload).toMatchObject({
+    adminNote: 'Remote support approved.'
+  });
+  await expect(page.getByRole('main')).not.toContainText('undefined');
+  await page.screenshot({ path: `${screenshotDir}/03-admin-ticket-chat-and-review.png`, fullPage: true });
 
   await page.evaluate(() => {
     localStorage.setItem('buildgraph.token', 'jwt-user-token');
@@ -512,7 +548,8 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.goto('/support/qa-ticket-after');
   await expect(page.getByRole('main')).toContainText('승인됨');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('https://support.example.test/session/qa-ticket-after');
+  await expect(page.getByRole('main')).toContainText('원격 지원이 승인되었습니다');
+  await expect(page.getByRole('main')).toContainText('지원 코드');
   await page.screenshot({ path: `${screenshotDir}/04-support-ticket-after-decision.png`, fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -534,6 +571,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   expect(apiCalls).toEqual(expect.arrayContaining([
     'GET /api/as-tickets/qa-ticket-before',
     'GET /api/admin/as-tickets/qa-ticket-before',
+    'POST /api/admin/as-tickets/qa-ticket-before/approve-remote-support',
     'GET /api/admin/support/chat-sessions',
     'POST /api/admin/support/chat-sessions/qa-chat-room-1/messages',
     'DELETE /api/admin/as-tickets/qa-ticket-no-samples'

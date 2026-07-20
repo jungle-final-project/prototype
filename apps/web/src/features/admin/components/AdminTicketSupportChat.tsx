@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Send } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,7 +19,7 @@ const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
 // AS 티켓 상세에 박는 상담방 채팅(메시지 + 입력만). 방문 예약·상담방 삭제 같은 관리 기능은
 // /admin/support-chat-sessions가 담당하고, 여기서는 이 티켓의 대화 확인·답변 전송만 한다.
 // 실시간 방식은 상담방 관리 페이지와 동일: WebSocket 수신 + 재연결 사다리 + 폴링 폴백.
-export function AdminTicketSupportChat({ ticketId }: { ticketId: string }) {
+export function AdminTicketSupportChat({ ticketId, remoteAction }: { ticketId: string; remoteAction?: ReactNode }) {
   const queryClient = useQueryClient();
   const socketRef = useRef<SupportChatSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -191,7 +191,12 @@ export function AdminTicketSupportChat({ ticketId }: { ticketId: string }) {
       <Panel
         title="상담방"
         subtitle="이 AS 티켓의 사용자 상담방입니다. 방문 예약과 상담방 삭제는 상담방 관리에서 처리합니다."
-        action={<Link className="shrink-0 text-xs font-bold text-brand-blue hover:underline" to="/admin/support-chat-sessions">상담방 관리로 이동</Link>}
+        action={(
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {remoteAction}
+            <Link className="shrink-0 text-xs font-bold text-brand-blue hover:underline" to="/admin/support-chat-sessions">상담방 관리로 이동</Link>
+          </div>
+        )}
       >
         {listQuery.isLoading ? <StateMessage type="info" title="상담방 확인 중" body="이 티켓의 상담방을 찾고 있습니다." /> : null}
         {listQuery.isError ? <StateMessage type="warn" title="상담방 조회 실패" body="상담방 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." /> : null}

@@ -2,7 +2,6 @@ package com.buildgraph.prototype.recommendation;
 
 import com.buildgraph.prototype.common.MockData;
 import com.buildgraph.prototype.common.ReadThroughTtlCache;
-import com.buildgraph.prototype.user.CurrentUserService;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -64,7 +63,7 @@ public class AuthenticatedHomeService {
         this.refreshExecutor = refreshExecutor;
     }
 
-    public Map<String, Object> home(CurrentUserService.CurrentUser user) {
+    public Map<String, Object> home() {
         return cachedHome();
     }
 

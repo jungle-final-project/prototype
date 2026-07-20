@@ -23,6 +23,12 @@ public class RemoteSupportSessionEntity extends PublicIdEntity {
     @Column(name = "session_url")
     private String sessionUrl;
 
+    @Column(name = "access_code")
+    private String accessCode;
+
+    @Column(name = "access_code_registered_at")
+    private Instant accessCodeRegisteredAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private RemoteSupportStatus status;

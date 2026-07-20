@@ -27,6 +27,7 @@ export function AdminTicketsPage() {
     '상태': <StatusBadge status={ticket.status} />,
     '검토': ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-',
     '결정': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-',
+    'Agent 진단': <span className="line-clamp-2 min-w-48 text-xs leading-5 text-slate-600">{agentDiagnosisSummary(ticket)}</span>,
     '추천 서비스': <span className="inline-block whitespace-nowrap">{recommendedSupportLabel(ticket)}</span>,
     '증상': <Link className="font-bold text-slate-800 hover:text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{ticket.title ?? firstLine(ticket.symptom)}</Link>,
     '사용자': userLabel(ticket),
@@ -74,9 +75,9 @@ export function AdminTicketsPage() {
             ) : null}
             {!isLoading && !isError && ticketRows.length > 0 ? (
               <DataTable
-                columns={['티켓', '상태', '검토', '결정', '추천 서비스', '증상', '사용자', '접수 시간', '담당자', '관리']}
+                columns={['티켓', '상태', '검토', '결정', 'Agent 진단', '추천 서비스', '증상', '사용자', '접수 시간', '담당자', '관리']}
                 rows={ticketRows}
-                minWidth={1180}
+                minWidth={1320}
                 nowrapColumns={['티켓', '상태', '검토', '결정', '추천 서비스', '접수 시간', '담당자', '관리']}
               />
             ) : null}
@@ -90,9 +91,9 @@ export function AdminTicketsPage() {
                 <DataTable columns={['필드', '값']} rows={[
                   { 필드: 'ticketId', 값: selected.id },
                   { 필드: '상태', 값: <StatusBadge status={selected.status} /> },
-                  { 필드: '분석 상태', 값: selected.analysisStatus ?? '-' },
-                  { 필드: '검토 상태', 값: selected.reviewStatus ?? '-' },
-                  { 필드: '지원 결정', 값: selected.supportDecision ?? '-' },
+                  { 필드: '분석 상태', 값: selected.analysisStatus ? <StatusBadge status={selected.analysisStatus} /> : '-' },
+                  { 필드: '검토 상태', 값: selected.reviewStatus ? <StatusBadge status={selected.reviewStatus} /> : '-' },
+                  { 필드: '지원 결정', 값: selected.supportDecision ? <StatusBadge status={selected.supportDecision} /> : '-' },
                   { 필드: '로그 업로드', 값: selected.logUploadId ?? '-' },
                   { 필드: '원인 후보', 값: `${selected.causeCandidates.length}건` },
                   { 필드: '추천 조치', 값: `${selected.upgradeCandidates.length}건` }
@@ -111,6 +112,10 @@ export function AdminTicketsPage() {
 
 function userLabel(ticket: AdminAsTicket) {
   return ticket.userEmail ?? ticket.userName ?? ticket.userId ?? '-';
+}
+
+function agentDiagnosisSummary(ticket: AdminAsTicket) {
+  return ticket.diagnosisSummary ?? ticket.logSummaryText ?? firstLine(ticket.symptom);
 }
 
 function recommendedSupportLabel(ticket: AdminAsTicket) {
