@@ -4012,6 +4012,37 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void smoothnessRequestIsRecognizedOnlyWhenItAsksToChangeTheBuild() {
+        // 발표 문장과 그 변형 — 목표 수치 없이 향상만 요구한다.
+        assertThat(BuildChatService.requestsSmootherPerformance(
+                "가격이 조금 올라가도 괜찮으니, 배그 화면이 더 부드럽게 보이도록 바꿔줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 화면을 더 부드럽게 바꿔줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("프레임 올려줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("FPS 높여줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("더 쾌적하게 해줘")).isTrue();
+
+        // 가로채면 안 되는 것 — 이 fast path는 LLM 이전에 잡으므로 한 번 삼키면 되돌릴 수 없다.
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 화면이 멈춰요")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("게임하다 자꾸 튕겨요")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("부드러운 화면의 모니터 추천해줘")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("주사율 높은 모니터 알려줘")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("GPU를 바꾸면 FPS가 얼마나 올라?")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 4K 120FPS 되는 GPU로 바꿔줘")).isFalse();
+    }
+
+    @Test
+    void nextSmoothnessTierPicksTheFirstTierAboveCurrentFps() {
+        // 발표 시나리오: 배그 4K 80FPS -> 120FPS 목표.
+        assertThat(BuildChatService.nextSmoothnessTier(80)).isEqualTo(120);
+        assertThat(BuildChatService.nextSmoothnessTier(59.9)).isEqualTo(60);
+        assertThat(BuildChatService.nextSmoothnessTier(120)).isEqualTo(165);
+        assertThat(BuildChatService.nextSmoothnessTier(170)).isEqualTo(240);
+        // 이미 최상 구간이면 목표가 없다 — 교체를 권하지 않는다.
+        assertThat(BuildChatService.nextSmoothnessTier(240)).isNull();
+        assertThat(BuildChatService.nextSmoothnessTier(300)).isNull();
+    }
+
+    @Test
     void comparativeUpgradeReferenceTreatsModelNameAsAFloorNotAPick() {
         // 기준선 표현 — 모델명을 '고를 상품'으로 읽으면 안 된다.
         assertThat(BuildChatService.comparativeUpgradeReference("지금 5080보다 좋은 gpu 추천해줘")).isTrue();

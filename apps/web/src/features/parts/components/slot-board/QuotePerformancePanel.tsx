@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { ChevronDown, Sparkles } from 'lucide-react';
 import {
   DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION,
+  rememberPerformanceView,
   PART_CATEGORY_LABELS,
   type BuildGraphResolveResponse,
   type PartCategory
@@ -236,6 +237,10 @@ function PerfPanelBody({
   const [resKey, setResKey] = useState<string>(DEFAULT_FPS_RESOLUTION.key);
   const game = FPS_GAMES.find((g) => g.key === gameKey) ?? DEFAULT_FPS_GAME;
   const resolution = FPS_RESOLUTIONS.find((r) => r.key === resKey) ?? DEFAULT_FPS_RESOLUTION;
+  // 챗봇의 "더 부드럽게"는 지금 이 화면의 게임·해상도를 기준으로 해석된다 — 선택을 남겨 둔다.
+  useEffect(() => {
+    rememberPerformanceView({ gameQuery: game.query, resolution: resolution.key });
+  }, [game.query, resolution.key]);
 
   // 비교 헤더에서 토글(구분선 왼쪽)과 후보 선택(오른쪽)을 떨어뜨려 놓기 위해 카테고리를 여기서 소유한다.
   const [compareCategory, setCompareCategory] = useState<PerfCompareTarget['category']>(comparison?.category ?? 'GPU');
