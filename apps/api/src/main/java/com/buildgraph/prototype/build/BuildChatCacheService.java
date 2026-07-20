@@ -210,7 +210,9 @@ public class BuildChatCacheService {
         //      (조건을 무시한 목록을 "골랐다"고 내놓던 문제).
         // v76: CPU·GPU 추천 정렬이 VRAM이 아니라 벤치마크 점수 기준이 됐고,
         //      "5080보다 좋은"의 모델명은 고를 상품이 아니라 기준선으로 읽는다.
-        return "buildgraph:build-chat:v76:" + sha256(json);
+        // v77: 부품 추천도 예산 모드를 구분한다 — "150만원 정도"(TARGET)는 ±12.5% 밴드,
+        //      "100만원 이하"(MAX)는 종전대로 상한.
+        return "buildgraph:build-chat:v77:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

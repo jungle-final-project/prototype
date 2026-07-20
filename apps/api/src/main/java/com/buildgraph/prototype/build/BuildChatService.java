@@ -3475,12 +3475,21 @@ public class BuildChatService {
         // A. 예산만 명시("10만원짜리 램") — 예산 내 최상 스펙 TOP3를 나열하고 담기 칩을 준다.
         if (!constraint.hasSpec()) {
             int budget = constraint.maxBudgetWon();
+            // "150만원 정도"면 그 가격대를 겨냥한다 — 상한으로만 읽으면 92만원짜리를 주면서
+            // "예산 안"이라고 답하게 된다. 밴드 안에 후보가 없으면 상한 조회로 되돌아간다.
+            boolean targetBand = constraint.targetsBudgetBand();
+            List<BuildChatFeasibilityService.PartOption> pool = targetBand
+                    ? feasibilityService.bestWithinBudgetBand(constraint.category(), budget, quantity,
+                            PART_RECOMMENDATION_CANDIDATE_POOL_SIZE)
+                    : List.of();
+            if (pool.isEmpty()) {
+                targetBand = false;
+                pool = feasibilityService.bestUnderBudget(constraint.category(), budget, quantity,
+                        PART_RECOMMENDATION_CANDIDATE_POOL_SIZE);
+            }
             List<BuildChatFeasibilityService.PartOption> options = compatibleRecommendationOptions(
-                    user,
-                    constraint.category(),
-                    feasibilityService.bestUnderBudget(constraint.category(), budget, quantity,
-                            PART_RECOMMENDATION_CANDIDATE_POOL_SIZE),
-                    PART_RECOMMENDATION_LIMIT);
+                    user, constraint.category(), pool, PART_RECOMMENDATION_LIMIT);
+            String budgetPhrase = targetBand ? " 안팎 " : " 이내 ";
             if (options.isEmpty()) {
                 Optional<BuildChatFeasibilityService.PartOption> cheapestAny = compatibleRecommendationOptions(
                         user,
@@ -3490,7 +3499,7 @@ public class BuildChatService {
                                 PART_RECOMMENDATION_CANDIDATE_POOL_SIZE),
                         1).stream().findFirst();
                 StringBuilder textBuilder = new StringBuilder()
-                        .append(formatBudgetLabel(budget)).append(" 이내 ").append(categoryLabel)
+                        .append(formatBudgetLabel(budget)).append(budgetPhrase).append(categoryLabel)
                         .append(" 부품을 내부 자산에서 찾지 못했습니다.");
                 cheapestAny.ifPresent(any -> textBuilder.append(" 보유 최저가는 ").append(any.name())
                         .append(" ").append(String.format("%,d원", any.unitPrice())).append("입니다."));
@@ -3499,7 +3508,7 @@ public class BuildChatService {
                 response.put("warnings", distinct(warnings));
                 response.put("quickReplies", List.of(categoryLabel + " 최저가로 추천해줘"));
             } else {
-                response.put("message", formatBudgetLabel(budget) + " 이내 " + categoryLabel
+                response.put("message", formatBudgetLabel(budget) + budgetPhrase + categoryLabel
                         + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
                 setPartRecommendationQuickReplies(body, response, constraint.category(), options);
@@ -4473,7 +4482,12 @@ public class BuildChatService {
         merged.put("minVramGb", numberValue(llmConstraint.get("minVramGb")));
         merged.put("minWattageW", wattage);
         merged.put("quantity", numberValue(llmConstraint.get("quantity")));
+        // 예산은 숫자만 뽑지 않고 모드까지 가져온다 — "150만원 정도"(TARGET)와 "100만원 이하"(MAX)는
+        // 다른 요청인데, 여기서 parseBudgetWon만 쓰던 탓에 부품 추천에서는 늘 상한으로 뭉개졌다.
+        // LLM이 직접 maxBudgetWon을 준 경우는 그 자체가 상한이므로 모드를 비운다.
+        Integer llmBudget = numberValue(llmConstraint.get("maxBudgetWon"));
         merged.put("maxBudgetWon", firstNumber(llmConstraint.get("maxBudgetWon"), parseBudgetWon(message)));
+        merged.put("budgetMode", llmBudget != null ? null : budgetIntent(message).mode());
         // 닫힌 속성은 LLM만 구조화한다(서버 키워드 해석 금지) — 값이 있으면 그대로 이어받는다.
         merged.put("coolingType", text(llmConstraint.get("coolingType")));
         merged.put("pcieGeneration", numberValue(llmConstraint.get("pcieGeneration")));
