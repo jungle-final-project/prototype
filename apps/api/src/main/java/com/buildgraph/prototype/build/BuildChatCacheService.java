@@ -206,7 +206,9 @@ public class BuildChatCacheService {
         //      싣지 않고 말풍선 나열을 유지한다 — 종전에는 한쪽만 골라 패널로 넘겼다.
         // v74: 기준 없는 부품 추천은 그 자리에 이미 부품이 있으면 나열 대신 되묻는다
         //      (담긴 것보다 못한 후보가 "호환되는 추천"으로 올라오던 문제).
-        return "buildgraph:build-chat:v74:" + sha256(json);
+        // v75: 소음·발열·게임 성능처럼 아직 반영하지 못하는 조건은 목록 대신 못 한다고 답한다
+        //      (조건을 무시한 목록을 "골랐다"고 내놓던 문제).
+        return "buildgraph:build-chat:v75:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

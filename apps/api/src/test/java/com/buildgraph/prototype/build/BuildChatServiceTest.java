@@ -4012,6 +4012,24 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void unsupportedRecommendationQualifierNamesOnlyWhatWeCannotHonor() {
+        // 못 다루는 조건 — 이름을 붙여 되묻는다.
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("조용한 쿨러 추천해줘")).isEqualTo("소음");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("발열 적은 gpu 추천해줘")).isEqualTo("발열");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("롤 잘 돌아가는 gpu 추천해줘")).isEqualTo("게임 성능");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("4k 게임용 gpu 추천해줘")).isEqualTo("게임 성능");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("작은 케이스 추천해줘")).isEqualTo("크기");
+
+        // 잘 되던 문장은 건드리지 않는다 — 오탐이 나면 되던 기능이 되묻기로 퇴화한다.
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("고성능 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("가성비 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("100만원 이하 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("8기가 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("램 수량 두 개로 바꿔줘")).isNull();
+    }
+
+    @Test
     void buildChatAsksForCriteriaWhenRecommendingAPartTheDraftAlreadyHas() {
         // "gpu 추천해줘" — 기준이 하나도 없는데 이미 RTX 5080이 담겨 있다. 후보 정렬은 호환·가격만
         // 보므로 그냥 나열하면 더 못한 5060 Ti가 "현재 견적과 호환되는 추천"으로 올라온다.

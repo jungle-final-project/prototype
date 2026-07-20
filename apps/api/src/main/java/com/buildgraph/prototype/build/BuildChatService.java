@@ -3411,6 +3411,13 @@ public class BuildChatService {
                         currentCategoryItem, message);
                 return;
             }
+            // 여기까지 왔다는 건 수치 스펙도 예산도 하나도 못 뽑았다는 뜻이다. 그 상태에서 우리가
+            // 다루지 못하는 조건이 문장에 있으면, 그 조건을 무시한 목록을 "골랐다"고 내놓지 않는다.
+            String unsupportedQualifier = unsupportedRecommendationQualifier(message);
+            if (unsupportedQualifier != null) {
+                respondUnsupportedCriteria(response, warnings, categoryLabel, unsupportedQualifier, message);
+                return;
+            }
             List<BuildChatFeasibilityService.PartOption> orderedOptions = valueFocused
                     ? feasibilityService.bestValueFirst(
                             constraint.category(), PART_RECOMMENDATION_CANDIDATE_POOL_SIZE)
@@ -4169,6 +4176,35 @@ public class BuildChatService {
     }
 
     /**
+     * 아직 추천 기준으로 반영하지 못하는 조건들. 파싱에 실패하면 조용히 기본 정렬(호환·가격)로
+     * 떨어지는데 문구는 "골랐다"고 말해, 사용자는 조건이 반영된 줄 안다 —
+     * "발열 적은 GPU"에 발열 1등 카드가, "롤 잘 돌아가는 GPU"에 700만원 카드가 나온다.
+     * 넓은 휴리스틱 대신 못 다루는 것만 이름으로 적어 오탐(잘 되는 문장까지 되묻기)을 막는다.
+     */
+    private static final List<CategoryKeywords> UNSUPPORTED_RECOMMENDATION_QUALIFIERS = List.of(
+            new CategoryKeywords("소음", List.of("조용", "정숙", "무소음", "소음")),
+            new CategoryKeywords("발열", List.of("발열", "저발열", "온도", "시원", "쿨링좋")),
+            new CategoryKeywords("크기", List.of("작은", "슬림", "미니", "컴팩트")),
+            new CategoryKeywords("디자인", List.of("이쁜", "예쁜", "예쁘", "이쁘", "led", "rgb", "화이트감성")),
+            new CategoryKeywords("게임 성능", List.of(
+                    "롤", "리그오브레전드", "배그", "배틀그라운드", "발로란트", "오버워치",
+                    "로스트아크", "사이버펑크", "게임용", "게이밍용", "4k", "qhd", "fhd", "프레임", "fps"))
+    );
+
+    /** 문장에 들어 있는, 아직 반영하지 못하는 조건 이름. 없으면 null. */
+    static String unsupportedRecommendationQualifier(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        for (CategoryKeywords qualifier : UNSUPPORTED_RECOMMENDATION_QUALIFIERS) {
+            for (String keyword : qualifier.keywords()) {
+                if (normalized.contains(keyword)) {
+                    return qualifier.category();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * "gpu 추천해줘"처럼 카테고리와 추천 동사 말고는 아무 기준도 없는 요청인가.
      * 되묻기는 이 좁은 경우에만 한다 — "통풍 좋은 케이스 추천해줘"는 방향이 있고,
      * "램 수량 두 개로 바꿔줘"는 애초에 추천 요청이 아니다. 남는 말이 있으면 종전대로 나열한다.
@@ -4235,6 +4271,33 @@ public class BuildChatService {
         // 다음 짧은 답("150만원")이 원 요청과 합쳐지도록 원문을 에코한다(무상태 후속).
         response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
         warnings.add("PART_RECOMMENDATION_CRITERIA_MISSING");
+        response.put("warnings", distinct(warnings));
+    }
+
+    /**
+     * 아직 반영하지 못하는 조건에는 그 조건을 무시한 목록 대신 못 한다고 말한다.
+     * "발열 적은 GPU 추천해줘"에 발열 1등 카드를 "골랐다"고 내놓는 것보다,
+     * 못 한다고 말하고 다룰 수 있는 기준을 제안하는 편이 정확하다.
+     */
+    private static void respondUnsupportedCriteria(
+            Map<String, Object> response,
+            List<String> warnings,
+            String categoryLabel,
+            String qualifierLabel,
+            String message
+    ) {
+        response.put("answerType", "PART");
+        response.put("builds", List.of());
+        response.remove("partRecommendation");
+        response.put("message", qualifierLabel + " 기준으로는 아직 " + categoryLabel
+                + "를 골라 드리지 못해요. 예산이나 성능 방향으로 알려주시면 그 기준으로 추천해 드릴게요.");
+        response.put("quickReplies", List.of(
+                "고성능 " + categoryLabel + " 추천해줘",
+                "가성비 " + categoryLabel + " 추천해줘",
+                "제일 저렴한 " + categoryLabel + " 추천해줘"));
+        response.remove("quickReplyCommands");
+        response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+        warnings.add("PART_RECOMMENDATION_CRITERIA_UNSUPPORTED");
         response.put("warnings", distinct(warnings));
     }
 
