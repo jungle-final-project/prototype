@@ -183,10 +183,10 @@ export function AdminTicketDetailPage() {
             <TicketDetailList rows={agentDiagnosisRows(ticket)} />
           </Panel>
           <Panel title="판단 근거" subtitle="수집된 근거와 진단 결과에 실제로 포함된 판단 자료입니다." className="shadow-sm">
-            <TicketDetailList rows={evidenceRows(ticket)} />
-            <div className="mt-4 border-t border-slate-100 pt-4">
+            <div className="mb-4 border-b border-slate-100 pb-4">
               <AgentLogSamplesToggle ticket={ticket} />
             </div>
+            <TicketDetailList rows={evidenceRows(ticket)} />
           </Panel>
           <Link className="inline-block text-sm font-bold text-brand-blue" to="/admin/as-tickets">목록으로 돌아가기</Link>
         </div>
@@ -202,6 +202,21 @@ export function AdminTicketDetailPage() {
               isPending: reviewMutation.isPending,
               onRequest: requestRemoteSupportFromChat
             } : undefined}
+            remoteSupportPanel={remoteSupportApproved ? (
+              <div id="admin-ticket-remote-support" className="scroll-mt-4">
+                <AdminRemoteSupportPanel
+                  state={remoteSupportQuery.data}
+                  isLoading={remoteSupportQuery.isLoading}
+                  isError={remoteSupportQuery.isError}
+                  notice={remoteSupportNotice}
+                  isCopying={copyAccessCodeMutation.isPending}
+                  isUpdating={remoteSupportMutation.isPending}
+                  onCopy={() => copyAccessCodeMutation.mutate()}
+                  onStart={() => remoteSupportMutation.mutate('START')}
+                  onComplete={() => remoteSupportMutation.mutate('COMPLETE')}
+                />
+              </div>
+            ) : undefined}
           />
           <div>
             <Panel title={reviewCompleted ? '처리 결과' : '관리자 검토'} subtitle={reviewCompleted ? '완료된 검토 결과입니다.' : '필요한 업무 행동만 선택해 처리합니다.'}>
@@ -241,21 +256,6 @@ export function AdminTicketDetailPage() {
             )}
             </Panel>
           </div>
-          {remoteSupportApproved ? (
-            <div id="admin-ticket-remote-support" className="scroll-mt-4">
-              <AdminRemoteSupportPanel
-                state={remoteSupportQuery.data}
-                isLoading={remoteSupportQuery.isLoading}
-                isError={remoteSupportQuery.isError}
-                notice={remoteSupportNotice}
-                isCopying={copyAccessCodeMutation.isPending}
-                isUpdating={remoteSupportMutation.isPending}
-                onCopy={() => copyAccessCodeMutation.mutate()}
-                onStart={() => remoteSupportMutation.mutate('START')}
-                onComplete={() => remoteSupportMutation.mutate('COMPLETE')}
-              />
-            </div>
-          ) : null}
         </div>
 
         <div className="min-w-0 min-[1000px]:col-span-2">
@@ -379,7 +379,11 @@ function AdminRemoteSupportPanel({
   onComplete: () => void;
 }) {
   return (
-    <Panel title="원격 지원 연결" subtitle="실제 연결과 화면 공유 승인은 Chrome Remote Desktop에서 수행합니다.">
+    <section className="rounded-lg border border-blue-200 bg-blue-50/60 p-4" aria-labelledby="admin-remote-support-title">
+      <div className="mb-3">
+        <h3 id="admin-remote-support-title" className="text-base font-black text-slate-950">원격 지원 연결</h3>
+        <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">실제 연결과 화면 공유 승인은 Chrome Remote Desktop에서 수행합니다.</p>
+      </div>
       {isLoading ? <StateMessage type="info" title="연결 상태 확인 중" body="사용자의 지원 코드 등록 상태를 불러오고 있습니다." /> : null}
       {isError ? <StateMessage type="warn" title="연결 상태 조회 실패" body="담당 관리자 배정과 티켓 상태를 확인해 주세요." /> : null}
       {!isLoading && !isError && state?.status ? (
@@ -423,7 +427,7 @@ function AdminRemoteSupportPanel({
           {notice ? <p role="status" className="rounded bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{notice}</p> : null}
         </div>
       ) : null}
-    </Panel>
+    </section>
   );
 }
 
@@ -503,10 +507,9 @@ function evidenceRows(ticket: AdminAsTicket) {
   const diagnosisResult = objectValue(ticket.diagnosisResult);
   const routing = objectValue(ticket.supportRouting);
   return [
-    { '항목': 'evidence', '내용': structuredList(ticket.diagnosisEvidence ?? valueList(diagnosisResult?.evidence)) },
-    { '항목': 'suspected causes', '내용': structuredList(valueList(diagnosisResult?.suspectedCauses).length > 0 ? valueList(diagnosisResult?.suspectedCauses) : ticket.causeCandidates) },
-    { '항목': 'recommended actions', '내용': structuredList(valueList(diagnosisResult?.recommendedActions).length > 0 ? valueList(diagnosisResult?.recommendedActions) : valueList(routing?.recommendedActions)) },
-    { '항목': 'unsupported checks', '내용': structuredList(valueList(diagnosisResult?.unsupportedChecks)) }
+    { '항목': '추정 원인 후보', '내용': structuredList(valueList(diagnosisResult?.suspectedCauses).length > 0 ? valueList(diagnosisResult?.suspectedCauses) : ticket.causeCandidates, '수집된 근거만으로 확정 가능한 원인 후보가 없습니다.') },
+    { '항목': '권장 조치', '내용': structuredList(valueList(diagnosisResult?.recommendedActions).length > 0 ? valueList(diagnosisResult?.recommendedActions) : valueList(routing?.recommendedActions)) },
+    { '항목': '확인하지 못한 항목', '내용': structuredList(valueList(diagnosisResult?.unsupportedChecks)) }
   ];
 }
 
@@ -818,9 +821,9 @@ function valueList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function structuredList(items: unknown[]) {
+function structuredList(items: unknown[], emptyText = '-') {
   if (items.length === 0) {
-    return '-';
+    return emptyText;
   }
   return (
     <ul className="min-w-0 space-y-2" data-testid="structured-evidence-list">

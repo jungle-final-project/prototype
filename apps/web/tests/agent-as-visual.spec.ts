@@ -454,6 +454,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   }
 
   await page.goto('/admin/as-tickets/qa-ticket-code43');
+  await page.getByRole('button', { name: '에이전트 데이터 보기 (1건)', exact: true }).click();
   await expect(page.getByRole('main')).toContainText('Intel Arc A350M / Code 43');
   await expect(page.getByRole('main')).toContainText('그래픽 드라이버 재설치 또는 이전 버전 롤백');
   await expect(page.getByRole('main')).toContainText('규칙 진단 완료');
