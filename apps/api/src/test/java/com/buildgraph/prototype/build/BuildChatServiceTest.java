@@ -458,6 +458,41 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void productDisambiguationChoicesReachTheClientAsQuickReplies() {
+        // 후보가 두어 개뿐이면 이동 대신 채팅에서 고르게 한다 — 칩 문구가 그대로 다음 질문이 된다.
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "'9800X3D'에 해당하는 상품이 2개예요. 어느 쪽인지 골라 주세요.",
+                        AiChatIntent.ASK_FOLLOW_UP,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("routeChoiceChips", List.of(
+                                "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해",
+                                "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티 상세페이지로 이동해")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "9800X3D 상세페이지로 이동해줘"));
+
+        assertThat(response).doesNotContainKey("actions");
+        assertThat(response.get("quickReplies")).asList().containsExactly(
+                "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해",
+                "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티 상세페이지로 이동해");
+    }
+
+    @Test
     void answersWithoutAResolvedRouteCarryNoNavigationField() {
         AiChatEngine aiChatEngine = mock(AiChatEngine.class);
         BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
