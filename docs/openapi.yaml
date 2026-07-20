@@ -5176,6 +5176,26 @@ components:
           properties:
             originalMessage:
               type: string
+    AiChatNavigationAction:
+      type: object
+      required: [type, label, payload]
+      properties:
+        type:
+          type: string
+          enum: [OPEN_ROUTE]
+        label:
+          type: string
+          description: 이동 대상 화면의 사용자 언어 이름 (예 "상품 상세 보기", "CPU 부품 보기").
+        payload:
+          type: object
+          required: [route]
+          properties:
+            route:
+              type: string
+              description: >-
+                서버가 화이트리스트로 검증한 앱 내부 경로. /parts/{publicId},
+                /self-quote(?category=<8개 카테고리>[&q=...]), /my/quotes, /requirements/new,
+                /support/new, /support/ai-chat, /checkout만 나온다.
     AiBuildChatResponse:
       type: object
       required: [answerType, message, builds, warnings]
@@ -5230,6 +5250,14 @@ components:
           items:
             type: string
           description: Build chat RAG 검색에 사용된 reusable evidence public id 목록
+        actions:
+          type: array
+          description: >-
+            답변 문구가 약속한 화면 이동 명령. 상품 상세 요청을 실제 상품 1건으로 특정하면 /parts/{publicId}를,
+            특정하지 못하면 해당 카테고리 후보 목록(/self-quote?category=...&q=...)을 돌려주며 이때 답변 문구도
+            "상세페이지" 약속 대신 목록 안내로 교정된다. 이동이 없는 답변에는 필드 자체가 없다.
+          items:
+            $ref: "#/components/schemas/AiChatNavigationAction"
         quickReplies:
           type: array
           items:
@@ -5237,6 +5265,8 @@ components:
           description: >
             다음 행동 선택지 칩. 되묻기(명확화)뿐 아니라 우아한 거절(기능 안내 3종: "200만원 게이밍 PC 추천해줘"/"지금 견적 나머지 채워줘"/"CPU를 9700X로 바꾸면?"),
             역제안("{부품명} 견적에 담아줘"), 다중부품 감액 안내("{카테고리} 더 저렴한 걸로 바꿔줘") 응답에도 온다.
+            상품 상세 요청이 2~4개 후보로만 좁혀지면 화면을 옮기는 대신 각 후보의 "{정확한 상품명} 상세페이지로 이동해" 칩을
+            돌려주며(이때 actions는 비어 있다), 칩을 그대로 보내면 상품이 하나로 특정돼 상세로 이동한다.
             카드·칩·되묻기·시뮬레이션이 전부 빈 응답에는 서버가 항상 칩을 채운다(dead-end 방지).
             각 항목은 그 자체로 완전한 프롬프트라서 그대로 다음 message로 보내면 된다.
         quickReplyCommands:

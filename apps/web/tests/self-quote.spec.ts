@@ -397,6 +397,40 @@ test('keeps self quote and the primary navigation inside a mobile viewport', asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
 
+// AI가 상품을 하나로 특정하지 못하면 "'9800X3D'... CPU 후보 목록에서 확인해 주세요"라며
+// /self-quote?category=CPU&q=9800X3D 로 보낸다. 그 q를 후보 패널이 받지 않으면
+// 안내와 달리 걸러지지 않은 전체 목록에 떨어져 사용자는 다시 "아무 일도 안 일어났다"고 느낀다.
+test('AI가 넘긴 검색어를 달고 도착하면 후보 패널이 그 검색어로 열린다', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
+  });
+  const partsQueries: string[] = [];
+  await page.route('**/api/parts**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/api/parts')) {
+      partsQueries.push(url.searchParams.get('q') ?? '');
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 })
+    });
+  });
+
+  await page.goto('/self-quote?category=CPU&q=9800X3D');
+
+  const searchBox = page.getByRole('textbox', { name: 'CPU 부품 검색' });
+  await expect(searchBox).toHaveValue('9800X3D');
+  await expect.poll(() => partsQueries.includes('9800X3D')).toBe(true);
+  // 취급하지 않는 모델이면 '결과 없음'이 사실을 그대로 말해 준다.
+  await expect(page.getByText("'9800X3D' 검색 결과가 없습니다.")).toBeVisible();
+
+  // 패널을 닫으면 검색어도 주소에서 함께 사라진다 — 다음에 여는 슬롯까지 따라가지 않게.
+  await page.getByRole('button', { name: '후보 패널 닫기' }).click();
+  await expect(page).toHaveURL('/self-quote');
+});
+
 test('AI part location focus spotlights all 8 categories across fused, motherboard, and 3D views', async ({ page }) => {
   await loginAsUser(page);
   await page.addInitScript(() => {

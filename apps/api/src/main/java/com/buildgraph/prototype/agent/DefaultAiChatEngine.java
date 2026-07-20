@@ -86,6 +86,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
             확신이 낮거나 복합 명령이면 routeIntent.shouldNavigate=false, routeType=NONE, confidence=LOW로 두십시오.
+            반대로 shouldNavigate=true로 둘 때는 반드시 confidence=HIGH로 두십시오. HIGH가 아니면 이동이 실행되지 않아,
+            “이동할게요”라고 답해 놓고 화면이 그대로인 상태가 됩니다. PART_DETAIL이면 category도 함께 채우십시오.
             uiContext.surface=SELF_QUOTE이고 capabilities에 BOARD_PART_FOCUS가 있을 때, 사용자가 현재 구성도에서 부품의 물리적 위치를 묻는 순수 위치 질문이면 boardFocusIntent를 구조화하십시오.
             위치 질문은 “RAM 위치가 어디야”, “CPU와 RAM 자리 표시해줘”, “M.2 슬롯이 어디 있어”처럼 부품과 공간 의도가 함께 있는 경우입니다.
             추천·가격·구매·교체·담기·삭제·성능 비교가 섞인 요청은 위치 강조가 아니며 boardFocusIntent.shouldFocus=false로 두십시오.
@@ -122,6 +124,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final List<String> BUILD_CATEGORIES = List.of(
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
     );
+    /** 상품 상세를 요청받았지만 하나로 특정하지 못해 카테고리 후보 목록으로 대신 보냈다는 표식. */
+    private static final String PART_DETAIL_LIST_FALLBACK = "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK";
+    /** 채팅에서 되물어 고르게 할 최대 후보 수. 이보다 많으면 칩 대신 후보 목록 화면으로 보낸다. */
+    private static final int MAX_ROUTE_CHOICE_CHIPS = 4;
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
@@ -257,9 +263,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
             parsedContext.put("partConstraint", partConstraint);
         }
         String assistantMessage = firstText(text(plan.get("assistantMessage")), null);
-        EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
+        RoutePlan routePlan = planRoute(objectMap(plan.get("routeIntent")), selectedCategory);
+        EngineRouteIntent routeIntent = routePlan.routeIntent();
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
+            assistantMessage = correctedRouteMessage(assistantMessage, routeIntent);
+        }
+        if (!routePlan.choiceChips().isEmpty()) {
+            // 화면을 옮기는 대신 채팅에서 고르게 하는 턴 — 칩과 되묻기 문구가 LLM 원문을 대신한다.
+            parsedContext.put("routeChoiceChips", routePlan.choiceChips());
+            assistantMessage = firstText(routePlan.message(), assistantMessage);
+        }
+        if (routePlan.unresolved()) {
+            // 이동 의도는 있었는데 갈 곳이 없었다. 문구를 문자열로 판단하지 않고 이 상태로만 교정한다 —
+            // 문자열로 보면 이동을 약속하지 않은 평범한 답변까지 갈아치우게 된다.
+            assistantMessage = firstText(routePlan.message(), assistantMessage);
         }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
         Map<String, Object> supportIntent = normalizeSupportIntent(objectMap(plan.get("supportIntent")));
@@ -892,43 +910,110 @@ public class DefaultAiChatEngine implements AiChatEngine {
         );
     }
 
-    private EngineRouteIntent normalizeRouteIntent(Map<String, Object> source, String selectedCategory) {
+    /**
+     * "상세페이지로 이동할게요"라고 답해 놓고 실제로는 상품을 하나로 특정하지 못해 후보 목록으로 보내는 경우,
+     * 문구가 약속한 화면과 실제 도착지가 어긋난다. 그 어긋남이 있을 때만 사실대로 다시 쓴다 —
+     * LLM이 처음부터 "목록으로 이동"이라고 답했으면 손대지 않는다.
+     */
+    private static String correctedRouteMessage(String assistantMessage, EngineRouteIntent routeIntent) {
+        if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason()) || !promisesDetailPage(assistantMessage)) {
+            return assistantMessage;
+        }
+        String category = text(routeIntent.context().get("category"));
+        // route의 q= 값과 같은 정제를 거친 문구를 인용한다 — 도착한 화면의 검색어와 답변이 어긋나지 않게.
+        String partQuery = text(PartRouteResolver.extractPartQuery(text(routeIntent.context().get("partQuery"))));
+        String label = category == null ? "부품" : categoryLabel(category);
+        String head = partQuery == null
+                ? "찾으시는 상품을 하나로 특정하지 못했어요. "
+                : "'" + partQuery + "'에 정확히 맞는 상품을 하나로 특정하지 못했어요. ";
+        return head + label + " 후보 목록에서 확인해 주세요.";
+    }
+
+    /** 이동하려 했으나 갈 곳을 해상하지 못했을 때, 이동을 약속하는 대신 사실대로 되묻는 문구. */
+    private static String unresolvedRouteMessage(String partQuery) {
+        String query = text(PartRouteResolver.extractPartQuery(partQuery));
+        return query == null
+                ? "찾으시는 화면을 특정하지 못했어요. 어떤 부품인지 정확한 제품명으로 알려주시면 바로 열어드릴게요."
+                : "'" + query + "'로 찾을 수 있는 상품이 없어요. 정확한 제품명을 알려주시면 바로 열어드릴게요.";
+    }
+
+    /**
+     * "상세페이지"라는 약속만 잡는다. 그냥 "상세"로 판단하면 "상세 스펙을 알려드릴게요"처럼
+     * 이동을 약속하지 않은 정상 답변까지 통째로 갈아치운다.
+     */
+    private static boolean promisesDetailPage(String assistantMessage) {
+        if (assistantMessage == null) {
+            return false;
+        }
+        String compact = assistantMessage.replaceAll("\\s+", "");
+        return compact.contains("상세페이지") || compact.contains("상품페이지") || compact.contains("제품페이지");
+    }
+
+    private RoutePlan planRoute(Map<String, Object> source, String selectedCategory) {
         if (!Boolean.TRUE.equals(source.get("shouldNavigate"))) {
-            return null;
+            return RoutePlan.NONE;
         }
         if (!"HIGH".equals(text(source.get("confidence")))) {
-            return null;
+            return RoutePlan.NONE;
         }
         String routeType = text(source.get("routeType"));
         String category = firstText(categoryFrom(text(source.get("category"))), selectedCategory);
         String reason = firstText(text(source.get("reason")), "LLM_ROUTE_INTENT");
-        String route = switch (routeType == null ? "NONE" : routeType) {
-            case "CATEGORY" -> category == null ? null : "/self-quote?category=" + category;
-            case "SELF_QUOTE" -> "/self-quote";
-            case "MY_QUOTES" -> "/my/quotes";
-            case "REQUIREMENT_NEW" -> "/requirements/new";
-            case "SUPPORT_NEW" -> "/support/new";
-            case "SUPPORT_AI_CHAT" -> "/support/ai-chat";
-            case "CHECKOUT" -> "/checkout";
-            case "PART_DETAIL" -> partRouteResolver.resolvePartDetailRoute(text(source.get("partQuery")), category);
-            default -> null;
-        };
-        if (route == null && "PART_DETAIL".equals(routeType) && category != null) {
-            route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), category);
-            reason = firstText(reason, "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK");
+        String partQuery = text(source.get("partQuery"));
+        List<String> choices = List.of();
+        String route = null;
+        if ("PART_DETAIL".equals(routeType)) {
+            PartRouteResolver.PartDetailResolution resolution = partRouteResolver.resolvePartDetail(partQuery, category);
+            route = resolution.route();
+            choices = resolution.choices();
+        } else {
+            route = switch (routeType == null ? "NONE" : routeType) {
+                case "CATEGORY" -> category == null ? null : "/self-quote?category=" + category;
+                case "SELF_QUOTE" -> "/self-quote";
+                case "MY_QUOTES" -> "/my/quotes";
+                case "REQUIREMENT_NEW" -> "/requirements/new";
+                case "SUPPORT_NEW" -> "/support/new";
+                case "SUPPORT_AI_CHAT" -> "/support/ai-chat";
+                case "CHECKOUT" -> "/checkout";
+                default -> null;
+            };
+        }
+        // 후보가 두어 개뿐이면 화면을 옮기지 않고 채팅에서 바로 고르게 한다 —
+        // 두 개 중 하나 고르는 일에 목록 화면까지 이동시킬 이유가 없다.
+        if (route == null && choices.size() >= 2 && choices.size() <= MAX_ROUTE_CHOICE_CHIPS) {
+            return RoutePlan.choices(
+                    choices.stream().map(name -> name + " 상세페이지로 이동해").toList(),
+                    partQuery == null
+                            ? "말씀하신 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
+                            : "'" + partQuery + "'에 해당하는 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
+            );
+        }
+        if (route == null && "PART_DETAIL".equals(routeType)) {
+            // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
+            // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
+            String listCategory = firstText(category, PartRouteResolver.inferCategory(partQuery));
+            if (listCategory != null) {
+                route = partRouteResolver.resolveCategoryFilterRoute(partQuery, listCategory);
+                category = listCategory;
+                // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
+                // LLM이 써 준 reason 대신 이 표식을 남긴다.
+                reason = PART_DETAIL_LIST_FALLBACK;
+            }
         }
         if (!isAllowedRoute(route)) {
-            return null;
+            // 이동하려 했는데 갈 곳을 못 찾았다. 여기서 NONE을 돌려주면 LLM이 쓴 "이동할게요"가 그대로 나가
+            // 답만 하고 화면은 그대로인 상태가 된다 — 되묻기로 사실을 알린다.
+            return RoutePlan.unresolved(unresolvedRouteMessage(partQuery));
         }
-        return new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
+        return RoutePlan.route(new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
                 "shouldNavigate", true,
                 "routeType", routeType,
                 "category", category,
-                "partQuery", text(source.get("partQuery")),
+                "partQuery", partQuery,
                 "confidence", text(source.get("confidence")),
                 "resolvedRoute", route,
                 "reason", reason
-        ));
+        )));
     }
 
     private static Map<String, Object> normalizeBoardFocusIntent(Map<String, Object> source) {
@@ -3609,6 +3694,29 @@ public class DefaultAiChatEngine implements AiChatEngine {
     }
 
     private record EngineRouteIntent(String route, String label, String reason, Map<String, Object> context) {
+    }
+
+    /**
+     * 이동 요청 처리 결과. 셋 중 하나다 — 바로 이동(routeIntent), 채팅에서 되묻기(choiceChips), 아무것도 아님.
+     */
+    private record RoutePlan(EngineRouteIntent routeIntent, List<String> choiceChips, String message, boolean unresolved) {
+        static final RoutePlan NONE = new RoutePlan(null, List.of(), null, false);
+
+        static RoutePlan route(EngineRouteIntent routeIntent) {
+            return new RoutePlan(routeIntent, List.of(), null, false);
+        }
+
+        static RoutePlan choices(List<String> chips, String message) {
+            return new RoutePlan(null, chips, message, false);
+        }
+
+        /**
+         * 이동하려 했지만 어디로 갈지 끝내 해상하지 못한 상태. "이동 의도 없음"(NONE)과 반드시 구분해야 한다 —
+         * 둘을 같은 값으로 두면 "이동할게요"라고 답해 놓고 아무 일도 안 일어나는 턴을 잡아낼 수 없다.
+         */
+        static RoutePlan unresolved(String message) {
+            return new RoutePlan(null, List.of(), message, true);
+        }
     }
 
     private record PartQueryConstraints(
