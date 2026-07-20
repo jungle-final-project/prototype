@@ -1022,6 +1022,24 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void deterministicChatTreatsConjugatedDisplayInterruptionAsSupportGuidance() {
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "화면이 끊기고 그래픽 오류가 반복됩니다.",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.SUPPORT_GUIDANCE);
+        assertThat(response.recommendations()).isEmpty();
+        assertThat(response.partRecommendations()).isEmpty();
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredBuildChatUsesStructuredPlanAndKeepsExplicitRtx5090Constraint() {
         when(openAiResponsesClient.isConfigured()).thenReturn(true);
         when(agentRagRetrievalService.retrieveEvidenceSet(any(), eq(AgentRunProfiles.requirementParse()), anyString(), anyInt()))

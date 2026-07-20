@@ -100,6 +100,7 @@ class BuildChatIntentRouterTest {
                 c("컴퓨터가 갑자기 재부팅돼", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("부팅이 안돼", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("게임 프레임이 갑자기 뚝뚝 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("화면이 끊기고 그래픽 오류가 반복돼", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("팬 소리가 커지고 너무 뜨거워", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("SSD 디스크가 계속 100퍼센트야", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("인터넷이 자꾸 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
