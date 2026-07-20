@@ -375,20 +375,27 @@ public class PartRouteResolver {
                 .toList();
     }
 
+    /**
+     * 무엇을 찾는지 가장 잘 말해 주는 토큰 하나를 고른다. 모델명 → 실제 검색어 → 카테고리 이름 순이다.
+     * 카테고리 이름을 마지막에 두는 이유: '삼성 메모리'에서 '메모리'를 고르면 삼성과 무관한 RAM이
+     * 통째로 나온다. 두 글자를 받아 주는 이유: 한글 브랜드는 두 글자가 흔해(삼성·인텔·조텍)
+     * 세 글자 하한만 두면 '삼성 램'이 통째로 미해상이 되어 "그런 상품이 없어요"가 나간다.
+     */
     private static String routeSearchTerm(String normalizedQuery) {
         List<String> tokens = routeTokens(normalizedQuery);
-        return tokens.stream()
-                .filter(token -> token.length() >= 3)
-                .filter(token -> token.matches(".*\\d.*") && token.matches(".*[A-Z].*"))
-                .findFirst()
-                .or(() -> tokens.stream()
-                        .filter(token -> token.length() >= 3)
-                        .filter(token -> token.matches(".*\\d.*"))
-                        .findFirst())
-                .or(() -> tokens.stream()
-                        .filter(token -> token.length() >= 3)
-                        .findFirst())
+        return firstToken(tokens, token -> token.length() >= 3
+                        && token.matches(".*\\d.*") && token.matches(".*[A-Z].*"))
+                .or(() -> firstToken(tokens, token -> token.length() >= 3 && token.matches(".*\\d.*")))
+                .or(() -> firstToken(tokens, token -> token.length() >= 3 && !isCategoryWordToken(token)))
+                .or(() -> firstToken(tokens, token -> token.length() >= 2 && !isCategoryWordToken(token)))
+                // 남은 게 카테고리 이름뿐이면 그걸로라도 찾는다 — '메인보드 보여줘'처럼 카테고리를
+                // 둘러보려는 요청까지 미해상으로 떨어뜨리면 종전에 되던 길이 막힌다.
+                .or(() -> firstToken(tokens, token -> token.length() >= 3))
                 .orElse(null);
+    }
+
+    private static Optional<String> firstToken(List<String> tokens, java.util.function.Predicate<String> filter) {
+        return tokens.stream().filter(filter).findFirst();
     }
 
     private static boolean isRouteStopToken(String token) {
