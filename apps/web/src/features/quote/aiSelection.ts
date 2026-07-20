@@ -340,7 +340,12 @@ export type AiBuildChatRequest = {
      * - BOARD_PART_FOCUS: 보드에서 부품 위치를 강조할 수 있다
      * - PART_CANDIDATE_PANEL: 부품 목록 패널을 띄울 수 있다(상품 나열을 말풍선 대신 패널이 맡는다)
      */
-    capabilities: Array<'BOARD_PART_FOCUS' | 'PART_CANDIDATE_PANEL'>;
+    capabilities: Array<'BOARD_PART_FOCUS' | 'PART_CANDIDATE_PANEL' | 'GAME_PERFORMANCE_COMPARE'>;
+    /**
+     * 성능 패널이 지금 보여주는 게임·해상도. "더 부드럽게"처럼 목표 수치가 없는 요청을
+     * 이 기준으로 해석한다. FPS 숫자는 보내지 않는다 — 서버가 현재 draft와 DB 근거로 다시 계산한다.
+     */
+    performance?: PerformanceViewSelection;
   };
   assessmentContext?: AiAssessmentContext;
   /** 직전 되묻기(clarification)에 대한 답변임을 알리는 에코 — 서버가 원 요청과 합성한다. */
@@ -416,6 +421,43 @@ export type AiPartRecommendation = {
   category: PartCategory;
   options: AiPartRecommendationOption[];
 };
+
+const AI_PERFORMANCE_VIEW_KEY = 'buildgraph.performanceView';
+
+/** 성능 패널에서 지금 보고 있는 게임·해상도. 챗봇의 "더 부드럽게"가 이 기준으로 해석된다. */
+export type PerformanceViewSelection = { gameQuery: string; resolution: string };
+
+/**
+ * 성능 패널이 화면 문맥을 남긴다. "배그 화면을 더 부드럽게"는 목표 수치가 없어서, 서버가
+ * 어느 게임·해상도의 현재 FPS를 기준으로 다음 구간을 잡을지 알아야 한다. 패널과 챗봇은
+ * 남남인 컴포넌트라 이 저장소가 이미 챗봇↔화면 전달에 쓰는 방식으로 넘긴다.
+ */
+export function rememberPerformanceView(selection: PerformanceViewSelection) {
+  try {
+    sessionStorage.setItem(AI_PERFORMANCE_VIEW_KEY, JSON.stringify(selection));
+  } catch {
+    // 저장소를 못 쓰면 기본값(배그/4K)으로 읽힌다 — 화면과 어긋나도 답이 사라지진 않는다.
+  }
+}
+
+/** 화면에 떠 있는 게임·해상도. 아직 아무것도 안 남겼으면 패널의 기본값과 같은 값이다. */
+export function readPerformanceView(): PerformanceViewSelection {
+  const fallback: PerformanceViewSelection = {
+    gameQuery: DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION.gameQuery,
+    resolution: DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION.resolutionLabel
+  };
+  try {
+    const raw = sessionStorage.getItem(AI_PERFORMANCE_VIEW_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<PerformanceViewSelection>;
+    return {
+      gameQuery: typeof parsed.gameQuery === 'string' && parsed.gameQuery ? parsed.gameQuery : fallback.gameQuery,
+      resolution: typeof parsed.resolution === 'string' && parsed.resolution ? parsed.resolution : fallback.resolution
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 const AI_PART_PICKS_KEY = 'buildgraph.aiPartPicks';
 /** 추천 순서가 바뀌었다는 신호. 패널이 이미 그 카테고리로 열려 있으면 주소가 안 바뀌어 이 신호로만 안다. */

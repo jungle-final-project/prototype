@@ -22,6 +22,7 @@ import {
   mergeAiBuildHistory,
   navigationRouteFrom,
   partRecommendationFrom,
+  readPerformanceView,
   rememberAiPartPicks,
   normalizeAiBuilds,
   type AiQuickReplyKind,
@@ -566,8 +567,14 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         currentQuoteDraft,
         // PART_CANDIDATE_PANEL은 두 화면 모두 선언한다 — 홈에서 물어도 셀프견적으로 옮겨
         // 패널을 열기 때문이다. 이 신호가 있어야 서버가 상품 나열을 패널에 넘기고 말풍선을 줄인다.
+        // "배그 화면을 더 부드럽게"에는 목표 수치가 없다 — 지금 성능 패널이 보여주는 게임·해상도가
+        // 기준이어야 답이 화면과 맞는다. FPS 숫자는 보내지 않는다(서버가 draft와 DB 근거로 다시 계산).
         uiContext: surface === 'self-quote'
-          ? { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL'] }
+          ? {
+              surface: 'SELF_QUOTE',
+              capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL', 'GAME_PERFORMANCE_COMPARE'],
+              performance: readPerformanceView()
+            }
           : { surface: 'HOME', capabilities: ['PART_CANDIDATE_PANEL'] },
         assessmentContext,
         // 칩은 직전 질문에 대한 "답"이 아니라 "선택"이다 — 원문 에코를 함께 보내면 서버가 두 문장을

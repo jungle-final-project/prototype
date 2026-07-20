@@ -528,7 +528,12 @@ test('AI part location focus spotlights all 8 categories across fused, motherboa
   expect(draftMutationMethods).toHaveLength(0);
   expect(buildChatBodies).toHaveLength(focusCases.length + 1);
   for (const body of buildChatBodies) {
-    expect(body.uiContext).toEqual({ surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL'] });
+    // 성능 문맥(게임·해상도)은 "더 부드럽게"처럼 목표 수치 없는 요청을 해석하는 기준이라 함께 실린다.
+    expect(body.uiContext).toEqual({
+      surface: 'SELF_QUOTE',
+      capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL', 'GAME_PERFORMANCE_COMPARE'],
+      performance: { gameQuery: 'pubg', resolution: '4K' }
+    });
   }
 
   await page.getByTestId('slot-board-ai-focus-clear').click();
