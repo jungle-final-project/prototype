@@ -13,6 +13,8 @@ import {
   FALLBACK_EDGES,
   SLOT_BOARD_ISO_CALLOUT_LAYOUTS,
   SLOT_BOARD_ISO_EDGES,
+  FLOATING_CONTROL_STRIP_GAP,
+  FLOATING_CONTROL_STRIP_HEIGHT,
   SLOT_BOARD_ISO_SCENE,
   SLOT_BOARD_ISO_SCENE_HIGHLIGHT,
   SLOT_BOARD_ART_VIEWBOX,
@@ -639,8 +641,12 @@ function RelationMapBoardBody({
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white p-3"
     >
       <div ref={frameRef} data-testid="relation-map-frame" className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-lg bg-white">
-        {/* 문제 칩은 보드 스테이지 좌상단 공용 스트립이 담당 — 여기는 범례만, 플로팅 컨트롤 아래로 내려 겹침을 피한다. */}
-        <div className="pointer-events-none absolute inset-x-3 top-16 z-40 flex w-auto justify-end">
+        {/* 문제 칩은 보드 스테이지 공용 스트립이 담당 — 여기는 범례만, 플로팅 컨트롤 아래로 내려 겹침을 피한다.
+            top은 스트립 높이에서 유도한다(하드코딩 금지) — 칩 크기가 바뀌면 여기가 조용히 가려진다. */}
+        <div
+          style={{ top: FLOATING_CONTROL_STRIP_HEIGHT + FLOATING_CONTROL_STRIP_GAP }}
+          className="pointer-events-none absolute inset-x-3 z-40 flex w-auto justify-end"
+        >
           <div className="pointer-events-auto">
             <RelationMapStatusLegend />
           </div>

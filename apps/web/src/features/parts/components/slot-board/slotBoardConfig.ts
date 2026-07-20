@@ -1,5 +1,18 @@
 import type { PartCategory } from '../../../quote/aiSelection';
 
+/**
+ * 판 위에 떠 있는 컨트롤 스트립(문제 칩·다음 가이드·보기 전환)이 차지하는 세로 높이(px).
+ * 위 여백 12 + 가장 큰 요소인 문제 칩 56.
+ *
+ * 이 값을 상수로 둔 이유: 스트립 아래에 놓여야 하는 것이 두 군데(관계도 범례, 후보 패널 시작 위치)인데
+ * 예전에는 각자 다른 숫자(64, 56)를 박아 두고 있었다. 칩을 키우자 두 곳이 동시에 스트립에 가려졌고,
+ * 관계도에서 범례가 칩 아래로 안 내려가 CI가 깨졌다. 스트립 크기를 바꾸면 여기만 고치면 된다.
+ */
+export const FLOATING_CONTROL_STRIP_HEIGHT = 68;
+
+/** 스트립 아래에 놓는 요소가 둘 수 있는 최소 여백(px). */
+export const FLOATING_CONTROL_STRIP_GAP = 12;
+
 export type SlotConfig = {
   category: PartCategory;
   label: string;
