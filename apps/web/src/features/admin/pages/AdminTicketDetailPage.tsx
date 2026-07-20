@@ -182,7 +182,7 @@ export function AdminTicketDetailPage() {
           <Panel title="Agent 진단" subtitle="PC Agent가 저장한 진단 결과를 그대로 표시합니다." className="shadow-sm">
             <TicketDetailList rows={agentDiagnosisRows(ticket)} />
           </Panel>
-          <Panel title="판단 근거" subtitle="수집된 근거와 진단 결과에 실제로 포함된 판단 자료입니다." className="shadow-sm">
+          <Panel title="판단 근거" subtitle="핵심 진단 요약을 먼저 확인하고 원시 데이터는 필요할 때만 펼쳐봅니다." className="shadow-sm">
             <div className="mb-4 border-b border-slate-100 pb-4">
               <AgentLogSamplesToggle ticket={ticket} />
             </div>
@@ -507,10 +507,48 @@ function evidenceRows(ticket: AdminAsTicket) {
   const diagnosisResult = objectValue(ticket.diagnosisResult);
   const routing = objectValue(ticket.supportRouting);
   return [
+    { '항목': '장치 근거', '내용': diagnosisDeviceEvidenceSummary(ticket) },
+    { '항목': '진단 제목', '내용': ticket.diagnosisTitle ?? '-' },
+    { '항목': '진단 요약', '내용': ticket.diagnosisSummary ?? '-' },
+    { '항목': '위험도', '내용': ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
     { '항목': '추정 원인 후보', '내용': structuredList(valueList(diagnosisResult?.suspectedCauses).length > 0 ? valueList(diagnosisResult?.suspectedCauses) : ticket.causeCandidates, '수집된 근거만으로 확정 가능한 원인 후보가 없습니다.') },
+    { '항목': '시스템 권장 처리', '내용': diagnosisRecommendedActionSummary(ticket) },
     { '항목': '권장 조치', '내용': structuredList(valueList(diagnosisResult?.recommendedActions).length > 0 ? valueList(diagnosisResult?.recommendedActions) : valueList(routing?.recommendedActions)) },
     { '항목': '확인하지 못한 항목', '내용': structuredList(valueList(diagnosisResult?.unsupportedChecks)) }
   ];
+}
+
+function diagnosisRecommendedActionSummary(ticket: AdminAsTicket) {
+  const diagnosisResult = objectValue(ticket.diagnosisResult);
+  const actions = valueList(diagnosisResult?.recommendedActions).length > 0
+    ? valueList(diagnosisResult?.recommendedActions)
+    : valueList(objectValue(ticket.supportRouting)?.recommendedActions);
+  const readableActions = actions
+    .map(textValue)
+    .filter((value): value is string => Boolean(value));
+  return [recommendedSupportLabel(ticket), ...readableActions].join(' / ');
+}
+
+function diagnosisDeviceEvidenceSummary(ticket: AdminAsTicket) {
+  const diagnosisResult = objectValue(ticket.diagnosisResult);
+  const evidence = ticket.diagnosisEvidence ?? valueList(diagnosisResult?.evidence);
+  const problemDevice = evidence
+    .map(objectValue)
+    .find((item) => {
+      if (!item || textValue(item.metricType) !== 'display_device_status') {
+        return false;
+      }
+      const value = objectValue(item.value);
+      return typeof value?.problemCode === 'number' && value.problemCode !== 0;
+    });
+  const value = objectValue(problemDevice?.value);
+  const deviceName = textValue(value?.deviceName);
+  const problemCode = typeof value?.problemCode === 'number' ? value.problemCode : null;
+  if (!deviceName || problemCode === null) {
+    return '확정된 Windows PnP problem code 근거가 없습니다.';
+  }
+  const status = textValue(problemDevice?.status);
+  return `${deviceName}에서 Windows PnP problem code ${problemCode}이 확인됐습니다.${status ? ` 장치 상태: ${status}.` : ''}`;
 }
 
 function reviewReadOnlyRows(ticket: AdminAsTicket) {

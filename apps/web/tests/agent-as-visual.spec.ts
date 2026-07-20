@@ -123,12 +123,40 @@ const code43AgentTicket = {
   diagnosisMode: 'DEMO',
   diagnosisTitle: '그래픽 장치 오류 상태가 확인되었습니다',
   diagnosisSummary: 'Intel Arc A350M이 Code 43을 보고해 원격 지원을 권장합니다.',
-  diagnosisEvidence: [{
-    component: 'gpu',
-    metricType: 'display_device_status',
-    value: { deviceName: 'Intel(R) Arc(TM) A350M Graphics', problemCode: 43 },
-    description: 'Intel Arc A350M / Code 43'
-  }],
+  diagnosisEvidence: [
+    {
+      taskId: 'windows_display_devices',
+      component: 'gpu',
+      metricType: 'display_device_status',
+      value: {
+        deviceName: 'Intel(R) Arc(TM) A350M Graphics',
+        instanceId: 'PCI\\VEN_8086&DEV_5694',
+        problemCode: 43,
+        problemCodeQueryStatus: 'OK'
+      },
+      status: 'DEVICE_REPORTED_PROBLEM',
+      source: 'Win32_PnPEntity',
+      sampledAt: '2026-07-20T11:18:25Z'
+    },
+    {
+      taskId: 'current_system_status',
+      component: 'system',
+      metricType: 'observation_window',
+      value: { sampleCount: 3, sampleTimestamps: ['2026-07-20T11:18:21Z'] },
+      status: 'OBSERVED',
+      source: 'MetricsStore',
+      sampledAt: '2026-07-20T11:18:21Z'
+    },
+    {
+      taskId: 'evidence_finalize',
+      component: 'system',
+      metricType: 'evidence_summary',
+      value: [{ taskId: 'windows_display_devices', status: 'COMPLETED', evidenceCount: 3 }],
+      status: 'COMPLETED',
+      source: 'DiagnosisOrchestrator',
+      sampledAt: '2026-07-20T11:18:17Z'
+    }
+  ],
   diagnosisResult: {
     recommendedActions: ['그래픽 드라이버 재설치 또는 이전 버전 롤백', '원격 AS 기사 연결']
   },
@@ -454,11 +482,19 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   }
 
   await page.goto('/admin/as-tickets/qa-ticket-code43');
-  await page.getByRole('button', { name: '에이전트 데이터 보기 (1건)', exact: true }).click();
-  await expect(page.getByRole('main')).toContainText('Intel Arc A350M / Code 43');
+  const code43Overview = page.getByTestId('admin-as-ticket-overview');
+  await expect(code43Overview).toContainText('Intel(R) Arc(TM) A350M Graphics에서 Windows PnP problem code 43이 확인됐습니다.');
+  await expect(code43Overview).toContainText('장치 상태: DEVICE_REPORTED_PROBLEM.');
   await expect(page.getByRole('main')).toContainText('그래픽 드라이버 재설치 또는 이전 버전 롤백');
   await expect(page.getByRole('main')).toContainText('규칙 진단 완료');
   await expect(page.getByRole('main')).toContainText('원격지원 신청');
+  await expect(code43Overview).not.toContainText('[object Object]');
+  await expect(code43Overview).not.toContainText('sampleTimestamps');
+  const showCode43Evidence = code43Overview.getByRole('button', { name: '에이전트 데이터 보기 (3건)', exact: true });
+  await showCode43Evidence.click();
+  await expect(code43Overview.getByTestId('agent-log-samples-panel')).toContainText('"sampleCount": 3');
+  await expect(code43Overview.getByTestId('agent-log-samples-panel')).toContainText('"taskId": "windows_display_devices"');
+  await expect(code43Overview.getByTestId('agent-log-samples-panel')).not.toContainText('[object Object]');
 
   await page.goto('/admin/as-tickets/qa-ticket-before');
   await expect(page.getByRole('main')).toContainText('관리자 검토');
@@ -477,6 +513,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(receipt).toContainText('우선 진단만 받기');
 
   const ticketOverview = page.getByTestId('admin-as-ticket-overview');
+  await expect(ticketOverview).not.toContainText('[object Object]');
   const evidenceCode = ticketOverview.getByTestId('structured-evidence-list').filter({ hasText: 'GPU thermal throttling' }).locator('pre code');
   await expect(evidenceCode).toContainText('"label": "GPU thermal throttling"');
   const overviewLabels = await ticketOverview.locator('dt').allTextContents();
