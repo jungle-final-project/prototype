@@ -182,12 +182,15 @@ export function SlotBoard({
     >
       <div data-testid="slot-board-body-stage" className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* 헤더 밴드 제거 리디자인: 제목 칸을 없애고 판 전체를 시각화에 쓴다.
-            컨트롤은 판 위 플로팅 — 좌: 다음 가이드·AI 강조, 가운데: 문제 칩(클릭=모달), 우: 3D 정보 스위치·보기 전환.
+            컨트롤은 판 위 플로팅 — 좌: 문제 칩(클릭=모달)·다음 가이드·AI 강조, 우: 3D 정보 스위치·보기 전환.
             모바일은 카드 목록을 가리지 않게 정적 행으로 폴백. */}
-        {/* 문제 칩은 판 가운데(좌우 기준)에 둔다 — 좌상단에 있으면 다른 컨트롤에 묻혀 그냥 지나친다.
-            양쪽 칸을 1fr로 같게 준 3열 그리드라, 좌우 컨트롤 개수가 달라져도 가운데 칸은 정확히 가운데다. */}
-        <div className="z-50 grid grid-cols-[1fr_auto_1fr] items-start gap-2 px-3 py-2 lg:pointer-events-none lg:absolute lg:inset-x-0 lg:top-0 lg:z-[60] lg:py-0 lg:pt-3">
+        <div className="z-50 flex items-start justify-between gap-2 px-3 py-2 lg:pointer-events-none lg:absolute lg:inset-x-0 lg:top-0 lg:z-[60] lg:py-0 lg:pt-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2 lg:pointer-events-auto">
+            <SlotBoardProblemChip
+              problems={boardProblems}
+              onExplain={(problem) => explainIssue(undefined, problem.tool)}
+              onJumpToSlot={(category) => onSlotSelect(category)}
+            />
             {nextCategory && !hasAiFocus ? (
               <button
                 type="button"
@@ -217,14 +220,7 @@ export function SlotBoard({
               </span>
             ) : null}
           </div>
-          <div className="flex min-w-0 justify-center lg:pointer-events-auto">
-            <SlotBoardProblemChip
-              problems={boardProblems}
-              onExplain={(problem) => explainIssue(undefined, problem.tool)}
-              onJumpToSlot={(category) => onSlotSelect(category)}
-            />
-          </div>
-          <div className="flex shrink-0 items-center justify-end gap-2 lg:pointer-events-auto">
+          <div className="flex shrink-0 items-center gap-2 lg:pointer-events-auto">
             {isIsometric ? (
               <SlotBoardDisplaySwitch
                 label="보드 정보 표시"
@@ -2101,11 +2097,15 @@ function SlotBoardProblemChip({
   const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
   const warnCount = problems.length - failCount;
   const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
+  // 건수만 나열하면 표지판처럼 읽혀 그냥 지나친다 — 문장으로 말해 준다.
+  // 둘 다 있을 때는 "…가 …건 있습니다"를 두 번 반복하지 않고 한 문장으로 묶는다.
   const countsLabel = (
     <span>
-      {failCount > 0 ? <>호환 불가 {failCount}건</> : null}
-      {failCount > 0 && warnCount > 0 ? ' · ' : null}
-      {warnCount > 0 ? <>주의 필요 {warnCount}건</> : null}
+      {failCount > 0 && warnCount > 0
+        ? <>호환 불가 {failCount}건, 주의 필요 {warnCount}건이 있습니다</>
+        : failCount > 0
+          ? <>호환 불가 건수가 {failCount}건 있습니다</>
+          : <>주의 필요 건수가 {warnCount}건 있습니다</>}
     </span>
   );
 
