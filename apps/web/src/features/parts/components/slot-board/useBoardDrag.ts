@@ -150,7 +150,22 @@ export function useBoardDrag<T extends HTMLElement>({
   const baseRef = useRef(base);
   baseRef.current = base;
 
+  // 사용자가 모서리를 끌어 바꾼 크기를 기억한다. 네이티브 [resize:both]는 이벤트를 내지 않아
+  // ResizeObserver로만 알 수 있다. 첫 관찰은 '열면서 적용한 크기'라 사용자의 뜻이 아니므로 건너뛴다.
+  const sizeSeenRef = useRef(false);
+  // 디바운스 타이머와 마지막 측정치는 ref에 둔다 — 되돌리기가 대기 중인 저장을 취소해야 하고,
+  // 언마운트 때는 반대로 대기 중인 저장을 흘려보내야 한다.
+  const sizeWriteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pendingSizeRef = useRef<PlacedSize | null>(null);
+
   const resetDrag = () => {
+    // 되돌리기가 만드는 크기 변화(기억한 크기 → 기본 크기)도 ResizeObserver에 배달된다.
+    // 다시 무장하지 않으면 그 변화를 '사용자 리사이즈'로 오해해 200ms 뒤 방금 지운 자리를
+    // 되살려 쓴다 — 유일한 수동 해제 수단이 새로고침을 못 넘긴다.
+    clearTimeout(sizeWriteTimerRef.current);
+    sizeWriteTimerRef.current = undefined;
+    pendingSizeRef.current = null;
+    sizeSeenRef.current = false;
     clearPlaced(persistKey, remember);
     setPlaced(null);
     setRememberedSize(null);
@@ -164,16 +179,12 @@ export function useBoardDrag<T extends HTMLElement>({
     }
   };
 
-  // 사용자가 모서리를 끌어 바꾼 크기를 기억한다. 네이티브 [resize:both]는 이벤트를 내지 않아
-  // ResizeObserver로만 알 수 있다. 첫 관찰은 '열면서 적용한 크기'라 사용자의 뜻이 아니므로 건너뛴다.
-  const sizeSeenRef = useRef(false);
   useEffect(() => {
     const target = targetRef.current;
     if (!rememberSize || !isDesktop || !target || typeof ResizeObserver === 'undefined') {
       return;
     }
     sizeSeenRef.current = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const observer = new ResizeObserver((entries) => {
       const box = entries[0]?.contentRect;
       if (!box || box.width === 0) return;
@@ -182,19 +193,26 @@ export function useBoardDrag<T extends HTMLElement>({
         return;
       }
       // 끄는 동안 매 픽셀 저장하지 않는다 — 손을 멈춘 뒤 한 번만 쓴다.
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        const rect = target.getBoundingClientRect();
-        writePlaced(
-          persistKey,
-          { ...baseRef.current, size: { width: rect.width, height: rect.height } },
-          remember
-        );
+      const rect = target.getBoundingClientRect();
+      pendingSizeRef.current = { width: rect.width, height: rect.height };
+      clearTimeout(sizeWriteTimerRef.current);
+      sizeWriteTimerRef.current = setTimeout(() => {
+        const size = pendingSizeRef.current;
+        if (!size) return;
+        pendingSizeRef.current = null;
+        writePlaced(persistKey, { ...baseRef.current, size }, remember);
       }, 200);
     });
     observer.observe(target);
     return () => {
-      clearTimeout(timer);
+      clearTimeout(sizeWriteTimerRef.current);
+      sizeWriteTimerRef.current = undefined;
+      // 크기를 바꾸자마자 닫으면 대기 중이던 저장이 취소돼 마지막 조작만 사라진다 — 흘려보낸다.
+      const size = pendingSizeRef.current;
+      pendingSizeRef.current = null;
+      if (size) {
+        writePlaced(persistKey, { ...baseRef.current, size }, remember);
+      }
       observer.disconnect();
     };
   }, [isDesktop, persistKey, remember, rememberSize, targetRef]);
