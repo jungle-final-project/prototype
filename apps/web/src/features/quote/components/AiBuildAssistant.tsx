@@ -630,6 +630,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       // 패널을 먼저 닫아야 한다 — 중앙 모달은 fixed inset-0 전체화면이라 열린 채로 두면
       // 도착한 화면을 그대로 덮어, 사용자 눈에는 이동이 일어나지 않은 것과 똑같이 보인다.
       const navigationRoute = navigationRouteFrom(response);
+      const followedNavigation = Boolean(navigationRoute) && canFollowNavigation(requestId, sentFromPathname);
       if (navigationRoute && canFollowNavigation(requestId, sentFromPathname)) {
         if (!isEmbedded) {
           setOpen(false);
@@ -646,12 +647,16 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       const partRecommendation = partRecommendationFrom(response);
       if (partRecommendation && canFollowNavigation(requestId, sentFromPathname)) {
         // 추천 순서는 화면 이동을 건너뛰지 못한다 — 옮겨 가며 이 컴포넌트가 언마운트되기 때문이다.
+        // 이동을 안 하더라도(이미 그 패널이 열려 있는 경우) 저장은 한다. 저장이 신호를 쏘고
+        // 열려 있는 패널이 그 신호로 새 순서를 읽는다.
         rememberAiPartPicks(partRecommendation);
-        const candidatePanelRoute = `/self-quote?category=${partRecommendation.category}`;
         if (!isEmbedded) {
           setOpen(false);
         }
-        if (candidatePanelRoute !== currentRouteKey(locationRef.current)) {
+        // 위에서 이미 서버가 지정한 곳으로 옮겼으면 두 번 밀지 않는다. 두 번 밀면 첫 이동이
+        // 실어 준 검색어(q)가 곧바로 지워지고, 뒤로가기가 사용자가 본 적 없는 화면으로 돌아간다.
+        const candidatePanelRoute = `/self-quote?category=${partRecommendation.category}`;
+        if (!followedNavigation && candidatePanelRoute !== currentRouteKey(locationRef.current)) {
           navigate(candidatePanelRoute);
         }
       }
