@@ -523,7 +523,7 @@ public class BuildChatService {
         if (deterministicResponse.isPresent()) {
             Map<String, Object> response = deterministicResponse.get();
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
-            if (semanticCacheAllowed) {
+            if (semanticCacheAllowed && !carriesTurnSpecificRouting(response)) {
                 semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
             }
             logBuildChatPath("FAST_DETERMINISTIC", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
@@ -537,6 +537,9 @@ public class BuildChatService {
         long semanticMs = elapsedMs(stageStartNanos);
         if (semanticCachedResponse.isPresent()) {
             Map<String, Object> response = semanticCachedResponse.get();
+            // 배포 전에 저장된 행에는 아직 이동 경로가 남아 있을 수 있다(TTL 만료 전까지).
+            // 다른 질문에 실려 화면을 끌고 가지 않도록 읽는 쪽에서도 한 번 더 벗겨낸다.
+            response.remove("actions");
             logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return withConversationTransition(response, recommendationConversationTransition);
@@ -548,7 +551,7 @@ public class BuildChatService {
             Map<String, Object> response = multiPartReduction.get();
             attachFollowUpContext(response, message);
             buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
-            if (semanticCacheAllowed) {
+            if (semanticCacheAllowed && !carriesTurnSpecificRouting(response)) {
                 semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
             }
             logBuildChatPath("FAST_MULTI_PART_REDUCTION", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.routeFallback(),
@@ -711,7 +714,9 @@ public class BuildChatService {
                         && stringList(response.get("quickReplies")).isEmpty());
         // 되묻기는 최대 1회 — 이미 되묻기 후속 턴이면 에코를 재부착하지 않는다.
         // 속성 1:1 카드로 답을 낸 턴은 완결 응답이므로 에코를 붙이지 않는다(카드가 주인공).
+        // 화면을 실제로 옮긴 턴도 완결 응답이다 — 에코를 붙이면 다음 이동 요청이 이 문장과 합성돼 깨진다.
         if (askedFollowUp && !clarificationFollowUp
+                && response.get("actions") == null
                 && response.get("clarification") == null && response.get("simulation") == null) {
             response.put("clarification", MockData.map(
                     "missingSlots", List.of(),
@@ -730,7 +735,11 @@ public class BuildChatService {
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
         log.debug("Build Chat response generated: userId={}, requestedAiProfile={}, cacheStore=true", userId, requestedAiProfile);
         buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
-        if (semanticCacheAllowed) {
+        // 이 턴의 상품·화면에 종속된 산출물(이동 경로·후보 선택 칩)은 semantic 캐시에 넣지 않는다 —
+        // 서명이 비슷하다는 이유로 다른 질문에 재생되면 엉뚱한 화면으로 끌고 가거나 남의 상품을 권한다.
+        boolean turnSpecificRouting = carriesTurnSpecificRouting(response)
+                || !stringList(engineResponse.parsedContext().get("routeChoiceChips")).isEmpty();
+        if (semanticCacheAllowed && !turnSpecificRouting) {
             semanticCacheService.storeAsync(body, requestedAiProfile, intentDecision, response);
         }
         logBuildChatPath("LLM_FULL", startedNanos, userId, requestedAiProfile, false, guardStats,
@@ -1431,6 +1440,11 @@ public class BuildChatService {
             response.put("quickReplies", routeChoiceChips);
         }
         return response;
+    }
+
+    /** 이 턴에서만 유효한 화면 이동을 담고 있는 응답인지. 담고 있으면 다른 질문에 재사용해선 안 된다. */
+    private static boolean carriesTurnSpecificRouting(Map<String, Object> response) {
+        return response.get("actions") != null;
     }
 
     /**
@@ -5465,7 +5479,10 @@ public class BuildChatService {
         if (!"GENERAL".equals(inferSupportSymptomCategory(message))) {
             return true;
         }
-        if (detectPartCategory(message) != null
+        // 대상 부품이 원문에 있으면 그 자체로 완결된 요청이다. detectPartCategory는 카테고리 어휘만 알아서
+        // "9800X3D 상세페이지로 이동해"처럼 모델명만 있는 문장을 놓쳤고, 그러면 직전 되묻기 원문과 합성돼
+        // 이동이 통째로 삼켜졌다(실측 재현). 아래 SIMULATE_REPLACEMENT 분기와 같은 관용구로 맞춘다.
+        if ((detectPartCategory(message) != null || PartRouteResolver.inferCategory(message) != null)
                 && containsAnyNormalized(
                         normalized,
                         "추천", "바꿔", "교체", "담아", "넣어", "추가",

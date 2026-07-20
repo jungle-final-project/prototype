@@ -30,6 +30,7 @@ import com.buildgraph.prototype.part.catalog.PartCompatibleCandidateService;
 import com.buildgraph.prototype.part.tool.ToolBuildPart;
 import com.buildgraph.prototype.part.tool.ToolCheckService;
 import com.buildgraph.prototype.recommendation.CandidateReranker;
+import com.buildgraph.prototype.recommendation.NoopCandidateReranker;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -490,6 +491,128 @@ class BuildChatServiceTest {
         assertThat(response.get("quickReplies")).asList().containsExactly(
                 "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해",
                 "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티 상세페이지로 이동해");
+    }
+
+    @Test
+    void navigationRequestAfterAClarificationIsNotMergedWithThePreviousMessage() {
+        // 제보 재현: "게이밍 PC 추천해줘"로 되물은 직후 "9800X3D 상세페이지로 이동해"를 치면
+        // 두 문장이 합성돼 엔진이 호출조차 되지 않고 이동이 통째로 삼켜졌다.
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        List<String> engineSaw = new java.util.ArrayList<>();
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenAnswer(invocation -> {
+                    engineSaw.add(((AiChatEngineRequest) invocation.getArgument(0)).message());
+                    return new AiChatEngineResponse(
+                            "9800X3D 상세페이지로 이동할게요.",
+                            AiChatIntent.ASK_FOLLOW_UP,
+                            List.of(new AiChatAction(
+                                    AiChatActionType.OPEN_ROUTE,
+                                    "상품 상세 보기",
+                                    Map.of("route", "/parts/a75d6544-2296-4c4c-a7cd-64596e66f6d7")
+                            )),
+                            List.of(),
+                            List.of(),
+                            Map.of(),
+                            List.of(),
+                            List.of(),
+                            null
+                    );
+                });
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "9800X3D 상세페이지로 이동해",
+                "clarificationContext", Map.of("originalMessage", "게이밍 PC 추천해줘")
+        ));
+
+        // 이전 원문이 앞에 붙지 않은 그대로가 엔진에 가야 한다.
+        assertThat(engineSaw).containsExactly("9800X3D 상세페이지로 이동해");
+        assertThat(response.get("actions")).asList().isNotEmpty();
+    }
+
+    @Test
+    void aTurnThatActuallyNavigatedDoesNotEchoItselfIntoTheNextQuestion() {
+        // 이동한 턴은 완결 응답이다. 여기에 되묻기 에코가 붙으면 다음 이동 요청이 이 문장과 합성돼 깨진다.
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "해당 CPU 상세페이지로 이동할게요.",
+                        AiChatIntent.ASK_FOLLOW_UP,
+                        List.of(new AiChatAction(
+                                AiChatActionType.OPEN_ROUTE,
+                                "상품 상세 보기",
+                                Map.of("route", "/parts/a75d6544-2296-4c4c-a7cd-64596e66f6d7")
+                        )),
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "9950X3D 상세페이지로 이동해"));
+
+        assertThat(response.get("actions")).asList().isNotEmpty();
+        assertThat(response.get("clarification")).isNull();
+    }
+
+    @Test
+    void responsesCarryingANavigationRouteAreNotStoredInTheSemanticCache() {
+        // semantic 캐시는 '비슷한 질문'에 재생된다. 이 턴의 화면 이동이 거기 들어가면
+        // 견적만 물은 다른 사용자를 엉뚱한 화면으로 끌고 간다.
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        BuildChatSemanticCacheService semanticCacheService = mock(BuildChatSemanticCacheService.class);
+        when(semanticCacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "셀프 견적 화면으로 이동할게요.",
+                        AiChatIntent.ASK_FOLLOW_UP,
+                        List.of(new AiChatAction(
+                                AiChatActionType.OPEN_ROUTE,
+                                "셀프 견적 열기",
+                                Map.of("route", "/self-quote")
+                        )),
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService,
+                null,
+                new NoopCandidateReranker(),
+                new PartRouteResolver(mock(JdbcTemplate.class)),
+                new BuildChatIntentRouter(),
+                semanticCacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of("message", "끝판왕 PC 견적 화면 열어줘"));
+
+        assertThat(response.get("actions")).asList().isNotEmpty();
+        verify(semanticCacheService, never()).storeAsync(any(), any(), any(), any());
     }
 
     @Test

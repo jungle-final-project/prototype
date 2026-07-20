@@ -2034,6 +2034,67 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredNavigationThatResolvesNowhereStopsPromisingToNavigate() {
+        // 실서버 재현: "커세어 상세페이지로 이동해줘"는 브랜드명뿐이라 상품도 카테고리도 특정되지 않는다.
+        // 예전에는 route만 조용히 사라지고 LLM이 쓴 "이동할게요"가 그대로 나가 아무 일도 안 일어났다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "커세어 상세페이지로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": null,
+                    "partQuery": "커세어",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "커세어 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .isEmpty();
+        assertThat(response.assistantMessage())
+                .doesNotContain("이동할게요")
+                .contains("커세어");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredPartDetailAsksWhichProductInChatWhenOnlyAFewCandidatesMatch() {
         // 후보가 둘뿐이면 목록 화면까지 옮길 이유가 없다 — 채팅에서 바로 고르게 한다.
         stubBuildChatPlan("""

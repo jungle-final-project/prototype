@@ -101,8 +101,15 @@ public class BuildChatIntentRouter {
         }
 
         if (isBuildRecommend(normalized, message, category)) {
+            // 이동 어휘가 섞인 문장("끝판왕 PC 견적 화면 열어줘")은 semantic 캐시를 쓰지 않는다.
+            // 서명을 만드는 extractPartQuery가 '화면·열어·이동' 같은 이동 어휘를 지워버려서,
+            // 이동 문장과 비이동 문장이 같은 버킷에 들어간다 — 그대로 두면 견적만 물은 사용자가
+            // 남의 이동 응답에 실려 화면이 끌려가고, 반대로 이동 요청이 비이동 응답에 히트해 안 움직인다.
+            String cachePolicy = standaloneContext(body) && !isNavigationCommand(normalized)
+                    ? "SEMANTIC_READ_ONLY"
+                    : "EXACT_ONLY";
             return decision(BuildChatIntent.BUILD_RECOMMEND, "HIGH", "NONE", category, partQuery, "LLM_OR_DETERMINISTIC",
-                    standaloneContext(body) ? "SEMANTIC_READ_ONLY" : "EXACT_ONLY",
+                    cachePolicy,
                     semanticSignature(BuildChatIntent.BUILD_RECOMMEND, category, partQuery, budgetSignature(message)), List.of());
         }
 
