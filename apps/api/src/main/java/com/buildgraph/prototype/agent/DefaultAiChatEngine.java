@@ -86,6 +86,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
             확신이 낮거나 복합 명령이면 routeIntent.shouldNavigate=false, routeType=NONE, confidence=LOW로 두십시오.
+            반대로 shouldNavigate=true로 둘 때는 반드시 confidence=HIGH로 두십시오. HIGH가 아니면 이동이 실행되지 않아,
+            “이동할게요”라고 답해 놓고 화면이 그대로인 상태가 됩니다. PART_DETAIL이면 category도 함께 채우십시오.
             uiContext.surface=SELF_QUOTE이고 capabilities에 BOARD_PART_FOCUS가 있을 때, 사용자가 현재 구성도에서 부품의 물리적 위치를 묻는 순수 위치 질문이면 boardFocusIntent를 구조화하십시오.
             위치 질문은 “RAM 위치가 어디야”, “CPU와 RAM 자리 표시해줘”, “M.2 슬롯이 어디 있어”처럼 부품과 공간 의도가 함께 있는 경우입니다.
             추천·가격·구매·교체·담기·삭제·성능 비교가 섞인 요청은 위치 강조가 아니며 boardFocusIntent.shouldFocus=false로 두십시오.
@@ -122,6 +124,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final List<String> BUILD_CATEGORIES = List.of(
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
     );
+    /** 상품 상세를 요청받았지만 하나로 특정하지 못해 카테고리 후보 목록으로 대신 보냈다는 표식. */
+    private static final String PART_DETAIL_LIST_FALLBACK = "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK";
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
@@ -260,6 +264,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
+            assistantMessage = correctedRouteMessage(assistantMessage, routeIntent);
         }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
         Map<String, Object> supportIntent = normalizeSupportIntent(objectMap(plan.get("supportIntent")));
@@ -892,6 +897,37 @@ public class DefaultAiChatEngine implements AiChatEngine {
         );
     }
 
+    /**
+     * "상세페이지로 이동할게요"라고 답해 놓고 실제로는 상품을 하나로 특정하지 못해 후보 목록으로 보내는 경우,
+     * 문구가 약속한 화면과 실제 도착지가 어긋난다. 그 어긋남이 있을 때만 사실대로 다시 쓴다 —
+     * LLM이 처음부터 "목록으로 이동"이라고 답했으면 손대지 않는다.
+     */
+    private static String correctedRouteMessage(String assistantMessage, EngineRouteIntent routeIntent) {
+        if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason()) || !promisesDetailPage(assistantMessage)) {
+            return assistantMessage;
+        }
+        String category = text(routeIntent.context().get("category"));
+        // route의 q= 값과 같은 정제를 거친 문구를 인용한다 — 도착한 화면의 검색어와 답변이 어긋나지 않게.
+        String partQuery = text(PartRouteResolver.extractPartQuery(text(routeIntent.context().get("partQuery"))));
+        String label = category == null ? "부품" : categoryLabel(category);
+        String head = partQuery == null
+                ? "찾으시는 상품을 하나로 특정하지 못했어요. "
+                : "'" + partQuery + "'에 정확히 맞는 상품을 하나로 특정하지 못했어요. ";
+        return head + label + " 후보 목록에서 확인해 주세요.";
+    }
+
+    /**
+     * "상세페이지"라는 약속만 잡는다. 그냥 "상세"로 판단하면 "상세 스펙을 알려드릴게요"처럼
+     * 이동을 약속하지 않은 정상 답변까지 통째로 갈아치운다.
+     */
+    private static boolean promisesDetailPage(String assistantMessage) {
+        if (assistantMessage == null) {
+            return false;
+        }
+        String compact = assistantMessage.replaceAll("\\s+", "");
+        return compact.contains("상세페이지") || compact.contains("상품페이지") || compact.contains("제품페이지");
+    }
+
     private EngineRouteIntent normalizeRouteIntent(Map<String, Object> source, String selectedCategory) {
         if (!Boolean.TRUE.equals(source.get("shouldNavigate"))) {
             return null;
@@ -913,9 +949,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
             case "PART_DETAIL" -> partRouteResolver.resolvePartDetailRoute(text(source.get("partQuery")), category);
             default -> null;
         };
-        if (route == null && "PART_DETAIL".equals(routeType) && category != null) {
-            route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), category);
-            reason = firstText(reason, "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK");
+        if (route == null && "PART_DETAIL".equals(routeType)) {
+            // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
+            // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
+            String listCategory = firstText(category, PartRouteResolver.inferCategory(text(source.get("partQuery"))));
+            if (listCategory != null) {
+                route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), listCategory);
+                category = listCategory;
+                // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
+                // LLM이 써 준 reason 대신 이 표식을 남긴다.
+                reason = PART_DETAIL_LIST_FALLBACK;
+            }
         }
         if (!isAllowedRoute(route)) {
             return null;

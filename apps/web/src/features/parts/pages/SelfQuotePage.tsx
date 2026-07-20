@@ -77,6 +77,9 @@ function SelfQuoteSlotBoardPage() {
   }, []);
   const categoryParam = searchParams.get('category');
   const selectedCategory: PartCategory | null = isSlotCategory(categoryParam) ? categoryParam : null;
+  // AI가 상품을 하나로 특정하지 못해 "후보 목록에서 확인해 주세요"라며 보낼 때 함께 오는 검색어.
+  // 이걸 후보 패널에 넘기지 않으면 안내와 달리 걸러지지 않은 전체 목록에 떨어진다.
+  const pendingSearch = searchParams.get('q') ?? '';
   const [aiBuild, setAiBuild] = useState<AiSelectedBuild | null>(() => readSelectedAiBuild());
   // R1 견적 비교: 챗봇이 마지막으로 내려준 추천 배치(최대 3안 — 가성비/균형/고성능).
   const [recentBuilds, setRecentBuilds] = useState<AiRecommendedBuild[]>(() => recentBuildsForChatContext(readAssistantSession()));
@@ -244,6 +247,7 @@ function SelfQuoteSlotBoardPage() {
     setSearchParams((current) => {
       const nextParams = new URLSearchParams(current);
       nextParams.delete('category');
+      nextParams.delete('q');
       return nextParams;
     });
   }, [setSearchParams]);
@@ -260,6 +264,8 @@ function SelfQuoteSlotBoardPage() {
     setSearchParams((current) => {
       const nextParams = new URLSearchParams(current);
       nextParams.set('category', category);
+      // 다른 슬롯으로 옮기면 AI가 넘겨준 검색어는 더 이상 그 슬롯의 조건이 아니다.
+      nextParams.delete('q');
       return nextParams;
     });
   };
@@ -465,6 +471,7 @@ function SelfQuoteSlotBoardPage() {
                   onUpdateQuantity={updateQuantity}
                   isMutating={isMutating}
                   placement="board-overlay"
+                  initialSearch={pendingSearch}
                 />
               ) : null}
               onBodyOverlayDismiss={closePanel}
