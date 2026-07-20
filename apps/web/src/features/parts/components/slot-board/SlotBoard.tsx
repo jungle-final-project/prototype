@@ -2114,16 +2114,17 @@ function SlotBoardProblemChip({
         onClick={() => setIsOpen(true)}
         className={[
           // 호환 문제는 이 화면에서 가장 먼저 눈에 들어와야 하는 신호다 — 주변 컨트롤(text-xs)보다
-          // 한 단 크게, 테두리도 두 배로 준다. 작게 두면 판 위 다른 칩들과 구분이 안 된다.
-          'flex items-center gap-2 rounded-xl border-2 bg-white px-4 py-2.5 text-sm font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+          // 두 단 크게, 테두리도 두 배로 준다. 작게 두면 판 위 다른 칩들과 구분이 안 된다.
+          // 크기 기준은 하단 요약의 '호환 상태' 카드(211×51) — 판 위와 아래에서 같은 무게로 읽히게 맞춘다.
+          'flex items-center gap-2 rounded-xl border-2 bg-white px-5 py-3.5 text-base font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
           overallStatus === 'FAIL'
             ? 'slot-board-fail-banner-pulse border-red-500 text-red-600 shadow-[0_12px_26px_rgba(239,68,68,0.28)] hover:border-red-600 hover:bg-red-50 focus-visible:ring-red-300'
             : 'border-amber-500 text-amber-700 shadow-[0_12px_26px_rgba(245,158,11,0.22)] hover:border-amber-600 hover:bg-amber-50 focus-visible:ring-amber-300'
         ].join(' ')}
       >
         {overallStatus === 'FAIL'
-          ? <CircleX size={19} aria-hidden="true" className="shrink-0" />
-          : <AlertTriangle size={19} aria-hidden="true" className="shrink-0" />}
+          ? <CircleX size={22} aria-hidden="true" className="shrink-0" />
+          : <AlertTriangle size={22} aria-hidden="true" className="shrink-0" />}
         {countsLabel}
       </button>
       {isOpen ? (
