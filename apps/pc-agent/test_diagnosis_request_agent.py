@@ -356,6 +356,29 @@ class BackgroundViewerControllerTest(unittest.TestCase):
         self.assertEqual([("session", None), "focus"], events)
         self.assertIsNone(controller._thread)
 
+    def test_show_reuses_ready_root_for_an_active_demo_session(self):
+        events = []
+        session = DiagnosisSession(DiagnosisRequest.from_payload(request_payload(mode="DEMO")))
+        controller = BackgroundViewerController(
+            Path("agent-config.json"),
+            diagnosis_session_provider=lambda: session,
+            connection_state_provider=lambda: "RUNNING",
+            show_viewer=lambda *args, **kwargs: events.append("new-root"),
+        )
+        controller._on_window_ready(
+            lambda: events.append("focus"),
+            lambda current: events.append(("session", current)),
+            lambda: None,
+            lambda: None,
+            lambda: None,
+        )
+        events.clear()
+
+        controller.show(session)
+
+        self.assertEqual([("session", session), "focus"], events)
+        self.assertIsNone(controller._thread)
+
     def test_forwards_metric_refresh_and_real_completion_to_existing_window(self):
         events = []
         controller = BackgroundViewerController(

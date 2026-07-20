@@ -420,7 +420,7 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
         metrics_updates: list[agent.MetricsSnapshot] = []
         coordinator = agent.InitialMetricsCoordinator(
             metrics_store,
-            live_provider_factory=lambda: DemoSensorProvider(),
+            live_provider_factory=lambda: provider_factory_calls.append("LIVE") or DemoSensorProvider(),
             demo_provider_factory=lambda: provider_factory_calls.append("DEMO") or DemoSensorProvider(),
             settings=InitialCollectionSettings(
                 sample_count=1,
@@ -484,7 +484,7 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
 
         self.assertEqual("diagnosis-next", repeated_session.request.diagnosis_id)
         self.assertIs(initial_metrics_thread, coordinator._thread)
-        self.assertEqual(["DEMO"], provider_factory_calls)
+        self.assertEqual(["LIVE"], provider_factory_calls)
         self.assertEqual("diagnosis-next", metrics_store.snapshot.diagnosis_id)
         self.assertTrue(metrics_store.snapshot.initial_complete)
         self.assertTrue(metrics_updates)

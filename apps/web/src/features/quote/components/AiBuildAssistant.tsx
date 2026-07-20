@@ -9,6 +9,7 @@ import { AI_BUILD_ASSISTANT_CLOSE_EVENT, AI_BUILD_ASSISTANT_OPEN_EVENT, AI_BUILD
 import { applyAiBuildToQuoteDraft, getCurrentQuoteDraft, putQuoteDraftItem } from '../../parts/partsApi';
 import type { QuoteDraft } from '../../parts/types';
 import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
+import { ensurePcAgentConnected } from '../../support/pcAgentLauncher';
 import { requestPcAgentDiagnosis } from '../../support/supportApi';
 import { AiChatPendingBubble } from './AiChatPendingBubble';
 import { applicationKindForBuild, startAiDraftApplicationFeedback } from './AiDraftApplicationFeedbackCoordinator';
@@ -1596,27 +1597,45 @@ function SupportGuidanceCard({
   const [downloadMessage, setDownloadMessage] = useState('');
   const [diagnosisState, setDiagnosisState] = useState<'idle' | 'requesting' | 'accepted' | 'rejected' | 'error'>('idle');
   const [diagnosisMessage, setDiagnosisMessage] = useState('');
+  const [diagnosisMode, setDiagnosisMode] = useState<'LIVE' | 'DEMO'>('LIVE');
+  const diagnosisRequestInFlight = useRef(false);
+  const diagnosisConnectionController = useRef<AbortController | null>(null);
   const canDownload = guidance.actions.some((action) => action.type === 'DOWNLOAD_PC_AGENT');
   const supportRoute = guidance.actions.find((action) => action.type === 'OPEN_SUPPORT_NEW')?.route ?? '/support/new';
 
+  useEffect(() => () => diagnosisConnectionController.current?.abort(), []);
+
   async function requestAgentDiagnosis() {
-    if (diagnosisState === 'requesting') return;
+    if (diagnosisRequestInFlight.current) return;
+    diagnosisRequestInFlight.current = true;
     setDiagnosisState('requesting');
     setDiagnosisMessage('');
+    const controller = new AbortController();
+    diagnosisConnectionController.current = controller;
     try {
+      const connected = await ensurePcAgentConnected(controller.signal);
+      if (!connected) {
+        setDiagnosisState('error');
+        setDiagnosisMessage('설치된 PC Agent를 실행했지만 연결되지 않았습니다. 실행 상태를 확인한 뒤 다시 시도해 주세요.');
+        return;
+      }
       const response = await requestPcAgentDiagnosis({
         symptom: symptom.trim(),
         requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
-        mode: 'LIVE'
-      });
+        mode: diagnosisMode
+      }, controller.signal);
       if (response.status === 'ACCEPTED') {
         setDiagnosisState('accepted');
         setDiagnosisMessage('설치된 PC Agent가 증상을 접수했습니다. PC 화면의 진단 창을 확인해 주세요.');
+        const destination = new URL(supportRoute, window.location.origin);
+        destination.searchParams.set('diagnosisId', response.diagnosisId);
+        navigate(`${destination.pathname}${destination.search}`);
       } else {
         setDiagnosisState('rejected');
         setDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
       }
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setDiagnosisState('error');
       if (cause instanceof ApiError && cause.code === 'AGENT_DISCONNECTED') {
         setDiagnosisMessage('실행 중인 PC Agent가 없습니다. 아래에서 다운로드해 실행한 뒤 다시 접수해 주세요.');
@@ -1625,6 +1644,11 @@ function SupportGuidanceCard({
       } else {
         setDiagnosisMessage('PC Agent 접수 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
       }
+    } finally {
+      if (diagnosisConnectionController.current === controller) {
+        diagnosisConnectionController.current = null;
+      }
+      diagnosisRequestInFlight.current = false;
     }
   }
 
@@ -1692,6 +1716,36 @@ function SupportGuidanceCard({
       <p className={`${isLarge ? 'mt-4 text-sm leading-6' : 'mt-3 text-[11px] leading-5'} rounded-md border border-cyan-100 bg-white px-3 py-2 font-semibold text-slate-600`}>
         위 항목은 입력한 증상에서 흔히 확인하는 가능성입니다. 원인 확정과 지원 방식은 PC Agent의 별도 진단 AI가 동의한 로그를 확인한 뒤 안내합니다.
       </p>
+
+      {symptom.trim() ? (
+        <div className={`${isLarge ? 'mt-4' : 'mt-3'} flex items-center gap-3`}>
+          <button
+            type="button"
+            role="switch"
+            aria-label="시연 모드"
+            aria-checked={diagnosisMode === 'DEMO'}
+            data-testid="ai-agent-demo-mode"
+            disabled={diagnosisState === 'requesting' || diagnosisState === 'accepted'}
+            onClick={() => setDiagnosisMode((current) => current === 'LIVE' ? 'DEMO' : 'LIVE')}
+            className={`${diagnosisMode === 'DEMO' ? 'bg-cyan-700' : 'bg-slate-300'} relative h-6 w-11 rounded-full transition focus:outline-none focus:ring-4 focus:ring-cyan-100 disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            <span
+              aria-hidden="true"
+              className={`${diagnosisMode === 'DEMO' ? 'translate-x-5' : 'translate-x-1'} absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow transition`}
+            />
+          </button>
+          <div>
+            <p className={`${isLarge ? 'text-sm' : 'text-xs'} font-black text-slate-700`}>
+              {diagnosisMode === 'DEMO' ? 'Code 43 시연 모드' : '실시간 측정'}
+            </p>
+            <p className={`${isLarge ? 'text-xs' : 'text-[10px]'} font-semibold text-slate-500`}>
+              {diagnosisMode === 'DEMO'
+                ? '다음 진단 한 건에만 시연 모드를 요청합니다.'
+                : '실제 PC 센서와 그래픽 장치 상태를 진단합니다.'}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className={`${isLarge ? 'mt-4 gap-3' : 'mt-3 gap-2'} flex flex-wrap`}>
         {symptom.trim() ? (

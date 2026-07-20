@@ -93,6 +93,10 @@ public class PcAgentDiagnosisRequestService {
         );
     }
 
+    public Map<String, Object> connectionStatus(CurrentUserService.CurrentUser user) {
+        return MockData.map("connected", ownedDeviceIds(user.internalId()).stream().anyMatch(broker::isConnected));
+    }
+
     private void markAgentResponse(String diagnosisId, String status) {
         int updated = jdbcTemplate.update("""
                 UPDATE pc_agent_diagnosis_requests
@@ -171,22 +175,27 @@ public class PcAgentDiagnosisRequestService {
     }
 
     private String connectedDeviceId(Long userInternalId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
-                SELECT public_id::text AS device_id
-                FROM agent_devices
-                WHERE user_id = ?
-                  AND status IN ('ACTIVE', 'UPDATE_REQUIRED')
-                ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
-                """, userInternalId);
-        return rows.stream()
-                .map(row -> DbValueMapper.string(row, "device_id"))
-                .filter(deviceId -> deviceId != null && broker.isConnected(deviceId))
+        return ownedDeviceIds(userInternalId).stream()
+                .filter(broker::isConnected)
                 .findFirst()
                 .orElseThrow(() -> new ApiException(
                         HttpStatus.CONFLICT,
                         "AGENT_DISCONNECTED",
                         "현재 연결된 PC Agent가 없습니다. PC Agent 실행 상태를 확인해 주세요."
                 ));
+    }
+
+    private List<String> ownedDeviceIds(Long userInternalId) {
+        return jdbcTemplate.queryForList("""
+                SELECT public_id::text AS device_id
+                FROM agent_devices
+                WHERE user_id = ?
+                  AND status IN ('ACTIVE', 'UPDATE_REQUIRED')
+                ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
+                """, userInternalId).stream()
+                .map(row -> DbValueMapper.string(row, "device_id"))
+                .filter(deviceId -> deviceId != null)
+                .toList();
     }
 
     private static List<String> normalizeChecks(List<String> requestedChecks) {

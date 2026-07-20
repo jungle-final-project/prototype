@@ -495,6 +495,8 @@ class AgentGoal1112Test(unittest.TestCase):
 
     def test_metric_collector_reads_cpu_clock_and_disk_capacity(self) -> None:
         class FakePsutil:
+            disk_paths: list[str] = []
+
             def cpu_percent(self, interval: float = 0.0) -> float:
                 return 24.0
 
@@ -505,7 +507,13 @@ class AgentGoal1112Test(unittest.TestCase):
                 return SimpleNamespace(percent=41.0, used=8 * 1024**3, total=16 * 1024**3)
 
             def disk_usage(self, path: str) -> SimpleNamespace:
-                return SimpleNamespace(percent=52.0, used=520 * 1024**3, total=1000 * 1024**3)
+                self.disk_paths.append(path)
+                return SimpleNamespace(
+                    percent=3.0,
+                    used=30 * 1024**3,
+                    free=480 * 1024**3,
+                    total=1000 * 1024**3,
+                )
 
             def disk_io_counters(self) -> SimpleNamespace:
                 return SimpleNamespace(read_bytes=1000, write_bytes=500, read_count=10, write_count=5, busy_time=100)
@@ -525,11 +533,18 @@ class AgentGoal1112Test(unittest.TestCase):
             time_fn=lambda: 1.0,
         )
 
-        row = collector.collect(datetime.now(agent.KST), 0)
+        with patch("buildgraph_agent.os.name", "nt"), patch.dict(
+            agent.os.environ,
+            {"SystemDrive": "D:"},
+        ):
+            row = collector.collect(datetime.now(agent.KST), 0)
 
         self.assertEqual(4250.0, row["cpuClockMhz"])
+        self.assertEqual(52.0, row["diskUsage"])
+        self.assertEqual(52.0, row["diskUsedPercent"])
         self.assertEqual(520 * 1024**3, row["diskUsedBytes"])
         self.assertEqual(1000 * 1024**3, row["diskTotalBytes"])
+        self.assertEqual(["D:\\"], FakePsutil.disk_paths)
 
     def test_symptom_screen_marks_usage_at_80_percent_as_warning(self) -> None:
         payload = {
@@ -587,7 +602,7 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual("주의", disk.status)
         self.assertEqual("warning", disk.tone)
 
-    def test_disk_card_reports_high_activity_without_relabeling_storage(self) -> None:
+    def test_disk_card_uses_high_activity_only_for_detail_and_wave(self) -> None:
         payload = {
             "cpuUsagePercent": 20.0,
             "gpuUsagePercent": 30.0,
@@ -604,8 +619,29 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual("저장 공간 35%", disk.primary)
         self.assertEqual("활성 시간 92%", disk.details[1])
         self.assertEqual((92.0,), disk.history)
+        self.assertEqual("정상", disk.status)
+        self.assertEqual("default", disk.tone)
+
+    def test_disk_card_keeps_low_activity_wave_when_storage_is_high(self) -> None:
+        payload = {
+            "cpuUsagePercent": 20.0,
+            "gpuUsagePercent": 30.0,
+            "memoryUsedPercent": 40.0,
+            "diskBusyEstimatePercent": 0.1,
+            "diskUsedPercent": 92.0,
+            "diskSmartStatus": "정상",
+        }
+        row = agent.build_metric_snapshot(datetime.now(agent.KST), 0, agent.SYSTEM_METRIC_KIND, payload)
+        disk = agent.build_symptom_screen_state(agent.SymptomScreenInput(
+            agent.hardware_sensor_snapshot(row, [row]), "디스크 상태 확인", None
+        )).widgets[3]
+
+        self.assertEqual("저장 공간 92%", disk.primary)
+        self.assertEqual("활성 시간 0.1%", disk.details[1])
+        self.assertEqual((0.1,), disk.history)
         self.assertEqual("주의", disk.status)
         self.assertEqual("warning", disk.tone)
+        self.assertLess(agent.usage_wave_target_amplitude(disk.history[-1]), 1.0)
 
     def test_disk_card_distinguishes_zero_activity_from_missing_activity(self) -> None:
         zero_payload = {
@@ -927,7 +963,7 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertFalse(agent.is_supported_graphics_symptom("게임 중 소리가 잠깐 끊겼다가 다시 들립니다."))
         self.assertFalse(agent.is_supported_graphics_symptom("게임이 심하게 느려졌어요."))
 
-    def test_code43_fixture_is_selected_only_for_explicit_demo_scenario(self) -> None:
+    def test_code43_fixture_is_selected_only_for_explicit_demo_mode(self) -> None:
         live_provider = MagicMock(return_value="live-snapshot")
         demo_provider = MagicMock(return_value="demo-snapshot")
         symptom = "게임 중 화면이 잠깐 꺼졌다가 다시 켜지고, 이후 게임이 심하게 느려졌어요."
@@ -945,7 +981,7 @@ class AgentGoal1112Test(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            "live-snapshot",
+            "demo-snapshot",
             agent.collect_session_windows_graphics_snapshot(
                 session("DEMO", "게임이 심하게 느려졌어요."), live_provider, demo_provider,
             ),
@@ -956,46 +992,26 @@ class AgentGoal1112Test(unittest.TestCase):
                 session("DEMO", symptom), live_provider, demo_provider,
             ),
         )
-        self.assertEqual(2, live_provider.call_count)
-        demo_provider.assert_called_once_with()
+        live_provider.assert_called_once_with()
+        self.assertEqual(2, demo_provider.call_count)
 
-    def test_persisted_demo_session_is_discarded_but_live_session_is_preserved(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for mode, expected_discarded in (("DEMO", True), ("LIVE", False)):
-                with self.subTest(mode=mode):
-                    suffix = mode.casefold()
-                    diagnosis_store = agent.DiagnosisSessionStore(root / f"session-{suffix}.json")
-                    request = DiagnosisRequest(
-                        f"diagnosis-{suffix}", "device-1", "증상", ("gpu",),
-                        "2026-07-13T00:00:00Z", "2026-07-13T00:02:00Z", mode,
-                    )
-                    diagnosis_store.accept(DiagnosisSession(request))
-                    metrics_store = agent.MetricsStore(root / f"metrics-{suffix}.json")
-                    metrics_store.begin(request.diagnosis_id, mode)
-                    diagnosis_log_store = agent.DiagnosisLogStore(root / f"progress-{suffix}.json")
-                    diagnosis_log_store.replace(agent.DiagnosisRunSnapshot(
-                        diagnosis_id=request.diagnosis_id,
-                        mode=mode,
-                        state="COLLECTING",
-                    ))
-                    result_store = agent.DiagnosisResultStore(root / f"result-{suffix}.json")
+    def test_active_live_and_demo_sessions_are_both_restorable(self) -> None:
+        for mode in ("LIVE", "DEMO"):
+            with self.subTest(mode=mode):
+                request = DiagnosisRequest(
+                    f"diagnosis-{mode.casefold()}", "device-1", "증상", ("gpu",),
+                    "2026-07-13T00:00:00Z", "2026-07-13T00:02:00Z", mode,
+                )
+                session = DiagnosisSession(request, agent_state="RUNNING")
+                diagnosis = agent.DiagnosisRunSnapshot(
+                    diagnosis_id=request.diagnosis_id,
+                    mode=mode,
+                    state="DIAGNOSING",
+                )
 
-                    discarded = agent.discard_persisted_demo_session(
-                        diagnosis_store,
-                        metrics_store,
-                        diagnosis_log_store,
-                        result_store,
-                    )
+                self.assertIs(session, agent.active_viewer_session(session, diagnosis))
 
-                    self.assertEqual(expected_discarded, discarded)
-                    if expected_discarded:
-                        self.assertIsNone(diagnosis_store.session)
-                        self.assertIsNone(metrics_store.snapshot.diagnosis_id)
-                        self.assertIsNone(diagnosis_log_store.snapshot.diagnosis_id)
-                    else:
-                        self.assertEqual(request.diagnosis_id, diagnosis_store.session.request.diagnosis_id)
-                        self.assertEqual(request.diagnosis_id, metrics_store.snapshot.diagnosis_id)
+        self.assertNotIn("discard_persisted_demo_session", inspect.getsource(agent.run_background))
 
     def test_demo_scenario_metadata_remains_internal_without_large_page_badge(self) -> None:
         source = inspect.getsource(agent.show_log_viewer)
@@ -2571,6 +2587,27 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), b"pca-agent-exe")
             self.assertEqual(startup_path.name, f"{agent.APP_NAME}.cmd")
             self.assertIn(f'"{installed}" run-background', startup_path.read_text(encoding="utf-8"))
+
+    def test_register_url_protocol_launches_without_uri_identity_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "PCAgent.exe"
+            with patch("buildgraph_agent.os.name", "nt"), \
+                    patch.object(agent.sys, "frozen", True, create=True), \
+                    patch("buildgraph_agent.ensure_installed_executable", return_value=executable), \
+                    patch("winreg.CreateKey") as create_key, \
+                    patch("winreg.SetValueEx") as set_value:
+                registered = agent.register_url_protocol()
+
+            self.assertTrue(registered)
+            created_paths = [call.args[1] for call in create_key.call_args_list]
+            self.assertEqual(created_paths, [
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}",
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}\DefaultIcon",
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}\shell\open\command",
+            ])
+            command = set_value.call_args_list[-1].args[-1]
+            self.assertEqual(command, f'"{executable}"')
+            self.assertNotIn("%1", command)
 
     def test_ensure_installed_executable_skips_copy_when_content_matches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

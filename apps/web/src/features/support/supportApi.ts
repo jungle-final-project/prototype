@@ -38,6 +38,10 @@ export type PcAgentDiagnosisRequestDto = {
   message?: string;
 };
 
+export type PcAgentConnectionStatusDto = {
+  connected: boolean;
+};
+
 export type PcAgentDiagnosisEventDto = {
   eventId: string;
   taskId?: string | null;
@@ -156,11 +160,16 @@ export function issueAgentActivationToken() {
   });
 }
 
-export function requestPcAgentDiagnosis(request: PcAgentDiagnosisRequestCreate) {
+export function requestPcAgentDiagnosis(request: PcAgentDiagnosisRequestCreate, signal?: AbortSignal) {
   return api<PcAgentDiagnosisRequestDto>('/api/users/me/agent-diagnosis-requests', {
     method: 'POST',
-    body: JSON.stringify(request)
+    body: JSON.stringify(request),
+    signal
   });
+}
+
+export function getPcAgentConnectionStatus(signal?: AbortSignal) {
+  return api<PcAgentConnectionStatusDto>('/api/users/me/agent-diagnosis-requests/connection', { signal });
 }
 
 export function getPcAgentDiagnosis(diagnosisId: string, signal?: AbortSignal) {
