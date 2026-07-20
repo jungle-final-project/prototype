@@ -3914,7 +3914,79 @@ class BuildChatServiceTest {
                                 Map.of("coolerType", "AIR", "tdpW", 150))))));
 
         assertThat(response).doesNotContainKey("simulation");
+        // 패널을 못 띄우는 클라이언트(capability 없음)에게는 종전 TOP 목록 문장이 그대로 나간다.
         assertThat(response.get("message")).asString().contains("수랭", "추천 TOP3");
+        assertThat(response.get("quickReplies")).asList().containsExactly(
+                "수랭 쿨러 A 견적에 담아줘",
+                "수랭 쿨러 B 견적에 담아줘",
+                "수랭 쿨러 C 견적에 담아줘");
+        // 구조화된 추천 결과는 capability와 무관하게 항상 실어 보낸다 — 문장 안의 상품명은 파싱할 수 없다.
+        assertThat(response.get("partRecommendation"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("category", "COOLER");
+    }
+
+    // 부품 목록 패널을 띄울 수 있는 클라이언트에게는 상품 나열을 패널에 넘기고 말풍선을 짧게 준다.
+    // 같은 목록이 채팅과 패널에 두 번 나오면 어느 쪽을 봐야 할지 헷갈린다.
+    @Test
+    void buildChatShortensPartRecommendationMessageWhenClientCanOpenCandidatePanel() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                return List.of(
+                        Map.of("id", "cooler-a", "name", "수랭 쿨러 A", "price", 180_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0),
+                        Map.of("id", "cooler-b", "name", "수랭 쿨러 B", "price", 220_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0),
+                        Map.of("id", "cooler-c", "name", "수랭 쿨러 C", "price", 260_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "수랭 쿨러 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "COOLER", "coolingType", "LIQUID")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "수랭 쿨러 추천해줘",
+                "uiContext", Map.of("capabilities", List.of("PART_CANDIDATE_PANEL")),
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("cooler-current", "COOLER", "현재 공랭 쿨러", 1,
+                                Map.of("coolerType", "AIR", "tdpW", 150))))));
+
+        // 말풍선은 상품명·가격을 나열하지 않는다.
+        assertThat(response.get("message")).asString()
+                .doesNotContain("추천 TOP3")
+                .doesNotContain("1)")
+                .doesNotContain("수랭 쿨러 A");
+        // 대신 무엇이 열렸는지 한 줄로 말한다.
+        assertThat(response.get("message")).asString().contains("부품 목록");
+        // 나열은 패널 몫 — 순서를 지킬 수 있게 partId가 함께 온다.
+        assertThat(response.get("partRecommendation"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("category", "COOLER");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> options = (List<Map<String, Object>>)
+                ((Map<String, Object>) response.get("partRecommendation")).get("options");
+        assertThat(options).hasSize(3);
+        assertThat(options).extracting(option -> option.get("partId"))
+                .containsExactly("cooler-a", "cooler-b", "cooler-c");
+        // 담기 칩은 그대로다 — 패널이 열려도 채팅에서 바로 담는 길을 막지 않는다.
         assertThat(response.get("quickReplies")).asList().containsExactly(
                 "수랭 쿨러 A 견적에 담아줘",
                 "수랭 쿨러 B 견적에 담아줘",

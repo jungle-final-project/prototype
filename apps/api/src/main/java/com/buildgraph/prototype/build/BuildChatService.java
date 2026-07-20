@@ -994,6 +994,17 @@ public class BuildChatService {
                 .toList();
     }
 
+    /**
+     * 부품 후보 패널을 띄울 수 있는 클라이언트인가. 있으면 추천 상품 나열을 말풍선이 아니라 패널이 맡는다.
+     * BOARD_PART_FOCUS와 달리 surface를 보지 않는다 — 홈에서 물어도 셀프견적으로 옮겨 패널을 열기 때문이다.
+     * 이 신호가 없으면(구버전 프론트·외부 호출) 종전 TOP 목록 문장이 그대로 나가야 한다.
+     */
+    private static boolean supportsPartCandidatePanel(Map<String, Object> body) {
+        Map<String, Object> uiContext = objectMap(body.get("uiContext"));
+        return stringList(uiContext.get("capabilities")).stream()
+                .anyMatch(capability -> "PART_CANDIDATE_PANEL".equalsIgnoreCase(capability));
+    }
+
     private static boolean supportsBoardPartFocus(Map<String, Object> body) {
         Map<String, Object> uiContext = objectMap(body.get("uiContext"));
         if (!"SELF_QUOTE".equalsIgnoreCase(text(uiContext.get("surface")))) {
@@ -3369,7 +3380,7 @@ public class BuildChatService {
                 response.put("message", explicitSelection.label() + " 조건을 만족하는 " + categoryLabel
                         + " " + budgetPrefix + "추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-                setPartRecommendationQuickReplies(response, constraint.category(), options);
+                setPartRecommendationQuickReplies(body, response, constraint.category(), options);
             }
             return;
         }
@@ -3438,7 +3449,7 @@ public class BuildChatService {
                             + options.size() + "를 보여드립니다. " + topListText(options)
                             + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.";
             response.put("message", listing);
-            setPartRecommendationQuickReplies(response, constraint.category(), options);
+            setPartRecommendationQuickReplies(body, response, constraint.category(), options);
             return;
         }
 
@@ -3472,7 +3483,7 @@ public class BuildChatService {
                 response.put("message", formatBudgetLabel(budget) + " 이내 " + categoryLabel
                         + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-                setPartRecommendationQuickReplies(response, constraint.category(), options);
+                setPartRecommendationQuickReplies(body, response, constraint.category(), options);
             }
             return;
         }
@@ -3564,7 +3575,7 @@ public class BuildChatService {
         response.put("message", "조건(" + specSummary + ")을 만족하는 " + categoryLabel
                 + " 추천 TOP" + top.size() + "입니다. " + topListText(top)
                 + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-        setPartRecommendationQuickReplies(response, constraint.category(), top);
+        setPartRecommendationQuickReplies(body, response, constraint.category(), top);
     }
 
     /**
@@ -4151,10 +4162,27 @@ public class BuildChatService {
      * 내려준다. 단일 카테고리는 기존 미리보기/명시 적용 정책을 유지한다.
      */
     private static void setPartRecommendationQuickReplies(
+            Map<String, Object> body,
             Map<String, Object> response,
             String category,
             List<BuildChatFeasibilityService.PartOption> options
     ) {
+        // 추천 결과를 구조화해 함께 내려보낸다. 문장 안의 상품명은 프론트가 다시 파싱할 수 없다 —
+        // 부품 목록 패널이 "AI가 고른 그 순서"로 후보를 띄우려면 partId가 필요하다.
+        response.put("partRecommendation", MockData.map(
+                "category", category,
+                "options", options.stream()
+                        .map(option -> MockData.map(
+                                "partId", option.partId(),
+                                "name", option.name(),
+                                "price", option.unitPrice()))
+                        .toList()));
+        // 패널을 띄울 수 있는 클라이언트에게는 말풍선을 짧게 준다 — 같은 상품 목록이 채팅과 패널에
+        // 두 번 나오면 어느 쪽을 봐야 할지 헷갈린다. 패널이 없는 구버전 클라이언트는 종전 문장 그대로다.
+        if (supportsPartCandidatePanel(body)) {
+            response.put("message", CATEGORY_LABELS.getOrDefault(category, "부품")
+                    + " 추천 후보 " + options.size() + "개를 부품 목록에 띄웠어요.");
+        }
         List<String> labels = options.stream().map(option -> option.name() + " 견적에 담아줘").toList();
         response.put("quickReplies", labels);
         if (!DIRECT_MULTI_ITEM_QUICK_REPLY_CATEGORIES.contains(category)) {
