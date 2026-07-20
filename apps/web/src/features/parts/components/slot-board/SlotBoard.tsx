@@ -13,6 +13,8 @@ import {
   FALLBACK_EDGES,
   SLOT_BOARD_ISO_CALLOUT_LAYOUTS,
   SLOT_BOARD_ISO_EDGES,
+  FLOATING_CONTROL_STRIP_GAP,
+  FLOATING_CONTROL_STRIP_HEIGHT,
   SLOT_BOARD_ISO_SCENE,
   SLOT_BOARD_ISO_SCENE_HIGHLIGHT,
   SLOT_BOARD_ART_VIEWBOX,
@@ -635,8 +637,12 @@ function RelationMapBoardBody({
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white p-3"
     >
       <div ref={frameRef} data-testid="relation-map-frame" className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-lg bg-white">
-        {/* 문제 칩은 보드 스테이지 좌상단 공용 스트립이 담당 — 여기는 범례만, 플로팅 컨트롤 아래로 내려 겹침을 피한다. */}
-        <div className="pointer-events-none absolute inset-x-3 top-16 z-40 flex w-auto justify-end">
+        {/* 문제 칩은 보드 스테이지 공용 스트립이 담당 — 여기는 범례만, 플로팅 컨트롤 아래로 내려 겹침을 피한다.
+            top은 스트립 높이에서 유도한다(하드코딩 금지) — 칩 크기가 바뀌면 여기가 조용히 가려진다. */}
+        <div
+          style={{ top: FLOATING_CONTROL_STRIP_HEIGHT + FLOATING_CONTROL_STRIP_GAP }}
+          className="pointer-events-none absolute inset-x-3 z-40 flex w-auto justify-end"
+        >
           <div className="pointer-events-auto">
             <RelationMapStatusLegend />
           </div>
@@ -2091,11 +2097,15 @@ function SlotBoardProblemChip({
   const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
   const warnCount = problems.length - failCount;
   const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
+  // 건수만 나열하면 표지판처럼 읽혀 그냥 지나친다 — 문장으로 말해 준다.
+  // 둘 다 있을 때는 "…가 …건 있습니다"를 두 번 반복하지 않고 한 문장으로 묶는다.
   const countsLabel = (
     <span>
-      {failCount > 0 ? <>호환 불가 {failCount}건</> : null}
-      {failCount > 0 && warnCount > 0 ? ' · ' : null}
-      {warnCount > 0 ? <>주의 필요 {warnCount}건</> : null}
+      {failCount > 0 && warnCount > 0
+        ? <>호환 불가 {failCount}건, 주의 필요 {warnCount}건이 있습니다</>
+        : failCount > 0
+          ? <>호환 불가 건수가 {failCount}건 있습니다</>
+          : <>주의 필요 건수가 {warnCount}건 있습니다</>}
     </span>
   );
 
@@ -2109,15 +2119,18 @@ function SlotBoardProblemChip({
         aria-expanded={isOpen}
         onClick={() => setIsOpen(true)}
         className={[
-          'flex items-center gap-2 rounded-lg border bg-white px-3 py-1.5 text-[11px] font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+          // 호환 문제는 이 화면에서 가장 먼저 눈에 들어와야 하는 신호다 — 주변 컨트롤(text-xs)보다
+          // 두 단 크게, 테두리도 두 배로 준다. 작게 두면 판 위 다른 칩들과 구분이 안 된다.
+          // 크기 기준은 하단 요약의 '호환 상태' 카드(211×51) — 판 위와 아래에서 같은 무게로 읽히게 맞춘다.
+          'flex items-center gap-2 rounded-xl border-2 bg-white px-5 py-3.5 text-base font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
           overallStatus === 'FAIL'
-            ? 'slot-board-fail-banner-pulse border-red-400 text-red-600 shadow-[0_10px_20px_rgba(239,68,68,0.24)] hover:border-red-500 hover:bg-red-50 focus-visible:ring-red-300'
-            : 'border-amber-400 text-amber-700 shadow-[0_10px_20px_rgba(245,158,11,0.18)] hover:border-amber-500 hover:bg-amber-50 focus-visible:ring-amber-300'
+            ? 'slot-board-fail-banner-pulse border-red-500 text-red-600 shadow-[0_12px_26px_rgba(239,68,68,0.28)] hover:border-red-600 hover:bg-red-50 focus-visible:ring-red-300'
+            : 'border-amber-500 text-amber-700 shadow-[0_12px_26px_rgba(245,158,11,0.22)] hover:border-amber-600 hover:bg-amber-50 focus-visible:ring-amber-300'
         ].join(' ')}
       >
         {overallStatus === 'FAIL'
-          ? <CircleX size={15} aria-hidden="true" className="shrink-0" />
-          : <AlertTriangle size={15} aria-hidden="true" className="shrink-0" />}
+          ? <CircleX size={22} aria-hidden="true" className="shrink-0" />
+          : <AlertTriangle size={22} aria-hidden="true" className="shrink-0" />}
         {countsLabel}
       </button>
       {isOpen ? (
