@@ -4012,6 +4012,22 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void comparativeUpgradeReferenceTreatsModelNameAsAFloorNotAPick() {
+        // 기준선 표현 — 모델명을 '고를 상품'으로 읽으면 안 된다.
+        assertThat(BuildChatService.comparativeUpgradeReference("지금 5080보다 좋은 gpu 추천해줘")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("5080보다 나은 걸로")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("5080 이상으로 추천해줘")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("9800X3D보다 성능 높은 cpu")).isTrue();
+
+        // 예산 하한('이상')은 비교 표현이 아니다 — 사이에 '만원'이 끼어 걸리지 않아야 한다.
+        assertThat(BuildChatService.comparativeUpgradeReference("150만원 이상 gpu 추천해줘")).isFalse();
+        assertThat(BuildChatService.comparativeUpgradeReference("100만원 이하 gpu 추천해줘")).isFalse();
+        // 그냥 모델명 지정은 그대로 상품 지정이다.
+        assertThat(BuildChatService.comparativeUpgradeReference("5080 추천해줘")).isFalse();
+        assertThat(BuildChatService.comparativeUpgradeReference("rtx 5080 견적에 담아줘")).isFalse();
+    }
+
+    @Test
     void unsupportedRecommendationQualifierNamesOnlyWhatWeCannotHonor() {
         // 못 다루는 조건 — 이름을 붙여 되묻는다.
         assertThat(BuildChatService.unsupportedRecommendationQualifier("조용한 쿨러 추천해줘")).isEqualTo("소음");

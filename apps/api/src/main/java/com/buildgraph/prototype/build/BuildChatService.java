@@ -4228,6 +4228,18 @@ public class BuildChatService {
         return remainder.isEmpty();
     }
 
+    /**
+     * "5080보다 좋은", "5080 이상"처럼 모델명이 고를 상품이 아니라 넘어야 할 기준선인 표현.
+     * '이상'은 예산 하한 표현이기도 하므로(150만원 이상) 숫자 바로 뒤에 붙은 경우만 본다 —
+     * "150만원이상"은 사이에 '만원'이 끼어 이 패턴에 걸리지 않는다.
+     */
+    private static final Pattern MODEL_UPGRADE_REFERENCE =
+            Pattern.compile("(?i)(보다(좋|나은|나아|높|센|빠|위|상위|성능|더))|(\\d{3,5}[a-z0-9]*이상)");
+
+    static boolean comparativeUpgradeReference(String message) {
+        return MODEL_UPGRADE_REFERENCE.matcher(normalizeCommand(message)).find();
+    }
+
     /** 현재 견적에서 그 카테고리에 담겨 있는 부품. 없으면 null. */
     private static Map<String, Object> draftItemInCategory(Map<String, Object> body, String category) {
         if (category == null) {
@@ -4367,6 +4379,12 @@ public class BuildChatService {
     }
 
     private static ExplicitPartSelection explicitPartSelection(String category, String message) {
+        // "5080보다 좋은 GPU 추천해줘"의 5080은 고르라는 상품이 아니라 넘어야 할 기준선이다.
+        // 이걸 상품 지정으로 읽으면 5080 3종을 나열하고, 사용자는 "더 좋은 걸 달라"고 한 답으로
+        // 같은 제품을 받는다. 비교 표현이 있으면 상품 지정을 포기하고 일반 추천 경로로 보낸다.
+        if (comparativeUpgradeReference(message)) {
+            return null;
+        }
         String gpuClass = "GPU".equals(category) ? targetGpuClass(message) : null;
         String modelOrVendor = gpuClass == null ? simulationModelToken(category, message) : null;
         if (gpuClass == null && isGenericPartSpecToken(category, modelOrVendor)) {

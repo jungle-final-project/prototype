@@ -208,7 +208,9 @@ public class BuildChatCacheService {
         //      (담긴 것보다 못한 후보가 "호환되는 추천"으로 올라오던 문제).
         // v75: 소음·발열·게임 성능처럼 아직 반영하지 못하는 조건은 목록 대신 못 한다고 답한다
         //      (조건을 무시한 목록을 "골랐다"고 내놓던 문제).
-        return "buildgraph:build-chat:v75:" + sha256(json);
+        // v76: CPU·GPU 추천 정렬이 VRAM이 아니라 벤치마크 점수 기준이 됐고,
+        //      "5080보다 좋은"의 모델명은 고를 상품이 아니라 기준선으로 읽는다.
+        return "buildgraph:build-chat:v76:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {
