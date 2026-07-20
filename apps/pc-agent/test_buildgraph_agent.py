@@ -3166,7 +3166,7 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         acquire_lock.assert_called_once_with(agent.BACKGROUND_INSTANCE_MUTEX_NAME)
         ensure_default_config.assert_not_called()
-        viewer_request_signal.return_value.signal.assert_called_once_with()
+        viewer_request_signal.return_value.signal.assert_called_once_with(reconnect=True)
         show_log_viewer.assert_not_called()
 
     def test_run_background_releases_instance_lock_after_shutdown(self) -> None:

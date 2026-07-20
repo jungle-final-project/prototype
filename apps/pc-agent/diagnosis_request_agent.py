@@ -329,6 +329,7 @@ class AgentDiagnosisWebSocketClient:
         self.on_ready = on_ready or (lambda: None)
         self.websocket_factory = websocket_factory or (websocket.WebSocketApp if websocket is not None else None)
         self.stop_event = threading.Event()
+        self.reconnect_event = threading.Event()
         self.authenticated = False
         self.ready_once = False
         self.state = "DISCONNECTED"
@@ -349,11 +350,13 @@ class AgentDiagnosisWebSocketClient:
         if self._thread and self._thread.is_alive():
             return
         self.stop_event.clear()
+        self.reconnect_event.clear()
         self._thread = threading.Thread(target=self._run, name="pc-agent-diagnosis-websocket", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.reconnect_event.set()
         socket_app = self._socket
         if socket_app is not None:
             try:
@@ -361,6 +364,20 @@ class AgentDiagnosisWebSocketClient:
             except Exception:
                 pass
         self._set_state("DISCONNECTED")
+
+    def request_reconnect(self) -> bool:
+        if self.authenticated:
+            return False
+        self.reconnect_event.set()
+        socket_app = self._socket
+        if socket_app is not None:
+            try:
+                socket_app.close()
+            except Exception:
+                pass
+        if self._thread is None or not self._thread.is_alive():
+            self.start()
+        return True
 
     def send_diagnosis_status(self, detail: dict[str, Any]) -> bool:
         event_id = detail.get("eventId")
@@ -419,12 +436,18 @@ class AgentDiagnosisWebSocketClient:
                 self._set_state("DISCONNECTED")
             if self.stop_event.is_set():
                 break
+            if self.reconnect_event.is_set():
+                self.reconnect_event.clear()
+                attempt = 0
+                continue
             delay = self.BACKOFF_SECONDS[min(attempt, len(self.BACKOFF_SECONDS) - 1)]
             # READY까지 도달했더라도 곧바로 끊긴 연결은 정상으로 치지 않는다. 그렇지 않으면
             # 서버가 매번 연결을 끊는 상황에서 1초 간격 재접속 핫루프가 된다.
             stable = time.monotonic() - started_at >= self.STABLE_CONNECTION_SECONDS
             attempt = 0 if stable else attempt + 1
-            self.stop_event.wait(delay)
+            if self.reconnect_event.wait(delay):
+                self.reconnect_event.clear()
+                attempt = 0
 
     def _on_open(self, socket_app: Any) -> None:
         socket_app.send(json.dumps({"type": "AUTH", "agentToken": self.agent_token}))
@@ -600,6 +623,7 @@ class BackgroundViewerController:
         cancel_diagnosis: Callable[[], bool] | None = None,
         retry_diagnosis: Callable[[], bool] | None = None,
         finish_diagnosis_session: Callable[[], bool] | None = None,
+        request_reconnect: Callable[[], bool] | None = None,
     ) -> None:
         self.config_path = config_path
         self.diagnosis_session_provider = diagnosis_session_provider
@@ -613,6 +637,7 @@ class BackgroundViewerController:
         self.cancel_diagnosis = cancel_diagnosis or (lambda: False)
         self.retry_diagnosis = retry_diagnosis or (lambda: False)
         self.finish_diagnosis_session = finish_diagnosis_session or (lambda: False)
+        self.request_reconnect = request_reconnect or (lambda: False)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._request_focus: Any = None
@@ -621,7 +646,9 @@ class BackgroundViewerController:
         self._request_initial_metrics_complete: Any = None
         self._request_destroy: Any = None
 
-    def show(self, session: DiagnosisSession | None = None) -> None:
+    def show(self, session: DiagnosisSession | None = None, reconnect: bool = False) -> None:
+        if reconnect:
+            self.request_reconnect()
         with self._lock:
             request_focus = self._request_focus
             request_apply_session = self._request_apply_session
@@ -709,11 +736,14 @@ class ViewerRequestSignal:
         self.path = path
         self.restrict_file = restrict_file
 
-    def signal(self) -> None:
+    def signal(self, reconnect: bool = False) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f"{self.path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            temporary.write_text(json.dumps({"requestId": str(uuid.uuid4())}) + "\n", encoding="utf-8")
+            temporary.write_text(
+                json.dumps({"requestId": str(uuid.uuid4()), "reconnect": reconnect}) + "\n",
+                encoding="utf-8",
+            )
             for attempt in range(5):
                 try:
                     temporary.replace(self.path)
@@ -737,7 +767,11 @@ class ViewerRequestSignal:
                 current_request = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
                 if current_request and current_request != last_request:
                     last_request = current_request
-                    controller.show()
+                    try:
+                        payload = json.loads(current_request)
+                    except (TypeError, json.JSONDecodeError):
+                        payload = {}
+                    controller.show(reconnect=payload.get("reconnect") is True)
             except OSError:
                 pass
             time.sleep(0.25)

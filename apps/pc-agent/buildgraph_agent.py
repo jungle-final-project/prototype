@@ -8267,7 +8267,7 @@ def run_background(
             ViewerRequestSignal(
                 app_data_dir() / "show-viewer-request.json",
                 restrict_file_to_current_user,
-            ).signal()
+            ).signal(reconnect=True)
         return 0
     try:
         path = ensure_default_config(config_path or default_background_config_path())
@@ -8312,6 +8312,8 @@ def run_background(
             retry_diagnosis=lambda: diagnosis_orchestrator_holder["value"].retry()
             if "value" in diagnosis_orchestrator_holder else False,
             finish_diagnosis_session=lambda: finish_current_diagnosis_session(),
+            request_reconnect=lambda: diagnosis_client_holder["value"].request_reconnect()
+            if "value" in diagnosis_client_holder else False,
         )
 
         def on_connection_state_changed(state: str) -> None:

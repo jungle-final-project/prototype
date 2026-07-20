@@ -1,9 +1,10 @@
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from diagnosis_request_agent import (
     AgentDiagnosisWebSocketClient,
@@ -162,11 +163,24 @@ class ViewerRequestSignalTest(unittest.TestCase):
                 return original_replace(source, target)
 
             with patch.object(Path, "replace", autospec=True, side_effect=flaky_replace):
-                signal.signal()
+                signal.signal(reconnect=True)
 
             self.assertEqual(2, attempts)
             self.assertEqual([path], restricted)
-            self.assertIn("requestId", json.loads(path.read_text(encoding="utf-8")))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("requestId", payload)
+            self.assertTrue(payload["reconnect"])
+
+    def test_monitor_forwards_reconnect_request_to_existing_controller(self):
+        runtime = MagicMock(running=True)
+        controller = MagicMock()
+        signal = ViewerRequestSignal(Path("show-viewer-request.json"), lambda path: None)
+        with patch.object(Path, "exists", return_value=True), \
+                patch.object(Path, "read_text", side_effect=["{}", '{"requestId":"next","reconnect":true}']), \
+                patch("diagnosis_request_agent.time.sleep", side_effect=lambda seconds: setattr(runtime, "running", False)):
+            signal.monitor(runtime, controller)
+
+        controller.show.assert_called_once_with(reconnect=True)
 
 
 class FakeSocket:
@@ -190,6 +204,59 @@ class FailingSocket(FakeSocket):
 
 
 class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
+    def test_protocol_reconnect_is_a_noop_while_authenticated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            socket = FakeSocket()
+            client._socket = socket
+            client.authenticated = True
+
+            self.assertFalse(client.request_reconnect())
+            self.assertFalse(socket.closed)
+            self.assertFalse(client.reconnect_event.is_set())
+
+    def test_protocol_reconnect_closes_disconnected_socket_and_wakes_backoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wait_started = threading.Event()
+            sockets = []
+
+            class ObservableReconnectEvent(threading.Event):
+                def wait(self, timeout=None):
+                    wait_started.set()
+                    return super().wait(timeout)
+
+            class BackoffSocket(FakeSocket):
+                def run_forever(self, **kwargs):
+                    if len(sockets) >= 2:
+                        client.stop_event.set()
+
+            def socket_factory(*args, **kwargs):
+                socket = BackoffSocket()
+                sockets.append(socket)
+                return socket
+
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=socket_factory,
+            )
+            client.BACKOFF_SECONDS = (30,)
+            client.reconnect_event = ObservableReconnectEvent()
+            client.start()
+            self.assertTrue(wait_started.wait(1))
+
+            self.assertTrue(client.request_reconnect())
+            client._thread.join(1)
+
+            self.assertGreaterEqual(len(sockets), 2)
+            self.assertTrue(sockets[0].closed)
+
     def test_ready_authenticates_and_request_gets_real_response(self):
         with tempfile.TemporaryDirectory() as directory:
             states = []
@@ -334,6 +401,29 @@ class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
 
 
 class BackgroundViewerControllerTest(unittest.TestCase):
+    def test_show_requests_reconnect_and_reuses_hidden_viewer(self):
+        events = []
+        controller = BackgroundViewerController(
+            Path("agent-config.json"),
+            diagnosis_session_provider=lambda: None,
+            connection_state_provider=lambda: "DISCONNECTED",
+            show_viewer=lambda *args, **kwargs: events.append("new-root"),
+            request_reconnect=lambda: events.append("reconnect") or True,
+        )
+        controller._on_window_ready(
+            lambda: events.append("focus"),
+            lambda session: events.append(("session", session)),
+            lambda: None,
+            lambda: None,
+            lambda: None,
+        )
+        events.clear()
+
+        controller.show(reconnect=True)
+
+        self.assertEqual(["reconnect", ("session", None), "focus"], events)
+        self.assertIsNone(controller._thread)
+
     def test_show_reuses_ready_root_and_only_requests_apply_and_focus(self):
         events = []
         controller = BackgroundViewerController(
