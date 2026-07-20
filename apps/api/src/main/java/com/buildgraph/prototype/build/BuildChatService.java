@@ -4169,19 +4169,26 @@ public class BuildChatService {
             String category,
             List<BuildChatFeasibilityService.PartOption> options
     ) {
-        // 추천 결과를 구조화해 함께 내려보낸다. 문장 안의 상품명은 프론트가 다시 파싱할 수 없다 —
-        // 부품 목록 패널이 "AI가 고른 그 순서"로 후보를 띄우려면 partId가 필요하다.
-        response.put("partRecommendation", MockData.map(
-                "category", category,
-                "options", options.stream()
-                        .map(option -> MockData.map(
-                                "partId", option.partId(),
-                                "name", option.name(),
-                                "price", option.unitPrice()))
-                        .toList()));
+        // 여러 카테고리를 한꺼번에 물으면("케이스랑 파워 추천해줘") 패널로 넘기지 않는다.
+        // 패널은 한 번에 한 카테고리만 열 수 있어, 한쪽만 띄워 놓고 "띄웠어요"라고 답하면
+        // 나머지 한쪽을 물어본 적 없는 것처럼 만든다. 이때는 종전대로 말풍선에 나열한다.
+        // 이 판정은 여기서 한다 — partRecommendation을 싣는 유일한 지점이라 경로마다 새지 않는다.
+        boolean multipleCategories = requestsMultiplePartCategories(String.valueOf(body.get("message")));
+        if (!multipleCategories) {
+            // 추천 결과를 구조화해 함께 내려보낸다. 문장 안의 상품명은 프론트가 다시 파싱할 수 없다 —
+            // 부품 목록 패널이 "AI가 고른 그 순서"로 후보를 띄우려면 partId가 필요하다.
+            response.put("partRecommendation", MockData.map(
+                    "category", category,
+                    "options", options.stream()
+                            .map(option -> MockData.map(
+                                    "partId", option.partId(),
+                                    "name", option.name(),
+                                    "price", option.unitPrice()))
+                            .toList()));
+        }
         // 패널을 띄울 수 있는 클라이언트에게는 말풍선을 짧게 준다 — 같은 상품 목록이 채팅과 패널에
         // 두 번 나오면 어느 쪽을 봐야 할지 헷갈린다. 패널이 없는 구버전 클라이언트는 종전 문장 그대로다.
-        if (supportsPartCandidatePanel(body)) {
+        if (!multipleCategories && supportsPartCandidatePanel(body)) {
             response.put("message", "내부 자산 기준으로 고른 " + CATEGORY_LABELS.getOrDefault(category, "부품")
                     + " 추천 " + options.size() + "개를 부품 목록에 띄웠어요.");
         }

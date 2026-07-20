@@ -202,7 +202,9 @@ public class BuildChatCacheService {
         //      ("CPU와 GPU 추천"이 GPU 단일 → 견적 경로)로 같은 문장의 응답이 또 달라진다.
         // v72: 부품 추천 응답에 partRecommendation(카테고리+partId 목록)이 추가되고,
         //      패널을 띄울 수 있는 클라이언트에게는 TOP 목록 문장 대신 짧은 안내가 나간다.
-        return "buildgraph:build-chat:v72:" + sha256(json);
+        // v73: 여러 카테고리를 한꺼번에 묻는 문장("케이스랑 파워 추천해줘")은 partRecommendation을
+        //      싣지 않고 말풍선 나열을 유지한다 — 종전에는 한쪽만 골라 패널로 넘겼다.
+        return "buildgraph:build-chat:v73:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

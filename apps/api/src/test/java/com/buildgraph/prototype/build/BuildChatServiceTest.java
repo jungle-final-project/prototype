@@ -3994,6 +3994,50 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void buildChatKeepsBubbleListingWhenUserAsksForTwoCategoriesAtOnce() {
+        // "케이스랑 파워 추천해줘" — 패널은 한 번에 한 카테고리만 연다. 한쪽만 띄워 놓고
+        // "띄웠어요"라고 답하면 나머지 한쪽은 물어본 적 없는 것처럼 사라진다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                return List.of(
+                        Map.of("id", "psu-a", "name", "파워 A", "price", 120_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 850),
+                        Map.of("id", "psu-b", "name", "파워 B", "price", 150_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 1000));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "케이스와 파워 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "PSU")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "케이스랑 파워 추천해줘",
+                "uiContext", Map.of("capabilities", List.of("PART_CANDIDATE_PANEL"))));
+
+        // 패널로 넘기지 않는다 — 넘기면 케이스를 물어본 적 없는 것처럼 된다.
+        assertThat(response.get("partRecommendation")).isNull();
+        // 말풍선도 줄이지 않는다 — 나열이 유일한 답이므로 그대로 있어야 한다.
+        assertThat(response.get("message")).asString().doesNotContain("부품 목록에 띄웠어요");
+    }
+
+    @Test
     void buildChatListsAttributeCandidatesWhenDraftHasNoMatchingCategory() {
         // "통풍 좋은 케이스 추천해줘" — 비교 대상(드래프트 케이스) 없음 → 속성 충족 후보 TOP 나열 + 담기 칩.
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
