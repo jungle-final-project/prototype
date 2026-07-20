@@ -4054,9 +4054,9 @@ class BuildChatServiceTest {
         assertThat(response.get("message")).asString()
                 .contains("RTX 5080")
                 .contains("어떤 기준");
-        // 칩은 실제로 다른 결과를 내는 경로만 준다.
+        // 칩은 실제로 다른 결과를 내는 경로만 준다(성능순·가성비순·최저가순).
         assertThat(response.get("quickReplies")).asList()
-                .contains("가성비 GPU 추천해줘", "제일 저렴한 GPU 추천해줘");
+                .containsExactly("고성능 GPU 추천해줘", "가성비 GPU 추천해줘", "제일 저렴한 GPU 추천해줘");
         // 다음 짧은 답이 원 요청과 합쳐지도록 원문을 에코한다.
         assertThat(response.get("clarification"))
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)

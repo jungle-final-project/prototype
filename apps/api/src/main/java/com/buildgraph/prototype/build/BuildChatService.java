@@ -4207,8 +4207,9 @@ public class BuildChatService {
 
     /**
      * 기준 없는 부품 추천에 되묻는다. 칩은 실제로 다른 결과를 내는 경로만 제안한다 —
-     * "더 좋은 걸로" 같은 칩은 지금 정렬(호환·가격)로는 같은 목록을 돌려주므로 넣지 않는다.
-     * 예산 칩은 담긴 부품 가격을 기준으로 만들어, 누르면 그 가격대에서 다시 고른다.
+     * 누르면 같은 목록이 나오는 칩은 버튼으로 거짓말을 하는 것이다.
+     * 예산 칩은 넣지 않는다: "N만원대/짜리/정도"가 전부 상한으로만 해석돼, 담긴 부품 가격을
+     * 그대로 적어 줘도 그 가격대가 아니라 가장 싼 후보가 돌아온다(실측 확인).
      */
     private static void respondAskRecommendationCriteria(
             Map<String, Object> response,
@@ -4219,9 +4220,6 @@ public class BuildChatService {
             String message
     ) {
         String currentName = text(currentItem.get("name"));
-        Integer currentPrice = firstNumber(
-                currentItem.get("currentPrice"), currentItem.get("price"),
-                currentItem.get("unitPriceAtAdd"), currentItem.get("lineTotal"));
         response.put("answerType", "PART");
         response.put("builds", List.of());
         response.remove("partRecommendation");
@@ -4229,16 +4227,10 @@ public class BuildChatService {
                 ? "지금 견적에 " + categoryLabel + "가 이미 담겨 있어요. "
                 : "지금 견적에는 " + currentName + "이(가) 담겨 있어요. ")
                 + "어떤 기준으로 골라 드릴까요? 예산이나 방향을 알려주시면 그 기준으로 다시 추천해 드릴게요.");
-        List<String> chips = new ArrayList<>();
-        if (currentPrice != null && currentPrice > 0) {
-            // 담긴 가격을 만원 단위로 올림해 그 예산대를 제안한다 — 누르면 예산 경로로 들어가
-            // 호환·가격순이 아니라 그 예산 안에서 고른다.
-            int band = Math.max(10, (int) Math.round(currentPrice / 10_000.0));
-            chips.add(band + "만원대 " + categoryLabel + " 추천해줘");
-        }
-        chips.add("가성비 " + categoryLabel + " 추천해줘");
-        chips.add("제일 저렴한 " + categoryLabel + " 추천해줘");
-        response.put("quickReplies", chips);
+        response.put("quickReplies", List.of(
+                "고성능 " + categoryLabel + " 추천해줘",
+                "가성비 " + categoryLabel + " 추천해줘",
+                "제일 저렴한 " + categoryLabel + " 추천해줘"));
         response.remove("quickReplyCommands");
         // 다음 짧은 답("150만원")이 원 요청과 합쳐지도록 원문을 에코한다(무상태 후속).
         response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
