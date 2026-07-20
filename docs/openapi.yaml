@@ -5360,7 +5360,21 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [BOARD_PART_FOCUS, PART_CANDIDATE_PANEL]
+            enum: [BOARD_PART_FOCUS, PART_CANDIDATE_PANEL, GAME_PERFORMANCE_COMPARE]
+        performance:
+          type: object
+          description: >
+            성능 패널이 지금 보여주는 게임·해상도. "더 부드럽게"처럼 목표 FPS가 없는 향상 요청을
+            이 기준으로 해석해 현재 예상 FPS 위의 첫 체감 구간(60/120/165/240)을 목표로 삼는다.
+            FPS 숫자는 보내지 않는다 — 서버가 현재 draft와 벤치마크 근거로 다시 계산한다.
+          required: [gameQuery, resolution]
+          properties:
+            gameQuery:
+              type: string
+              description: 게임 조회 키(예 pubg, valorant).
+            resolution:
+              type: string
+              enum: [FHD, QHD, 4K]
     AiPartRecommendationDto:
       type: object
       required: [category, options]

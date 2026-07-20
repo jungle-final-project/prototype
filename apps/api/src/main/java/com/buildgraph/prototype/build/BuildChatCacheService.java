@@ -212,7 +212,10 @@ public class BuildChatCacheService {
         //      "5080보다 좋은"의 모델명은 고를 상품이 아니라 기준선으로 읽는다.
         // v77: 부품 추천도 예산 모드를 구분한다 — "150만원 정도"(TARGET)는 ±12.5% 밴드,
         //      "100만원 이하"(MAX)는 종전대로 상한.
-        return "buildgraph:build-chat:v77:" + sha256(json);
+        // v78: "더 부드럽게"처럼 목표 수치 없는 향상 요청이 화면 문맥(게임·해상도)으로 다음 체감
+        //      구간을 계산해 GPU 변경 미리보기를 만든다. uiContext.performance가 응답을 가르므로
+        //      capabilities와 함께 키에 들어간다(uiContextFingerprint).
+        return "buildgraph:build-chat:v78:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

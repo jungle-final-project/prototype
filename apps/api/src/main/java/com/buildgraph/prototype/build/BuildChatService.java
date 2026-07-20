@@ -1917,6 +1917,16 @@ public class BuildChatService {
     }
 
     private List<Map<String, Object>> simulationFpsEvidence(PartCandidate cpu, PartCandidate gpu, String message) {
+        return simulationFpsEvidence(cpu, gpu, gameKeyFromText(message), resolutionFromText(message));
+    }
+
+    /**
+     * 게임·해상도를 문장에서 다시 뽑지 않고 그대로 받는다. "더 부드럽게 바꿔줘"처럼 게임·해상도가
+     * 문장에 없고 화면 문맥에서 오는 요청도 같은 조회를 쓸 수 있어야 한다 — 문장을 넘기면
+     * game_key 필터가 통째로 빠져 LIMIT 4에 엉뚱한 행이 채워지고 근거를 못 찾는다.
+     */
+    private List<Map<String, Object>> simulationFpsEvidence(
+            PartCandidate cpu, PartCandidate gpu, String gameKey, String resolution) {
         if (gpu == null) {
             return List.of();
         }
@@ -1927,8 +1937,6 @@ public class BuildChatService {
         String cpuClass = hardwareClass(cpu);
         Long gpuId = gpu.internalId() == null ? -1L : gpu.internalId();
         Long cpuId = cpu == null || cpu.internalId() == null ? -1L : cpu.internalId();
-        String gameKey = gameKeyFromText(message);
-        String resolution = resolutionFromText(message);
         List<Object> params = new ArrayList<>();
         params.add(gpuId);
         params.add(gpuClass);
@@ -4656,6 +4664,49 @@ public class BuildChatService {
         return "사무용";
     }
 
+    /** 체감이 달라지는 프레임 구간. "더 부드럽게"는 현재보다 위의 첫 구간을 목표로 삼는다. */
+    private static final int[] SMOOTHNESS_TIERS = { 60, 120, 165, 240 };
+
+    /**
+     * "더 부드럽게"처럼 목표 수치 없이 향상만 요구하는 표현. 화면에 이미 게임·해상도·현재 FPS가
+     * 떠 있으므로 그 문맥으로 목표를 계산한다.
+     */
+    private static final List<String> SMOOTHNESS_INTENT_TERMS = List.of(
+            "부드럽게", "부드러운", "쾌적하게", "프레임올려", "프레임을올려", "프레임높", "fps올려", "fps높", "끊김없");
+
+    /**
+     * 상대 향상으로 읽으면 안 되는 문장. 증상 신고는 AS로 가야 하고, 모니터·주사율 이야기는
+     * GPU 교체가 답이 아니며, 가정형 질문("바꾸면 얼마나 올라?")은 읽기 전용 시뮬레이션이다.
+     */
+    private static final List<String> SMOOTHNESS_INTENT_EXCLUSIONS = List.of(
+            "멈춰", "멈춤", "검은화면", "튕김", "튕겨", "먹통", "블루스크린", "고장",
+            "모니터", "주사율", "화면교체", "디스플레이",
+            "바꾸면", "교체하면", "올리면", "얼마나올라");
+
+    /** 상대 향상 요청인가 — 화면 문맥으로 목표를 계산해 기존 목표 FPS 엔진에 넘길 수 있는 문장. */
+    static boolean requestsSmootherPerformance(String message) {
+        String normalized = normalizeCommand(message);
+        if (containsAnyNormalized(normalized, SMOOTHNESS_INTENT_EXCLUSIONS.toArray(String[]::new))) {
+            return false;
+        }
+        if (!containsAnyNormalized(normalized, SMOOTHNESS_INTENT_TERMS.toArray(String[]::new))) {
+            return false;
+        }
+        // 견적을 바꿔 달라는 요청일 때만 미리보기를 만든다 — 설명·추천 요청은 기존 경로가 답한다.
+        return containsAnyNormalized(normalized,
+                "바꿔", "변경", "교체", "업그레이드", "올려", "높여", "해줘", "보이도록", "되도록");
+    }
+
+    /** 현재 FPS 위의 첫 체감 구간. 이미 최상 구간이면 null. */
+    static Integer nextSmoothnessTier(double currentFps) {
+        for (int tier : SMOOTHNESS_TIERS) {
+            if (currentFps < tier) {
+                return tier;
+            }
+        }
+        return null;
+    }
+
     private Optional<Map<String, Object>> targetFpsGpuPreviewResponse(
             Map<String, Object> body,
             String message
@@ -4668,11 +4719,29 @@ public class BuildChatService {
                 : "평균 " + targetFps + "FPS 이상";
         boolean directChange = containsAnyNormalized(normalized,
                 "바꿔줘", "변경해줘", "교체해줘", "업그레이드해줘", "올려줘", "맞춰줘");
-        if (targetFps == null || !directChange || !"GPU".equals(detectPartCategory(message))) {
+        boolean explicitTarget = targetFps != null && directChange && "GPU".equals(detectPartCategory(message));
+        // 상대 향상("더 부드럽게")은 문장에 GPU도 목표 수치도 없다 — GPU가 지렛대라는 건 엔진이 정한다.
+        boolean relativeTarget = !explicitTarget && requestsSmootherPerformance(message);
+        if (!explicitTarget && !relativeTarget) {
             return Optional.empty();
         }
         String gameKey = gameKeyFromText(message);
         String resolution = resolutionFromText(message);
+        if (relativeTarget) {
+            // 화면에 떠 있는 성능 패널의 게임·해상도가 기준이다. 문장에 적혀 있으면 그쪽이 우선.
+            Map<String, Object> performanceContext = objectMap(objectMap(body.get("uiContext")).get("performance"));
+            if (gameKey == null) {
+                gameKey = gameKeyFromText(text(performanceContext.get("gameQuery")));
+            }
+            if (resolution == null) {
+                resolution = resolutionFromText(text(performanceContext.get("resolution")));
+            }
+            if (gameKey == null || resolution == null) {
+                // 바꿀 견적이 있다는 건 셀프견적 화면이라는 뜻이고 거기엔 성능 패널이 늘 떠 있다.
+                // 그래도 문맥이 비었으면 임의로 정하지 않고 기존 경로에 넘긴다.
+                return Optional.empty();
+            }
+        }
         if (gameKey == null || resolution == null) {
             Map<String, Object> clarification = fastResponse(
                     "GENERAL",
@@ -4721,8 +4790,32 @@ public class BuildChatService {
         boolean namedDifferentFromCurrent = namedGpuClass != null
                 && !namedGpuClass.equals(hardwareClass(currentGpu));
 
-        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, message, gameKey, resolution, stableTarget);
-        if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= targetFps) {
+        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, gameKey, resolution, stableTarget);
+        if (relativeTarget) {
+            // 목표 수치를 사용자가 주지 않았으므로 현재 FPS 위의 첫 체감 구간을 목표로 삼는다.
+            // 근거가 없으면 "다음 구간"을 정직하게 말할 수 없다 — 지어내지 않고 기존 경로에 넘긴다.
+            if (currentEvidence == null) {
+                return Optional.empty();
+            }
+            targetFps = nextSmoothnessTier(currentEvidence.value());
+            if (targetFps == null) {
+                Map<String, Object> alreadyTop = fastResponse(
+                        "GENERAL",
+                        gameDisplayName(gameKey) + " " + resolution + " 기준 현재 약 "
+                                + formatFps(currentEvidence.value()) + "FPS로, 이미 가장 높은 체감 구간입니다. "
+                                + "더 올릴 여지가 크지 않아 교체 미리보기는 만들지 않았습니다.",
+                        List.of()
+                );
+                alreadyTop.put("quickReplies", List.of("현재 견적 점수 설명해줘", "지금 견적 그대로 둘게"));
+                return Optional.of(alreadyTop);
+            }
+            targetPhrase = "평균 " + targetFps + "FPS 이상";
+        }
+        // 여기서부터 목표는 확정이다 — 아래 후보 루프의 람다가 잡을 수 있도록 final로 고정한다.
+        final int resolvedTargetFps = targetFps;
+        final String resolvedGameKey = gameKey;
+        final String resolvedResolution = resolution;
+        if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= resolvedTargetFps) {
             Map<String, Object> alreadyMet = fastResponse(
                     "GENERAL",
                     currentGpu.name() + "은(는) " + currentEvidence.metricLabel() + " 기준 약 "
@@ -4758,9 +4851,9 @@ public class BuildChatService {
             FpsTargetEvidence evidence = evidenceByGpuClass.computeIfAbsent(
                     candidateClass,
                     ignored -> Optional.ofNullable(targetFpsEvidence(
-                            currentCpu, candidate, message, gameKey, resolution, stableTarget))
+                            currentCpu, candidate, resolvedGameKey, resolvedResolution, stableTarget))
             ).orElse(null);
-            if (evidence == null || evidence.value() < targetFps) {
+            if (evidence == null || evidence.value() < resolvedTargetFps) {
                 continue;
             }
             fpsEligibleCandidateCount += 1;
@@ -5197,15 +5290,18 @@ public class BuildChatService {
         };
     }
 
+    /**
+     * 이 게임·해상도에서의 예상 FPS 근거. 문장이 아니라 게임·해상도 값으로만 조회한다 —
+     * 화면 문맥에서 온 요청("더 부드럽게")도 같은 근거를 써야 하기 때문이다.
+     */
     private FpsTargetEvidence targetFpsEvidence(
             PartCandidate cpu,
             PartCandidate gpu,
-            String message,
             String gameKey,
             String resolution,
             boolean stableTarget
     ) {
-        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, message)) {
+        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, gameKey, resolution)) {
             if (!gameKey.equals(text(row.get("game_key"))) || !resolution.equals(text(row.get("resolution")))) {
                 continue;
             }
