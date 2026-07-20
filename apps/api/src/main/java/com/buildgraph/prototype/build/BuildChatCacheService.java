@@ -181,6 +181,9 @@ public class BuildChatCacheService {
         fingerprint.put("message", normalizeText(body.get("message")));
         fingerprint.put("selectedCategory", normalizeText(body.get("selectedCategory")));
         fingerprint.put("uiContext", uiContextFingerprint(body.get("uiContext")));
+        // 같은 문장이라도 "칩으로 고른 턴"과 "직접 타이핑한 턴"은 응답이 다르다(전자는 이동 확정).
+        // 서명에 넣지 않으면 한쪽 응답이 TTL 동안 다른 쪽에 재생돼 이동이 안 되거나 반대로 끌려간다.
+        fingerprint.put("quickReplySource", normalizeText(body.get("quickReplySource")));
         fingerprint.put("cacheMode", sharedRecommendation ? "SHARED_STANDALONE_RECOMMENDATION" : scope.name());
         fingerprint.put("currentQuoteDraft", quoteDraftFingerprint(body.get("currentQuoteDraft")));
         if (scope != CacheScope.RECOMMENDATION) {
@@ -192,7 +195,8 @@ public class BuildChatCacheService {
         // 안 올리면 옛 응답이 TTL(600초) 동안 그대로 재생돼 배포한 수정이 없던 일이 된다.
         // v67: 응답에 화면 이동(actions) 추가.
         // v68: 후보 2~4건이면 이동 대신 칩으로 되묻도록 응답 모양이 바뀜(#264) + 이동 해상 실패 시 문구 교정.
-        return "buildgraph:build-chat:v68:" + sha256(json);
+        // v69: 목록 대체 이동의 q가 리졸버 토큰으로 바뀜 + 이동 턴 문구 교정 + 되묻기 응답에 quickReplyKind 추가.
+        return "buildgraph:build-chat:v69:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

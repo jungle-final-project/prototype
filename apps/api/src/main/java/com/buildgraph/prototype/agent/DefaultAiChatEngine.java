@@ -128,6 +128,14 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final String PART_DETAIL_LIST_FALLBACK = "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK";
     /** 채팅에서 되물어 고르게 할 최대 후보 수. 이보다 많으면 칩 대신 후보 목록 화면으로 보낸다. */
     private static final int MAX_ROUTE_CHOICE_CHIPS = 4;
+    /** 화면은 옮기는데 조건에 맞는 후보는 없을 때, 이동 사실을 먼저 알리고 서버 사유를 잇는다. */
+    private static final String NAVIGATED_NOTICE = "요청하신 화면으로 이동할게요. ";
+    /** '페이지'라는 낱말로 상세 화면을 약속하는 문구 — 이동 어휘 없이도 상세 약속으로 본다. */
+    private static final List<String> DETAIL_PAGE_PROMISES = List.of("상세페이지", "상품페이지", "제품페이지");
+    /** '페이지' 없이 상세를 약속하는 문구. 오검출이 쉬워 이동 어휘가 함께 있을 때만 약속으로 본다. */
+    private static final List<String> DETAIL_PROMISES_NEEDING_NAVIGATION = List.of("제품상세", "상품상세", "상세화면");
+    /** 이동 어휘. PartRouteResolver.hasProductRouteIntent와 같은 계보로 맞춘다. */
+    private static final List<String> ROUTE_NAVIGATION_VERBS = List.of("이동", "열어", "열게", "열어드", "보여", "띄워");
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
@@ -265,18 +273,25 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String assistantMessage = firstText(text(plan.get("assistantMessage")), null);
         RoutePlan routePlan = planRoute(objectMap(plan.get("routeIntent")), selectedCategory);
         EngineRouteIntent routeIntent = routePlan.routeIntent();
+        // 이 턴의 문구를 서버가 도착지를 근거로 직접 썼는지. 아래 빈-후보 가드가 이 문구를 덮으면
+        // 화면은 옮겨 놓고 "후보를 찾지 못했습니다"라고 답하는 턴이 된다.
+        boolean serverAuthoredRouteMessage = false;
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
-            assistantMessage = correctedRouteMessage(assistantMessage, routeIntent);
+            String correctedMessage = correctedRouteMessage(assistantMessage, routeIntent);
+            serverAuthoredRouteMessage = !Objects.equals(correctedMessage, assistantMessage);
+            assistantMessage = correctedMessage;
         }
         if (!routePlan.choiceChips().isEmpty()) {
             // 화면을 옮기는 대신 채팅에서 고르게 하는 턴 — 칩과 되묻기 문구가 LLM 원문을 대신한다.
             parsedContext.put("routeChoiceChips", routePlan.choiceChips());
+            serverAuthoredRouteMessage = firstText(routePlan.message(), null) != null;
             assistantMessage = firstText(routePlan.message(), assistantMessage);
         }
         if (routePlan.unresolved()) {
             // 이동 의도는 있었는데 갈 곳이 없었다. 문구를 문자열로 판단하지 않고 이 상태로만 교정한다 —
             // 문자열로 보면 이동을 약속하지 않은 평범한 답변까지 갈아치우게 된다.
+            serverAuthoredRouteMessage = firstText(routePlan.message(), null) != null;
             assistantMessage = firstText(routePlan.message(), assistantMessage);
         }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
@@ -299,7 +314,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             case ASK_FOLLOW_UP -> askFollowUpResponse(message);
         };
         base = withRouteAction(base, routeIntent);
-        return withLlmMetadata(base, assistantMessage, parsedContext, evidenceIds);
+        return withLlmMetadata(base, assistantMessage, parsedContext, evidenceIds,
+                serverAuthoredRouteMessage, routeIntent != null);
     }
 
     @Override
@@ -859,16 +875,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
             AiChatEngineResponse response,
             String assistantMessage,
             Map<String, Object> parsedContext,
-            List<String> evidenceIds
+            List<String> evidenceIds,
+            boolean serverAuthoredRouteMessage,
+            boolean navigates
     ) {
         Map<String, Object> mergedContext = new LinkedHashMap<>(response.parsedContext() == null ? Map.of() : response.parsedContext());
         if (parsedContext != null) {
             mergedContext.putAll(parsedContext);
         }
         preserveServerHardConstraints(mergedContext, response.parsedContext());
-        String finalAssistantMessage = shouldKeepServerAssistantMessage(response, mergedContext)
-                ? response.assistantMessage()
-                : firstText(assistantMessage, response.assistantMessage());
+        String finalAssistantMessage = resolveAssistantMessage(
+                response, mergedContext, assistantMessage, serverAuthoredRouteMessage, navigates);
         return new AiChatEngineResponse(
                 finalAssistantMessage,
                 response.intent(),
@@ -880,6 +897,31 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 response.toolResults(),
                 response.agentSessionId()
         );
+    }
+
+    /**
+     * 빈-후보 가드(shouldKeepServerAssistantMessage)는 LLM이 없는 후보를 있다고 말하는 걸 막는 장치다.
+     * 그런데 이동하는 턴에서는 도착지를 설명하는 문구까지 덮어, 화면은 상세로 가 놓고
+     * "후보를 찾지 못했습니다"라고 답하는 턴을 만든다. 이동 사실과 후보 없음은 함께 말해야 한다.
+     */
+    private static String resolveAssistantMessage(
+            AiChatEngineResponse response,
+            Map<String, Object> mergedContext,
+            String assistantMessage,
+            boolean serverAuthoredRouteMessage,
+            boolean navigates
+    ) {
+        // 서버가 이 턴의 도착지를 보고 직접 쓴 문구다. LLM의 낙관을 막는 가드가 이걸 덮을 이유가 없다.
+        if (serverAuthoredRouteMessage) {
+            return firstText(assistantMessage, response.assistantMessage());
+        }
+        if (!shouldKeepServerAssistantMessage(response, mergedContext)) {
+            return firstText(assistantMessage, response.assistantMessage());
+        }
+        // 가드는 그대로 두되, 화면이 실제로 옮겨 가는 턴이면 그 사실을 앞에 붙여 도착지와 어긋나지 않게 한다.
+        return navigates
+                ? NAVIGATED_NOTICE + response.assistantMessage()
+                : response.assistantMessage();
     }
 
     private AiChatEngineResponse withRouteAction(AiChatEngineResponse response, EngineRouteIntent routeIntent) {
@@ -946,7 +988,13 @@ public class DefaultAiChatEngine implements AiChatEngine {
             return false;
         }
         String compact = assistantMessage.replaceAll("\\s+", "");
-        return compact.contains("상세페이지") || compact.contains("상품페이지") || compact.contains("제품페이지");
+        if (DETAIL_PAGE_PROMISES.stream().anyMatch(compact::contains)) {
+            return true;
+        }
+        // "제품 상세로 이동할게요"처럼 '페이지' 없이 상세 화면을 약속하는 문구도 잡는다.
+        // 다만 이동 어휘가 함께 있을 때만 — "제품 상세를 정리해 드릴게요" 같은 설명 답변은 건드리지 않는다.
+        return DETAIL_PROMISES_NEEDING_NAVIGATION.stream().anyMatch(compact::contains)
+                && ROUTE_NAVIGATION_VERBS.stream().anyMatch(compact::contains);
     }
 
     private RoutePlan planRoute(Map<String, Object> source, String selectedCategory) {
@@ -962,8 +1010,10 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String partQuery = text(source.get("partQuery"));
         List<String> choices = List.of();
         String route = null;
+        // 목록으로 대신 보낼 때 q에 실을 토큰이 이 안에 있다 — 블록 밖에서도 읽을 수 있게 끌어올린다.
+        PartRouteResolver.PartDetailResolution resolution = null;
         if ("PART_DETAIL".equals(routeType)) {
-            PartRouteResolver.PartDetailResolution resolution = partRouteResolver.resolvePartDetail(partQuery, category);
+            resolution = partRouteResolver.resolvePartDetail(partQuery, category);
             route = resolution.route();
             choices = resolution.choices();
         } else {
@@ -988,12 +1038,15 @@ public class DefaultAiChatEngine implements AiChatEngine {
                             : "'" + partQuery + "'에 해당하는 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
             );
         }
-        if (route == null && "PART_DETAIL".equals(routeType)) {
+        // 보여 줄 후보가 하나라도 있을 때만 목록으로 보낸다. 0건이면 화면을 옮겨 봐야 무관한 상품만 잔뜩 보여 주는 꼴이라,
+        // 아래 unresolved 경로로 떨어뜨려 "그런 상품이 없다"고 사실대로 되묻는다.
+        if (route == null && "PART_DETAIL".equals(routeType) && !resolution.choices().isEmpty()) {
             // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
             // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
             String listCategory = firstText(category, PartRouteResolver.inferCategory(partQuery));
             if (listCategory != null) {
-                route = partRouteResolver.resolveCategoryFilterRoute(partQuery, listCategory);
+                // q에는 리졸버가 실제로 걸어 본 토큰만 싣는다 — 원문을 그대로 실으면 도착 목록이 0건이 된다.
+                route = partRouteResolver.categoryFilterRoute(listCategory, resolution);
                 category = listCategory;
                 // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
                 // LLM이 써 준 reason 대신 이 표식을 남긴다.
