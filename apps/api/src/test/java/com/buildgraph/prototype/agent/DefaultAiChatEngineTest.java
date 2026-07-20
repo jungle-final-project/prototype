@@ -2137,6 +2137,126 @@ class DefaultAiChatEngineTest {
         verifyNoJdbcWrites();
     }
 
+    // 실서버 재현: "쿨러마스터 파워 상세페이지로 이동해"를 LLM이 PART_DETAIL이 아니라 CATEGORY로 분류하면
+    // 서버가 목록 폴백 표식을 찍지 않는다. 표식으로 문구 교정 여부를 판정하던 시절에는 교정이 통째로
+    // 건너뛰어져, "상세 페이지로 이동할게요"라고 말하고 파워 목록에 떨구는 턴이 그대로 나갔다.
+    @Test
+    void llmRequiredCategoryRouteStopsPromisingADetailPageItDoesNotOpen() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "파워서플라이 상세 페이지로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "CATEGORY",
+                    "category": "PSU",
+                    "partQuery": "쿨러마스터 파워",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 파워 카테고리를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "쿨러마스터 파워 상세페이지로 이동해",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        // 도착지는 그대로 카테고리 목록이다 — 고치는 것은 문구지 이동이 아니다.
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload().get("route")).isEqualTo("/self-quote?category=PSU"));
+        assertThat(response.assistantMessage()).doesNotContain("상세 페이지로 이동");
+        assertThat(response.assistantMessage()).contains("목록");
+        // 후보를 세어 보지 않은 턴이므로 후보가 몇 개 있다고 단언하지 않는다.
+        assertThat(response.assistantMessage()).doesNotContain("후보 목록에서 확인");
+        verifyNoJdbcWrites();
+    }
+
+    // 반대편 경계: LLM이 처음부터 목록으로 안내했으면 그 문구를 서버가 갈아치우지 않는다.
+    @Test
+    void llmRequiredCategoryRouteKeepsAnHonestListMessageAsIs() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "쿨러마스터 파워 상품 목록으로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "CATEGORY",
+                    "category": "PSU",
+                    "partQuery": "쿨러마스터 파워",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 파워 카테고리를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "쿨러마스터 파워 목록 보여줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).isEqualTo("쿨러마스터 파워 상품 목록으로 이동할게요.");
+        verifyNoJdbcWrites();
+    }
+
     @Test
     void llmRequiredNavigationThatResolvesNowhereStopsPromisingToNavigate() {
         // 실서버 재현: "커세어 상세페이지로 이동해줘"는 브랜드명뿐이라 상품도 카테고리도 특정되지 않는다.
