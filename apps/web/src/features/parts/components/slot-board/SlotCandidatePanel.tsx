@@ -88,8 +88,15 @@ export function SlotCandidatePanel({
   const [filtersOpen, setFiltersOpen] = useState(false);
   // 챗봇이 이 카테고리로 추천해 열었다면 그 순서가 남아 있다. 슬롯을 바꾸면 다시 읽는다.
   const [aiPickedPartIds, setAiPickedPartIds] = useState<string[]>(() => readAiPartPicks(slot.category));
+  // 챗봇에게 추천을 받아 열린 창이면 추천만 보여준다 — 전체 카탈로그를 함께 깔면
+  // "추천 창"이 아니라 "부품 목록 창"으로 읽힌다. 전체는 눌러야 펼쳐진다.
+  const [showAllCandidates, setShowAllCandidates] = useState(false);
   useEffect(() => {
-    const sync = () => setAiPickedPartIds(readAiPartPicks(slot.category));
+    const sync = () => {
+      setAiPickedPartIds(readAiPartPicks(slot.category));
+      // 새 추천이 오면 다시 추천만 보여준다(전체를 펼쳐 둔 채였어도).
+      setShowAllCandidates(false);
+    };
     sync();
     // 패널이 이미 그 카테고리로 열려 있으면 챗봇이 다시 추천해도 주소가 안 바뀐다 —
     // 리마운트도 카테고리 변경도 없으므로 이 신호로만 새 순서를 안다.
@@ -255,10 +262,16 @@ export function SlotCandidatePanel({
     if (onlyWishlist) {
       list = list.filter((part) => wishlist.has(part.id));
     }
-    // 챗봇이 골라 준 후보를 그 순서대로 맨 위로 올린다. 사용자가 검색어를 치는 순간 그만둔다 —
+    // 챗봇이 골라 준 후보만 그 순서대로 보여준다. 사용자가 검색어를 치는 순간 그만둔다 —
     // 그때부터는 "챗봇이 추천한 것"이 아니라 "내가 찾는 것"이 목록의 주인이다.
     if (aiPickedPartIds.length > 0 && !q) {
       const rank = new Map(aiPickedPartIds.map((partId, index) => [partId, index]));
+      if (!showAllCandidates) {
+        return list
+          .filter((part) => rank.has(part.id))
+          .sort((left, right) => (rank.get(left.id) ?? 0) - (rank.get(right.id) ?? 0));
+      }
+      // 전체를 펼쳐도 추천은 맨 위에 남긴다 — 어디로 갔는지 찾게 만들지 않는다.
       list = [...list].sort((left, right) => {
         const leftRank = rank.get(left.id) ?? Number.MAX_SAFE_INTEGER;
         const rightRank = rank.get(right.id) ?? Number.MAX_SAFE_INTEGER;
@@ -266,7 +279,14 @@ export function SlotCandidatePanel({
       });
     }
     return list;
-  }, [visibleParts, hideFail, onlyWishlist, wishlist, aiPickedPartIds, q]);
+  }, [visibleParts, hideFail, onlyWishlist, wishlist, aiPickedPartIds, q, showAllCandidates]);
+
+  // 추천만 보여주는 중인가 — 헤더 문구와 '전체 목록' 버튼의 조건이자, 무한스크롤을 멈추는 조건이다.
+  const showingAiPicksOnly = aiPickedPartIds.length > 0 && !q && !showAllCandidates;
+  // 추천 중 아직 목록에 실리지 않은 개수(다음 장을 당겨 오는 중이면 0으로 수렴한다).
+  const missingPickCount = showingAiPicksOnly
+    ? aiPickedPartIds.filter((partId) => !loadedPartIds.has(partId)).length
+    : 0;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -281,7 +301,9 @@ export function SlotCandidatePanel({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || !hasNextPage) {
+    // 추천만 보여주는 동안은 목록이 짧아 센티넬이 늘 보인다 — 그대로 두면 화면에 뜨지도 않을
+    // 전체 카탈로그를 뒤에서 계속 당겨 온다. 추천을 찾는 데 필요한 만큼은 위 이펙트가 당긴다.
+    if (!sentinel || !hasNextPage || showingAiPicksOnly) {
       return;
     }
     const observer = new IntersectionObserver((entries) => {
@@ -291,7 +313,7 @@ export function SlotCandidatePanel({
     });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, showingAiPicksOnly]);
 
   const commitPart = async (part: PartRow) => {
     setCommitError(null);
@@ -510,6 +532,27 @@ export function SlotCandidatePanel({
       {commitError ? (
         <div data-testid="candidate-commit-error" className="mx-4 mt-3 shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
           {commitError}
+        </div>
+      ) : null}
+
+      {/* 챗봇에게 추천을 받아 열린 창은 추천만 보여준다 — 전체 카탈로그가 함께 깔리면
+          "추천 창"이 아니라 "부품 목록 창"으로 읽힌다. 전체는 눌러야 펼쳐진다. */}
+      {aiPickedPartIds.length > 0 && !q ? (
+        <div data-testid="candidate-ai-picks-banner" className="shrink-0 border-b border-commerce-line bg-blue-50/60 px-4 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 text-xs font-black text-brand-blue">
+              챗봇이 고른 {slot.label} 추천 {aiPickedPartIds.length}개
+              {missingPickCount > 0 ? <span className="ml-1 font-bold text-slate-500">· 불러오는 중…</span> : null}
+            </div>
+            <button
+              type="button"
+              data-testid="candidate-toggle-all"
+              onClick={() => setShowAllCandidates((open) => !open)}
+              className="shrink-0 rounded-md border border-commerce-line bg-white px-2 py-1 text-xs font-bold text-slate-600 transition hover:border-commerce-ink hover:text-commerce-ink"
+            >
+              {showAllCandidates ? '추천만 보기' : `전체 ${slot.label} 목록 보기`}
+            </button>
+          </div>
         </div>
       ) : null}
 
