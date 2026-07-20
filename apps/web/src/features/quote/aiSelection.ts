@@ -277,6 +277,8 @@ export type AiChatMessage = {
   supportGuidance?: AiSupportGuidance;
   warnings?: string[];
   quickReplies?: string[];
+  /** 이 칩이 무엇을 뜻하는지. ROUTE_CHOICE면 "상품 하나 고르기"라서 다음 요청에 출처를 되보낸다. */
+  quickReplyKind?: AiQuickReplyKind;
   /** RAM/SSD처럼 다중 상품을 허용하는 구체 추천 칩의 직접 견적 추가 메타데이터. */
   quickReplyCommands?: AiQuickReplyCommand[];
 };
@@ -338,6 +340,11 @@ export type AiBuildChatRequest = {
   assessmentContext?: AiAssessmentContext;
   /** 직전 되묻기(clarification)에 대한 답변임을 알리는 에코 — 서버가 원 요청과 합성한다. */
   clarificationContext?: { originalMessage: string };
+  /**
+   * 이 message가 사용자가 직접 친 문장이 아니라 되묻기 칩에서 온 것임을 알리는 표식.
+   * ROUTE_CHOICE면 서버는 상품명 어휘를 해석하지 않고 그 턴을 상품 이동으로 확정한다.
+   */
+  quickReplySource?: AiQuickReplyKind;
 };
 
 export type AiBoardFocus = {
@@ -345,6 +352,9 @@ export type AiBoardFocus = {
   categories: PartCategory[];
   label: string;
 };
+
+/** 칩이 무엇을 뜻하는지. ROUTE_CHOICE = 후보 상품 중 하나 고르기(상세 이동 후보). */
+export type AiQuickReplyKind = 'ROUTE_CHOICE';
 
 /** 답변이 "이동할게요"라고 약속한 화면. 서버가 실제 상품·카테고리로 해상한 내부 경로만 담긴다. */
 export type AiChatNavigationAction = {
@@ -365,6 +375,8 @@ export type AiBuildChatResponse = {
   warnings?: string[];
   /** 모호 요청 되묻기 시 함께 오는 선택지 칩 — 그 자체로 완전한 프롬프트다. */
   quickReplies?: string[];
+  /** quickReplies가 무엇을 뜻하는 칩인지. ROUTE_CHOICE = 상품 하나 고르기(상세 이동 후보). */
+  quickReplyKind?: AiQuickReplyKind;
   /**
    * 구체 RAM/SSD 추천 칩의 직접 견적 추가 명령. 일반 자연어 변경 요청은 이 필드를 쓰지 않고
    * 기존 변경 미리보기 흐름을 유지한다.

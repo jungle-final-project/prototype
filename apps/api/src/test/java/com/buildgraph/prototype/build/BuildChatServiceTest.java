@@ -494,6 +494,43 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void routeChoiceChipIsTreatedAsAProductSelectionNotANewRequest() {
+        // 칩 라벨은 DB 상품명 전문이라 "게임PC"·"포함" 같은 어휘가 섞여 있다.
+        // 표식 없이 문장만 읽으면 견적 추천으로 새어, 상품을 고르라는 질문에 견적 카드가 나온다.
+        String product = "게임PC 조립용 메인보드 B850M 팬 1개 포함";
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        when(jdbcTemplate.queryForList(anyString(), eq(product), eq(product)))
+                .thenReturn(List.of(Map.of(
+                        "id", "11111111-1111-4111-8111-111111111111",
+                        "category", "MOTHERBOARD",
+                        "name", product,
+                        "manufacturer", "TEST")));
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        BuildChatService service = new BuildChatService(
+                jdbcTemplate,
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                cacheService
+        );
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", product + " 상세페이지로 이동해",
+                "quickReplySource", "ROUTE_CHOICE"
+        ));
+
+        assertThat(response.get("actions")).asList()
+                .singleElement()
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .satisfies(action -> assertThat(action.get("payload"))
+                        .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                        .containsEntry("route", "/parts/11111111-1111-4111-8111-111111111111"));
+        assertThat(response.get("builds")).asList().isEmpty();
+        verify(aiChatEngine, never()).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
+    }
+
+    @Test
     void exactProductNameNavigationResolvesWithoutCallingTheLlm() {
         // 정확한 풀 상품명 이동은 DB 한 번이면 끝난다 — LLM을 태우면 느리고, LLM이 흔들리면 이동이 죽는다.
         String query = "AMD 라이젠9-6세대 9950X3D 그래니트 릿지 정품(멀티팩)";

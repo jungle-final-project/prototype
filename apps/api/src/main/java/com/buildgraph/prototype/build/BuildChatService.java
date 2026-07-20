@@ -288,8 +288,12 @@ public class BuildChatService {
             previousBody.put("message", clarificationOriginal);
             previousIntentDecision = intentRouter.decide(previousBody, clarificationOriginal);
         }
+        // 칩은 직전 되묻기의 "답"이 아니라 "선택"이다 — 원문("'9800X3D'에 해당하는 상품이 2개예요…")과
+        // 합성하면 상품명이 이전 질문에 묻혀 이동이 통째로 삼켜진다. 카테고리 어휘가 없는 상품명
+        // ("Noctua NH-D15 G2", "DeepCool AK620")은 inferCategory 폴백으로도 안 걸리므로 표식으로 끊는다.
         boolean selfContainedClarificationReply = clarificationFollowUp
-                && isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision);
+                && (BuildChatIntentRouter.isRouteChoiceSelection(rawBody)
+                        || isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision));
         boolean mergedClarificationReply = clarificationFollowUp && !selfContainedClarificationReply;
         Map<String, Object> body;
         String message;
@@ -473,7 +477,10 @@ public class BuildChatService {
         if (partRouteResolver != null && intentDecision.intent() == BuildChatIntent.UNSUPPORTED) {
             Optional<PartRouteResolver.ResolvedRoute> fastRoute;
             try {
-                fastRoute = partRouteResolver.resolveFastRoute(message, text(body.get("selectedCategory")));
+                fastRoute = partRouteResolver.resolveFastRoute(
+                        message,
+                        text(body.get("selectedCategory")),
+                        BuildChatIntentRouter.isRouteChoiceSelection(body));
             } catch (RuntimeException error) {
                 // 이동 해상은 부가 기능이다 — DB가 흔들려도 대화를 끊지 않고 LLM 경로로 넘긴다.
                 log.warn("Build Chat deterministic route resolution failed, falling back to LLM path", error);
@@ -645,6 +652,16 @@ public class BuildChatService {
         }
         BuildChatGuardStats guardStats = new BuildChatGuardStats();
         Map<String, Object> response = responseMap(engineResponse, rawBudgetIntent, guardStats);
+        // "어느 상품인지" 되묻는 턴은 그 자체로 완결이다 — 질문 문구와 후보 칩이 한 짝이라, 아래 후처리
+        // (부품 제약 역제안·용도 예산 칩·폴백 조합·에코)가 하나라도 손대면 상품을 물어 놓고
+        // 예산 조합이나 "조건을 넓혀서 추천해줘" 칩을 보여 주게 된다. 여기서 잘라 낸다.
+        if (!stringList(engineResponse.parsedContext().get("routeChoiceChips")).isEmpty()) {
+            response.put("builds", List.of());
+            buildChatCacheService.storeAsync(body, requestedAiProfile, userId, response);
+            logBuildChatPath("LLM_ROUTE_CHOICE", startedNanos, userId, requestedAiProfile, false, guardStats,
+                    "redisMs=" + redisMs + " engineMs=" + engineMs);
+            return response;
+        }
         if (intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART) {
             List<String> focusCategories = llmBoardFocusCategories(engineResponse.parsedContext(), body);
             if (!focusCategories.isEmpty()) {
@@ -1468,6 +1485,10 @@ public class BuildChatService {
         List<String> routeChoiceChips = stringList(engineResponse.parsedContext().get("routeChoiceChips"));
         if (!routeChoiceChips.isEmpty()) {
             response.put("quickReplies", routeChoiceChips);
+            // 이 칩은 "상품 선택"이라는 뜻을 갖는다. 프론트가 다음 요청에 quickReplySource로 되보내면
+            // 라우터가 상품명 어휘를 읽지 않고 이동으로 확정한다. 라벨 문구는 그대로 둔다 —
+            // 칩 텍스트가 곧 다음 message이고, 사용자가 읽는 문장이기도 하기 때문이다.
+            response.put("quickReplyKind", "ROUTE_CHOICE");
         }
         return response;
     }

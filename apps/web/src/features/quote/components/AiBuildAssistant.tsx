@@ -21,6 +21,7 @@ import {
   mergeAiBuildHistory,
   navigationRouteFrom,
   normalizeAiBuilds,
+  type AiQuickReplyKind,
   normalizeAiRecommendedBuild,
   readAssistantSession,
   recentBuildsForChatContext,
@@ -183,7 +184,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [pendingAutoApplyBuild, setPendingAutoApplyBuild] = useState<AiRecommendedBuild | null>(null);
   const autoApplyBuildRef = useRef<string | null>(null);
   const [runningQuickReplyCommandId, setRunningQuickReplyCommandId] = useState<string | null>(null);
-  const [pendingSubmit, setPendingSubmit] = useState<{ text: string; assessmentContext?: AiAssessmentContext } | null>(null);
+  const [pendingSubmit, setPendingSubmit] = useState<{
+    text: string;
+    assessmentContext?: AiAssessmentContext;
+    quickReplySource?: AiQuickReplyKind;
+  } | null>(null);
   const [centerScrollbar, setCenterScrollbar] = useState<CenterScrollbarState>({
     canScroll: false,
     visible: false,
@@ -404,7 +409,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     if (!pendingSubmit || isSending) return;
     const submission = pendingSubmit;
     setPendingSubmit(null);
-    void sendMessage(submission.text, submission.assessmentContext);
+    void sendMessage(submission.text, submission.assessmentContext, submission.quickReplySource);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSubmit, isSending]);
 
@@ -417,7 +422,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     await sendMessage(prompt);
   }
 
-  async function sendMessage(rawPrompt: string, assessmentContext?: AiAssessmentContext) {
+  async function sendMessage(
+    rawPrompt: string,
+    assessmentContext?: AiAssessmentContext,
+    quickReplySource?: AiQuickReplyKind
+  ) {
     const nextPrompt = rawPrompt.trim();
     if (!nextPrompt || isSending || applyingBuildId) return;
 
@@ -510,7 +519,12 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           ? { surface: 'SELF_QUOTE', capabilities: ['BOARD_PART_FOCUS'] }
           : { surface: 'HOME', capabilities: [] },
         assessmentContext,
-        clarificationContext: pendingClarification ?? undefined
+        // 칩은 직전 질문에 대한 "답"이 아니라 "선택"이다 — 원문 에코를 함께 보내면 서버가 두 문장을
+        // 합성해 상품명이 묻힌다. 서버에도 같은 가드가 있지만 보내지 않는 쪽이 계약상 정확하다.
+        clarificationContext: quickReplySource === 'ROUTE_CHOICE'
+          ? undefined
+          : (pendingClarification ?? undefined),
+        quickReplySource
       });
       const boardFocus = normalizeBoardFocus(response.boardFocus);
       if (boardFocus && onBoardFocus) {
@@ -542,6 +556,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         supportGuidance: response.supportGuidance ?? undefined,
         warnings: response.warnings ?? [],
         quickReplies: response.quickReplies ?? undefined,
+        quickReplyKind: response.quickReplyKind ?? undefined,
         quickReplyCommands: response.quickReplyCommands ?? undefined
       };
       const nextSession = {
@@ -709,10 +724,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const handleQuickReply = useCallback(async (
     reply: string,
     command?: AiQuickReplyCommand,
-    messageId?: string
+    messageId?: string,
+    quickReplyKind?: AiQuickReplyKind
   ) => {
     if (!command) {
-      setPendingSubmit({ text: reply });
+      setPendingSubmit({ text: reply, quickReplySource: quickReplyKind });
       return;
     }
     const commandId = `${messageId ?? 'quick-reply'}:${command.partId}`;
@@ -1348,7 +1364,12 @@ const ChatMessage = memo(function ChatMessage({
 }: {
   message: AiChatMessage;
   onSelectBuild: (build: AiRecommendedBuild) => void;
-  onQuickReply: (reply: string, command?: AiQuickReplyCommand, messageId?: string) => void;
+  onQuickReply: (
+    reply: string,
+    command?: AiQuickReplyCommand,
+    messageId?: string,
+    quickReplyKind?: AiQuickReplyKind
+  ) => void;
   runningQuickReplyCommandId: string | null;
   applyingBuildId: string | null;
   size?: AiChatMessageSize;
@@ -1448,7 +1469,7 @@ const ChatMessage = memo(function ChatMessage({
                     key={reply}
                     type="button"
                     disabled={isRunning}
-                    onClick={() => onQuickReply(reply, command, message.id)}
+                    onClick={() => onQuickReply(reply, command, message.id, message.quickReplyKind)}
                     className={`${isLarge ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[11px]'} rounded-full border border-slate-200 bg-white font-black text-slate-600 shadow-sm transition hover:border-[#de6c2d] hover:text-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#de6c2d]/15 disabled:cursor-wait disabled:opacity-60`}
                   >
                     {isRunning ? '추가 중...' : reply}

@@ -63,8 +63,16 @@ public class PartRouteResolver {
     }
 
     public Optional<ResolvedRoute> resolveFastRoute(String message, String selectedCategory) {
+        return resolveFastRoute(message, selectedCategory, false);
+    }
+
+    /**
+     * @param intentAlreadyKnown 이동 의도가 문장 밖에서 확정된 경우(되묻기 칩 선택). 이때는 어휘 게이트를 건너뛴다 —
+     *                           칩 라벨은 DB 상품명 전문이라 "추천"·"포함" 같은 말이 섞여 게이트에 걸릴 수 있다.
+     */
+    public Optional<ResolvedRoute> resolveFastRoute(String message, String selectedCategory, boolean intentAlreadyKnown) {
         String normalized = normalizeCommand(message);
-        if (!hasProductRouteIntent(normalized) || hasActionMutationIntent(normalized)) {
+        if (!intentAlreadyKnown && (!hasProductRouteIntent(normalized) || hasActionMutationIntent(normalized))) {
             return Optional.empty();
         }
         String category = firstText(categoryFrom(selectedCategory), inferCategory(message));
