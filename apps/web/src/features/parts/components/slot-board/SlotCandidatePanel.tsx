@@ -50,6 +50,11 @@ type SlotCandidatePanelProps = {
   onUpdateQuantity: (partId: string, quantity: number) => void;
   isMutating: boolean;
   placement?: 'board-overlay';
+  /**
+   * 패널을 열 때 미리 채워둘 검색어. AI가 "'9800X3D'를 하나로 특정하지 못했으니 목록에서 확인해 주세요"라고
+   * 답하며 보낼 때, 그 상품명으로 걸러진 목록에 도착해야 안내가 말이 된다.
+   */
+  initialSearch?: string;
 };
 
 export function SlotCandidatePanel({
@@ -60,11 +65,12 @@ export function SlotCandidatePanel({
   onRemoveItem,
   onUpdateQuantity,
   isMutating,
-  placement = 'board-overlay'
+  placement = 'board-overlay',
+  initialSearch = ''
 }: SlotCandidatePanelProps) {
   const [sort, setSort] = useState<PartSearchParams['sort']>('price_asc');
-  const [searchInput, setSearchInput] = useState('');
-  const [q, setQ] = useState('');
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [q, setQ] = useState(initialSearch);
   const [manufacturer, setManufacturer] = useState('');
   const [manufacturerOptions, setManufacturerOptions] = useState<string[]>([]);
   const [minPriceInput, setMinPriceInput] = useState('');
@@ -145,9 +151,10 @@ export function SlotCandidatePanel({
   }, [minPriceInput, maxPriceInput]);
 
   // 다른 슬롯(카테고리)으로 넘어가면 검색·필터를 초기화한다.
+  // 이 이펙트는 마운트 때도 돌기 때문에, AI가 넘겨준 검색어는 빈 값이 아니라 여기서 다시 심어야 살아남는다.
   useEffect(() => {
-    setSearchInput('');
-    setQ('');
+    setSearchInput(initialSearch);
+    setQ(initialSearch);
     setManufacturer('');
     setManufacturerOptions([]);
     setMinPriceInput('');
@@ -158,7 +165,7 @@ export function SlotCandidatePanel({
     setOnlyWishlist(false);
     setQuickViewPart(null);
     setCommitError(null);
-  }, [slot.category]);
+  }, [slot.category, initialSearch]);
   const isMulti = isMultiItemCategory(slot.category);
   const selectedPartIds = new Set(draftItems.map((item) => item.partId));
   // 교체 성능 비교: CPU·GPU 슬롯에 현재 부품이 있으면, 후보로 바꿨을 때 성능 변화를 챗봇에 물어본다.
