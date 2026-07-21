@@ -170,7 +170,7 @@ XGBoost reranker는 Build Chat에서 shadow scoring만 수행하고, 홈 하단 
 | `/parts` | 2번 | 5번 | `GET /api/parts`, `GET /api/quote-drafts/current`, `PUT/PATCH/DELETE /api/quote-drafts/current/items/{partId}`, `GET /api/parts/{id}/price-history` |
 | `/checkout` | 2번 | 1번, 5번 | `GET /api/quote-drafts/current`, `POST /api/build-graphs/resolve`, `POST /api/assembly-requests` |
 | `/checkout/offers/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/offers/{offerId}/select` |
-| `/checkout/payment/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/payments/confirm-virtual` |
+| `/checkout/payment/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/payments/attempts`, `POST /api/payments/attempts/{id}/mock-result`, `POST /api/payments/attempts/{id}/complete`, `GET /api/users/me/points`, `POST /api/assembly-requests/{id}/payments/points/confirm` |
 | `/checkout/complete/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}` |
 | `/my/assembly-requests` | 2번 | 1번, 5번 | `GET /api/assembly-requests` |
 | `/my/assembly-requests/:requestId` | 2번 | 1번, 5번 | `GET /api/assembly-requests/{id}`, `POST /api/assembly-requests/{id}/cancel` |
