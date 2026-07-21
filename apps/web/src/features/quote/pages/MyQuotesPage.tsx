@@ -1139,7 +1139,7 @@ function HoverRevealText({
       <span className={`block min-w-0 ${className}`}>{text}</span>
       <span
         role="tooltip"
-        className={`pointer-events-none invisible absolute bottom-full z-30 mb-2 w-max max-w-[min(360px,80vw)] rounded-md bg-slate-900 px-3 py-2 text-left text-xs font-semibold leading-5 text-white opacity-0 shadow-xl transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 ${align === 'right' ? 'right-0' : 'left-0'}`}
+        className={`pointer-events-none fixed inset-x-4 bottom-4 z-30 hidden max-w-[calc(100vw-2rem)] rounded-md bg-slate-900 px-3 py-2 text-left text-xs font-semibold leading-5 text-white shadow-xl group-hover:block group-focus:block sm:absolute sm:inset-x-auto sm:bottom-full sm:mb-2 sm:w-max sm:max-w-[min(360px,80vw)] ${align === 'right' ? 'sm:right-0' : 'sm:left-0'}`}
       >
         {fullText}
       </span>

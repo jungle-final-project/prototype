@@ -291,6 +291,8 @@ public class BuildChatService {
         // 칩은 직전 되묻기의 "답"이 아니라 "선택"이다 — 원문("'9800X3D'에 해당하는 상품이 2개예요…")과
         // 합성하면 상품명이 이전 질문에 묻혀 이동이 통째로 삼켜진다. 카테고리 어휘가 없는 상품명
         // ("Noctua NH-D15 G2", "DeepCool AK620")은 inferCategory 폴백으로도 안 걸리므로 표식으로 끊는다.
+        boolean contextualCandidateFollowUp = clarificationFollowUp
+                && referencesPriorRecommendationCandidate(normalizeCommand(rawMessage));
         boolean selfContainedClarificationReply = clarificationFollowUp
                 && (BuildChatIntentRouter.isRouteChoiceSelection(rawBody)
                         || isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision));
@@ -351,6 +353,11 @@ public class BuildChatService {
         }
         if (intentDecision.intent() == BuildChatIntent.EXPLAIN_BUILD_SCORE) {
             Map<String, Object> response = buildScoreExplanationResponse(body, message, user, intentDecision);
+            if (mergedClarificationReply) {
+                attachFollowUpContext(response, message);
+            } else if (contextualCandidateFollowUp) {
+                attachFollowUpContext(response, clarificationOriginal + " " + rawMessage);
+            }
             logBuildChatPath("LIVE_BUILD_ASSESSMENT", startedNanos, userId, SCORE_EXPLANATION_PROFILE, false, BuildChatGuardStats.empty());
             return response;
         }
@@ -465,7 +472,12 @@ public class BuildChatService {
         var cachedResponse = buildChatCacheService.lookup(body, requestedAiProfile, userId);
         long redisMs = elapsedMs(stageStartNanos);
         if (cachedResponse.isPresent()) {
-            Map<String, Object> response = cachedResponse.get();
+            // 캐시 구현이나 테스트 대역이 불변 Map을 반환할 수 있다. 후속 문맥을 붙이더라도
+            // 캐시 원본 payload 자체를 바꾸지 않도록 요청별 복사본만 수정한다.
+            Map<String, Object> response = new LinkedHashMap<>(cachedResponse.get());
+            if (mergedClarificationReply && shouldPreserveMergedTurnContext(response)) {
+                attachFollowUpContext(response, message);
+            }
             logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs);
             return withConversationTransition(response, recommendationConversationTransition);
@@ -573,10 +585,13 @@ public class BuildChatService {
                 : Optional.<Map<String, Object>>empty();
         long semanticMs = elapsedMs(stageStartNanos);
         if (semanticCachedResponse.isPresent()) {
-            Map<String, Object> response = semanticCachedResponse.get();
+            Map<String, Object> response = new LinkedHashMap<>(semanticCachedResponse.get());
             // 배포 전에 저장된 행에는 아직 이동 경로가 남아 있을 수 있다(TTL 만료 전까지).
             // 다른 질문에 실려 화면을 끌고 가지 않도록 읽는 쪽에서도 한 번 더 벗겨낸다.
             response.remove("actions");
+            if (mergedClarificationReply && shouldPreserveMergedTurnContext(response)) {
+                attachFollowUpContext(response, message);
+            }
             logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return withConversationTransition(response, recommendationConversationTransition);
@@ -776,7 +791,8 @@ public class BuildChatService {
         }
         alignBuildCountMessage(response);
         ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
-        if (shouldPreserveSuccessfulTurnContext(response)) {
+        if ((mergedClarificationReply && shouldPreserveMergedTurnContext(response))
+                || shouldPreserveSuccessfulTurnContext(response)) {
             attachFollowUpContext(response, message);
         }
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
@@ -994,6 +1010,17 @@ public class BuildChatService {
                 .toList();
     }
 
+    /**
+     * 부품 후보 패널을 띄울 수 있는 클라이언트인가. 있으면 추천 상품 나열을 말풍선이 아니라 패널이 맡는다.
+     * BOARD_PART_FOCUS와 달리 surface를 보지 않는다 — 홈에서 물어도 셀프견적으로 옮겨 패널을 열기 때문이다.
+     * 이 신호가 없으면(구버전 프론트·외부 호출) 종전 TOP 목록 문장이 그대로 나가야 한다.
+     */
+    private static boolean supportsPartCandidatePanel(Map<String, Object> body) {
+        Map<String, Object> uiContext = objectMap(body.get("uiContext"));
+        return stringList(uiContext.get("capabilities")).stream()
+                .anyMatch(capability -> "PART_CANDIDATE_PANEL".equalsIgnoreCase(capability));
+    }
+
     private static boolean supportsBoardPartFocus(Map<String, Object> body) {
         Map<String, Object> uiContext = objectMap(body.get("uiContext"));
         if (!"SELF_QUOTE".equalsIgnoreCase(text(uiContext.get("surface")))) {
@@ -1048,6 +1075,15 @@ public class BuildChatService {
         }
         return objectMaps(response.get("builds")).stream()
                 .anyMatch(build -> stringList(build.get("badges")).contains("DRAFT_EDIT_PREVIEW"));
+    }
+
+    private static boolean shouldPreserveMergedTurnContext(Map<String, Object> response) {
+        if (response == null || response.get("clarification") != null) {
+            return false;
+        }
+        // 화면 이동은 그 자리에서 끝나는 명령이다. 반면 추천 설명·비교·후보 보완은 다음 짧은
+        // 질문이 직전 대상에 의존하므로 합성된 문맥을 다시 내려 3턴 이상 유지한다.
+        return response.get("actions") == null && response.get("boardFocus") == null;
     }
 
     // 종단 칩 플로어: 카드·칩·되묻기·시뮬레이션이 전부 빈 dead-end 응답에는 다음 행동 칩만 보강한다
@@ -1906,6 +1942,16 @@ public class BuildChatService {
     }
 
     private List<Map<String, Object>> simulationFpsEvidence(PartCandidate cpu, PartCandidate gpu, String message) {
+        return simulationFpsEvidence(cpu, gpu, gameKeyFromText(message), resolutionFromText(message));
+    }
+
+    /**
+     * 게임·해상도를 문장에서 다시 뽑지 않고 그대로 받는다. "더 부드럽게 바꿔줘"처럼 게임·해상도가
+     * 문장에 없고 화면 문맥에서 오는 요청도 같은 조회를 쓸 수 있어야 한다 — 문장을 넘기면
+     * game_key 필터가 통째로 빠져 LIMIT 4에 엉뚱한 행이 채워지고 근거를 못 찾는다.
+     */
+    private List<Map<String, Object>> simulationFpsEvidence(
+            PartCandidate cpu, PartCandidate gpu, String gameKey, String resolution) {
         if (gpu == null) {
             return List.of();
         }
@@ -1916,8 +1962,6 @@ public class BuildChatService {
         String cpuClass = hardwareClass(cpu);
         Long gpuId = gpu.internalId() == null ? -1L : gpu.internalId();
         Long cpuId = cpu == null || cpu.internalId() == null ? -1L : cpu.internalId();
-        String gameKey = gameKeyFromText(message);
-        String resolution = resolutionFromText(message);
         List<Object> params = new ArrayList<>();
         params.add(gpuId);
         params.add(gpuClass);
@@ -3369,7 +3413,7 @@ public class BuildChatService {
                 response.put("message", explicitSelection.label() + " 조건을 만족하는 " + categoryLabel
                         + " " + budgetPrefix + "추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-                setPartRecommendationQuickReplies(response, constraint.category(), options);
+                setPartRecommendationQuickReplies(body, response, constraint.category(), options);
             }
             return;
         }
@@ -3390,6 +3434,23 @@ public class BuildChatService {
             boolean valueFocused = containsAnyNormalized(normalizedMessage, "가성비", "가격대비");
             boolean lowestPriceFocused = containsAnyNormalized(
                     normalizedMessage, "최저가", "가장싼", "제일싼", "저렴한", "가격낮은");
+            // 기준이 하나도 없는데 그 자리에 이미 부품이 있으면 나열하지 않고 되묻는다.
+            // 후보 정렬은 호환성과 가격만 보고 성능은 보지 않아, 그냥 나열하면 담긴 RTX 5080보다
+            // 못한 5060 Ti가 "현재 견적과 호환되는 추천"으로 올라온다 — 사용자는 그걸 추천 근거로 읽는다.
+            // 슬롯이 비어 있으면 종전대로 나열한다(채우는 게 목적이라 기준이 없어도 도움이 된다).
+            Map<String, Object> currentCategoryItem = draftItemInCategory(body, constraint.category());
+            if (isBarePartRecommendationRequest(message) && currentCategoryItem != null) {
+                respondAskRecommendationCriteria(response, warnings, constraint.category(), categoryLabel,
+                        currentCategoryItem, message);
+                return;
+            }
+            // 여기까지 왔다는 건 수치 스펙도 예산도 하나도 못 뽑았다는 뜻이다. 그 상태에서 우리가
+            // 다루지 못하는 조건이 문장에 있으면, 그 조건을 무시한 목록을 "골랐다"고 내놓지 않는다.
+            String unsupportedQualifier = unsupportedRecommendationQualifier(message);
+            if (unsupportedQualifier != null) {
+                respondUnsupportedCriteria(response, warnings, categoryLabel, unsupportedQualifier, message);
+                return;
+            }
             List<BuildChatFeasibilityService.PartOption> orderedOptions = valueFocused
                     ? feasibilityService.bestValueFirst(
                             constraint.category(), PART_RECOMMENDATION_CANDIDATE_POOL_SIZE)
@@ -3434,23 +3495,34 @@ public class BuildChatService {
                     ? "고성능 요청을 기준으로 현재 견적에서 자동 검증을 통과한 " + categoryLabel + " 후보 TOP"
                             + options.size() + "입니다. 상위 후보라도 현재 조합에서 장착·전력·호환 검사를 통과하지 못하면 제외했습니다. "
                             + topListText(options) + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요."
-                    : "추가 조건이 없어 현재 견적과 호환되는 " + categoryLabel + " 대표 후보 TOP"
-                            + options.size() + "를 보여드립니다. " + topListText(options)
+                    // "추가 조건이 없어"로 시작하면 사용자가 뭘 덜 말해서 어쩔 수 없이 보여준다는 변명으로 읽힌다.
+                    // 실제로는 내부 자산에서 호환까지 확인해 고른 추천이다 — 그렇게 말한다.
+                    : "내부 자산 기준으로 현재 견적과 호환되는 " + categoryLabel + " 추천 TOP"
+                            + options.size() + "입니다. " + topListText(options)
                             + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.";
             response.put("message", listing);
-            setPartRecommendationQuickReplies(response, constraint.category(), options);
+            setPartRecommendationQuickReplies(body, response, constraint.category(), options);
             return;
         }
 
         // A. 예산만 명시("10만원짜리 램") — 예산 내 최상 스펙 TOP3를 나열하고 담기 칩을 준다.
         if (!constraint.hasSpec()) {
             int budget = constraint.maxBudgetWon();
+            // "150만원 정도"면 그 가격대를 겨냥한다 — 상한으로만 읽으면 92만원짜리를 주면서
+            // "예산 안"이라고 답하게 된다. 밴드 안에 후보가 없으면 상한 조회로 되돌아간다.
+            boolean targetBand = constraint.targetsBudgetBand();
+            List<BuildChatFeasibilityService.PartOption> pool = targetBand
+                    ? feasibilityService.bestWithinBudgetBand(constraint.category(), budget, quantity,
+                            PART_RECOMMENDATION_CANDIDATE_POOL_SIZE)
+                    : List.of();
+            if (pool.isEmpty()) {
+                targetBand = false;
+                pool = feasibilityService.bestUnderBudget(constraint.category(), budget, quantity,
+                        PART_RECOMMENDATION_CANDIDATE_POOL_SIZE);
+            }
             List<BuildChatFeasibilityService.PartOption> options = compatibleRecommendationOptions(
-                    user,
-                    constraint.category(),
-                    feasibilityService.bestUnderBudget(constraint.category(), budget, quantity,
-                            PART_RECOMMENDATION_CANDIDATE_POOL_SIZE),
-                    PART_RECOMMENDATION_LIMIT);
+                    user, constraint.category(), pool, PART_RECOMMENDATION_LIMIT);
+            String budgetPhrase = targetBand ? " 안팎 " : " 이내 ";
             if (options.isEmpty()) {
                 Optional<BuildChatFeasibilityService.PartOption> cheapestAny = compatibleRecommendationOptions(
                         user,
@@ -3460,7 +3532,7 @@ public class BuildChatService {
                                 PART_RECOMMENDATION_CANDIDATE_POOL_SIZE),
                         1).stream().findFirst();
                 StringBuilder textBuilder = new StringBuilder()
-                        .append(formatBudgetLabel(budget)).append(" 이내 ").append(categoryLabel)
+                        .append(formatBudgetLabel(budget)).append(budgetPhrase).append(categoryLabel)
                         .append(" 부품을 내부 자산에서 찾지 못했습니다.");
                 cheapestAny.ifPresent(any -> textBuilder.append(" 보유 최저가는 ").append(any.name())
                         .append(" ").append(String.format("%,d원", any.unitPrice())).append("입니다."));
@@ -3469,10 +3541,10 @@ public class BuildChatService {
                 response.put("warnings", distinct(warnings));
                 response.put("quickReplies", List.of(categoryLabel + " 최저가로 추천해줘"));
             } else {
-                response.put("message", formatBudgetLabel(budget) + " 이내 " + categoryLabel
+                response.put("message", formatBudgetLabel(budget) + budgetPhrase + categoryLabel
                         + " 추천 TOP" + options.size() + "입니다. " + topListText(options)
                         + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-                setPartRecommendationQuickReplies(response, constraint.category(), options);
+                setPartRecommendationQuickReplies(body, response, constraint.category(), options);
             }
             return;
         }
@@ -3564,7 +3636,7 @@ public class BuildChatService {
         response.put("message", "조건(" + specSummary + ")을 만족하는 " + categoryLabel
                 + " 추천 TOP" + top.size() + "입니다. " + topListText(top)
                 + " 담고 싶은 부품이 있으면 아래 버튼을 누르거나 말씀해 주세요.");
-        setPartRecommendationQuickReplies(response, constraint.category(), top);
+        setPartRecommendationQuickReplies(body, response, constraint.category(), top);
     }
 
     /**
@@ -4146,15 +4218,177 @@ public class BuildChatService {
     }
 
     /**
+     * 아직 추천 기준으로 반영하지 못하는 조건들. 파싱에 실패하면 조용히 기본 정렬(호환·가격)로
+     * 떨어지는데 문구는 "골랐다"고 말해, 사용자는 조건이 반영된 줄 안다 —
+     * "발열 적은 GPU"에 발열 1등 카드가, "롤 잘 돌아가는 GPU"에 700만원 카드가 나온다.
+     * 넓은 휴리스틱 대신 못 다루는 것만 이름으로 적어 오탐(잘 되는 문장까지 되묻기)을 막는다.
+     */
+    private static final List<CategoryKeywords> UNSUPPORTED_RECOMMENDATION_QUALIFIERS = List.of(
+            new CategoryKeywords("소음", List.of("조용", "정숙", "무소음", "소음")),
+            new CategoryKeywords("발열", List.of("발열", "저발열", "온도", "시원", "쿨링좋")),
+            new CategoryKeywords("크기", List.of("작은", "슬림", "미니", "컴팩트")),
+            new CategoryKeywords("디자인", List.of("이쁜", "예쁜", "예쁘", "이쁘", "led", "rgb", "화이트감성")),
+            new CategoryKeywords("게임 성능", List.of(
+                    "롤", "리그오브레전드", "배그", "배틀그라운드", "발로란트", "오버워치",
+                    "로스트아크", "사이버펑크", "게임용", "게이밍용", "4k", "qhd", "fhd", "프레임", "fps"))
+    );
+
+    /** 문장에 들어 있는, 아직 반영하지 못하는 조건 이름. 없으면 null. */
+    static String unsupportedRecommendationQualifier(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        for (CategoryKeywords qualifier : UNSUPPORTED_RECOMMENDATION_QUALIFIERS) {
+            for (String keyword : qualifier.keywords()) {
+                if (normalized.contains(keyword)) {
+                    return qualifier.category();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * "gpu 추천해줘"처럼 카테고리와 추천 동사 말고는 아무 기준도 없는 요청인가.
+     * 되묻기는 이 좁은 경우에만 한다 — "통풍 좋은 케이스 추천해줘"는 방향이 있고,
+     * "램 수량 두 개로 바꿔줘"는 애초에 추천 요청이 아니다. 남는 말이 있으면 종전대로 나열한다.
+     */
+    static boolean isBarePartRecommendationRequest(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        if (firstKeywordIndex(normalized, List.of("추천", "후보", "골라")) < 0) {
+            return false;
+        }
+        String remainder = normalized;
+        for (CategoryKeywords category : RECOMMENDATION_TARGET_CATEGORIES) {
+            for (String keyword : category.keywords()) {
+                remainder = remainder.replace(keyword, " ");
+            }
+        }
+        // 추천 동사와 붙는 조사·어미만 걷어낸다. 그러고도 남는 말이 있으면 사용자가 준 기준이다.
+        remainder = remainder
+                .replaceAll("추천|후보|골라|해\\s*줘|해\\s*주세요|해줄래|알려\\s*줘|보여\\s*줘|주세요|좀|줘", " ")
+                .replaceAll("[의를을이가는은도만에서에]", " ")
+                .replaceAll("[\\s\\p{Punct}]+", "");
+        return remainder.isEmpty();
+    }
+
+    /**
+     * "5080보다 좋은", "5080 이상"처럼 모델명이 고를 상품이 아니라 넘어야 할 기준선인 표현.
+     * '이상'은 예산 하한 표현이기도 하므로(150만원 이상) 숫자 바로 뒤에 붙은 경우만 본다 —
+     * "150만원이상"은 사이에 '만원'이 끼어 이 패턴에 걸리지 않는다.
+     */
+    private static final Pattern MODEL_UPGRADE_REFERENCE =
+            Pattern.compile("(?i)(보다(좋|나은|나아|높|센|빠|위|상위|성능|더))|(\\d{3,5}[a-z0-9]*이상)");
+
+    static boolean comparativeUpgradeReference(String message) {
+        return MODEL_UPGRADE_REFERENCE.matcher(normalizeCommand(message)).find();
+    }
+
+    /** 현재 견적에서 그 카테고리에 담겨 있는 부품. 없으면 null. */
+    private static Map<String, Object> draftItemInCategory(Map<String, Object> body, String category) {
+        if (category == null) {
+            return null;
+        }
+        for (Map<String, Object> item : objectMaps(objectMap(body.get("currentQuoteDraft")).get("items"))) {
+            if (category.equalsIgnoreCase(text(item.get("category")))) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 기준 없는 부품 추천에 되묻는다. 칩은 실제로 다른 결과를 내는 경로만 제안한다 —
+     * 누르면 같은 목록이 나오는 칩은 버튼으로 거짓말을 하는 것이다.
+     * 예산 칩은 넣지 않는다: "N만원대/짜리/정도"가 전부 상한으로만 해석돼, 담긴 부품 가격을
+     * 그대로 적어 줘도 그 가격대가 아니라 가장 싼 후보가 돌아온다(실측 확인).
+     */
+    private static void respondAskRecommendationCriteria(
+            Map<String, Object> response,
+            List<String> warnings,
+            String category,
+            String categoryLabel,
+            Map<String, Object> currentItem,
+            String message
+    ) {
+        String currentName = text(currentItem.get("name"));
+        response.put("answerType", "PART");
+        response.put("builds", List.of());
+        response.remove("partRecommendation");
+        response.put("message", (currentName.isBlank()
+                ? "지금 견적에 " + categoryLabel + "가 이미 담겨 있어요. "
+                : "지금 견적에는 " + currentName + "이(가) 담겨 있어요. ")
+                + "어떤 기준으로 골라 드릴까요? 예산이나 방향을 알려주시면 그 기준으로 다시 추천해 드릴게요.");
+        response.put("quickReplies", List.of(
+                "고성능 " + categoryLabel + " 추천해줘",
+                "가성비 " + categoryLabel + " 추천해줘",
+                "제일 저렴한 " + categoryLabel + " 추천해줘"));
+        response.remove("quickReplyCommands");
+        // 다음 짧은 답("150만원")이 원 요청과 합쳐지도록 원문을 에코한다(무상태 후속).
+        response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+        warnings.add("PART_RECOMMENDATION_CRITERIA_MISSING");
+        response.put("warnings", distinct(warnings));
+    }
+
+    /**
+     * 아직 반영하지 못하는 조건에는 그 조건을 무시한 목록 대신 못 한다고 말한다.
+     * "발열 적은 GPU 추천해줘"에 발열 1등 카드를 "골랐다"고 내놓는 것보다,
+     * 못 한다고 말하고 다룰 수 있는 기준을 제안하는 편이 정확하다.
+     */
+    private static void respondUnsupportedCriteria(
+            Map<String, Object> response,
+            List<String> warnings,
+            String categoryLabel,
+            String qualifierLabel,
+            String message
+    ) {
+        response.put("answerType", "PART");
+        response.put("builds", List.of());
+        response.remove("partRecommendation");
+        response.put("message", qualifierLabel + " 기준으로는 아직 " + categoryLabel
+                + "를 골라 드리지 못해요. 예산이나 성능 방향으로 알려주시면 그 기준으로 추천해 드릴게요.");
+        response.put("quickReplies", List.of(
+                "고성능 " + categoryLabel + " 추천해줘",
+                "가성비 " + categoryLabel + " 추천해줘",
+                "제일 저렴한 " + categoryLabel + " 추천해줘"));
+        response.remove("quickReplyCommands");
+        response.put("clarification", MockData.map("missingSlots", List.of(), "originalMessage", message));
+        warnings.add("PART_RECOMMENDATION_CRITERIA_UNSUPPORTED");
+        response.put("warnings", distinct(warnings));
+    }
+
+    /**
      * 부품 후보 칩은 기존 문장형 quickReplies를 유지한다. 다만 RAM/SSD는 여러 상품을 함께 담을 수
      * 있으므로, 프론트가 안전하게 기존 quote draft API를 직접 호출할 수 있는 별도 메타데이터를 함께
      * 내려준다. 단일 카테고리는 기존 미리보기/명시 적용 정책을 유지한다.
      */
     private static void setPartRecommendationQuickReplies(
+            Map<String, Object> body,
             Map<String, Object> response,
             String category,
             List<BuildChatFeasibilityService.PartOption> options
     ) {
+        // 여러 카테고리를 한꺼번에 물으면("케이스랑 파워 추천해줘") 패널로 넘기지 않는다.
+        // 패널은 한 번에 한 카테고리만 열 수 있어, 한쪽만 띄워 놓고 "띄웠어요"라고 답하면
+        // 나머지 한쪽을 물어본 적 없는 것처럼 만든다. 이때는 종전대로 말풍선에 나열한다.
+        // 이 판정은 여기서 한다 — partRecommendation을 싣는 유일한 지점이라 경로마다 새지 않는다.
+        boolean multipleCategories = requestsMultiplePartCategories(String.valueOf(body.get("message")));
+        if (!multipleCategories) {
+            // 추천 결과를 구조화해 함께 내려보낸다. 문장 안의 상품명은 프론트가 다시 파싱할 수 없다 —
+            // 부품 목록 패널이 "AI가 고른 그 순서"로 후보를 띄우려면 partId가 필요하다.
+            response.put("partRecommendation", MockData.map(
+                    "category", category,
+                    "options", options.stream()
+                            .map(option -> MockData.map(
+                                    "partId", option.partId(),
+                                    "name", option.name(),
+                                    "price", option.unitPrice()))
+                            .toList()));
+        }
+        // 패널을 띄울 수 있는 클라이언트에게는 말풍선을 짧게 준다 — 같은 상품 목록이 채팅과 패널에
+        // 두 번 나오면 어느 쪽을 봐야 할지 헷갈린다. 패널이 없는 구버전 클라이언트는 종전 문장 그대로다.
+        if (!multipleCategories && supportsPartCandidatePanel(body)) {
+            response.put("message", "내부 자산 기준으로 고른 " + CATEGORY_LABELS.getOrDefault(category, "부품")
+                    + " 추천 " + options.size() + "개를 부품 목록에 띄웠어요.");
+        }
         List<String> labels = options.stream().map(option -> option.name() + " 견적에 담아줘").toList();
         response.put("quickReplies", labels);
         if (!DIRECT_MULTI_ITEM_QUICK_REPLY_CATEGORIES.contains(category)) {
@@ -4187,6 +4421,12 @@ public class BuildChatService {
     }
 
     private static ExplicitPartSelection explicitPartSelection(String category, String message) {
+        // "5080보다 좋은 GPU 추천해줘"의 5080은 고르라는 상품이 아니라 넘어야 할 기준선이다.
+        // 이걸 상품 지정으로 읽으면 5080 3종을 나열하고, 사용자는 "더 좋은 걸 달라"고 한 답으로
+        // 같은 제품을 받는다. 비교 표현이 있으면 상품 지정을 포기하고 일반 추천 경로로 보낸다.
+        if (comparativeUpgradeReference(message)) {
+            return null;
+        }
         String gpuClass = "GPU".equals(category) ? targetGpuClass(message) : null;
         String modelOrVendor = gpuClass == null ? simulationModelToken(category, message) : null;
         if (gpuClass == null && isGenericPartSpecToken(category, modelOrVendor)) {
@@ -4274,8 +4514,14 @@ public class BuildChatService {
         merged.put("minCapacityGb", capacity);
         merged.put("minVramGb", numberValue(llmConstraint.get("minVramGb")));
         merged.put("minWattageW", wattage);
+        merged.put("wattageMode", wattage == null ? null : wattageConstraintMode(message, wattage));
         merged.put("quantity", numberValue(llmConstraint.get("quantity")));
+        // 예산은 숫자만 뽑지 않고 모드까지 가져온다 — "150만원 정도"(TARGET)와 "100만원 이하"(MAX)는
+        // 다른 요청인데, 여기서 parseBudgetWon만 쓰던 탓에 부품 추천에서는 늘 상한으로 뭉개졌다.
+        // LLM이 직접 maxBudgetWon을 준 경우는 그 자체가 상한이므로 모드를 비운다.
+        Integer llmBudget = numberValue(llmConstraint.get("maxBudgetWon"));
         merged.put("maxBudgetWon", firstNumber(llmConstraint.get("maxBudgetWon"), parseBudgetWon(message)));
+        merged.put("budgetMode", llmBudget != null ? null : budgetIntent(message).mode());
         // 닫힌 속성은 LLM만 구조화한다(서버 키워드 해석 금지) — 값이 있으면 그대로 이어받는다.
         merged.put("coolingType", text(llmConstraint.get("coolingType")));
         merged.put("pcieGeneration", numberValue(llmConstraint.get("pcieGeneration")));
@@ -4444,6 +4690,49 @@ public class BuildChatService {
         return "사무용";
     }
 
+    /** 체감이 달라지는 프레임 구간. "더 부드럽게"는 현재보다 위의 첫 구간을 목표로 삼는다. */
+    private static final int[] SMOOTHNESS_TIERS = { 60, 120, 165, 240 };
+
+    /**
+     * "더 부드럽게"처럼 목표 수치 없이 향상만 요구하는 표현. 화면에 이미 게임·해상도·현재 FPS가
+     * 떠 있으므로 그 문맥으로 목표를 계산한다.
+     */
+    private static final List<String> SMOOTHNESS_INTENT_TERMS = List.of(
+            "부드럽게", "부드러운", "쾌적하게", "프레임올려", "프레임을올려", "프레임높", "fps올려", "fps높", "끊김없");
+
+    /**
+     * 상대 향상으로 읽으면 안 되는 문장. 증상 신고는 AS로 가야 하고, 모니터·주사율 이야기는
+     * GPU 교체가 답이 아니며, 가정형 질문("바꾸면 얼마나 올라?")은 읽기 전용 시뮬레이션이다.
+     */
+    private static final List<String> SMOOTHNESS_INTENT_EXCLUSIONS = List.of(
+            "멈춰", "멈춤", "검은화면", "튕김", "튕겨", "먹통", "블루스크린", "고장",
+            "모니터", "주사율", "화면교체", "디스플레이",
+            "바꾸면", "교체하면", "올리면", "얼마나올라");
+
+    /** 상대 향상 요청인가 — 화면 문맥으로 목표를 계산해 기존 목표 FPS 엔진에 넘길 수 있는 문장. */
+    static boolean requestsSmootherPerformance(String message) {
+        String normalized = normalizeCommand(message);
+        if (containsAnyNormalized(normalized, SMOOTHNESS_INTENT_EXCLUSIONS.toArray(String[]::new))) {
+            return false;
+        }
+        if (!containsAnyNormalized(normalized, SMOOTHNESS_INTENT_TERMS.toArray(String[]::new))) {
+            return false;
+        }
+        // 견적을 바꿔 달라는 요청일 때만 미리보기를 만든다 — 설명·추천 요청은 기존 경로가 답한다.
+        return containsAnyNormalized(normalized,
+                "바꿔", "변경", "교체", "업그레이드", "올려", "높여", "해줘", "보이도록", "되도록");
+    }
+
+    /** 현재 FPS 위의 첫 체감 구간. 이미 최상 구간이면 null. */
+    static Integer nextSmoothnessTier(double currentFps) {
+        for (int tier : SMOOTHNESS_TIERS) {
+            if (currentFps < tier) {
+                return tier;
+            }
+        }
+        return null;
+    }
+
     private Optional<Map<String, Object>> targetFpsGpuPreviewResponse(
             Map<String, Object> body,
             String message
@@ -4456,11 +4745,29 @@ public class BuildChatService {
                 : "평균 " + targetFps + "FPS 이상";
         boolean directChange = containsAnyNormalized(normalized,
                 "바꿔줘", "변경해줘", "교체해줘", "업그레이드해줘", "올려줘", "맞춰줘");
-        if (targetFps == null || !directChange || !"GPU".equals(detectPartCategory(message))) {
+        boolean explicitTarget = targetFps != null && directChange && "GPU".equals(detectPartCategory(message));
+        // 상대 향상("더 부드럽게")은 문장에 GPU도 목표 수치도 없다 — GPU가 지렛대라는 건 엔진이 정한다.
+        boolean relativeTarget = !explicitTarget && requestsSmootherPerformance(message);
+        if (!explicitTarget && !relativeTarget) {
             return Optional.empty();
         }
         String gameKey = gameKeyFromText(message);
         String resolution = resolutionFromText(message);
+        if (relativeTarget) {
+            // 화면에 떠 있는 성능 패널의 게임·해상도가 기준이다. 문장에 적혀 있으면 그쪽이 우선.
+            Map<String, Object> performanceContext = objectMap(objectMap(body.get("uiContext")).get("performance"));
+            if (gameKey == null) {
+                gameKey = gameKeyFromText(text(performanceContext.get("gameQuery")));
+            }
+            if (resolution == null) {
+                resolution = resolutionFromText(text(performanceContext.get("resolution")));
+            }
+            if (gameKey == null || resolution == null) {
+                // 바꿀 견적이 있다는 건 셀프견적 화면이라는 뜻이고 거기엔 성능 패널이 늘 떠 있다.
+                // 그래도 문맥이 비었으면 임의로 정하지 않고 기존 경로에 넘긴다.
+                return Optional.empty();
+            }
+        }
         if (gameKey == null || resolution == null) {
             Map<String, Object> clarification = fastResponse(
                     "GENERAL",
@@ -4509,8 +4816,32 @@ public class BuildChatService {
         boolean namedDifferentFromCurrent = namedGpuClass != null
                 && !namedGpuClass.equals(hardwareClass(currentGpu));
 
-        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, message, gameKey, resolution, stableTarget);
-        if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= targetFps) {
+        FpsTargetEvidence currentEvidence = targetFpsEvidence(currentCpu, currentGpu, gameKey, resolution, stableTarget);
+        if (relativeTarget) {
+            // 목표 수치를 사용자가 주지 않았으므로 현재 FPS 위의 첫 체감 구간을 목표로 삼는다.
+            // 근거가 없으면 "다음 구간"을 정직하게 말할 수 없다 — 지어내지 않고 기존 경로에 넘긴다.
+            if (currentEvidence == null) {
+                return Optional.empty();
+            }
+            targetFps = nextSmoothnessTier(currentEvidence.value());
+            if (targetFps == null) {
+                Map<String, Object> alreadyTop = fastResponse(
+                        "GENERAL",
+                        gameDisplayName(gameKey) + " " + resolution + " 기준 현재 약 "
+                                + formatFps(currentEvidence.value()) + "FPS로, 이미 가장 높은 체감 구간입니다. "
+                                + "더 올릴 여지가 크지 않아 교체 미리보기는 만들지 않았습니다.",
+                        List.of()
+                );
+                alreadyTop.put("quickReplies", List.of("현재 견적 점수 설명해줘", "지금 견적 그대로 둘게"));
+                return Optional.of(alreadyTop);
+            }
+            targetPhrase = "평균 " + targetFps + "FPS 이상";
+        }
+        // 여기서부터 목표는 확정이다 — 아래 후보 루프의 람다가 잡을 수 있도록 final로 고정한다.
+        final int resolvedTargetFps = targetFps;
+        final String resolvedGameKey = gameKey;
+        final String resolvedResolution = resolution;
+        if (!namedDifferentFromCurrent && currentEvidence != null && currentEvidence.value() >= resolvedTargetFps) {
             Map<String, Object> alreadyMet = fastResponse(
                     "GENERAL",
                     currentGpu.name() + "은(는) " + currentEvidence.metricLabel() + " 기준 약 "
@@ -4546,9 +4877,9 @@ public class BuildChatService {
             FpsTargetEvidence evidence = evidenceByGpuClass.computeIfAbsent(
                     candidateClass,
                     ignored -> Optional.ofNullable(targetFpsEvidence(
-                            currentCpu, candidate, message, gameKey, resolution, stableTarget))
+                            currentCpu, candidate, resolvedGameKey, resolvedResolution, stableTarget))
             ).orElse(null);
-            if (evidence == null || evidence.value() < targetFps) {
+            if (evidence == null || evidence.value() < resolvedTargetFps) {
                 continue;
             }
             fpsEligibleCandidateCount += 1;
@@ -4985,15 +5316,18 @@ public class BuildChatService {
         };
     }
 
+    /**
+     * 이 게임·해상도에서의 예상 FPS 근거. 문장이 아니라 게임·해상도 값으로만 조회한다 —
+     * 화면 문맥에서 온 요청("더 부드럽게")도 같은 근거를 써야 하기 때문이다.
+     */
     private FpsTargetEvidence targetFpsEvidence(
             PartCandidate cpu,
             PartCandidate gpu,
-            String message,
             String gameKey,
             String resolution,
             boolean stableTarget
     ) {
-        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, message)) {
+        for (Map<String, Object> row : simulationFpsEvidence(cpu, gpu, gameKey, resolution)) {
             if (!gameKey.equals(text(row.get("game_key"))) || !resolution.equals(text(row.get("resolution")))) {
                 continue;
             }
@@ -5638,6 +5972,15 @@ public class BuildChatService {
             // "그중 드라이버 가능성은?"처럼 단독으로 분류하기 어려운 후속 설명은 기존 문맥을 쓴다.
             case UNSUPPORTED -> false;
         };
+    }
+
+    private static boolean referencesPriorRecommendationCandidate(String normalized) {
+        return containsAnyNormalized(
+                normalized,
+                "첫번째후보", "두번째후보", "세번째후보",
+                "1번후보", "2번후보", "3번후보",
+                "이후보", "그후보", "해당후보", "추천한후보", "추천해준후보"
+        );
     }
 
     // 그래프(드래프트) 기반 견적 완성: 담긴 부품은 고정하고 빈 카테고리만 채운다. LLM 미경유.
@@ -6773,6 +7116,27 @@ public class BuildChatService {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
         Matcher matcher = WATT_PATTERN.matcher(normalized);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
+    private static String wattageConstraintMode(String message, Integer wattage) {
+        if (wattage == null) {
+            return null;
+        }
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        String value = Pattern.quote(String.valueOf(wattage));
+        if (Pattern.compile("(?:최소|적어도|minimum|at\\s+least)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이상|부터|or\\s+more)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MIN";
+        }
+        if (Pattern.compile("(?:최대|maximum|at\\s+most)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이하|이내|안으로|넘지|or\\s+less)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MAX";
+        }
+        return "EXACT";
     }
 
     private List<Map<String, Object>> toolResults(List<PartCandidate> parts, int budgetWon, List<String> warnings) {

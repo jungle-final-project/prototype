@@ -803,6 +803,49 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void candidateAssessmentKeepsTheRecommendationContextForTheNextTurn() {
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildEvaluationService evaluationService = mock(BuildEvaluationService.class);
+        Map<String, Object> assessment = scoreAssessment();
+        when(evaluationService.evaluateCurrentDraft(eq(42L), nullable(Integer.class), nullable(String.class), nullable(String.class)))
+                .thenReturn(new BuildEvaluationService.BuildEvaluation(List.of(), 2_000_000, 2_000_000, List.of(), Map.of(), assessment));
+        when(aiChatEngine.explainBuildAssessment(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST")))
+                .thenReturn(new AiChatEngineResponse(
+                        "현재 구성의 자동 검증 결과를 확인했습니다.",
+                        AiChatIntent.EXPLAIN,
+                        List.of(), List.of(), List.of(), Map.of(), List.of(), List.of(), null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                BuildChatCacheService.disabled(),
+                null,
+                null,
+                null,
+                new BuildChatIntentRouter(),
+                BuildChatSemanticCacheService.disabled(),
+                evaluationService
+        );
+        CurrentUserService.CurrentUser user = new CurrentUserService.CurrentUser(
+                42L, "user-id", "user@example.com", "사용자", "USER", null);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "첫 번째 후보를 적용하면 현재 구성에서 문제가 없는지 설명해줘",
+                "clarificationContext", Map.of("originalMessage", "현재 메인보드에 맞는 CPU 추천해줘"),
+                "currentQuoteDraft", Map.of("items", List.of(Map.of(
+                        "partId", "cpu-current", "category", "CPU", "quantity", 1)))
+        ), user);
+
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry(
+                        "originalMessage",
+                        "현재 메인보드에 맞는 CPU 추천해줘 첫 번째 후보를 적용하면 현재 구성에서 문제가 없는지 설명해줘"
+                );
+    }
+
+    @Test
     void boardLocationFastPathReturnsReadOnlyFocusWithoutCallingLlm() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
@@ -3914,11 +3957,262 @@ class BuildChatServiceTest {
                                 Map.of("coolerType", "AIR", "tdpW", 150))))));
 
         assertThat(response).doesNotContainKey("simulation");
+        // 패널을 못 띄우는 클라이언트(capability 없음)에게는 종전 TOP 목록 문장이 그대로 나간다.
         assertThat(response.get("message")).asString().contains("수랭", "추천 TOP3");
         assertThat(response.get("quickReplies")).asList().containsExactly(
                 "수랭 쿨러 A 견적에 담아줘",
                 "수랭 쿨러 B 견적에 담아줘",
                 "수랭 쿨러 C 견적에 담아줘");
+        // 구조화된 추천 결과는 capability와 무관하게 항상 실어 보낸다 — 문장 안의 상품명은 파싱할 수 없다.
+        assertThat(response.get("partRecommendation"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("category", "COOLER");
+    }
+
+    // 부품 목록 패널을 띄울 수 있는 클라이언트에게는 상품 나열을 패널에 넘기고 말풍선을 짧게 준다.
+    // 같은 목록이 채팅과 패널에 두 번 나오면 어느 쪽을 봐야 할지 헷갈린다.
+    @Test
+    void buildChatShortensPartRecommendationMessageWhenClientCanOpenCandidatePanel() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                return List.of(
+                        Map.of("id", "cooler-a", "name", "수랭 쿨러 A", "price", 180_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0),
+                        Map.of("id", "cooler-b", "name", "수랭 쿨러 B", "price", 220_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0),
+                        Map.of("id", "cooler-c", "name", "수랭 쿨러 C", "price", 260_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 0));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "수랭 쿨러 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "COOLER", "coolingType", "LIQUID")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "수랭 쿨러 추천해줘",
+                "uiContext", Map.of("capabilities", List.of("PART_CANDIDATE_PANEL")),
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("cooler-current", "COOLER", "현재 공랭 쿨러", 1,
+                                Map.of("coolerType", "AIR", "tdpW", 150))))));
+
+        // 말풍선은 상품명·가격을 나열하지 않는다.
+        assertThat(response.get("message")).asString()
+                .doesNotContain("추천 TOP3")
+                .doesNotContain("1)")
+                .doesNotContain("수랭 쿨러 A");
+        // 대신 무엇이 열렸는지 한 줄로 말한다.
+        assertThat(response.get("message")).asString().contains("부품 목록");
+        // 나열은 패널 몫 — 순서를 지킬 수 있게 partId가 함께 온다.
+        assertThat(response.get("partRecommendation"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("category", "COOLER");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> options = (List<Map<String, Object>>)
+                ((Map<String, Object>) response.get("partRecommendation")).get("options");
+        assertThat(options).hasSize(3);
+        assertThat(options).extracting(option -> option.get("partId"))
+                .containsExactly("cooler-a", "cooler-b", "cooler-c");
+        // 담기 칩은 그대로다 — 패널이 열려도 채팅에서 바로 담는 길을 막지 않는다.
+        assertThat(response.get("quickReplies")).asList().containsExactly(
+                "수랭 쿨러 A 견적에 담아줘",
+                "수랭 쿨러 B 견적에 담아줘",
+                "수랭 쿨러 C 견적에 담아줘");
+    }
+
+    @Test
+    void barePartRecommendationRequestIsRecognizedOnlyWhenNoCriteriaRemain() {
+        // 되묻기는 이 좁은 경우에만 — 카테고리와 추천 동사 말고는 아무 말도 없을 때.
+        assertThat(BuildChatService.isBarePartRecommendationRequest("gpu 추천해줘")).isTrue();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("그래픽카드 추천")).isTrue();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("케이스 좀 추천해주세요")).isTrue();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("파워 후보 보여줘")).isTrue();
+
+        // 사용자가 방향을 줬으면 그대로 나열한다.
+        assertThat(BuildChatService.isBarePartRecommendationRequest("통풍 좋은 케이스 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("100만원대 gpu 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("가성비 gpu 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("조용한 쿨러 추천해줘")).isFalse();
+        // 애초에 추천 요청이 아닌 문장은 건드리지 않는다(변경·수량 조작 경로 보호).
+        assertThat(BuildChatService.isBarePartRecommendationRequest("램 수량 두 개로 바꿔줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("지금 견적 나머지 채워줘")).isFalse();
+    }
+
+    @Test
+    void smoothnessRequestIsRecognizedOnlyWhenItAsksToChangeTheBuild() {
+        // 발표 문장과 그 변형 — 목표 수치 없이 향상만 요구한다.
+        assertThat(BuildChatService.requestsSmootherPerformance(
+                "가격이 조금 올라가도 괜찮으니, 배그 화면이 더 부드럽게 보이도록 바꿔줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 화면을 더 부드럽게 바꿔줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("프레임 올려줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("FPS 높여줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("더 쾌적하게 해줘")).isTrue();
+
+        // 가로채면 안 되는 것 — 이 fast path는 LLM 이전에 잡으므로 한 번 삼키면 되돌릴 수 없다.
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 화면이 멈춰요")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("게임하다 자꾸 튕겨요")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("부드러운 화면의 모니터 추천해줘")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("주사율 높은 모니터 알려줘")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("GPU를 바꾸면 FPS가 얼마나 올라?")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 4K 120FPS 되는 GPU로 바꿔줘")).isFalse();
+    }
+
+    @Test
+    void nextSmoothnessTierPicksTheFirstTierAboveCurrentFps() {
+        // 발표 시나리오: 배그 4K 80FPS -> 120FPS 목표.
+        assertThat(BuildChatService.nextSmoothnessTier(80)).isEqualTo(120);
+        assertThat(BuildChatService.nextSmoothnessTier(59.9)).isEqualTo(60);
+        assertThat(BuildChatService.nextSmoothnessTier(120)).isEqualTo(165);
+        assertThat(BuildChatService.nextSmoothnessTier(170)).isEqualTo(240);
+        // 이미 최상 구간이면 목표가 없다 — 교체를 권하지 않는다.
+        assertThat(BuildChatService.nextSmoothnessTier(240)).isNull();
+        assertThat(BuildChatService.nextSmoothnessTier(300)).isNull();
+    }
+
+    @Test
+    void comparativeUpgradeReferenceTreatsModelNameAsAFloorNotAPick() {
+        // 기준선 표현 — 모델명을 '고를 상품'으로 읽으면 안 된다.
+        assertThat(BuildChatService.comparativeUpgradeReference("지금 5080보다 좋은 gpu 추천해줘")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("5080보다 나은 걸로")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("5080 이상으로 추천해줘")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("9800X3D보다 성능 높은 cpu")).isTrue();
+
+        // 예산 하한('이상')은 비교 표현이 아니다 — 사이에 '만원'이 끼어 걸리지 않아야 한다.
+        assertThat(BuildChatService.comparativeUpgradeReference("150만원 이상 gpu 추천해줘")).isFalse();
+        assertThat(BuildChatService.comparativeUpgradeReference("100만원 이하 gpu 추천해줘")).isFalse();
+        // 그냥 모델명 지정은 그대로 상품 지정이다.
+        assertThat(BuildChatService.comparativeUpgradeReference("5080 추천해줘")).isFalse();
+        assertThat(BuildChatService.comparativeUpgradeReference("rtx 5080 견적에 담아줘")).isFalse();
+    }
+
+    @Test
+    void unsupportedRecommendationQualifierNamesOnlyWhatWeCannotHonor() {
+        // 못 다루는 조건 — 이름을 붙여 되묻는다.
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("조용한 쿨러 추천해줘")).isEqualTo("소음");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("발열 적은 gpu 추천해줘")).isEqualTo("발열");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("롤 잘 돌아가는 gpu 추천해줘")).isEqualTo("게임 성능");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("4k 게임용 gpu 추천해줘")).isEqualTo("게임 성능");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("작은 케이스 추천해줘")).isEqualTo("크기");
+
+        // 잘 되던 문장은 건드리지 않는다 — 오탐이 나면 되던 기능이 되묻기로 퇴화한다.
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("고성능 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("가성비 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("100만원 이하 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("8기가 gpu 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("램 수량 두 개로 바꿔줘")).isNull();
+    }
+
+    @Test
+    void buildChatAsksForCriteriaWhenRecommendingAPartTheDraftAlreadyHas() {
+        // "gpu 추천해줘" — 기준이 하나도 없는데 이미 RTX 5080이 담겨 있다. 후보 정렬은 호환·가격만
+        // 보므로 그냥 나열하면 더 못한 5060 Ti가 "현재 견적과 호환되는 추천"으로 올라온다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                return List.of(
+                        Map.of("id", "gpu-cheap", "name", "RTX 5060 Ti 16GB", "price", 660_000,
+                                "capacity_gb", 0, "vram_gb", 16, "wattage_w", 0));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "GPU 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "GPU")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "gpu 추천해줘",
+                "uiContext", Map.of("capabilities", List.of("PART_CANDIDATE_PANEL")),
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("gpu-current", "GPU", "MSI 지포스 RTX 5080", 1, Map.of("vramGb", 16))))));
+
+        // 나열하지 않는다 — 패널도 열지 않는다.
+        assertThat(response.get("partRecommendation")).isNull();
+        assertThat(response.get("message")).asString()
+                .contains("RTX 5080")
+                .contains("어떤 기준");
+        // 칩은 실제로 다른 결과를 내는 경로만 준다(성능순·가성비순·최저가순).
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly("고성능 GPU 추천해줘", "가성비 GPU 추천해줘", "제일 저렴한 GPU 추천해줘");
+        // 다음 짧은 답이 원 요청과 합쳐지도록 원문을 에코한다.
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("originalMessage", "gpu 추천해줘");
+    }
+
+    @Test
+    void buildChatKeepsBubbleListingWhenUserAsksForTwoCategoriesAtOnce() {
+        // "케이스랑 파워 추천해줘" — 패널은 한 번에 한 카테고리만 연다. 한쪽만 띄워 놓고
+        // "띄웠어요"라고 답하면 나머지 한쪽은 물어본 적 없는 것처럼 사라진다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts p")) {
+                return List.of(
+                        Map.of("id", "psu-a", "name", "파워 A", "price", 120_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 850),
+                        Map.of("id", "psu-b", "name", "파워 B", "price", 150_000,
+                                "capacity_gb", 0, "vram_gb", 0, "wattage_w", 1000));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        when(aiChatEngine.respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class)))
+                .thenReturn(new AiChatEngineResponse(
+                        "케이스와 파워 후보를 찾아봤어요.",
+                        AiChatIntent.PART_RECOMMEND,
+                        List.<AiChatAction>of(),
+                        List.of(),
+                        List.of(),
+                        Map.of("partConstraint", Map.of("category", "PSU")),
+                        List.of(),
+                        List.of(),
+                        null
+                ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "케이스랑 파워 추천해줘",
+                "uiContext", Map.of("capabilities", List.of("PART_CANDIDATE_PANEL"))));
+
+        // 패널로 넘기지 않는다 — 넘기면 케이스를 물어본 적 없는 것처럼 된다.
+        assertThat(response.get("partRecommendation")).isNull();
+        // 말풍선도 줄이지 않는다 — 나열이 유일한 답이므로 그대로 있어야 한다.
+        assertThat(response.get("message")).asString().doesNotContain("부품 목록에 띄웠어요");
     }
 
     @Test
@@ -4617,8 +4911,11 @@ class BuildChatServiceTest {
                         "partId", "gpu-current", "category", "GPU", "name", "RTX 5090", "quantity", 1)))), user);
 
         assertThat(response.get("answerType")).isEqualTo("PART");
-        assertThat(response.get("message")).asString().contains("파워 대표 후보 TOP3", "1200W PSU A");
-        assertThat(response.get("quickReplies")).asList().hasSize(3);
+        assertThat(response.get("message")).asString().contains("파워 추천 TOP3", "1200W PSU A");
+        // 이 테스트의 검증력이 문구 하나에 실려 있었다(칩은 개수만 셌다) — 문구가 바뀌면 같이 무너진다.
+        // 어떤 후보를 어떤 순서로 골랐는지를 칩으로 고정해, 문안이 또 바뀌어도 판정이 남게 한다.
+        assertThat(response.get("quickReplies")).asList()
+                .containsExactly("1200W PSU A 견적에 담아줘", "1200W PSU B 견적에 담아줘", "1000W PSU C 견적에 담아줘");
         verifyNoInteractions(aiChatEngine);
     }
 
@@ -4709,6 +5006,39 @@ class BuildChatServiceTest {
         assertThat(response.get("message")).asString().contains("조건(2000GB)", "추천 TOP3", "NVMe SSD 2TB A");
         assertThat(response.get("quickReplies")).asList().hasSize(3);
         verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatReturnsMergedContextAgainAfterAContextualExplanationTurn() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(), any())).thenReturn(new AiChatEngineResponse(
+                "첫 번째 후보는 현재 메인보드와 소켓 조건이 맞습니다.",
+                AiChatIntent.EXPLAIN,
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(),
+                null
+        ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "첫 번째 후보가 왜 맞아?",
+                "clarificationContext", Map.of("originalMessage", "B860 메인보드에 맞는 CPU 추천해줘")
+        ));
+
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry(
+                        "originalMessage",
+                        "B860 메인보드에 맞는 CPU 추천해줘 첫 번째 후보가 왜 맞아?"
+                );
     }
 
     @Test
