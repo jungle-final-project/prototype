@@ -29,6 +29,9 @@ class TechnicianMarketplaceControllerTest {
     @MockitoBean
     private TechnicianMarketplaceService service;
 
+    @MockitoBean
+    private TechnicianProfileImageService profileImageService;
+
     @Test
     void applicationAndProfileRoutesAreWired() throws Exception {
         when(service.apply(eq(TOKEN), anyMap())).thenReturn(Map.of("id", "tech-1", "verificationStatus", "PENDING"));
