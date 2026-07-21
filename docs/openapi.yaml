@@ -118,6 +118,53 @@ paths:
       responses:
         "204":
           description: 비밀번호 확인 완료
+  /api/users/me/points:
+    get:
+      summary: 현재 사용자 포인트 지갑 조회
+      description: 조립 결제에 사용할 포인트 잔액과 원화 환산 단위를 반환한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 현재 사용자 포인트 지갑
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name, balance, pointValueWon, currency, updatedAt]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                    example: 포인트
+                  balance:
+                    type: integer
+                    format: int64
+                  pointValueWon:
+                    type: integer
+                    example: 1
+                  currency:
+                    type: string
+                    example: KRW
+                  updatedAt:
+                    type: string
+                    format: date-time
+  /api/users/me/agent-activation-token:
+    post:
+      summary: 현재 사용자용 PC Agent 활성화 토큰 발급
+      description: 로그인 사용자가 소유할 PC Agent를 등록할 때 사용할 단기 활성화 토큰을 발급한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: 발급된 Agent 활성화 토큰과 만료 정보
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
   /api/auth/login:
     post:
       summary: 이메일 로그인
@@ -1086,6 +1133,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/build-graph-layouts/default:
+    get:
+      summary: 사용자 화면용 기본 견적 관계도 배치 조회
+      description: 관리자가 저장한 기본 배치를 반환하며 저장값이 없으면 서버 기본 좌표를 반환한다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 기본 견적 관계도 배치
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildGraphLayoutDto"
   /api/parts:
     get:
       summary: 부품 목록
@@ -1403,23 +1463,160 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
   /api/assembly-requests/{id}/payments/confirm-virtual:
     post:
-      summary: 가상 결제 완료 처리
-      description: 실제 결제 정보나 금전 거래 없이 PENDING 결제를 PAID로 변경한다.
+      summary: 폐기된 가상 결제 완료 API
+      description: 결제 시도·검증 흐름으로 대체된 호환용 경로이며 항상 410 GONE을 반환한다. 신규 클라이언트는 payments/attempts 또는 payments/points/confirm을 사용한다.
+      deprecated: true
       parameters:
         - $ref: "#/components/parameters/PublicId"
       responses:
-        "200":
-          description: 가상 결제 완료 요청
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AssemblyRequestDto"
-        "409":
-          description: 매칭 전이거나 결제 불가 상태
+        "410":
+          description: 폐기된 결제 API
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/assembly-requests/{id}/payments/attempts:
+    post:
+      summary: 조립 요청 결제 시도 생성
+      description: 선택된 기사 제안의 결제에 대해 30분 유효한 결제 시도를 생성한다. 같은 Idempotency-Key는 기존 시도를 반환한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            maxLength: 120
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method]
+              properties:
+                method:
+                  type: string
+                  enum: [CARD, KAKAOPAY, TOSSPAY]
+      responses:
+        "200":
+          description: 결제 시도와 Mock checkout 세션
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: 기사 매칭 전, 이미 결제됨 또는 결제 불가 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/assembly-requests/{id}/payments/points/confirm:
+    post:
+      summary: 조립 요청 포인트 결제 확정
+      description: 현재 사용자의 포인트를 차감하고 조립 결제를 원자적으로 PAID 처리한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            maxLength: 120
+      responses:
+        "200":
+          description: 성공한 결제 시도와 갱신된 포인트 지갑
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: 포인트 부족, 기사 매칭 전 또는 결제 불가 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/payments/attempts/{id}/mock-result:
+    post:
+      summary: 개발용 Mock 결제 결과 지정
+      description: 본인 결제 시도의 Mock provider 결과를 지정한다. 운영 PG 결제 API가 아니다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [result]
+              properties:
+                result:
+                  type: string
+      responses:
+        "200":
+          description: 갱신된 결제 시도
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/payments/attempts/{id}/complete:
+    post:
+      summary: 결제 시도 검증 및 완료
+      description: provider 결과와 금액을 서버에서 다시 검증하고 성공 시 조립 결제를 PAID로 전이한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: 검증이 끝난 결제 시도
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: 금액 불일치, 만료 또는 결제 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/payments/webhooks/mock:
+    post:
+      summary: 개발용 Mock 결제 웹훅 수신
+      description: X-Mock-Webhook-Secret 검증 후 중복 eventId를 멱등 처리한다. 운영 PG 웹훅이 아니다.
+      security: []
+      parameters:
+        - in: header
+          name: X-Mock-Webhook-Secret
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, eventType, merchantPaymentId, result]
+              additionalProperties: true
+      responses:
+        "200":
+          description: 처리 또는 중복 수신 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
   /api/assembly-requests/{id}/cancel:
     post:
       summary: 본인 조립 요청 취소
@@ -3362,6 +3559,152 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/log-uploads/as-rag-preview:
+    post:
+      summary: PC Agent 업로드 전 AS RAG 분석 미리보기
+      description: Agent token과 업로드 동의를 검증한 뒤 gzip JSONL을 저장하지 않고 마스킹·요약·지원 경로 미리보기만 반환한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/PcAgentLogUploadRequest"
+      responses:
+        "200":
+          description: 저장되지 않은 AS RAG 분석 미리보기
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: 동의 누락 또는 로그 검증 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/as-drafts:
+    post:
+      summary: PC Agent 로그 기반 AS 접수 초안 생성
+      description: gzip JSONL과 증상 정보를 검증해 사용자 확인용 AS 초안을 생성한다. 실제 AS 티켓 확정 API와 구분된다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title:
+                  type: string
+                detailDescription:
+                  type: string
+                supportRequestKind:
+                  type: string
+                symptom:
+                  type: string
+                consentId:
+                  type: string
+                rangeMinutes:
+                  type: integer
+      responses:
+        "201":
+          description: 생성된 AS 접수 초안
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: 동의 누락 또는 로그 검증 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/agent/as-requests:
+    post:
+      summary: PC Agent 진단 결과로 AS 티켓 생성
+      description: 저장된 진단 결과와 evidence를 서버에서 다시 검증하고 진단별 새 AS 티켓과 상담방을 생성한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: diagnosisId와 같아야 한다.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [diagnosisId, deviceId, requestType, symptom, consentAccepted]
+              properties:
+                diagnosisId:
+                  type: string
+                  format: uuid
+                resultId:
+                  type: string
+                  nullable: true
+                deviceId:
+                  type: string
+                  format: uuid
+                requestType:
+                  type: string
+                  enum: [PHYSICAL_INSPECTION]
+                symptom:
+                  type: string
+                diagnosisTitle:
+                  type: string
+                diagnosisSummary:
+                  type: string
+                evidenceSummary:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+                diagnosedAt:
+                  type: string
+                  format: date-time
+                mode:
+                  type: string
+                consentAccepted:
+                  type: boolean
+      responses:
+        "201":
+          description: 생성되거나 동일 diagnosisId로 이미 존재하는 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
+        "400":
+          description: 진단 근거, 동의 또는 요청 계약 검증 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/agent/diagnosis-chat:
     post:
       summary: PC Agent local diagnosis chatbot
@@ -3439,6 +3782,98 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AsTicketDto"
+  /api/as-ticket-drafts/{id}:
+    get:
+      summary: 현재 사용자의 유효한 AS 접수 초안 조회
+      description: 만료되지 않은 DRAFT 상태 초안만 소유권을 검증해 반환한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      responses:
+        "200":
+          description: AS 접수 초안
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: 초안이 없거나 현재 사용자 소유가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/as-tickets/{id}/remote-support-requests:
+    post:
+      summary: 사용자 원격지원 요청 생성
+      description: 본인 AS 티켓에 원격지원 요청을 생성한다. 같은 티켓의 진행 중 요청은 중복 생성하지 않는다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                contactPhone:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: 원격지원 요청이 반영된 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
+        "409":
+          description: 이미 진행 중인 원격지원 요청이 있음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/as-tickets/{id}/feedback:
+    post:
+      summary: 사용자 AS 처리 피드백 저장
+      description: 본인 AS 티켓에 1~5점 평가와 선택 의견을 저장한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PublicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                comment:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: 피드백이 반영된 AS 티켓
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsTicketDto"
+        "404":
+          description: 티켓이 없거나 현재 사용자 소유가 아님
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/as-tickets/{id}/remote-support:
     get:
       summary: 사용자 원격 지원 진행 상태 조회

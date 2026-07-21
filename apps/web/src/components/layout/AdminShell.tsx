@@ -22,12 +22,12 @@ type AdminShellProps = {
 export function AdminShell({ children, title, exportRows = [], exportFileName = 'admin-export.csv', action }: AdminShellProps) {
   const canExport = exportRows.length > 0;
   return (
-    <div className="screen-shell flex bg-slate-100 font-['Noto_Sans_KR']">
+    <div className="screen-shell flex flex-col bg-slate-100 font-['Noto_Sans_KR'] lg:flex-row">
       <AdminSidebar />
       <div className="min-w-0 flex-1">
-        <div className="flex min-h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-5 lg:px-6 xl:px-7">
-          <h1 className="min-w-0 text-lg font-bold text-brand-navy">{title}</h1>
-          <div className="flex shrink-0 gap-2">
+        <div className="flex min-h-16 flex-col items-stretch gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5 lg:px-6 xl:px-7">
+          <h1 className="min-w-0 break-keep text-lg font-bold text-brand-navy">{title}</h1>
+          <div className="flex flex-wrap gap-2 sm:shrink-0 sm:justify-end">
             <Link
               to="/"
               className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-brand-navy hover:bg-slate-50"
@@ -97,17 +97,17 @@ function AdminSidebar() {
   ];
 
   return (
-    <aside className="w-44 shrink-0 bg-brand-navy px-3 py-5 text-white lg:w-52 lg:px-4 xl:w-60 xl:py-6">
-      <div data-testid="admin-brand" className="mb-7 text-lg font-bold xl:mb-8 xl:text-xl">Dazzajo<br />관리자</div>
-      <nav aria-label="관리자 메뉴" className="space-y-5">
+    <aside className="w-full shrink-0 bg-brand-navy px-3 py-3 text-white lg:w-52 lg:px-4 lg:py-5 xl:w-60 xl:py-6">
+      <div data-testid="admin-brand" className="mb-3 text-lg font-bold lg:mb-7 xl:mb-8 xl:text-xl">Dazzajo<span className="ml-2 lg:ml-0 lg:block">관리자</span></div>
+      <nav aria-label="관리자 메뉴" className="flex gap-4 overflow-x-auto pb-1 lg:block lg:space-y-5 lg:overflow-visible lg:pb-0">
         {groups.map((group) => (
-          <div key={group.heading}>
-            <div className="mb-2 px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">{group.heading}</div>
-            <div className="space-y-1">
+          <div key={group.heading} className="shrink-0">
+            <div className="mb-2 hidden px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400 lg:block">{group.heading}</div>
+            <div className="flex gap-1 lg:block lg:space-y-1">
               {group.items.map(({ to, label, Icon, match }) => {
                 const isActive = match(pathname);
                 return (
-                  <Link key={to} to={to} aria-current={isActive ? 'page' : undefined} className={`flex min-h-10 items-center gap-2 rounded px-3 py-2 text-xs font-semibold leading-5 lg:text-sm ${isActive ? 'bg-brand-blue text-white' : 'text-slate-300 hover:bg-white/10'}`}>
+                  <Link key={to} to={to} aria-current={isActive ? 'page' : undefined} className={`flex min-h-10 items-center gap-2 whitespace-nowrap rounded px-3 py-2 text-xs font-semibold leading-5 lg:text-sm ${isActive ? 'bg-brand-blue text-white' : 'text-slate-300 hover:bg-white/10'}`}>
                     <Icon size={16} />
                     {label}
                   </Link>

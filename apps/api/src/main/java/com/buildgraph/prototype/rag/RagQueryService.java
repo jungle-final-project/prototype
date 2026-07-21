@@ -49,7 +49,16 @@ public class RagQueryService {
                 && ragEmbeddingService.canVectorSearch()
                 && ragVectorPolicy.publicSearchEnabledFor(normalizedPurpose)) {
             try {
-                return vectorSearch(normalizedQuery, normalizedPurpose, normalizedSourceType, safePage, safeSize);
+                Map<String, Object> vectorResult = vectorSearch(
+                        normalizedQuery,
+                        normalizedPurpose,
+                        normalizedSourceType,
+                        safePage,
+                        safeSize
+                );
+                if (number(vectorResult.get("total")) > 0) {
+                    return vectorResult;
+                }
             } catch (RuntimeException ignored) {
                 // Keep the public search endpoint available even when live embedding lookup fails.
             }

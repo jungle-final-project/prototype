@@ -877,6 +877,9 @@ test('renders manufacturer release demo intake on admin parts page', async ({ pa
   await expect(page.locator('body')).toContainText('부품 / 가격 관리자');
   await expect(page.locator('main')).toContainText('부품 DB 관리');
   await expect(page.locator('main')).toContainText('ASUS ROG Astral GeForce RTX 5090 OC 32GB');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole('button', { name: '부품 DB 관리 접기' }).click();
   await expect(page.locator('main')).not.toContainText('ASUS ROG Astral GeForce RTX 5090 OC 32GB');
   await expect(page.locator('main')).not.toContainText('부품 상세 패널');
@@ -1089,6 +1092,7 @@ test('admin can drag self quote slot cards and save the fixed board layout', asy
 });
 
 test('renders price job and load test admin menu pages for ADMIN role', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
@@ -1120,6 +1124,7 @@ test('renders price job and load test admin menu pages for ADMIN role', async ({
   await expect(page.locator('main')).toContainText('작업 처리기 실행');
   await expect(page.getByRole('button', { name: '가격 작업 실행' }).first()).toBeEnabled();
   await expect(page.getByText('가격 작업 관리자').first()).toHaveCSS('font-family', /Noto Sans KR/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 
   await page.goto('/admin/load-tests');
   await expect(page.getByRole('heading', { name: '관리자 권한이 필요합니다' })).toBeHidden();
@@ -1127,6 +1132,7 @@ test('renders price job and load test admin menu pages for ADMIN role', async ({
   await expect(page.locator('main')).toContainText('k6 Smoke');
   await expect(page.locator('main')).toContainText('npm run test');
   await expect(page.locator('main')).toContainText('300명');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 });
 
 test('renders admin dashboard with ADMIN role and dashboard API response', async ({ page }) => {

@@ -1595,6 +1595,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
         PartQueryConstraints detected = partQueryConstraints(category, message);
         List<String> modelTokens = detected.modelTokens();
         Integer targetCapacityGb = detected.targetCapacityGb();
+        Integer targetWattageW = detected.targetWattageW();
+        String wattageMode = detected.wattageMode();
 
         // 전체 견적 문장에는 여러 카테고리의 숫자가 함께 등장한다. 범용 숫자 정규식 결과를 다른
         // 카테고리에 재사용하면 9950X3D가 GPU 모델로, 2TB가 RAM 용량으로 번질 수 있다.
@@ -1605,7 +1607,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
             modelTokens = List.of();
             targetCapacityGb = inferScopedCapacityGb(category, message);
         } else if ("PSU".equals(category)) {
-            modelTokens = inferPsuWattageTokens(message);
+            // 정격 출력은 상품명/URL 부분 문자열이 아니라 숫자 속성으로 비교한다. 1200W 상품의
+            // 참고 URL에 "1000w"가 들어 있어 1000W 조건으로 오인되던 사례를 차단한다.
+            modelTokens = List.of();
+            targetWattageW = inferPsuWattage(message);
+            wattageMode = inferPsuWattageMode(message, targetWattageW);
         }
 
         List<String> keywords = new ArrayList<>();
@@ -1619,6 +1625,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (targetCapacityGb != null) {
             keywords.add(targetCapacityGb + "GB");
         }
+        if (targetWattageW != null) {
+            keywords.add(targetWattageW + "W");
+        }
         if (detected.targetModuleCount() != null) {
             keywords.add(detected.targetModuleCount() + "개");
         }
@@ -1627,6 +1636,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 detected.brandToken(),
                 modelTokens,
                 targetCapacityGb,
+                targetWattageW,
+                wattageMode,
                 detected.targetModuleCount(),
                 detected.targetQuantity(),
                 keywords.stream().distinct().toList()
@@ -1694,15 +1705,30 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return unit.startsWith("t") || unit.startsWith("테라") ? value * 1000 : value;
     }
 
-    private static List<String> inferPsuWattageTokens(String message) {
+    private static Integer inferPsuWattage(String message) {
         Matcher matcher = Pattern.compile("(?i)(\\d{3,4})\\s*w(?:att)?").matcher(safe(message));
-        List<String> tokens = new ArrayList<>();
-        while (matcher.find()) {
-            if (!tokens.contains(matcher.group(1))) {
-                tokens.add(matcher.group(1));
-            }
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
+    private static String inferPsuWattageMode(String message, Integer wattage) {
+        if (wattage == null) {
+            return null;
         }
-        return tokens;
+        String normalized = safe(message).toLowerCase(Locale.ROOT);
+        String value = Pattern.quote(String.valueOf(wattage));
+        if (Pattern.compile("(?:최소|적어도|minimum|at\\s+least)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이상|부터|or\\s+more)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MIN";
+        }
+        if (Pattern.compile("(?:최대|maximum|at\\s+most)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이하|이내|안으로|넘지|or\\s+less)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MAX";
+        }
+        return "EXACT";
     }
 
     private static Map<String, PartQueryConstraints> mergeStructuredPartConstraints(
@@ -1734,6 +1760,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         null,
                         null,
                         null,
+                        null,
+                        null,
                         keywords
                 ));
                 continue;
@@ -1746,15 +1774,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
             if ("GPU".equals(category)) {
                 modelTokens.addAll(existing.modelTokens());
             }
-            modelTokens.addAll(keywords);
+            keywords.stream()
+                    .filter(keyword -> !"PSU".equals(category) || !keyword.matches("(?i)\\d{3,4}\\s*w?"))
+                    .forEach(modelTokens::add);
+            List<String> requiredKeywords = new ArrayList<>(existing.requiredPartKeywords());
+            requiredKeywords.addAll(keywords);
             merged.put(category, new PartQueryConstraints(
                     "CPU".equals(category) ? existing.cpuModelToken() : null,
                     null,
                     modelTokens.stream().distinct().toList(),
                     existing.targetCapacityGb(),
+                    existing.targetWattageW(),
+                    existing.wattageMode(),
                     existing.targetModuleCount(),
                     existing.targetQuantity(),
-                    modelTokens.stream().distinct().toList()
+                    requiredKeywords.stream().distinct().toList()
             ));
         }
         return merged;
@@ -1821,6 +1855,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 if (constraints.targetQuantity() != null) {
                     parsedContext.put("targetQuantity", constraints.targetQuantity());
                 }
+            } else if ("PSU".equals(entry.getKey()) && constraints.targetWattageW() != null) {
+                parsedContext.put("targetPsuWattageW", constraints.targetWattageW());
+                parsedContext.put("psuWattageMode", constraints.wattageMode());
             }
         }
         parsedContext.put("requiredPartKeywords", keywords.stream()
@@ -1932,6 +1969,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 return false;
             }
         }
+        if (constraints.targetWattageW() != null) {
+            Integer capacityW = firstPositiveNumber(
+                    attrNumber(part.attributes(), "capacityW"),
+                    attrNumber(part.attributes(), "wattage")
+            );
+            if (capacityW == null) {
+                return false;
+            }
+            String mode = constraints.wattageMode() == null ? "EXACT" : constraints.wattageMode();
+            if (("MIN".equals(mode) && capacityW < constraints.targetWattageW())
+                    || ("MAX".equals(mode) && capacityW > constraints.targetWattageW())
+                    || ("EXACT".equals(mode) && !capacityW.equals(constraints.targetWattageW()))) {
+                return false;
+            }
+        }
         if (constraints.targetModuleCount() != null) {
             // moduleCount 미존재 = 단품(1) 계약 — 키가 없다고 '싱글' 질의에서 제외하지 않는다.
             Integer moduleCount = attrNumber(part.attributes(), "moduleCount");
@@ -1954,9 +2006,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         values.add(text(part.attributes().get("cpuClass")));
         values.add(text(part.attributes().get("hardwareClass")));
         values.add(text(part.attributes().get("shortSpec")));
-        part.attributes().values().stream()
-                .map(DefaultAiChatEngine::text)
-                .forEach(values::add);
+        values.add(text(part.attributes().get("gpuClass")));
+        values.add(text(part.attributes().get("model")));
+        values.add(text(part.attributes().get("series")));
         return values.stream()
                 .map(DefaultAiChatEngine::compactToken)
                 .filter(Objects::nonNull)
@@ -2726,6 +2778,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String normalizedCategory = categoryFrom(category);
         String cpuModelToken = "CPU".equals(normalizedCategory) ? inferCpuModelToken(message) : null;
         Integer targetCapacityGb = "RAM".equals(normalizedCategory) || "STORAGE".equals(normalizedCategory) ? inferCapacityGb(message) : null;
+        Integer targetWattageW = "PSU".equals(normalizedCategory) ? inferPsuWattage(message) : null;
+        String wattageMode = inferPsuWattageMode(message, targetWattageW);
         Integer targetModuleCount = "RAM".equals(normalizedCategory) ? inferRamModuleCount(message) : null;
         Integer targetQuantity = targetModuleCount != null ? targetModuleCount : null;
         String brandToken = inferBrandToken(message);
@@ -2741,6 +2795,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (targetCapacityGb != null) {
             keywords.add(targetCapacityGb + "GB");
         }
+        if (targetWattageW != null) {
+            keywords.add(targetWattageW + "W");
+        }
         if (targetModuleCount != null) {
             keywords.add(targetModuleCount + "개");
         }
@@ -2749,6 +2806,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 brandToken,
                 modelTokens,
                 targetCapacityGb,
+                targetWattageW,
+                wattageMode,
                 targetModuleCount,
                 targetQuantity,
                 keywords
@@ -3803,6 +3862,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             String brandToken,
             List<String> modelTokens,
             Integer targetCapacityGb,
+            Integer targetWattageW,
+            String wattageMode,
             Integer targetModuleCount,
             Integer targetQuantity,
             List<String> requiredPartKeywords
@@ -3812,6 +3873,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
                     || brandToken != null
                     || !modelTokens.isEmpty()
                     || targetCapacityGb != null
+                    || targetWattageW != null
                     || targetModuleCount != null;
         }
 

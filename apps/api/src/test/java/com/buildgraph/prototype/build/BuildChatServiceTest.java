@@ -803,6 +803,49 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void candidateAssessmentKeepsTheRecommendationContextForTheNextTurn() {
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildEvaluationService evaluationService = mock(BuildEvaluationService.class);
+        Map<String, Object> assessment = scoreAssessment();
+        when(evaluationService.evaluateCurrentDraft(eq(42L), nullable(Integer.class), nullable(String.class), nullable(String.class)))
+                .thenReturn(new BuildEvaluationService.BuildEvaluation(List.of(), 2_000_000, 2_000_000, List.of(), Map.of(), assessment));
+        when(aiChatEngine.explainBuildAssessment(any(AiChatEngineRequest.class), eq("BUILD_CHAT_54_MINI_FAST")))
+                .thenReturn(new AiChatEngineResponse(
+                        "현재 구성의 자동 검증 결과를 확인했습니다.",
+                        AiChatIntent.EXPLAIN,
+                        List.of(), List.of(), List.of(), Map.of(), List.of(), List.of(), null
+                ));
+        BuildChatService service = new BuildChatService(
+                mock(JdbcTemplate.class),
+                mock(ToolCheckService.class),
+                aiChatEngine,
+                BuildChatCacheService.disabled(),
+                null,
+                null,
+                null,
+                new BuildChatIntentRouter(),
+                BuildChatSemanticCacheService.disabled(),
+                evaluationService
+        );
+        CurrentUserService.CurrentUser user = new CurrentUserService.CurrentUser(
+                42L, "user-id", "user@example.com", "사용자", "USER", null);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "첫 번째 후보를 적용하면 현재 구성에서 문제가 없는지 설명해줘",
+                "clarificationContext", Map.of("originalMessage", "현재 메인보드에 맞는 CPU 추천해줘"),
+                "currentQuoteDraft", Map.of("items", List.of(Map.of(
+                        "partId", "cpu-current", "category", "CPU", "quantity", 1)))
+        ), user);
+
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry(
+                        "originalMessage",
+                        "현재 메인보드에 맞는 CPU 추천해줘 첫 번째 후보를 적용하면 현재 구성에서 문제가 없는지 설명해줘"
+                );
+    }
+
+    @Test
     void boardLocationFastPathReturnsReadOnlyFocusWithoutCallingLlm() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         ToolCheckService toolCheckService = mock(ToolCheckService.class);
@@ -4963,6 +5006,39 @@ class BuildChatServiceTest {
         assertThat(response.get("message")).asString().contains("조건(2000GB)", "추천 TOP3", "NVMe SSD 2TB A");
         assertThat(response.get("quickReplies")).asList().hasSize(3);
         verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
+    void buildChatReturnsMergedContextAgainAfterAContextualExplanationTurn() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        when(cacheService.lookup(any(), any(), any())).thenReturn(Optional.empty());
+        when(aiChatEngine.respondLlmRequired(any(), any())).thenReturn(new AiChatEngineResponse(
+                "첫 번째 후보는 현재 메인보드와 소켓 조건이 맞습니다.",
+                AiChatIntent.EXPLAIN,
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(),
+                null
+        ));
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "첫 번째 후보가 왜 맞아?",
+                "clarificationContext", Map.of("originalMessage", "B860 메인보드에 맞는 CPU 추천해줘")
+        ));
+
+        assertThat(response.get("clarification"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry(
+                        "originalMessage",
+                        "B860 메인보드에 맞는 CPU 추천해줘 첫 번째 후보가 왜 맞아?"
+                );
     }
 
     @Test

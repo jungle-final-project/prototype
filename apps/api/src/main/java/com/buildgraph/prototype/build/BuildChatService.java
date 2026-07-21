@@ -291,6 +291,8 @@ public class BuildChatService {
         // 칩은 직전 되묻기의 "답"이 아니라 "선택"이다 — 원문("'9800X3D'에 해당하는 상품이 2개예요…")과
         // 합성하면 상품명이 이전 질문에 묻혀 이동이 통째로 삼켜진다. 카테고리 어휘가 없는 상품명
         // ("Noctua NH-D15 G2", "DeepCool AK620")은 inferCategory 폴백으로도 안 걸리므로 표식으로 끊는다.
+        boolean contextualCandidateFollowUp = clarificationFollowUp
+                && referencesPriorRecommendationCandidate(normalizeCommand(rawMessage));
         boolean selfContainedClarificationReply = clarificationFollowUp
                 && (BuildChatIntentRouter.isRouteChoiceSelection(rawBody)
                         || isSelfContainedClarificationReply(rawMessage, standaloneIntentDecision, previousIntentDecision));
@@ -351,6 +353,11 @@ public class BuildChatService {
         }
         if (intentDecision.intent() == BuildChatIntent.EXPLAIN_BUILD_SCORE) {
             Map<String, Object> response = buildScoreExplanationResponse(body, message, user, intentDecision);
+            if (mergedClarificationReply) {
+                attachFollowUpContext(response, message);
+            } else if (contextualCandidateFollowUp) {
+                attachFollowUpContext(response, clarificationOriginal + " " + rawMessage);
+            }
             logBuildChatPath("LIVE_BUILD_ASSESSMENT", startedNanos, userId, SCORE_EXPLANATION_PROFILE, false, BuildChatGuardStats.empty());
             return response;
         }
@@ -465,7 +472,12 @@ public class BuildChatService {
         var cachedResponse = buildChatCacheService.lookup(body, requestedAiProfile, userId);
         long redisMs = elapsedMs(stageStartNanos);
         if (cachedResponse.isPresent()) {
-            Map<String, Object> response = cachedResponse.get();
+            // 캐시 구현이나 테스트 대역이 불변 Map을 반환할 수 있다. 후속 문맥을 붙이더라도
+            // 캐시 원본 payload 자체를 바꾸지 않도록 요청별 복사본만 수정한다.
+            Map<String, Object> response = new LinkedHashMap<>(cachedResponse.get());
+            if (mergedClarificationReply && shouldPreserveMergedTurnContext(response)) {
+                attachFollowUpContext(response, message);
+            }
             logBuildChatPath("CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs);
             return withConversationTransition(response, recommendationConversationTransition);
@@ -573,10 +585,13 @@ public class BuildChatService {
                 : Optional.<Map<String, Object>>empty();
         long semanticMs = elapsedMs(stageStartNanos);
         if (semanticCachedResponse.isPresent()) {
-            Map<String, Object> response = semanticCachedResponse.get();
+            Map<String, Object> response = new LinkedHashMap<>(semanticCachedResponse.get());
             // 배포 전에 저장된 행에는 아직 이동 경로가 남아 있을 수 있다(TTL 만료 전까지).
             // 다른 질문에 실려 화면을 끌고 가지 않도록 읽는 쪽에서도 한 번 더 벗겨낸다.
             response.remove("actions");
+            if (mergedClarificationReply && shouldPreserveMergedTurnContext(response)) {
+                attachFollowUpContext(response, message);
+            }
             logBuildChatPath("SEMANTIC_CACHE_HIT", startedNanos, userId, requestedAiProfile, true, BuildChatGuardStats.empty(),
                     "redisMs=" + redisMs + " deterministicMs=" + deterministicMs + " semanticMs=" + semanticMs);
             return withConversationTransition(response, recommendationConversationTransition);
@@ -776,7 +791,8 @@ public class BuildChatService {
         }
         alignBuildCountMessage(response);
         ensureNextAction(response, intentDecision.intent(), rawBudgetIntent);
-        if (shouldPreserveSuccessfulTurnContext(response)) {
+        if ((mergedClarificationReply && shouldPreserveMergedTurnContext(response))
+                || shouldPreserveSuccessfulTurnContext(response)) {
             attachFollowUpContext(response, message);
         }
         candidateReranker.recordShadowScores(body, response, userId, requestedAiProfile);
@@ -1059,6 +1075,15 @@ public class BuildChatService {
         }
         return objectMaps(response.get("builds")).stream()
                 .anyMatch(build -> stringList(build.get("badges")).contains("DRAFT_EDIT_PREVIEW"));
+    }
+
+    private static boolean shouldPreserveMergedTurnContext(Map<String, Object> response) {
+        if (response == null || response.get("clarification") != null) {
+            return false;
+        }
+        // 화면 이동은 그 자리에서 끝나는 명령이다. 반면 추천 설명·비교·후보 보완은 다음 짧은
+        // 질문이 직전 대상에 의존하므로 합성된 문맥을 다시 내려 3턴 이상 유지한다.
+        return response.get("actions") == null && response.get("boardFocus") == null;
     }
 
     // 종단 칩 플로어: 카드·칩·되묻기·시뮬레이션이 전부 빈 dead-end 응답에는 다음 행동 칩만 보강한다
@@ -4489,6 +4514,7 @@ public class BuildChatService {
         merged.put("minCapacityGb", capacity);
         merged.put("minVramGb", numberValue(llmConstraint.get("minVramGb")));
         merged.put("minWattageW", wattage);
+        merged.put("wattageMode", wattage == null ? null : wattageConstraintMode(message, wattage));
         merged.put("quantity", numberValue(llmConstraint.get("quantity")));
         // 예산은 숫자만 뽑지 않고 모드까지 가져온다 — "150만원 정도"(TARGET)와 "100만원 이하"(MAX)는
         // 다른 요청인데, 여기서 parseBudgetWon만 쓰던 탓에 부품 추천에서는 늘 상한으로 뭉개졌다.
@@ -5948,6 +5974,15 @@ public class BuildChatService {
         };
     }
 
+    private static boolean referencesPriorRecommendationCandidate(String normalized) {
+        return containsAnyNormalized(
+                normalized,
+                "첫번째후보", "두번째후보", "세번째후보",
+                "1번후보", "2번후보", "3번후보",
+                "이후보", "그후보", "해당후보", "추천한후보", "추천해준후보"
+        );
+    }
+
     // 그래프(드래프트) 기반 견적 완성: 담긴 부품은 고정하고 빈 카테고리만 채운다. LLM 미경유.
     private Optional<Map<String, Object>> draftCompletionFastResponse(Map<String, Object> request, String message, BudgetIntent rawBudgetIntent) {
         List<Map<String, Object>> draftItems = objectMaps(objectMap(request.get("currentQuoteDraft")).get("items"));
@@ -7081,6 +7116,27 @@ public class BuildChatService {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
         Matcher matcher = WATT_PATTERN.matcher(normalized);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
+    private static String wattageConstraintMode(String message, Integer wattage) {
+        if (wattage == null) {
+            return null;
+        }
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        String value = Pattern.quote(String.valueOf(wattage));
+        if (Pattern.compile("(?:최소|적어도|minimum|at\\s+least)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이상|부터|or\\s+more)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MIN";
+        }
+        if (Pattern.compile("(?:최대|maximum|at\\s+most)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이하|이내|안으로|넘지|or\\s+less)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MAX";
+        }
+        return "EXACT";
     }
 
     private List<Map<String, Object>> toolResults(List<PartCandidate> parts, int budgetWon, List<String> warnings) {

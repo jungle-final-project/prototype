@@ -32,7 +32,7 @@ export function AdminLoadTestsPage() {
 
   return (
     <AdminShell title="부하 테스트" exportRows={exportRows} exportFileName="admin-load-tests.csv">
-      <div className="grid grid-cols-[1fr_360px] gap-5">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="k6 Smoke 대상" subtitle="PR 전 빠르게 확인할 최소 endpoint">
           <DataTable columns={['target', 'purpose', 'status']} rows={smokeRows} />
         </Panel>
@@ -42,10 +42,10 @@ export function AdminLoadTestsPage() {
             <DataTable columns={['artifact', 'owner', 'status']} rows={reportRows} />
           </div>
         </Panel>
-        <Panel title="검증 명령" className="col-span-2">
+        <Panel title="검증 명령" className="xl:col-span-2">
           <DataTable columns={['command', 'purpose']} rows={commandRows} />
         </Panel>
-        <Panel title="부하 검증 계획" className="col-span-2">
+        <Panel title="부하 검증 계획" className="xl:col-span-2">
           <DataTable columns={['phase', 'target', 'metric']} rows={loadPlanRows} />
         </Panel>
       </div>

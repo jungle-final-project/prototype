@@ -51,4 +51,38 @@ class BuildChatFeasibilityServiceTest {
         verify(jdbcTemplate).queryForList(sql.capture(), any(Object[].class));
         assertThat(sql.getValue()).contains("ORDER BY price ASC, name ASC");
     }
+
+    @Test
+    void exactPsuWattageUsesEqualityInsteadOfMinimumComparison() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        when(jdbcTemplate.queryForList(any(String.class), any(Object[].class))).thenReturn(List.of());
+        BuildChatFeasibilityService service = new BuildChatFeasibilityService(jdbcTemplate);
+
+        service.meetingCheapestFirst(BuildChatFeasibilityService.SpecConstraint.fromMap(Map.of(
+                "category", "PSU",
+                "minWattageW", 1000,
+                "wattageMode", "EXACT"
+        )), 3);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).queryForList(sql.capture(), any(Object[].class));
+        assertThat(sql.getValue()).contains("= ?").doesNotContain(">= ?");
+    }
+
+    @Test
+    void minimumPsuWattageKeepsGreaterThanOrEqualComparison() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        when(jdbcTemplate.queryForList(any(String.class), any(Object[].class))).thenReturn(List.of());
+        BuildChatFeasibilityService service = new BuildChatFeasibilityService(jdbcTemplate);
+
+        service.meetingCheapestFirst(BuildChatFeasibilityService.SpecConstraint.fromMap(Map.of(
+                "category", "PSU",
+                "minWattageW", 1000,
+                "wattageMode", "MIN"
+        )), 3);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).queryForList(sql.capture(), any(Object[].class));
+        assertThat(sql.getValue()).contains(">= ?");
+    }
 }

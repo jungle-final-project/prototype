@@ -408,6 +408,19 @@ test('shows saved quotes while hiding target price alert UI', async ({ page }) =
   expect(priceAlertRequests).toHaveLength(0);
 });
 
+test('keeps populated saved quote comparison inside a mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openMyQuotesAsUser(page);
+
+  await expect(page.getByTestId('saved-builds-comparison')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+
+  const firstSpec = page.getByTestId('quote-compare-spec-MOTHERBOARD-A');
+  await firstSpec.locator('[tabindex="0"]').focus();
+  await expect(firstSpec.locator('[role="tooltip"]')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+});
+
 test('opens checkout for a saved quote without exposing target price controls', async ({ page }) => {
   const { applyBuildRequests } = await openMyQuotesAsUser(page);
 
