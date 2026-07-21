@@ -6,8 +6,10 @@ server:
   tomcat:
     threads:
       # HTTP worker 스레드. DB pool(Hikari)보다 많으면 DB 대기 요청이 JVM 안에서 큐잉된다.
-      # 단일 소형 EC2 시작값(부하테스트로 A/B). 스레드당 스택 ~1MB이므로 컨테이너 mem 예산과 함께 본다.
-      max: ${TOMCAT_THREADS_MAX:150}
+      # 부하 실측(2026-07-19 breakpoint) 기준 상향: 1043rps에서 동시 요청 ~209 > 150이라
+      # 스레드 만석 큐잉이 p95를 600ms로 밀어올렸다(무릎 시점 CPU 72%로 여유).
+      # 스레드당 스택 ~1MB이므로 컨테이너 mem 예산과 함께 본다.
+      max: ${TOMCAT_THREADS_MAX:300}
       min-spare: ${TOMCAT_THREADS_MIN_SPARE:20}
     # worker가 모두 바쁠 때 OS 소켓 백로그 큐 길이. 초과 연결은 즉시 거절되어 빠른 실패를 유도한다.
     accept-count: ${TOMCAT_ACCEPT_COUNT:100}
@@ -33,9 +35,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:buildgraph}
     password: ${SPRING_DATASOURCE_PASSWORD:buildgraph}
     hikari:
-      # DB 커넥션 풀. 단일 API 인스턴스 × 15는 Postgres 기본 max_connections(100) 대비 여유.
+      # DB 커넥션 풀. 부하 실측(2026-07-19)에서 RDS 커넥션이 20(앱 15+기타)에서 플랫 —
+      # 풀 만석 대기가 무릎(p95 600ms)의 공범이라 25로 상향(RDS t4g.small max_connections 대비 여유).
       # connection-timeout: 풀이 포화면 1.5초 내 커넥션을 못 받을 때 빠르게 실패(무한 대기 방지).
-      maximum-pool-size: ${DB_POOL_MAX_SIZE:15}
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:25}
       minimum-idle: ${DB_POOL_MIN_IDLE:5}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:1500}
       validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:800}
@@ -55,6 +58,13 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
       username: ${SPRING_DATA_REDIS_USERNAME:}
       password: ${SPRING_DATA_REDIS_PASSWORD:}
+      # 캐시는 선택 기능이다 — 없으면 원래 계산 경로로 돌면 그만이다. 그런데 command timeout을
+      # 안 주면 Lettuce 기본값(60초)이 적용돼, Redis가 응답 없이 매달릴 때 캐시 조회 한 번이
+      # 60초를 잡아먹고 Build Chat 요청이 통째로 죽는다(2026-07-20 감사 실측 60,003ms).
+      # 같은 VPC 조회는 한 자릿수 ms라 250ms면 넉넉하고, 넘으면 캐시를 포기하는 편이 낫다.
+      timeout: ${SPRING_DATA_REDIS_TIMEOUT:250ms}
+      # 연결 수립은 별개로 넉넉히 준다 — 운영은 TLS(in-transit)라 핸드셰이크가 붙는다.
+      connect-timeout: ${SPRING_DATA_REDIS_CONNECT_TIMEOUT:2s}
       ssl:
         enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}
   rabbitmq:
@@ -99,6 +109,25 @@ management:
 buildgraph:
   technician-profile-images:
     storage-path: ${TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH:data/technician-profile-images}
+  quote-draft-history:
+    evaluation:
+      # 변경 요청 트랜잭션에서는 snapshot만 저장하고, Tool·종합점수 평가는 전용 executor가 후처리한다.
+      # @Scheduled는 복구용이며, 배포에서 전역 scheduling이 꺼져도 커밋 이벤트와 startup wakeup으로 동작한다.
+      batch-size: ${QUOTE_DRAFT_HISTORY_EVALUATION_BATCH_SIZE:8}
+      max-drain-batches: ${QUOTE_DRAFT_HISTORY_EVALUATION_MAX_DRAIN_BATCHES:8}
+      retry-max-attempts: ${QUOTE_DRAFT_HISTORY_EVALUATION_RETRY_MAX_ATTEMPTS:3}
+      retry-base-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_RETRY_BASE_DELAY_MS:500}
+      retry-max-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_RETRY_MAX_DELAY_MS:5000}
+      executor-pool-size: ${QUOTE_DRAFT_HISTORY_EVALUATION_EXECUTOR_POOL_SIZE:1}
+      executor-shutdown-wait-seconds: ${QUOTE_DRAFT_HISTORY_EVALUATION_EXECUTOR_SHUTDOWN_WAIT_SECONDS:5}
+      initial-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_INITIAL_DELAY_MS:1000}
+      fixed-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_FIXED_DELAY_MS:750}
+  home:
+    cache:
+      prewarm:
+        enabled: ${BUILDGRAPH_HOME_CACHE_PREWARM_ENABLED:true}
+        public-refresh-delay-ms: ${BUILDGRAPH_HOME_CACHE_PREWARM_PUBLIC_REFRESH_DELAY_MS:100000}
+        authenticated-refresh-delay-ms: ${BUILDGRAPH_HOME_CACHE_PREWARM_AUTHENTICATED_REFRESH_DELAY_MS:240000}
   cors:
     allowed-origins: ${BUILDGRAPH_CORS_ALLOWED_ORIGINS:}
   payment:
@@ -131,7 +160,7 @@ buildgraph:
       enabled: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_ENABLED:true}
       run-on-startup: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_RUN_ON_STARTUP:true}
       fixed-delay-ms: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_CLEANUP_FIXED_DELAY_MS:3600000}
-      max-active-per-user: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_MAX_ACTIVE_PER_USER:10}
+      max-active-per-user: ${BUILDGRAPH_AUTH_REFRESH_TOKEN_MAX_ACTIVE_PER_USER:3}
     google:
       client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
       client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
@@ -148,6 +177,8 @@ support-chat:
     ttl-seconds: ${SUPPORT_CHAT_WS_TICKET_TTL_SECONDS:60}
 
 agent:
+  worker:
+    enabled: ${AGENT_WORKER_ENABLED:true}
   runner:
     mode: ${AGENT_RUNNER_MODE:deterministic}
   log-storage-root: ${AGENT_LOG_STORAGE_ROOT:data/agent-logs}
@@ -298,10 +329,19 @@ ai:
       recent-message-limit: ${BUILD_CHAT_54_MINI_FAST_RECENT_MESSAGE_LIMIT:0}
 
 recommendation:
+  events:
+    worker:
+      enabled: ${RECOMMENDATION_EVENTS_WORKER_ENABLED:true}
+    publisher:
+      workers: ${RECOMMENDATION_EVENTS_PUBLISHER_WORKERS:2}
+      queue-capacity: ${RECOMMENDATION_EVENTS_PUBLISHER_QUEUE_CAPACITY:2048}
+      retry-max-attempts: ${RECOMMENDATION_EVENTS_PUBLISHER_RETRY_MAX_ATTEMPTS:3}
+      retry-delay-ms: ${RECOMMENDATION_EVENTS_PUBLISHER_RETRY_DELAY_MS:100}
+      shutdown-wait-seconds: ${RECOMMENDATION_EVENTS_PUBLISHER_SHUTDOWN_WAIT_SECONDS:5}
   # 홈 응답(사용자 무관) 인메모리 캐시 TTL(초). 0이면 캐시 끔. 가격은 일일 갱신이라 수십 초 지연 무해.
   home-cache:
-    ttl-seconds: ${HOME_CACHE_TTL_SECONDS:30}
-    stale-seconds: ${HOME_CACHE_STALE_SECONDS:300}
+    ttl-seconds: ${HOME_CACHE_TTL_SECONDS:120}
+    stale-seconds: ${HOME_CACHE_STALE_SECONDS:600}
     authenticated:
       ttl-seconds: ${AUTH_HOME_CACHE_TTL_SECONDS:300}
       stale-seconds: ${AUTH_HOME_CACHE_STALE_SECONDS:900}
@@ -309,7 +349,7 @@ recommendation:
   # 점수·순위·shadow 기록은 여전히 요청마다 계산된다 — DB 스캔만 재사용.
   home-parts:
     candidate-cache:
-      ttl-seconds: ${HOME_PARTS_CANDIDATE_CACHE_TTL_SECONDS:30}
+      ttl-seconds: ${HOME_PARTS_CANDIDATE_CACHE_TTL_SECONDS:120}
   reranker:
     enabled: ${RECOMMENDATION_RERANKER_ENABLED:false}
     shadow-enabled: ${RECOMMENDATION_RERANKER_SHADOW_ENABLED:true}
@@ -341,12 +381,26 @@ build:
   history-cache:
     ttl-seconds: ${BUILD_HISTORY_CACHE_TTL_SECONDS:15}
 
+quote:
+  # 사용자별 활성 draft 읽기 캐시 TTL(초). 0이면 캐시 끔. 담기/AI 적용/수량/삭제가 즉시 무효화하므로
+  # 같은 인스턴스에서 read-your-writes는 TTL과 무관하게 유지된다 — TTL은 인스턴스 밖 변경
+  # (가격 일일 cron, 수평 확장 시 타 인스턴스 쓰기) 반영 지연의 상한이다.
+  draft-read-cache:
+    ttl-seconds: ${QUOTE_DRAFT_READ_CACHE_TTL_SECONDS:15}
+
 part:
   # 순수 카탈로그 조회(GET /api/parts, draft compatibility 제외) 인메모리 캐시 TTL(초). 0이면 캐시 끔.
   query-cache:
     ttl-seconds: ${PART_QUERY_CACHE_TTL_SECONDS:30}
+  # draft 기반 호환성 평가 응답(전수 평가·정렬 완료본, 페이지 자르기 전) 단기 캐시 TTL(초). 0이면 캐시 끔.
+  # 캐시 키에 draft 내용 서명(part_id×quantity)이 포함되어 draft 변경은 TTL과 무관하게 즉시 반영된다 —
+  # TTL은 가격/판매상태 변경(일 1회 배치) 반영 지연의 상한일 뿐이다.
+  compatibility-cache:
+    ttl-seconds: ${PART_COMPATIBILITY_CACHE_TTL_SECONDS:15}
   price-refresh:
     enabled: ${PART_PRICE_REFRESH_ENABLED:true}
+    worker:
+      enabled: ${PART_PRICE_REFRESH_WORKER_ENABLED:true}
     cron: "${PART_PRICE_REFRESH_CRON:0 0 4 * * *}"
     zone: "${PART_PRICE_REFRESH_ZONE:Asia/Seoul}"
   danawa-refresh:

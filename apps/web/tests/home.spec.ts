@@ -878,6 +878,265 @@ test('shows the login choice prompt before dismissed and opens AI flow choices',
   await expect(aiFlowDialog.getByTestId('home-ai-flow-choice-all-parts')).toBeVisible();
 });
 
+// 중앙 AI 모달은 인라인 ref로 컨테이너를 넘겨, 리렌더마다 스크롤 컨테이너가 재부착되며
+// 바닥으로 튕겨 내려가던 회귀가 있었다(#255). 위로 올린 위치는 타이핑·리렌더에도 유지돼야 한다.
+test('홈 중앙 AI 모달에서 위로 올린 스크롤 위치가 타이핑·리렌더에도 유지된다', async ({ page }) => {
+  await mockCurrentQuoteDraftApi(page);
+  const longAnswer = Array.from({ length: 12 }, (_, index) => (
+    `${index + 1}번째 근거 문단입니다. 현재 구성의 전력·발열·장착 여유와 게임별 예상 성능을 근거 수치와 함께 길게 설명하는 문단입니다.`
+  )).join(' ');
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ answerType: 'GENERAL', message: longAnswer, builds: [], warnings: [] })
+    });
+  });
+  await openHomeAsUser(page, { dismissHomeChoice: false });
+  await page.getByTestId('home-login-choice-dialog').getByTestId('home-login-choice-ai').click();
+  await page.getByTestId('home-ai-flow-choice-dialog').getByTestId('home-ai-flow-choice-ai').click();
+
+  const modal = page.getByTestId('ai-chatbot-modal');
+  await expect(modal).toBeVisible();
+  const input = modal.getByRole('textbox', { name: 'AI에게 PC 견적 질문' });
+  await input.fill('게이밍 200만원');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  const messages = modal.getByTestId('ai-chat-messages');
+  await expect(messages).toContainText('12번째 근거 문단입니다', { timeout: 20000 });
+  await expect.poll(async () => messages.evaluate((element) => element.scrollHeight - element.clientHeight))
+    .toBeGreaterThan(100);
+
+  // 위로 올려 이전 대화를 읽는 중.
+  await messages.evaluate((element) => { element.scrollTop = 0; });
+  expect(await messages.evaluate((element) => element.scrollTop)).toBeLessThan(50);
+
+  // 입력창에 타이핑하면 리렌더가 발생한다 — 그래도 읽던 위치가 유지돼야 한다.
+  await input.pressSequentially('추천', { delay: 30 });
+  expect(await messages.evaluate((element) => element.scrollTop)).toBeLessThan(50);
+
+  // 휠로 조금 내려도 강제로 바닥까지 끌려가지 않는다.
+  await messages.evaluate((element) => { element.scrollTop = 120; });
+  await input.pressSequentially('해줘', { delay: 30 });
+  const afterTyping = await messages.evaluate((element) => ({
+    top: element.scrollTop,
+    bottom: element.scrollHeight - element.clientHeight
+  }));
+  expect(afterTyping.top).toBeLessThan(afterTyping.bottom - 50);
+});
+
+// 제보 재현: "9700x3d 상세페이지로 이동해줘"에 "이동할게요"라고 답만 하고 화면은 그대로였다.
+// 서버가 해상해 준 이동 경로가 응답에 실려 오면 실제로 그 화면까지 가야 한다.
+test('AI가 상품 상세로 이동하겠다고 답하면 그 상세 화면으로 실제 이동한다', async ({ page }) => {
+  await mockCurrentQuoteDraftApi(page);
+  await page.route('**/api/parts/part-*', async (route) => {
+    const partId = decodeURIComponent(route.request().url().split('/').pop() ?? 'part-cpu-9800x3d');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(partDetail(partId))
+    });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '9800X3D 상세페이지로 이동할게요.',
+        builds: [],
+        warnings: [],
+        actions: [{
+          type: 'OPEN_ROUTE',
+          label: '상품 상세 보기',
+          payload: { route: '/parts/part-cpu-9800x3d' }
+        }]
+      })
+    });
+  });
+  await openHomeAsUser(page, { dismissHomeChoice: false });
+  await page.getByTestId('home-login-choice-dialog').getByTestId('home-login-choice-ai').click();
+  await page.getByTestId('home-ai-flow-choice-dialog').getByTestId('home-ai-flow-choice-ai').click();
+
+  const modal = page.getByTestId('ai-chatbot-modal');
+  await expect(modal).toBeVisible();
+  await modal.getByRole('textbox', { name: 'AI에게 PC 견적 질문' }).fill('9800X3D 상세페이지로 이동해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await expect(page).toHaveURL(/\/parts\/part-cpu-9800x3d$/);
+  // 주소만 바뀌고 전체화면 챗 모달이 그대로 덮고 있으면 사용자 눈에는 이동이 없는 것과 같다.
+  await expect(modal).toBeHidden();
+  const centerOfScreen = await page.evaluate(() => {
+    const element = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+    return element?.closest('[data-testid="ai-chatbot-modal"]') != null;
+  });
+  expect(centerOfScreen).toBe(false);
+});
+
+// 상품이 한 개로 특정되지 않으면 서버가 후보 칩으로 되묻는다. 칩 문구가 그대로 다음 질문이 되어
+// 상품이 하나로 좁혀지고, 그때 비로소 상세로 이동한다 — 이 왕복이 끊기면 되묻기가 막다른 길이 된다.
+test('상품이 여러 개면 후보 칩으로 되묻고, 칩을 고르면 그 상세로 이동한다', async ({ page }) => {
+  await mockCurrentQuoteDraftApi(page);
+  const chipLabel = 'AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해';
+  await page.route('**/api/parts/part-*', async (route) => {
+    const partId = decodeURIComponent(route.request().url().split('/').pop() ?? 'part-cpu-9800x3d');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(partDetail(partId))
+    });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { message?: string };
+    const pickedOne = body.message === chipLabel;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(pickedOne
+        ? {
+          answerType: 'GENERAL',
+          message: '해당 CPU 상세페이지로 이동할게요.',
+          builds: [],
+          warnings: [],
+          actions: [{ type: 'OPEN_ROUTE', label: '상품 상세 보기', payload: { route: '/parts/part-cpu-9800x3d' } }]
+        }
+        : {
+          answerType: 'GENERAL',
+          message: "'9800X3D'에 해당하는 상품이 2개예요. 어느 쪽인지 골라 주세요.",
+          builds: [],
+          warnings: [],
+          quickReplies: [chipLabel, 'AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티 상세페이지로 이동해']
+        })
+    });
+  });
+  await openHomeAsUser(page, { dismissHomeChoice: false });
+  await page.getByTestId('home-login-choice-dialog').getByTestId('home-login-choice-ai').click();
+  await page.getByTestId('home-ai-flow-choice-dialog').getByTestId('home-ai-flow-choice-ai').click();
+
+  const modal = page.getByTestId('ai-chatbot-modal');
+  await modal.getByRole('textbox', { name: 'AI에게 PC 견적 질문' }).fill('9800X3D 상세페이지로 이동해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  // 되묻는 턴에서는 이동하지 않는다 — 고를 기회를 준다.
+  await expect(modal.getByTestId('ai-quick-replies').getByRole('button', { name: chipLabel })).toBeVisible({ timeout: 20000 });
+  await expect(page).toHaveURL(/\/$/);
+
+  await modal.getByTestId('ai-quick-replies').getByRole('button', { name: chipLabel }).click();
+  await expect(page).toHaveURL(/\/parts\/part-cpu-9800x3d$/);
+  await expect(modal).toBeHidden();
+});
+
+// 응답이 늦게 오는 사이 사용자가 챗을 닫으면, 그 사람은 이미 이동을 그만둔 것이다.
+// 뒤늦게 화면을 끌고 가면 "가만히 있는데 화면이 튄다"가 된다 — 답변만 남기고 이동은 포기해야 한다.
+test('이동 응답이 늦게 와도 사용자가 챗을 닫았으면 화면을 끌고 가지 않는다', async ({ page }) => {
+  await mockCurrentQuoteDraftApi(page);
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '9800X3D 상세페이지로 이동할게요.',
+        builds: [],
+        warnings: [],
+        actions: [{ type: 'OPEN_ROUTE', label: '상품 상세 보기', payload: { route: '/parts/part-cpu-9800x3d' } }]
+      })
+    });
+  });
+  await openHomeAsUser(page, { dismissHomeChoice: false });
+  await page.getByTestId('home-login-choice-dialog').getByTestId('home-login-choice-ai').click();
+  await page.getByTestId('home-ai-flow-choice-dialog').getByTestId('home-ai-flow-choice-ai').click();
+
+  const modal = page.getByTestId('ai-chatbot-modal');
+  await modal.getByRole('textbox', { name: 'AI에게 PC 견적 질문' }).fill('9800X3D 상세페이지로 이동해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await page.getByTestId('ai-chat-close-button').click();
+  await expect(modal).toBeHidden();
+
+  // 응답이 도착하고도 남을 시간을 준 뒤에 본다.
+  await page.waitForTimeout(2500);
+  await expect(page).toHaveURL(/\/$/);
+});
+
+// 같은 화면으로 다시 이동하면 주소는 그대로인데 뒤로가기 기록만 쌓여, 뒤로가기가 먹지 않는 것처럼 보인다.
+test('이미 그 화면에 있으면 같은 주소로 다시 이동하지 않는다', async ({ page }) => {
+  await mockCurrentQuoteDraftApi(page);
+  await page.route('**/api/parts/part-*', async (route) => {
+    const partId = decodeURIComponent(route.request().url().split('/').pop() ?? 'part-cpu-9800x3d');
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(partDetail(partId)) });
+  });
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '9800X3D 상세페이지로 이동할게요.',
+        builds: [],
+        warnings: [],
+        actions: [{ type: 'OPEN_ROUTE', label: '상품 상세 보기', payload: { route: '/parts/part-cpu-9800x3d' } }]
+      })
+    });
+  });
+  await openHomeAsUser(page, { dismissHomeChoice: false });
+  await page.getByTestId('home-login-choice-dialog').getByTestId('home-login-choice-ai').click();
+  await page.getByTestId('home-ai-flow-choice-dialog').getByTestId('home-ai-flow-choice-ai').click();
+
+  const modal = page.getByTestId('ai-chatbot-modal');
+  await modal.getByRole('textbox', { name: 'AI에게 PC 견적 질문' }).fill('9800X3D 상세페이지로 이동해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page).toHaveURL(/\/parts\/part-cpu-9800x3d$/);
+
+  // 도착한 화면에서 같은 상품을 한 번 더 물어본다 — 서버는 같은 주소를 다시 내려준다.
+  await page.getByTestId('ai-chatbot-launcher').click();
+  const askAgain = page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' });
+  await expect(askAgain).toBeVisible();
+  const historyBefore = await page.evaluate(() => window.history.length);
+  await askAgain.fill('9800X3D 상세페이지로 이동해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  // 이미 그 화면이므로 패널만 닫혀 도착 화면이 드러난다 — 이 닫힘이 두 번째 턴이 끝난 신호다.
+  await expect(askAgain).toBeHidden();
+
+  expect(await page.evaluate(() => window.history.length)).toBe(historyBefore);
+  await expect(page).toHaveURL(/\/parts\/part-cpu-9800x3d$/);
+  // 기록이 쌓이지 않았으니 뒤로가기 한 번으로 원래 화면(홈)까지 돌아간다.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/$/);
+});
+
+// 이동 경로는 서버가 화이트리스트로 만들지만, 프론트도 앱 내부 절대경로만 따라간다.
+test('AI 응답이 앱 밖 주소를 이동 대상으로 주면 따라가지 않는다', async ({ page }) => {
+  await mockCurrentQuoteDraftApi(page);
+  await page.route('**/api/ai/build-chat', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        answerType: 'GENERAL',
+        message: '상세페이지로 이동할게요.',
+        builds: [],
+        warnings: [],
+        actions: [{
+          type: 'OPEN_ROUTE',
+          label: '상품 상세 보기',
+          payload: { route: '//example.invalid/phishing' }
+        }]
+      })
+    });
+  });
+  await openHomeAsUser(page, { dismissHomeChoice: false });
+  await page.getByTestId('home-login-choice-dialog').getByTestId('home-login-choice-ai').click();
+  await page.getByTestId('home-ai-flow-choice-dialog').getByTestId('home-ai-flow-choice-ai').click();
+
+  const modal = page.getByTestId('ai-chatbot-modal');
+  await modal.getByRole('textbox', { name: 'AI에게 PC 견적 질문' }).fill('상세페이지로 이동해줘');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+
+  await expect(modal.getByTestId('ai-chat-messages')).toContainText('이동할게요');
+  await expect(page).not.toHaveURL(/example\.invalid/);
+});
+
 test('renders the editorial home with the quote validation flow', async ({ page }) => {
   await mockCurrentQuoteDraftApi(page);
   await openHomeAsUser(page);
@@ -1143,6 +1402,154 @@ test('chatbot gives symptom-based possibilities and connects to the separate Age
 });
 
 // AI 대화창에서 말한 증상을 [PC Agent로 바로 접수]가 설치된 에이전트로 그대로 전달한다 (팀장 데모 시나리오 3번).
+async function openPcAgentGuidanceForConnectionTest(page: Page, symptomText = 'pc가 버벅여') {
+  await page.route('**/api/ai/build-chat', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      answerType: 'GENERAL',
+      message: '끊김 또는 성능 저하 증상으로 이해했습니다.',
+      builds: [],
+      warnings: [],
+      supportGuidance: {
+        type: 'PC_AGENT_DIAGNOSTIC_ENTRY',
+        scope: 'PRE_DIAGNOSIS',
+        symptomCategory: 'PERFORMANCE_STUTTER',
+        title: '끊김·성능 저하',
+        summary: '작업 부하 등이 원인 후보로 예상됩니다.',
+        possibleCauses: ['작업 부하'],
+        beforeDiagnosisChecks: ['증상 직후 PC Agent 진단을 실행해 주세요.'],
+        agentRecommendation: 'RECOMMENDED',
+        actions: [
+          { type: 'DOWNLOAD_PC_AGENT', label: 'PC Agent 다운로드' },
+          { type: 'OPEN_SUPPORT_NEW', label: 'AS 접수 화면 보기', route: '/support/new' }
+        ],
+        disclaimer: '입력한 증상만으로 예상한 가능성입니다.'
+      }
+    })
+  }));
+  await page.addInitScript(() => {
+    const originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function click() {
+      if (this.href.startsWith('buildgraph-pc-agent:')) {
+        const target = window as Window & { __pcAgentProtocolLaunches?: string[] };
+        target.__pcAgentProtocolLaunches = [...(target.__pcAgentProtocolLaunches ?? []), this.href];
+        return;
+      }
+      originalClick.call(this);
+    };
+  });
+  await openHomeAsUser(page);
+  await openDesktopAiAssistant(page);
+  await page.getByRole('textbox', { name: 'AI 챗봇에게 PC 사양 질문' }).fill(symptomText);
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  const guidance = page.getByTestId('ai-support-guidance');
+  await expect(guidance).toBeVisible();
+  return guidance;
+}
+
+async function advancePcAgentConnectionClock(page: Page, milliseconds: number) {
+  for (let elapsed = 0; elapsed < milliseconds; elapsed += 500) {
+    await page.clock.runFor(Math.min(500, milliseconds - elapsed));
+    await page.waitForTimeout(0);
+  }
+}
+
+test('connected PC Agent skips protocol launch and submits once', async ({ page }) => {
+  let diagnosisPosts = 0;
+  await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ connected: true })
+  }));
+  await page.route('**/api/users/me/agent-diagnosis-requests', (route) => {
+    diagnosisPosts += 1;
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ diagnosisId: 'connected-diag', deviceId: 'device-1', status: 'ACCEPTED' })
+    });
+  });
+  const guidance = await openPcAgentGuidanceForConnectionTest(page);
+
+  await guidance.getByTestId('ai-agent-diagnosis-request').click();
+  await expect(page).toHaveURL(/diagnosisId=connected-diag/);
+
+  expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches ?? [])).toEqual([]);
+  expect(diagnosisPosts).toBe(1);
+});
+
+for (const connectionDelayMs of [15_000, 30_000]) {
+  test(`waits for a PC Agent connected after ${connectionDelayMs / 1000} seconds without duplicate launch or diagnosis`, async ({ page }) => {
+    let connected = false;
+    let diagnosisPosts = 0;
+    await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ connected })
+    }));
+    await page.route('**/api/users/me/agent-diagnosis-requests', (route) => {
+      diagnosisPosts += 1;
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ diagnosisId: `delayed-${connectionDelayMs}`, deviceId: 'device-1', status: 'ACCEPTED' })
+      });
+    });
+    const guidance = await openPcAgentGuidanceForConnectionTest(page);
+    await page.clock.install();
+    const submit = guidance.getByTestId('ai-agent-diagnosis-request');
+
+    await submit.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PCAgent 열기를 승인해 주세요.');
+    await page.clock.runFor(connectionDelayMs);
+    expect(diagnosisPosts).toBe(0);
+    connected = true;
+    await page.clock.runFor(1_000);
+    await expect(page).toHaveURL(new RegExp(`diagnosisId=delayed-${connectionDelayMs}`));
+
+    expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches)).toEqual([
+      'buildgraph-pc-agent://open'
+    ]);
+    expect(diagnosisPosts).toBe(1);
+  });
+}
+
+test('reports timeout only after 45 seconds and aborts polling when unmounted', async ({ page }) => {
+  let connectionChecks = 0;
+  let diagnosisPosts = 0;
+  await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => {
+    connectionChecks += 1;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ connected: false }) });
+  });
+  await page.route('**/api/users/me/agent-diagnosis-requests', (route) => {
+    diagnosisPosts += 1;
+    return route.abort();
+  });
+  const guidance = await openPcAgentGuidanceForConnectionTest(page);
+  await page.clock.install();
+  await guidance.getByTestId('ai-agent-diagnosis-request').click();
+  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PCAgent 열기를 승인해 주세요.');
+
+  await advancePcAgentConnectionClock(page, 44_000);
+  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).not.toContainText('시간이 초과됐습니다');
+  expect(diagnosisPosts).toBe(0);
+  await advancePcAgentConnectionClock(page, 1_000);
+  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PC Agent 연결 시간이 초과됐습니다.');
+  expect(diagnosisPosts).toBe(0);
+
+  await guidance.getByTestId('ai-agent-diagnosis-request').click();
+  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PCAgent 열기를 승인해 주세요.');
+  const checksBeforeUnmount = connectionChecks;
+  await page.getByRole('button', { name: 'AI 견적 챗봇 닫기' }).click();
+  await page.clock.runFor(45_000);
+  expect(connectionChecks).toBe(checksBeforeUnmount);
+  expect(diagnosisPosts).toBe(0);
+});
+
 test('chatbot support guidance submits the spoken symptom to the installed PC Agent', async ({ page }) => {
   const symptomText = '게임 중 화면이 갑자기 검게 변하고 몇 초 뒤 다시 나옵니다.';
   const guidancePayload = {
@@ -1173,28 +1580,67 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
       })
     });
   });
+  await page.addInitScript(() => {
+    const originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function click() {
+      if (this.href.startsWith('buildgraph-pc-agent:')) {
+        const target = window as Window & { __pcAgentProtocolLaunches?: string[] };
+        target.__pcAgentProtocolLaunches = [...(target.__pcAgentProtocolLaunches ?? []), this.href];
+        return;
+      }
+      originalClick.call(this);
+    };
+  });
   const diagnosisBodies: Array<{ symptom?: string; mode?: string; requestedChecks?: string[] }> = [];
-  let diagnosisResponseStatus: 'ACCEPTED' | 'DISCONNECTED' = 'DISCONNECTED';
+  let connectionChecks = 0;
+  let diagnosisGetCount = 0;
+  await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ connected: ++connectionChecks > 1 })
+  }));
   await page.route('**/api/users/me/agent-diagnosis-requests', async (route) => {
-    diagnosisBodies.push(JSON.parse(route.request().postData() ?? '{}'));
-    if (diagnosisResponseStatus === 'DISCONNECTED') {
-      await route.fulfill({
-        status: 409,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 'AGENT_DISCONNECTED', message: 'no agent' })
-      });
-      return;
-    }
+    const requestBody = JSON.parse(route.request().postData() ?? '{}');
+    diagnosisBodies.push(requestBody);
     await route.fulfill({
-      status: 200,
+      status: 201,
       contentType: 'application/json',
       body: JSON.stringify({
         diagnosisId: 'diag-e2e-1',
         deviceId: 'device-1',
         requestedAt: '2026-07-15T00:00:00Z',
         expiresAt: '2026-07-15T00:05:00Z',
-        mode: 'LIVE',
+        mode: requestBody.mode,
         status: 'ACCEPTED'
+      })
+    });
+  });
+  await page.route('**/api/users/me/agent-diagnosis-requests/diag-e2e-1', (route) => {
+    diagnosisGetCount += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        diagnosisId: 'diag-e2e-1', status: 'ACCEPTED', connectionStatus: 'CONNECTED',
+        agentConnected: true, accepted: true, currentProgress: 100, currentTask: 'evidence-finalize',
+        events: [{
+          eventId: 'event-1', taskId: 'graphics-device-state', eventType: 'PROGRESS_UPDATED',
+          status: 'COMPLETED', progressPercent: 100, message: '진단을 완료했습니다.',
+          occurredAt: '2026-07-15T00:00:05Z', createdAt: '2026-07-15T00:00:05Z'
+        }],
+        completed: true, resolutionType: 'SOFTWARE_RECOVERY', dataMode: 'DEMO',
+        scenarioId: 'GRAPHICS_CODE43_REMOTE_SUPPORT',
+        result: {
+          resultId: 'result-1', diagnosisType: 'DEVICE_DRIVER_CONFIGURATION_ISSUE', severity: 'WARNING',
+          title: '그래픽 장치·드라이버 구성 이상', summary: 'Arc A350M Code 43 상태가 확인되었습니다.',
+          resolutionType: 'SOFTWARE_RECOVERY', canAutoRecover: false,
+          evidence: [{ metricType: 'PNP_PROBLEM_CODE', device: 'Intel Arc A350M', value: 43 }],
+          findings: [{ code: 'GRAPHICS_DEVICE_CODE_43' }], actions: ['원격 점검을 권장합니다.'],
+          dataMode: 'DEMO', scenarioId: 'GRAPHICS_CODE43_REMOTE_SUPPORT',
+          rawPayload: { remoteAsRecommended: true },
+          createdAt: '2026-07-15T00:00:05Z', updatedAt: '2026-07-15T00:00:05Z'
+        },
+        createdAt: '2026-07-15T00:00:00Z', updatedAt: '2026-07-15T00:00:05Z'
       })
     });
   });
@@ -1207,21 +1653,33 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   const guidance = page.getByTestId('ai-support-guidance');
   await expect(guidance).toBeVisible();
   const submit = guidance.getByTestId('ai-agent-diagnosis-request');
+  const demoMode = guidance.getByRole('switch', { name: '시연 모드' });
   await expect(submit).toContainText('PC Agent로 바로 접수');
+  await expect(demoMode).toHaveAttribute('aria-checked', 'false');
+  await expect(guidance).toContainText('실시간 측정');
 
-  // 1) 에이전트 미실행: 안내 문구가 뜨고 재시도 가능해야 한다.
+  // 에이전트 미실행 상태는 프로토콜로 한 번 깨운 뒤, 연결 확인 후 diagnosis POST를 한 번만 보낸다.
+  await demoMode.click();
+  await expect(demoMode).toHaveAttribute('aria-checked', 'true');
+  await expect(guidance).toContainText('Code 43 시연 모드');
   await submit.click();
-  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('실행 중인 PC Agent가 없습니다');
-  expect(diagnosisBodies[0].symptom).toBe(symptomText); // 대화에서 말한 증상이 그대로 전달된다
-  expect(diagnosisBodies[0].mode).toBe('LIVE');
+  await expect(page).toHaveURL(/\/support\/new\?diagnosisId=diag-e2e-1$/);
+  await expect(page.getByTestId('pc-agent-diagnosis-result')).toContainText('그래픽 장치·드라이버 구성 이상');
+  expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches)).toEqual([
+    'buildgraph-pc-agent://open'
+  ]);
+  expect(diagnosisBodies).toHaveLength(1);
+  expect(diagnosisBodies[0].symptom).toBe(symptomText);
+  expect(diagnosisBodies[0].mode).toBe('DEMO');
+  const terminalGetCount = diagnosisGetCount;
+  expect(terminalGetCount).toBeGreaterThan(0);
+  await page.waitForTimeout(2_300);
+  expect(diagnosisGetCount).toBe(terminalGetCount);
 
-  // 2) 에이전트 연결됨: 접수 성공 + 버튼이 접수 완료로 잠긴다.
-  diagnosisResponseStatus = 'ACCEPTED';
-  await submit.click();
-  await expect(guidance.getByTestId('ai-agent-diagnosis-status')).toContainText('PC Agent가 증상을 접수했습니다');
-  await expect(submit).toContainText('접수 완료');
-  await expect(submit).toBeDisabled();
-  expect(diagnosisBodies[1].symptom).toBe(symptomText);
+  await page.reload();
+  await expect(page.getByTestId('pc-agent-diagnosis-result')).toContainText('그래픽 장치·드라이버 구성 이상');
+  expect(diagnosisBodies).toHaveLength(1);
+  expect(diagnosisGetCount).toBeGreaterThan(1);
 });
 
 test('docks the desktop AI assistant and shifts the page while open', async ({ page }) => {
@@ -1866,6 +2324,7 @@ test('renders a temporary chatbot build detail and saves it to a persisted build
   const latestBuilds = budgetBuilds(2_000_000);
   const temporaryBuild = latestBuilds[1];
   const saveRequests: unknown[] = [];
+  const buildGraphRequests = await mockBuildGraphApi(page);
   await page.route('**/api/builds/from-chat', async (route) => {
     const requestBody = JSON.parse(route.request().postData() ?? '{}');
     saveRequests.push(requestBody);
@@ -1911,6 +2370,29 @@ test('renders a temporary chatbot build detail and saves it to a persisted build
   await expect(page.getByRole('heading', { name: `추천 견적 결과 / ${temporaryBuild.title}` })).toBeVisible();
   await expect(page.getByText('저장 전 AI 챗봇 추천')).toBeVisible();
   await expect(page.getByRole('link', { name: temporaryBuild.items[0].name })).toBeVisible();
+  const partsPanel = page.getByRole('heading', { name: '구성 부품' }).locator('..').locator('..').locator('..');
+  const partsTable = partsPanel.getByRole('table');
+  await expect(partsTable.getByRole('columnheader', { name: '호환성' })).toBeVisible();
+  await expect(partsTable.getByText('활성', { exact: true })).toHaveCount(0);
+  const gpuItem = temporaryBuild.items.find((item) => item.category === 'GPU');
+  const gpuRow = partsTable.getByRole('row').filter({ hasText: gpuItem?.name ?? 'GPU' });
+  await expect(gpuRow.getByText('주의', { exact: true })).toBeVisible();
+  await expect.poll(() => buildGraphRequests.length).toBeGreaterThan(0);
+  expect(buildGraphRequests[0]).toMatchObject({
+    source: 'AI_BUILD',
+    items: expect.arrayContaining([
+      expect.objectContaining({ category: 'GPU', partId: gpuItem?.partId, quantity: gpuItem?.quantity })
+    ])
+  });
+  await expect(page.getByRole('heading', { name: '검증 결과' })).toHaveCount(0);
+  const summaryPanel = page.getByRole('heading', { name: '견적 요약 / 액션' }).locator('..').locator('..').locator('..');
+  await expect(partsPanel.getByText('검증 요약', { exact: true })).toBeVisible();
+  await expect(partsPanel.getByText('1/1 통과', { exact: true })).toBeVisible();
+  await expect(summaryPanel.getByText('검증 요약', { exact: true })).toHaveCount(0);
+  const [partsBox, summaryBox] = await Promise.all([partsPanel.boundingBox(), summaryPanel.boundingBox()]);
+  expect(partsBox).not.toBeNull();
+  expect(summaryBox).not.toBeNull();
+  expect(Math.abs((partsBox?.height ?? 0) - (summaryBox?.height ?? 0))).toBeLessThanOrEqual(1);
   await page.getByRole('button', { name: '견적 저장' }).click();
 
   await expect.poll(() => saveRequests.length).toBe(1);

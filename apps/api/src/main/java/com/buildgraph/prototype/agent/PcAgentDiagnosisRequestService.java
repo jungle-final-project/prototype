@@ -74,7 +74,14 @@ public class PcAgentDiagnosisRequestService {
                 mode
         );
         storeRequest(user.internalId(), request);
-        PcAgentDiagnosisSocketBroker.AgentResponse response = broker.dispatchAndAwait(request);
+        PcAgentDiagnosisSocketBroker.AgentResponse response;
+        try {
+            response = broker.dispatchAndAwait(request);
+            markAgentResponse(request.diagnosisId(), response.status());
+        } catch (RuntimeException error) {
+            markDispatchFailed(request.diagnosisId(), error);
+            throw error;
+        }
         return MockData.map(
                 "diagnosisId", request.diagnosisId(),
                 "deviceId", request.deviceId(),
@@ -84,6 +91,41 @@ public class PcAgentDiagnosisRequestService {
                 "status", response.status(),
                 "message", response.message()
         );
+    }
+
+    public Map<String, Object> connectionStatus(CurrentUserService.CurrentUser user) {
+        return MockData.map("connected", ownedDeviceIds(user.internalId()).stream().anyMatch(broker::isConnected));
+    }
+
+    private void markAgentResponse(String diagnosisId, String status) {
+        int updated = jdbcTemplate.update("""
+                UPDATE pc_agent_diagnosis_requests
+                SET request_status = ?,
+                    connection_status = 'CONNECTED',
+                    accepted_at = CASE
+                      WHEN ? IN ('ACCEPTED', 'DUPLICATE') THEN COALESCE(accepted_at, now())
+                      ELSE accepted_at
+                    END,
+                    updated_at = now()
+                WHERE diagnosis_id = ?::uuid
+                """, status, status, diagnosisId);
+        if (updated != 1) {
+            throw new IllegalStateException("Stored PC Agent diagnosis request was not found.");
+        }
+    }
+
+    private void markDispatchFailed(String diagnosisId, RuntimeException error) {
+        String connectionStatus = error instanceof ApiException apiError
+                && Set.of("AGENT_DISCONNECTED", "AGENT_CONNECTION_FAILED").contains(apiError.code())
+                ? "DISCONNECTED"
+                : "CONNECTED";
+        jdbcTemplate.update("""
+                UPDATE pc_agent_diagnosis_requests
+                SET request_status = 'DISPATCH_FAILED',
+                    connection_status = ?,
+                    updated_at = now()
+                WHERE diagnosis_id = ?::uuid
+                """, connectionStatus, diagnosisId);
     }
 
     private void storeRequest(Long userInternalId, PcAgentDiagnosisRequest request) {
@@ -133,22 +175,27 @@ public class PcAgentDiagnosisRequestService {
     }
 
     private String connectedDeviceId(Long userInternalId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
-                SELECT public_id::text AS device_id
-                FROM agent_devices
-                WHERE user_id = ?
-                  AND status IN ('ACTIVE', 'UPDATE_REQUIRED')
-                ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
-                """, userInternalId);
-        return rows.stream()
-                .map(row -> DbValueMapper.string(row, "device_id"))
-                .filter(deviceId -> deviceId != null && broker.isConnected(deviceId))
+        return ownedDeviceIds(userInternalId).stream()
+                .filter(broker::isConnected)
                 .findFirst()
                 .orElseThrow(() -> new ApiException(
                         HttpStatus.CONFLICT,
                         "AGENT_DISCONNECTED",
                         "현재 연결된 PC Agent가 없습니다. PC Agent 실행 상태를 확인해 주세요."
                 ));
+    }
+
+    private List<String> ownedDeviceIds(Long userInternalId) {
+        return jdbcTemplate.queryForList("""
+                SELECT public_id::text AS device_id
+                FROM agent_devices
+                WHERE user_id = ?
+                  AND status IN ('ACTIVE', 'UPDATE_REQUIRED')
+                ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
+                """, userInternalId).stream()
+                .map(row -> DbValueMapper.string(row, "device_id"))
+                .filter(deviceId -> deviceId != null)
+                .toList();
     }
 
     private static List<String> normalizeChecks(List<String> requestedChecks) {

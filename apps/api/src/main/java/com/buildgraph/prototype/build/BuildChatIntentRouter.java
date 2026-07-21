@@ -53,6 +53,31 @@ public class BuildChatIntentRouter {
         String partQuery = PartRouteResolver.extractPartQuery(message);
         boolean hasDraftItems = !objectMaps(objectMap(body.get("currentQuoteDraft")).get("items")).isEmpty();
 
+        // 되묻기 칩이 보낸 문장은 새 요청이 아니라 "상품 하나를 고른 것"이다. 라벨은 DB 상품명 전문이라
+        // 어떤 어휘든 들어온다 — 실제 자산에 "게임PC 조립용 메인보드", "팬 1개 포함", "데스크톱 컴퓨터"가
+        // 그대로 있어 표층 어휘로 분류하면 견적 추천으로 새고, "어느 쪽인지 골라 주세요"에 답했는데
+        // 견적 카드가 나온다. 표식이 있으면 문장을 읽지 않고 이동 경로로 확정한다 —
+        // 상품명 사전을 늘려 막는 방식은 카탈로그가 갱신되면 다시 뚫린다.
+        if (isRouteChoiceSelection(body)) {
+            return decision(BuildChatIntent.UNSUPPORTED, "HIGH", "NONE", category, partQuery,
+                    "FAST_PART_DETAIL_ROUTE", "NONE", null, List.of("ROUTE_CHOICE_SELECTION"));
+        }
+
+        String historyMode = draftHistoryMode(body, normalized);
+        if (historyMode != null) {
+            return decision(
+                    BuildChatIntent.OPEN_DRAFT_HISTORY,
+                    "HIGH",
+                    "NONE",
+                    (String) null,
+                    null,
+                    "FAST_DRAFT_HISTORY",
+                    "NONE",
+                    null,
+                    List.of(historyMode)
+            );
+        }
+
         if (isSimulationIntent(normalized, category)) {
             List<String> reasons = new ArrayList<>();
             if (partQuery == null && category != null) {
@@ -101,8 +126,15 @@ public class BuildChatIntentRouter {
         }
 
         if (isBuildRecommend(normalized, message, category)) {
+            // 이동 어휘가 섞인 문장("끝판왕 PC 견적 화면 열어줘")은 semantic 캐시를 쓰지 않는다.
+            // 서명을 만드는 extractPartQuery가 '화면·열어·이동' 같은 이동 어휘를 지워버려서,
+            // 이동 문장과 비이동 문장이 같은 버킷에 들어간다 — 그대로 두면 견적만 물은 사용자가
+            // 남의 이동 응답에 실려 화면이 끌려가고, 반대로 이동 요청이 비이동 응답에 히트해 안 움직인다.
+            String cachePolicy = standaloneContext(body) && !isNavigationCommand(normalized)
+                    ? "SEMANTIC_READ_ONLY"
+                    : "EXACT_ONLY";
             return decision(BuildChatIntent.BUILD_RECOMMEND, "HIGH", "NONE", category, partQuery, "LLM_OR_DETERMINISTIC",
-                    standaloneContext(body) ? "SEMANTIC_READ_ONLY" : "EXACT_ONLY",
+                    cachePolicy,
                     semanticSignature(BuildChatIntent.BUILD_RECOMMEND, category, partQuery, budgetSignature(message)), List.of());
         }
 
@@ -157,6 +189,31 @@ public class BuildChatIntentRouter {
         return containsAny(normalized, "열어", "보여", "이동", "화면", "페이지", "목록", "상세");
     }
 
+    private static String draftHistoryMode(Map<String, Object> body, String normalized) {
+        Map<String, Object> uiContext = objectMap(body.get("uiContext"));
+        if (!"SELF_QUOTE".equalsIgnoreCase(text(uiContext.get("surface")))) {
+            return null;
+        }
+        boolean supported = stringList(uiContext.get("capabilities")).stream()
+                .anyMatch(capability -> "QUOTE_DRAFT_HISTORY".equalsIgnoreCase(capability));
+        if (!supported) {
+            return null;
+        }
+        if (containsAny(normalized,
+                "방금전으로돌", "직전으로돌", "이전견적으로돌", "과거견적으로돌", "견적복원", "되돌려")) {
+            return "RESTORE_CONFIRM";
+        }
+        if (containsAny(normalized,
+                "이전견적과비교", "과거견적과비교", "방금전과비교", "변경전과비교", "견적변경비교")) {
+            return "COMPARE";
+        }
+        if (containsAny(normalized,
+                "변경기록", "견적기록", "과거견적", "이전견적", "견적히스토리", "변경내역")) {
+            return "LIST";
+        }
+        return null;
+    }
+
     private static boolean isExplanationQuestion(String normalized) {
         return containsAny(normalized, "왜", "이유", "설명", "호환", "괜찮아", "병목");
     }
@@ -173,7 +230,7 @@ public class BuildChatIntentRouter {
 
         boolean explicitSymptom = containsAny(normalized,
                 "게임하다멈", "게임중멈", "화면멈", "컴퓨터멈", "pc멈", "프리징", "먹통",
-                "검은화면", "블랙스크린", "블루스크린", "갑자기꺼", "자꾸꺼", "재부팅",
+                "검은화면", "블랙스크린", "블루스크린", "화면이끊", "화면끊", "갑자기꺼", "자꾸꺼", "재부팅",
                 "부팅이안", "부팅안", "전원이안", "전원안들", "튕겨", "튕김", "크래시",
                 "프레임드랍", "화면깨", "과열", "너무뜨거", "온도가너무", "팬소리",
                 "디스크100", "저장공간부족", "인터넷이자꾸끊", "네트워크가끊", "소리가안", "소리안나",
@@ -222,8 +279,14 @@ public class BuildChatIntentRouter {
                 "현재견적", "이견적", "담긴견적", "내견적", "지금견적", "현재구성", "이구성", "지금구성");
         boolean scoreSignal = containsAny(normalized,
                 "종합점수", "총점", "이점수", "점수가", "점수를", "점수왜", "점수설명", "점수낮", "점수높");
+        // "균형/밸런스"는 그 자체로 점수 설명 신호가 아니다 — "개발과 게임 균형 CPU"는 CPU 추천 요청이다.
+        // 이 낱말이 현재 견적 평가를 가리키려면 무엇을 평가할지("현재 견적"·"점수")가 함께 있어야 한다.
+        // 아래 cpuGpuContrast는 "CPU와 GPU 균형이 왜 안 맞아?"를 따로 잡으므로 여기서 빠져도 덮인다.
+        boolean balanceSignal = containsAny(normalized, "균형", "밸런스")
+                && (currentBuildSignal || scoreSignal);
         boolean weaknessSignal = containsAny(normalized,
-                "병목", "약점", "부족한부분", "아쉬운부분", "문제점", "균형", "밸런스");
+                "병목", "약점", "부족한부분", "아쉬운부분", "문제점")
+                || balanceSignal;
         boolean prioritySignal = containsAny(normalized,
                 "뭐부터업그레이드", "무엇부터업그레이드", "뭘먼저업그레이드", "업그레이드우선", "먼저바꿀");
         boolean cpuGpuContrast = containsAny(normalized, "cpu", "씨피유", "프로세서")
@@ -615,6 +678,12 @@ public class BuildChatIntentRouter {
     private static boolean isMissingMonitorContext(String normalized) {
         return containsAny(normalized, "모니터")
                 && containsAny(normalized, "아직안", "안정", "못정", "미정", "모름");
+    }
+
+    /** 되묻기 칩이 보낸 턴인지. 프론트가 quickReplyKind=ROUTE_CHOICE 응답의 칩을 눌렀을 때만 실린다. */
+    static boolean isRouteChoiceSelection(Map<String, Object> request) {
+        Map<String, Object> body = request == null ? Map.of() : request;
+        return "ROUTE_CHOICE".equalsIgnoreCase(firstText(text(body.get("quickReplySource")), ""));
     }
 
     private static boolean standaloneContext(Map<String, Object> body) {

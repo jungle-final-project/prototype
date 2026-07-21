@@ -6,12 +6,13 @@ import { AdminShell, DataTable, Panel, StateMessage } from '../../../components/
 import { AUTH_CHANGED_EVENT, getCachedAuthUser } from '../../../lib/api';
 import { formatSeoulDateTime } from '../../../lib/dateTime';
 import { deleteAdminSupportChatSession, deleteAdminSupportChatVisitReservation, getAdminSupportChatSession, getAdminSupportChatSessions, openAdminSupportChatQueueSocket, openSupportChatSocket, postAdminSupportChatMessage, putAdminSupportChatVisitReservation, type SupportChatSocket } from '../../support/supportChatApi';
+import { SupportChatMessageContent } from '../../support/SupportChatMessageContent';
 import { KoreanStatusBadge } from '../adminDisplay';
 import type { SupportChatContact, SupportChatMessage, SupportChatSessionDto, SupportChatSessionListDto, VisitSupportReservation } from '../../support/types';
 
 const DEFAULT_POLL_MS = 5000;
 const SOCKET_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
-type SocketStatus = 'polling' | 'connecting' | 'reconnecting' | 'connected' | 'disconnected';
+export type SocketStatus = 'polling' | 'connecting' | 'reconnecting' | 'connected' | 'disconnected';
 
 export function AdminSupportChatSessionsPage() {
   const queryClient = useQueryClient();
@@ -601,25 +602,25 @@ export function AdminSupportChatSessionsPage() {
   );
 }
 
-function AdminChatBubble({ message }: { message: SupportChatMessage }) {
+export function AdminChatBubble({ message }: { message: SupportChatMessage }) {
   const isAdmin = message.role === 'ADMIN';
   const isSystem = message.role === 'SYSTEM';
   return (
     <div className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[82%] rounded-md border px-3 py-2 text-sm leading-6 shadow-sm ${
+      <div className={`max-w-[88%] rounded-lg border px-4 py-3 text-[15px] font-semibold leading-6 shadow-sm ${
         isAdmin
           ? 'bg-brand-blue text-white'
           : isSystem
             ? 'border-slate-200 bg-white text-slate-600'
             : 'border-slate-200 bg-white text-slate-900'
       }`}>
-        <div className="mb-1 flex items-center justify-between gap-2 text-[11px] font-bold opacity-75">
+        <div className="mb-1.5 flex items-center justify-between gap-3 text-xs font-bold opacity-80">
           <span>{messageLabel(message)}</span>
           <time className="font-normal opacity-75" dateTime={message.createdAt ?? undefined}>
             {formatDateTime(message.createdAt)}
           </time>
         </div>
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        <SupportChatMessageContent className="whitespace-pre-wrap break-words" content={message.content} />
       </div>
     </div>
   );
@@ -780,7 +781,7 @@ function pollingLabel(list: SupportChatSessionListDto | undefined) {
   return `${polling}ms`;
 }
 
-function socketStatusLabel(status: SocketStatus) {
+export function socketStatusLabel(status: SocketStatus) {
   switch (status) {
     case 'connected':
       return '실시간 연결';
@@ -795,7 +796,7 @@ function socketStatusLabel(status: SocketStatus) {
   }
 }
 
-function connectionClass(status: SocketStatus) {
+export function connectionClass(status: SocketStatus) {
   switch (status) {
     case 'connected':
       return 'bg-emerald-50 text-emerald-700 border-emerald-200';

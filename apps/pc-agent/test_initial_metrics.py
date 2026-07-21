@@ -172,6 +172,11 @@ class InitialMetricsNormalizerTest(unittest.TestCase):
 
 
 class InitialMetricsCoordinatorTest(unittest.TestCase):
+    def test_default_steady_collection_interval_is_five_seconds(self) -> None:
+        settings = InitialCollectionSettings()
+        self.assertEqual(0.25, settings.interval_seconds(False))
+        self.assertEqual(5.0, settings.interval_seconds(True))
+
     def test_live_mode_uses_only_live_provider_and_completes_with_real_history(self) -> None:
         store = MetricsStore()
         live = StaticProvider((20.0, 80.0, 95.0))
@@ -203,13 +208,14 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         self.assertTrue(snapshot.initial_complete)
         self.assertEqual(1, len(completed))
 
-    def test_demo_mode_never_constructs_live_provider(self) -> None:
+    def test_demo_mode_keeps_live_cpu_ram_and_disk_metrics(self) -> None:
         store = MetricsStore()
-        live_factory_calls: list[bool] = []
+        live = StaticProvider((24.0, 28.0))
+        demo_factory_calls: list[bool] = []
         coordinator = InitialMetricsCoordinator(
             store,
-            live_provider_factory=lambda: live_factory_calls.append(True) or StaticProvider(),
-            demo_provider_factory=DemoSensorProvider,
+            live_provider_factory=lambda: live,
+            demo_provider_factory=lambda: demo_factory_calls.append(True) or DemoSensorProvider(),
             settings=InitialCollectionSettings(2, 0.05, 0.5),
         )
 
@@ -217,9 +223,12 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
         self.assertTrue(coordinator.wait(2.0))
         self.assertTrue(coordinator.stop(1.0))
 
-        self.assertEqual([], live_factory_calls)
+        self.assertEqual([], demo_factory_calls)
+        self.assertEqual(2, live.calls)
         self.assertEqual("DEMO", store.snapshot.mode)
-        self.assertTrue(all(item.source == "demo-scenario" for item in store.snapshot.readings))
+        self.assertTrue(all(item.source != "demo-scenario" for item in store.snapshot.readings))
+        self.assertEqual((24.0, 28.0), store.snapshot.history("cpu", "usage"))
+        self.assertEqual((50.0, 50.0), store.snapshot.history("disk", "usage"))
 
     def test_provider_permission_failure_and_timeout_are_terminal(self) -> None:
         class PermissionProvider:
@@ -310,7 +319,7 @@ class InitialMetricsCoordinatorTest(unittest.TestCase):
             store,
             live_provider_factory=lambda: provider,
             demo_provider_factory=DemoSensorProvider,
-            settings=InitialCollectionSettings(3, 0.01, 0.5),
+            settings=InitialCollectionSettings(3, 0.01, 0.5, steady_interval_seconds=0.01),
             on_update=updates.append,
             on_complete=completed.append,
         )

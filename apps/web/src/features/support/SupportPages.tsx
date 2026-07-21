@@ -8,15 +8,20 @@ import { getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { downloadAgentPackage } from './agentDownload';
 import { prepareSupportLogFile } from './logFileProcessing';
-import { createSupportTicket, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getRemoteSupportState, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, registerRemoteSupportAccessCode, requestPcAgentDiagnosis, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import type { PcAgentDiagnosisResultDto } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
-import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate, SupportChatContact } from './types';
+import { SupportChatMessageContent } from './SupportChatMessageContent';
+import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, RemoteSupportStateDto, SupportChatContact } from './types';
+import { diagnosisStatus, usePcAgentDiagnosisPolling } from './usePcAgentDiagnosisPolling';
+import type { PcAgentDiagnosisPollingState } from './usePcAgentDiagnosisPolling';
 
 type SubmitState = 'default' | 'validation_error' | 'consent_required' | 'uploading' | 'upload_error' | 'ticket_error' | 'ticket_created';
 type AgentDownloadState = 'idle' | 'issuing' | 'done' | 'error';
 type AgentDiagnosisRequestState = 'idle' | 'requesting' | 'accepted' | 'rejected' | 'error';
 type AsRagPreviewState = 'idle' | 'loading' | 'ready' | 'error';
 type SupportRequestKind = 'DIAGNOSIS_ONLY' | 'REMOTE_REQUESTED' | 'VISIT_REQUESTED';
+const CHROME_REMOTE_DESKTOP_SUPPORT_URL = 'https://remotedesktop.google.com/support';
 type ExistingSupportChat = {
   asTicketId: string;
   supportChatRoomId?: string | null;
@@ -197,7 +202,7 @@ export function AsChatPage() {
                   <div key={item.id} className={`flex ${item.role === 'USER' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[88%] break-words rounded px-4 py-3 text-sm leading-6 shadow-sm sm:max-w-[72%] ${item.role === 'USER' ? 'bg-brand-blue text-white' : 'border border-slate-200 bg-white text-slate-800'}`}>
                       <div className="mb-1 text-[11px] font-bold opacity-75">{item.role === 'USER' ? '사용자' : 'AI 상담'}</div>
-                      <p className="whitespace-pre-wrap">{item.content}</p>
+                      <SupportChatMessageContent className="whitespace-pre-wrap" content={item.content} />
                     </div>
                   </div>
                 ))}
@@ -294,8 +299,9 @@ function progressLabel(eventName: string) {
 
 export function SupportNewPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const draftId = searchParams.get('draftId')?.trim() ?? '';
+  const diagnosisIdParam = searchParams.get('diagnosisId')?.trim() ?? '';
   const [symptomTitle, setSymptomTitle] = useState('');
   const [symptomDetail, setSymptomDetail] = useState('');
   const [symptomType, setSymptomType] = useState('REMOTE_DRIVER_OS');
@@ -321,8 +327,10 @@ export function SupportNewPage() {
   const [submitState, setSubmitState] = useState<SubmitState>('default');
   const [agentDownloadState, setAgentDownloadState] = useState<AgentDownloadState>('idle');
   const [agentDownloadMessage, setAgentDownloadMessage] = useState('');
-  const [agentDiagnosisState, setAgentDiagnosisState] = useState<AgentDiagnosisRequestState>('idle');
-  const [agentDiagnosisMessage, setAgentDiagnosisMessage] = useState('');
+  const [agentDiagnosisState, setAgentDiagnosisState] = useState<AgentDiagnosisRequestState>(() => diagnosisIdParam ? 'accepted' : 'idle');
+  const [agentDiagnosisMessage, setAgentDiagnosisMessage] = useState(() => diagnosisIdParam ? '저장된 PC Agent 진단 상태를 불러옵니다.' : '');
+  const [agentDiagnosisId, setAgentDiagnosisId] = useState(diagnosisIdParam);
+  const agentDiagnosisPolling = usePcAgentDiagnosisPolling(agentDiagnosisId);
   const [error, setError] = useState('');
   const authScope = authScopeKey(getCachedAuthUser());
   const currentChatQuery = useQuery({
@@ -337,6 +345,14 @@ export function SupportNewPage() {
     queryFn: () => getSupportDraft(draftId),
     enabled: Boolean(draftId)
   });
+
+  useEffect(() => {
+    setAgentDiagnosisId(diagnosisIdParam);
+    if (diagnosisIdParam) {
+      setAgentDiagnosisState('accepted');
+      setAgentDiagnosisMessage('저장된 PC Agent 진단 상태를 불러옵니다.');
+    }
+  }, [diagnosisIdParam]);
 
   useEffect(() => {
     const draft = draftQuery.data;
@@ -455,15 +471,19 @@ export function SupportNewPage() {
     }
     setAgentDiagnosisState('requesting');
     setAgentDiagnosisMessage('');
+    setAgentDiagnosisId('');
+    updateDiagnosisSearchParam('');
     try {
       const response = await requestPcAgentDiagnosis({
         symptom,
         requestedChecks: ['cpu', 'gpu', 'memory', 'disk', 'cooling'],
         mode: 'LIVE'
       });
-      if (response.status === 'ACCEPTED') {
+      if (response.status === 'ACCEPTED' || response.status === 'DUPLICATE') {
         setAgentDiagnosisState('accepted');
         setAgentDiagnosisMessage(`PC Agent가 진단 요청을 수신했습니다. (${response.diagnosisId})`);
+        setAgentDiagnosisId(response.diagnosisId);
+        updateDiagnosisSearchParam(response.diagnosisId);
       } else {
         setAgentDiagnosisState('rejected');
         setAgentDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
@@ -478,6 +498,16 @@ export function SupportNewPage() {
         setAgentDiagnosisMessage('PC Agent 진단 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
       }
     }
+  }
+
+  function updateDiagnosisSearchParam(diagnosisId: string) {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    if (diagnosisId) {
+      nextSearchParams.set('diagnosisId', diagnosisId);
+    } else {
+      nextSearchParams.delete('diagnosisId');
+    }
+    setSearchParams(nextSearchParams, { replace: true });
   }
 
   async function submit(event: FormEvent) {
@@ -727,6 +757,7 @@ export function SupportNewPage() {
                   {agentDiagnosisMessage}
                 </p>
               ) : null}
+              <PcAgentDiagnosisProgress state={agentDiagnosisPolling} />
               <input
                 id="support-log-file"
                 className="block w-full rounded border border-slate-300 p-3 text-sm focus:border-[#de6c2d] focus:outline-none focus:ring-4 focus:ring-[#f4c8b2] file:mr-4 file:rounded file:border-0 file:bg-[#de6c2d] file:px-4 file:py-2 file:text-sm file:font-bold file:text-white hover:file:bg-[#c45c22]"
@@ -764,6 +795,143 @@ export function SupportNewPage() {
       </form>
     </Screen>
   );
+}
+
+function PcAgentDiagnosisProgress({ state }: { state: PcAgentDiagnosisPollingState }) {
+  if (!state.diagnosisId) return null;
+
+  const snapshot = state.snapshot;
+  const status = snapshot ? diagnosisStatus(snapshot) : 'ACCEPTED';
+  const progress = Math.max(0, Math.min(100, snapshot?.currentProgress ?? 0));
+  const logs = state.events.filter((event) => Boolean(event.message?.trim()));
+
+  if (snapshot?.result) {
+    return <PcAgentDiagnosisResult result={snapshot.result} diagnosisId={state.diagnosisId} />;
+  }
+
+  const failed = status === 'FAILED' || status === 'TIMED_OUT';
+  const cancelled = status === 'CANCELLED';
+
+  return (
+    <div data-testid="pc-agent-diagnosis-progress" className="mb-3 rounded border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-bold text-slate-800">PC Agent 진단 진행</p>
+          <p className="mt-1 break-all text-[11px] text-slate-500">진단 ID: {state.diagnosisId}</p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+          {diagnosisStatusText(status)}
+        </span>
+      </div>
+      <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600">
+        <span>{snapshot?.currentTask || '진단 준비 중'}</span>
+        <span>{progress}%</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label="PC Agent 진단 진행률"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        className="h-2 overflow-hidden rounded-full bg-slate-200"
+      >
+        <div className="h-full bg-[#de6c2d] transition-[width]" style={{ width: `${progress}%` }} />
+      </div>
+      {logs.length ? (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-bold text-slate-700">진행 로그</p>
+          <ol data-testid="pc-agent-diagnosis-logs" className="space-y-1 text-xs leading-5 text-slate-600">
+            {logs.map((event) => (
+              <li key={event.eventId} data-event-id={event.eventId}>{event.message}</li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+      {state.error ? (
+        <div className="mt-3">
+          <StateMessage type="warn" title="진단 상태 조회 확인 필요" body={state.error} />
+        </div>
+      ) : null}
+      {failed ? (
+        <div className="mt-3">
+          <StateMessage type="warn" title="PC Agent 진단 실패" body={logs[logs.length - 1]?.message || '서버에 기록된 진단 상태가 실패로 종료되었습니다.'} />
+        </div>
+      ) : null}
+      {cancelled ? (
+        <div className="mt-3">
+          <StateMessage type="warn" title="PC Agent 진단 취소" body={logs[logs.length - 1]?.message || '서버에 기록된 진단이 취소되었습니다.'} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PcAgentDiagnosisResult({ result, diagnosisId }: { result: PcAgentDiagnosisResultDto; diagnosisId: string }) {
+  const evidence = [...(result.evidence ?? []), ...(result.findings ?? [])]
+    .map(diagnosisDetailText)
+    .filter(Boolean);
+  const actions = (result.actions ?? []).map(diagnosisDetailText).filter(Boolean);
+  const remoteRecommended = diagnosisRawFlag(result.rawPayload, 'remoteAsRecommended');
+
+  return (
+    <div data-testid="pc-agent-diagnosis-result" className="mb-3 rounded border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-bold">{result.title}</p>
+          <p className="mt-1 break-all text-[11px] text-emerald-700">진단 ID: {diagnosisId}</p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-800">진단 완료</span>
+      </div>
+      <p className="text-xs leading-5 text-emerald-900">{result.summary}</p>
+      {evidence.length ? (
+        <div className="mt-3">
+          <p className="mb-1 text-xs font-bold">진단 근거</p>
+          <ul className="space-y-1 text-xs leading-5">
+            {evidence.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+          </ul>
+        </div>
+      ) : null}
+      {actions.length ? (
+        <div className="mt-3">
+          <p className="mb-1 text-xs font-bold">권장 조치</p>
+          <ol className="list-decimal space-y-1 pl-4 text-xs leading-5">
+            {actions.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+          </ol>
+        </div>
+      ) : null}
+      {remoteRecommended ? (
+        <p className="mt-3 rounded border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800">
+          서버 진단 결과에 따라 원격 지원이 권장됩니다.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function diagnosisStatusText(status: string) {
+  if (status === 'RECEIVED' || status === 'ACCEPTED') return '요청 접수';
+  if (status === 'COLLECTING') return '정보 수집 중';
+  if (status === 'DIAGNOSING') return '진단 중';
+  if (status === 'EVALUATING') return '결과 판정 중';
+  if (status === 'COMPLETED') return '완료';
+  if (status === 'PARTIALLY_COMPLETED') return '일부 완료';
+  if (status === 'FAILED') return '실패';
+  if (status === 'CANCELLED') return '취소';
+  if (status === 'TIMED_OUT') return '시간 초과';
+  return status;
+}
+
+function diagnosisDetailText(value: unknown) {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return String(value ?? '');
+  return Object.entries(value)
+    .filter(([, item]) => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
+    .map(([key, item]) => `${key}: ${String(item)}`)
+    .join(' · ');
+}
+
+function diagnosisRawFlag(value: unknown, key: string) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>)[key] === true);
 }
 
 class TicketCreateError extends Error {}
@@ -861,8 +1029,8 @@ function ragPreviewFailureMessage(cause: unknown) {
 export function SupportTicketPage() {
   const { ticketId = '00000000-0000-4000-8000-000000006001' } = useParams();
   const queryClient = useQueryClient();
-  const [remoteRequestReason, setRemoteRequestReason] = useState('원격지원으로 화면을 함께 확인하고 싶습니다.');
-  const [remoteRequestError, setRemoteRequestError] = useState('');
+  const [remoteAccessCode, setRemoteAccessCode] = useState('');
+  const [remoteAccessCodeError, setRemoteAccessCodeError] = useState('');
   const [feedbackRating, setFeedbackRating] = useState('5');
   const [feedbackComment, setFeedbackComment] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
@@ -871,27 +1039,31 @@ export function SupportTicketPage() {
     queryFn: () => getSupportTicket(ticketId),
     refetchInterval: 5_000
   });
-  const remoteRequestMutation = useMutation({
-    mutationFn: async () => {
-      const reason = remoteRequestReason.trim();
-      return requestRemoteSupport(ticketId, {
-        reason: reason || '사용자가 원격지원을 요청했습니다.'
-      });
-    },
-    onSuccess: (updatedTicket) => {
-      setRemoteRequestError('');
-      queryClient.setQueryData(['support-ticket', ticketId], updatedTicket);
+  const remoteSupportApproved = ticket?.reviewStatus === 'APPROVED' && ticket.supportDecision === 'REMOTE_POSSIBLE';
+  const remoteSupportQuery = useQuery({
+    queryKey: ['support-ticket-remote-support', ticketId],
+    queryFn: () => getRemoteSupportState(ticketId),
+    enabled: Boolean(ticketId && remoteSupportApproved),
+    refetchInterval: 5_000
+  });
+  const remoteAccessCodeMutation = useMutation({
+    mutationFn: () => registerRemoteSupportAccessCode(ticketId, remoteAccessCode),
+    onSuccess: (state) => {
+      setRemoteAccessCode('');
+      setRemoteAccessCodeError('');
+      queryClient.setQueryData(['support-ticket-remote-support', ticketId], state);
+      queryClient.invalidateQueries({ queryKey: ['support-ticket', ticketId] });
     },
     onError: (cause) => {
-      if (cause instanceof ApiError && cause.status === 409) {
-        setRemoteRequestError('이미 진행 중인 원격지원 요청이 있습니다.');
-        return;
-      }
       if (cause instanceof ApiError && cause.status === 400) {
-        setRemoteRequestError('원격지원 요청 사유를 입력해 주세요.');
+        setRemoteAccessCodeError('지원 코드는 숫자로 입력해 주세요. 공백과 하이픈은 자동으로 정리됩니다.');
         return;
       }
-      setRemoteRequestError('원격지원 요청을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      if (cause instanceof ApiError && cause.status === 409) {
+        setRemoteAccessCodeError('현재 원격지원 상태에서는 코드를 등록할 수 없습니다. 새로고침 후 상태를 확인해 주세요.');
+        return;
+      }
+      setRemoteAccessCodeError('지원 코드를 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     }
   });
   const feedbackMutation = useMutation({
@@ -924,11 +1096,9 @@ export function SupportTicketPage() {
     );
   }
 
-  const remoteRequestLocked = isActiveRemoteSupportStatus(ticket.remoteSupportStatus);
-
   return (
     <Screen>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_380px]">
         <Panel title={`AS 티켓 #${shortTicketId(ticket.id)}`} subtitle="접수 내용과 처리 상태를 확인할 수 있습니다.">
           <div className="mb-4 flex flex-wrap gap-2">
             <StatusBadge status={ticket.status} />
@@ -940,45 +1110,32 @@ export function SupportTicketPage() {
           {hasAgentDiagnosis(ticket) ? <AgentDiagnosisPanel ticket={ticket} /> : null}
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
         </Panel>
-        <Panel title="담당자 확인 자료" subtitle="업로드한 로그를 바탕으로 담당자가 접수 내용을 확인합니다.">
-          <DataTable columns={['확인 항목', '내용', '상태']} rows={causeRows(ticket.causeCandidates)} />
-          <div className="mt-5">
-            <DataTable columns={['항목', '값']} rows={ticketDecisionRows(ticket)} />
-          </div>
-          {ticket.remoteSupportLink ? (
-            <div className="mt-5 rounded border border-blue-200 bg-blue-50 p-4">
-              <p className="text-sm font-bold text-blue-900">Quick Assist 안내</p>
-              <p className="mt-2 break-all text-sm leading-6 text-blue-800">{ticket.remoteSupportLink}</p>
-              <p className="mt-2 text-xs text-blue-700">원격 연결 전 사용자 추가 확인이 필요합니다. Quick Assist는 사용자가 직접 코드를 입력해 연결합니다.</p>
-            </div>
-          ) : null}
-          {!ticket.remoteSupportLink ? (
-            <form
-              className="mt-5 rounded border border-slate-200 bg-slate-50 p-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                remoteRequestMutation.mutate();
-              }}
-            >
-              <label className="mb-2 block text-sm font-bold text-slate-800">원격지원 요청</label>
-              <textarea
-                className="h-20 w-full rounded border border-slate-300 bg-white p-3 text-sm"
-                value={remoteRequestReason}
-                onChange={(event) => setRemoteRequestReason(event.target.value)}
-                disabled={remoteRequestMutation.isPending || remoteRequestLocked}
-              />
-              {remoteRequestError ? <p className="mt-2 text-xs font-semibold text-red-600">{remoteRequestError}</p> : null}
-              {remoteRequestLocked ? (
-                <p className="mt-2 text-xs font-semibold text-brand-blue">원격지원 상태: {statusLabel(ticket.remoteSupportStatus ?? 'REQUESTED')}</p>
-              ) : null}
-              <button
-                className="mt-3 rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={remoteRequestMutation.isPending || remoteRequestLocked}
+        <Panel title="지원 진행" subtitle="담당자가 진단 결과를 확인한 뒤 필요한 안내만 전달합니다.">
+          {remoteSupportApproved ? (
+            <UserRemoteSupportPanel
+              state={remoteSupportQuery.data}
+              isLoading={remoteSupportQuery.isLoading}
+              isError={remoteSupportQuery.isError}
+              accessCode={remoteAccessCode}
+              accessCodeError={remoteAccessCodeError}
+              isSubmitting={remoteAccessCodeMutation.isPending}
+              onAccessCodeChange={setRemoteAccessCode}
+              onSubmit={() => remoteAccessCodeMutation.mutate()}
+            />
+          ) : (
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+              <p className="text-base font-black text-blue-950">담당자 확인 중</p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-blue-900">
+                원격 지원이나 방문 점검이 필요하면 담당자가 상담방으로 안내합니다.
+              </p>
+              <Link
+                to={`/support/${ticketId}?chat=1`}
+                className="mt-4 inline-flex rounded bg-brand-blue px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700"
               >
-                {remoteRequestMutation.isPending ? '요청 저장 중...' : '원격지원 요청'}
-              </button>
-            </form>
-          ) : null}
+                상담방 열기
+              </Link>
+            </div>
+          )}
           <form
             className="mt-5 rounded border border-slate-200 bg-white p-4"
             onSubmit={(event) => {
@@ -1023,6 +1180,96 @@ export function SupportTicketPage() {
       </div>
     </Screen>
   );
+}
+
+function UserRemoteSupportPanel({
+  state,
+  isLoading,
+  isError,
+  accessCode,
+  accessCodeError,
+  isSubmitting,
+  onAccessCodeChange,
+  onSubmit
+}: {
+  state?: RemoteSupportStateDto;
+  isLoading: boolean;
+  isError: boolean;
+  accessCode: string;
+  accessCodeError: string;
+  isSubmitting: boolean;
+  onAccessCodeChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  if (isLoading) {
+    return <div className="mt-5"><StateMessage type="info" title="원격 지원 연결 확인 중" body="승인된 원격지원 상태를 불러오고 있습니다." /></div>;
+  }
+  if (isError || !state?.status) {
+    return <div className="mt-5"><StateMessage type="warn" title="원격 지원 상태 조회 실패" body="잠시 후 다시 시도해 주세요." /></div>;
+  }
+
+  const canRegisterCode = state.status === 'WAITING_FOR_CODE' || state.status === 'CODE_READY';
+  return (
+    <section aria-labelledby="user-remote-support-title" className="mt-5 rounded border border-blue-200 bg-blue-50 p-4">
+      <h3 id="user-remote-support-title" className="text-base font-black text-blue-950">{userRemoteSupportTitle(state.status)}</h3>
+      <p className="mt-2 text-sm leading-6 text-blue-900">{userRemoteSupportDescription(state.status)}</p>
+      <a
+        href={CHROME_REMOTE_DESKTOP_SUPPORT_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-4 inline-flex rounded border border-blue-300 bg-white px-4 py-2 text-sm font-bold text-brand-blue hover:bg-blue-100"
+      >
+        Chrome Remote Desktop 열기
+      </a>
+      {state.status === 'CODE_READY' ? <p className="mt-3 text-sm font-bold text-emerald-700">지원 코드 등록 완료 · 관리자가 연결을 준비하고 있습니다.</p> : null}
+      {state.status === 'IN_PROGRESS' ? (
+        <p className="mt-3 text-xs font-semibold leading-5 text-blue-800">Chrome Remote Desktop 화면에서 현재 공유 상태를 직접 확인할 수 있습니다.</p>
+      ) : null}
+      {canRegisterCode ? (
+        <form
+          className="mt-4 border-t border-blue-200 pt-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <label htmlFor="remote-access-code" className="mb-2 block text-sm font-bold text-blue-950">지원 코드</label>
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+            <input
+              id="remote-access-code"
+              className="h-11 min-w-0 flex-1 rounded border border-blue-300 bg-white px-3 text-sm"
+              value={accessCode}
+              onChange={(event) => onAccessCodeChange(event.target.value)}
+              autoComplete="off"
+              inputMode="numeric"
+              placeholder={state.status === 'CODE_READY' ? '새 일회용 코드로 교체' : '일회용 지원 코드 입력'}
+              disabled={isSubmitting}
+            />
+            <button className="h-11 rounded bg-brand-blue px-4 text-sm font-bold text-white disabled:bg-slate-400" disabled={isSubmitting || !accessCode.trim()}>
+              {isSubmitting ? '등록 중...' : state.status === 'CODE_READY' ? '새 코드 등록' : '지원 코드 등록'}
+            </button>
+          </div>
+          {accessCodeError ? <p className="mt-2 text-xs font-semibold text-red-600">{accessCodeError}</p> : null}
+        </form>
+      ) : null}
+      {state.startedAt ? <p className="mt-3 text-xs font-semibold text-blue-800">지원 시작: {formatSeoulTime(state.startedAt)}</p> : null}
+      {state.completedAt ? <p className="mt-1 text-xs font-semibold text-blue-800">지원 완료: {formatSeoulTime(state.completedAt)}</p> : null}
+    </section>
+  );
+}
+
+function userRemoteSupportTitle(status?: string | null) {
+  if (status === 'CODE_READY') return '지원 코드 등록 완료';
+  if (status === 'IN_PROGRESS') return '원격 지원 진행 중';
+  if (status === 'COMPLETED') return '원격 지원 완료';
+  return '원격 지원이 승인되었습니다';
+}
+
+function userRemoteSupportDescription(status?: string | null) {
+  if (status === 'CODE_READY') return '관리자가 연결을 준비하고 있습니다. 코드가 만료되었다면 새 코드를 등록해 주세요.';
+  if (status === 'IN_PROGRESS') return '관리자가 원격 지원을 진행하고 있습니다.';
+  if (status === 'COMPLETED') return '원격 지원이 완료되었으며 등록했던 일회용 지원 코드는 제거되었습니다.';
+  return 'Chrome Remote Desktop에서 일회용 지원 코드를 생성한 뒤 등록해 주세요.';
 }
 
 function AgentDiagnosisPanel({ ticket }: { ticket: AsTicketDto }) {
@@ -1078,11 +1325,27 @@ function diagnosisEvidenceText(item: NonNullable<AsTicketDto['diagnosisEvidence'
   if (item.label) return item.label;
   const component = item.component?.toUpperCase();
   const metricType = item.metricType ? statusLabel(item.metricType) : undefined;
-  const measuredValue = item.value == null ? undefined : `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`;
+  const measuredValue = diagnosisEvidenceValueText(item.value, item.unit);
   const detail = [component, metricType, measuredValue, item.status ? statusLabel(item.status) : undefined]
     .filter(Boolean)
     .join(' · ');
   return detail || `측정 근거 ${index + 1}`;
+}
+
+function diagnosisEvidenceValueText(value: unknown, unit?: string | null) {
+  if (value == null) return undefined;
+  if (typeof value !== 'object') return `${String(value)}${unit ? ` ${unit}` : ''}`;
+  if (Array.isArray(value)) return `${value.length}건`;
+
+  const record = value as Record<string, unknown>;
+  const deviceName = typeof record.deviceName === 'string' ? record.deviceName : undefined;
+  const problemCode = record.problemCode == null ? undefined : `문제 코드 ${String(record.problemCode)}`;
+  const description = typeof record.description === 'string' ? record.description : undefined;
+  const message = typeof record.message === 'string' ? record.message : undefined;
+  const summary = [deviceName, problemCode, description, message].filter(Boolean).slice(0, 2).join(' · ');
+  if (summary) return summary;
+
+  return `${Object.keys(record).length}개 측정값`;
 }
 
 function SafetyNoticePanel({ ticket }: { ticket: AsTicketDto }) {
@@ -1107,10 +1370,6 @@ function hasSafetyAdvice(ticket: AsTicketDto) {
     (ticket.safetyAdviceLevel && ticket.safetyAdviceLevel !== 'NONE')
     || ticket.safetyNotices?.length
   );
-}
-
-function isActiveRemoteSupportStatus(status?: string | null) {
-  return status === 'REQUESTED' || status === 'LINK_SENT' || status === 'IN_PROGRESS';
 }
 
 function safetyAdviceMessage(level?: string | null) {
@@ -1141,29 +1400,6 @@ function ticketTimeline(ticket: AsTicketDto) {
       내용: ticket.supportDecision ? `지원 결정: ${statusLabel(ticket.supportDecision)}` : ticket.assignedAdminId ? '담당자 배정 완료' : '담당자 배정 대기'
     }
   ];
-}
-
-function ticketDecisionRows(ticket: AsTicketDto) {
-  return [
-    { 항목: '진단 상태', 값: ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : '-' },
-    { 항목: '검토 상태', 값: ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
-    { 항목: '지원 결정', 값: ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
-    { 항목: '위험도', 값: ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
-    { 항목: '관리자 메모', 값: ticket.adminNote ?? '-' },
-    { 항목: '원격지원', 값: ticket.remoteSupportLink ? `${statusLabel(ticket.remoteSupportStatus ?? 'LINK_SENT')} · ${ticket.remoteSupportLink}` : ticket.remoteSupportStatus ? statusLabel(ticket.remoteSupportStatus) : '-' },
-    { 항목: '방문지원', 값: ticket.visitSupportRequired ? `${statusLabel(ticket.visitSupportStatus ?? 'REQUESTED')} ${ticket.visitPreferredDate ?? ''} ${visitSlotLabel(ticket.visitTimeSlot)}`.trim() : '-' }
-  ];
-}
-
-function causeRows(candidates: CauseCandidate[]) {
-  if (!candidates.length) {
-    return [{ '확인 항목': '로그 확인', 내용: '티켓 접수 완료', 상태: <StatusBadge status="LOW" /> }];
-  }
-  return candidates.map((candidate) => ({
-    '확인 항목': candidate.label ?? candidate.code ?? '로그 확인 항목',
-    내용: candidate.reason ?? (candidate.evidenceIds?.length ? candidate.evidenceIds.join(', ') : '업로드한 로그 기반 참고 자료'),
-    상태: <StatusBadge status={candidate.confidence ?? 'MEDIUM'} />
-  }));
 }
 
 function shortTicketId(id: string) {

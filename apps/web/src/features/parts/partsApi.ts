@@ -11,6 +11,9 @@ import type {
   PartSearchParams,
   PartRow,
   QuoteDraft,
+  QuoteDraftHistoryComparison,
+  QuoteDraftHistoryList,
+  RecommendationEventBulkAcceptedResponse,
   RecommendationEventBulkRequest,
   RecommendationEventRequest
 } from './types';
@@ -51,6 +54,13 @@ export function recordRecommendationEventsBulk(payload: RecommendationEventBulkR
   });
 }
 
+export function queueRecommendationEventsBulk(payload: RecommendationEventBulkRequest) {
+  return api<RecommendationEventBulkAcceptedResponse>('/api/recommendation-events/bulk/async', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
 export function getPart(partId: string) {
   return api<PartRow>(`/api/parts/${partId}`);
 }
@@ -77,23 +87,30 @@ export function getCurrentQuoteDraft() {
   return api<QuoteDraft>('/api/quote-drafts/current');
 }
 
-export function putQuoteDraftItem(partId: string, quantity: number) {
+function draftChangeHeaders(changeGroup?: string) {
+  return changeGroup ? { 'X-Quote-Draft-Change-Group': changeGroup } : undefined;
+}
+
+export function putQuoteDraftItem(partId: string, quantity: number, changeGroup?: string) {
   return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
     method: 'PUT',
+    headers: draftChangeHeaders(changeGroup),
     body: JSON.stringify({ quantity })
   });
 }
 
-export function patchQuoteDraftItem(partId: string, quantity: number) {
+export function patchQuoteDraftItem(partId: string, quantity: number, changeGroup?: string) {
   return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
     method: 'PATCH',
+    headers: draftChangeHeaders(changeGroup),
     body: JSON.stringify({ quantity })
   });
 }
 
-export function deleteQuoteDraftItem(partId: string) {
+export function deleteQuoteDraftItem(partId: string, changeGroup?: string) {
   return api<QuoteDraft>(`/api/quote-drafts/current/items/${partId}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: draftChangeHeaders(changeGroup)
   });
 }
 
@@ -101,10 +118,38 @@ export function applyAiBuildToQuoteDraft(payload: {
   buildId?: string;
   items: Array<Pick<AiBuildItem, 'partId' | 'category' | 'quantity'>>;
   conflictPolicy: 'REPLACE';
-}) {
+}, changeGroup?: string) {
   return api<QuoteDraft>('/api/quote-drafts/current/apply-ai-build', {
     method: 'PUT',
+    headers: draftChangeHeaders(changeGroup),
     body: JSON.stringify(payload)
+  });
+}
+
+export function listQuoteDraftHistory() {
+  return api<QuoteDraftHistoryList>('/api/quote-drafts/current/history');
+}
+
+export function getQuoteDraftHistoryComparison(
+  historyId: string,
+  game = 'pubg',
+  resolution: 'fhd' | 'qhd' | '4k' = 'qhd'
+) {
+  const search = new URLSearchParams({ game, resolution });
+  return api<QuoteDraftHistoryComparison>(
+    `/api/quote-drafts/current/history/${historyId}/comparison?${search.toString()}`
+  );
+}
+
+export function restoreQuoteDraftHistory(
+  historyId: string,
+  confirmCompatibilityRisk: boolean,
+  changeGroup?: string
+) {
+  return api<QuoteDraft>(`/api/quote-drafts/current/history/${historyId}/restore`, {
+    method: 'POST',
+    headers: draftChangeHeaders(changeGroup),
+    body: JSON.stringify({ confirmCompatibilityRisk })
   });
 }
 

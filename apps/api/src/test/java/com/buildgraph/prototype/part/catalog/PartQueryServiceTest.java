@@ -115,6 +115,90 @@ class PartQueryServiceTest {
     }
 
     @Test
+    void priceSortEvaluatesOnlyPageRowsWithoutRecommendationPinning() {
+        // 페이지 = [싼 것(추천 rank 2), 비싼 것(추천 rank 1)] — 구 전량 경로라면 rank 1이 최상단으로
+        // 끌려 올라간다. 페이지-스코프 경로는 SQL 가격순을 그대로 유지하고 뱃지만 달아야 한다.
+        List<Map<String, Object>> rawRows = List.of(
+                part("gpu-cheap", 103L, "GPU", "RTX 5060 Unbalanced", 500_000),
+                part("gpu-balanced", 104L, "GPU", "RTX 5070 Ti Balanced", 990_000)
+        );
+        List<Map<String, Object>> evaluatedRows = List.of(
+                withCompatibility(rawRows.get(0), "PASS", "호환 가능"),
+                withCompatibility(rawRows.get(1), "PASS", "호환 가능")
+        );
+        CurrentUserService.CurrentUser user = user();
+        org.mockito.ArgumentCaptor<String> idsSql = org.mockito.ArgumentCaptor.forClass(String.class);
+        when(jdbcTemplate.queryForList(idsSql.capture(), eq(String.class), any(Object[].class)))
+                .thenReturn(rawRows.stream().map(row -> String.valueOf(row.get("id"))).toList());
+        when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class), any(Object[].class)))
+                .thenReturn(87);
+        when(partDetailCachedLoader.detailsByPublicIds(anyList())).thenReturn(rawRows.stream()
+                .map(row -> new PartDetailDto(
+                        new ToolBuildPart(
+                                ((Number) row.get("internal_id")).longValue(),
+                                String.valueOf(row.get("id")),
+                                String.valueOf(row.get("category")),
+                                String.valueOf(row.get("name")),
+                                String.valueOf(row.get("manufacturer")),
+                                ((Number) row.get("price")).intValue(),
+                                Map.of(),
+                                1
+                        ),
+                        "ACTIVE",
+                        Map.of("summary", "GPU benchmark", "score", 91),
+                        null,
+                        null
+                ))
+                .toList());
+        when(compatibilityService.partRowsWithCompatibility(eq(user), eq("QUOTE_DRAFT_CURRENT"), eq("GPU"), eq(null), eq(null), anyList()))
+                .thenReturn(evaluatedRows);
+
+        Map<String, Object> response = service.parts(
+                user, "GPU", null, null, null, null, null, 0, 10, "price_asc", "QUOTE_DRAFT_CURRENT", null, null);
+
+        List<Map<String, Object>> items = castList(response.get("items"));
+        // SQL 가격순 유지 — 추천 rank 1(비싼 것)이 위로 끌려오지 않는다.
+        assertThat(items).extracting(item -> item.get("name"))
+                .containsExactly("RTX 5060 Unbalanced", "RTX 5070 Ti Balanced");
+        assertThat(recommendation(items.get(1)).get("rank")).isEqualTo(1);
+        assertThat(recommendation(items.get(0)).get("rank")).isEqualTo(2);
+        // total은 페이지 행 수가 아니라 카테고리 전체 count에서 온다.
+        assertThat(response.get("total")).isEqualTo(87);
+        // 후보 id 조회가 SQL 페이지네이션을 사용한다 — 전량 로드 없음.
+        assertThat(idsSql.getValue()).contains("LIMIT ? OFFSET ?");
+        // 평가는 페이지 행(2개)만 받는다.
+        org.mockito.ArgumentCaptor<List<Map<String, Object>>> evaluatedInput = candidateRowsCaptor();
+        verify(compatibilityService).partRowsWithCompatibility(eq(user), eq("QUOTE_DRAFT_CURRENT"), eq("GPU"), eq(null), eq(null), evaluatedInput.capture());
+        assertThat(evaluatedInput.getValue()).hasSize(2);
+    }
+
+    @Test
+    void priceSortPageResponseIsCachedPerPageAndSignature() {
+        CurrentUserService.CurrentUser user = user();
+        when(jdbcTemplate.queryForList(anyString(), eq(String.class), any(Object[].class)))
+                .thenReturn(List.of());
+        when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class), any(Object[].class)))
+                .thenReturn(0);
+        when(compatibilityService.partRowsWithCompatibility(eq(user), eq("QUOTE_DRAFT_CURRENT"), eq("GPU"), eq(null), eq(null), anyList()))
+                .thenReturn(List.of());
+
+        service.parts(user, "GPU", null, null, null, null, null, 0, 10, "price_asc", "QUOTE_DRAFT_CURRENT", null, null);
+        service.parts(user, "GPU", null, null, null, null, null, 0, 10, "price_asc", "QUOTE_DRAFT_CURRENT", null, null);
+        service.parts(user, "GPU", null, null, null, null, null, 1, 10, "price_asc", "QUOTE_DRAFT_CURRENT", null, null);
+
+        // 같은 (서명, 페이지)는 캐시 히트 — 평가는 페이지당 1회, count는 검색 조건 키라 페이지와 무관하게 1회.
+        verify(compatibilityService, org.mockito.Mockito.times(2))
+                .partRowsWithCompatibility(eq(user), eq("QUOTE_DRAFT_CURRENT"), eq("GPU"), eq(null), eq(null), anyList());
+        verify(jdbcTemplate, org.mockito.Mockito.times(1))
+                .queryForObject(anyString(), eq(Integer.class), any(Object[].class));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.mockito.ArgumentCaptor<List<Map<String, Object>>> candidateRowsCaptor() {
+        return org.mockito.ArgumentCaptor.forClass((Class) List.class);
+    }
+
+    @Test
     void plainPartsHydratesCandidateIdsThroughPartDetailCache() {
         Map<String, Object> rawRow = part("gpu-basic", 201L, "GPU", "RTX 5070", 890_000);
         when(jdbcTemplate.queryForList(anyString(), eq(String.class), any(Object[].class)))
@@ -139,6 +223,31 @@ class PartQueryServiceTest {
             assertThat(item.get("benchmarkSummary")).isEqualTo(Map.of("summary", "GPU benchmark", "score", 91));
         });
         verify(partDetailCachedLoader).detailsByPublicIds(List.of("gpu-basic"));
+    }
+
+    // 검색어는 사람이 읽는 텍스트(제품명·제조사·스펙·검색 키워드)에만 걸려야 한다. 외부 쇼핑몰 상품ID는
+    // 11자리 숫자라 '5050' 같은 모델 토큰이 ID 한가운데에 걸려, 5050을 찾는 사람에게 RTX 5080이 나왔다.
+    @Test
+    void searchHaystackExcludesExternalShoppingProductKey() {
+        org.mockito.ArgumentCaptor<String> idsSql = org.mockito.ArgumentCaptor.forClass(String.class);
+        when(jdbcTemplate.queryForList(idsSql.capture(), eq(String.class), any(Object[].class)))
+                .thenReturn(List.of());
+        when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class), any(Object[].class)))
+                .thenReturn(0);
+        when(partDetailCachedLoader.detailsByPublicIds(anyList())).thenReturn(List.of());
+
+        service.parts("GPU", "5050", null, null, null, null, 0, 20, "price_asc");
+
+        String sql = idsSql.getValue();
+        assertThat(sql).contains("p.attributes #- '{externalSources,naver,sourceProductKey}'");
+        // `#-`는 부분 함수다 — 해당 경로가 객체가 아닌 행이 하나만 있어도 목록과 total이 통째로 500이 된다.
+        // 타입을 먼저 물어보는 가드 없이 경로 삭제만 쓰면 안 된다.
+        assertThat(sql).contains("jsonb_typeof(p.attributes #> '{externalSources,naver}') = 'object'");
+        // attributes를 통째로 훑는 옛 술어가 남아 있으면 상품ID가 다시 건초더미에 들어온다.
+        assertThat(sql).doesNotContain("p.attributes::text");
+        // 나머지 검색 대상은 그대로다 — 제품명·제조사·스펙·검색 키워드는 계속 걸려야 한다.
+        assertThat(sql).contains("lower(p.name) LIKE");
+        assertThat(sql).contains("lower(coalesce(p.manufacturer, '')) LIKE");
     }
 
     private static Map<String, Object> part(String publicId, long internalId, String category, String name, int price) {

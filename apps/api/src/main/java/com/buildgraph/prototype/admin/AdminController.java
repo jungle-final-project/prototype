@@ -181,6 +181,73 @@ public class AdminController {
         return ticket;
     }
 
+    @PostMapping("/as-tickets/{id}/assign-to-me")
+    Map<String, Object> assignTicketToMe(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return broadcastTicketUpdate(ticketQueryService.assignToCurrentAdmin(id, admin));
+    }
+
+    @PostMapping("/as-tickets/{id}/request-more-info")
+    Map<String, Object> requestMoreTicketInformation(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        String adminNote = request == null ? null : stringOrNull(request.get("adminNote"));
+        return broadcastTicketUpdate(ticketQueryService.requestMoreInformation(id, adminNote, admin));
+    }
+
+    @PostMapping("/as-tickets/{id}/approve-remote-support")
+    Map<String, Object> approveRemoteTicketSupport(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        String adminNote = request == null ? null : stringOrNull(request.get("adminNote"));
+        return broadcastTicketUpdate(ticketQueryService.approveRemoteSupport(id, adminNote, admin));
+    }
+
+    @GetMapping("/as-tickets/{id}/remote-support")
+    Map<String, Object> remoteTicketSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.adminRemoteSupport(id, admin);
+    }
+
+    @GetMapping("/as-tickets/{id}/remote-support/access-code")
+    Map<String, Object> remoteTicketSupportAccessCode(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.remoteAccessCodeForAdmin(id, admin);
+    }
+
+    @PostMapping("/as-tickets/{id}/remote-support/start")
+    Map<String, Object> startRemoteTicketSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.startRemoteSupport(id, admin);
+    }
+
+    @PostMapping("/as-tickets/{id}/remote-support/complete")
+    Map<String, Object> completeRemoteTicketSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser admin = currentUserService.requireAdmin(authorization);
+        return ticketQueryService.completeRemoteSupport(id, admin);
+    }
+
     @DeleteMapping("/as-tickets/{id}")
     Map<String, Object> deleteTicket(
             @PathVariable String id,
@@ -215,5 +282,14 @@ public class AdminController {
         }
         String text = value.toString().trim();
         return text.isBlank() || "null".equalsIgnoreCase(text) ? null : text;
+    }
+
+    private Map<String, Object> broadcastTicketUpdate(Map<String, Object> ticket) {
+        String supportChatRoomId = stringOrNull(ticket.get("supportChatRoomId"));
+        if (supportChatRoomId != null) {
+            supportChatWebSocketHandler.broadcastRoomUpdate(supportChatRoomId);
+            adminSupportChatQueueWebSocketHandler.broadcastQueuePatch(supportChatRoomId);
+        }
+        return ticket;
     }
 }

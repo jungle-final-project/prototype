@@ -369,14 +369,45 @@ def run_assembly(context: WorkerContext, case: dict[str, Any], trace: list[dict[
         )
         if select_status != 200 or selected.get("status") != "MATCHED":
             failures.append("ASSEMBLY_MATCH_STATE_INVALID")
-        pay_status, paid, pay_ms, _ = context.client.request(
-            "POST", f"/api/assembly-requests/{request_id}/payments/confirm-virtual"
+        payment_key = f"stateful-payment-{case['id']}-{uuid.uuid4().hex}"
+        attempt_status, attempt, attempt_ms, _ = context.client.request(
+            "POST",
+            f"/api/assembly-requests/{request_id}/payments/attempts",
+            {"method": "CARD"},
+            headers={"Idempotency-Key": payment_key},
         )
-        if pay_status != 200 or (paid.get("payment") or {}).get("status") != "PAID":
+        mock_status = complete_status = paid_status = 0
+        mock_result: dict[str, Any] = {}
+        completed: dict[str, Any] = {}
+        paid: dict[str, Any] = {}
+        mock_ms = complete_ms = paid_ms = 0
+        attempt_id = str(attempt.get("id") or "")
+        if attempt_status in {200, 201} and attempt_id:
+            mock_status, mock_result, mock_ms, _ = context.client.request(
+                "POST", f"/api/payments/attempts/{attempt_id}/mock-result", {"result": "SUCCESS"}
+            )
+            if mock_status == 200:
+                complete_status, completed, complete_ms, _ = context.client.request(
+                    "POST", f"/api/payments/attempts/{attempt_id}/complete"
+                )
+                paid_status, paid, paid_ms, _ = context.client.request(
+                    "GET", f"/api/assembly-requests/{request_id}"
+                )
+        if (
+            attempt_status not in {200, 201}
+            or mock_status != 200
+            or complete_status != 200
+            or completed.get("status") != "SUCCEEDED"
+            or paid_status != 200
+            or (paid.get("payment") or {}).get("status") != "PAID"
+        ):
             failures.append("ASSEMBLY_PAYMENT_STATE_INVALID")
         trace.extend([
             {"step": "select-offer", "status": select_status, "latencyMs": select_ms, "response": selected},
-            {"step": "confirm-virtual-payment", "status": pay_status, "latencyMs": pay_ms, "response": paid},
+            {"step": "create-payment-attempt", "status": attempt_status, "latencyMs": attempt_ms, "response": attempt},
+            {"step": "set-mock-payment-result", "status": mock_status, "latencyMs": mock_ms, "response": mock_result},
+            {"step": "complete-payment-attempt", "status": complete_status, "latencyMs": complete_ms, "response": completed},
+            {"step": "verify-paid-request", "status": paid_status, "latencyMs": paid_ms, "response": paid},
         ])
     trace.extend([
         {"step": "assembly-create", "status": status, "latencyMs": latency, "response": created},

@@ -53,6 +53,10 @@ class InitialCollectionSettings:
     sample_interval_seconds: float = 0.25
     sample_timeout_seconds: float = 8.0
     transition_delay_seconds: float = 0.6
+    steady_interval_seconds: float = 5.0
+
+    def interval_seconds(self, initial_complete: bool) -> float:
+        return self.steady_interval_seconds if initial_complete else self.sample_interval_seconds
 
 
 DEFAULT_METRIC_POLICY = MetricPolicy()
@@ -516,7 +520,7 @@ class InitialMetricsCoordinator:
     def _run(self, diagnosis_id: str, mode: str, stop_event: threading.Event) -> None:
         try:
             try:
-                provider = self.demo_provider_factory() if mode == "DEMO" else self.live_provider_factory()
+                provider = self.live_provider_factory()
             except PermissionError:
                 self._finish_with_unavailable(
                     diagnosis_id,
@@ -566,7 +570,8 @@ class InitialMetricsCoordinator:
                     self._initial_complete_event.set()
                     self.on_update(completed)
                     self.on_complete(completed)
-                if stop_event.wait(max(0.01, self.settings.sample_interval_seconds)):
+                interval_seconds = self.settings.interval_seconds(initial_complete)
+                if stop_event.wait(max(0.01, interval_seconds)):
                     return
         finally:
             with self._lock:

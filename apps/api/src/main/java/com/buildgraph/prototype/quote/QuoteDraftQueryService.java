@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,48 +27,122 @@ public class QuoteDraftQueryService {
     // @Transactional이 응답 read-back(3-way JOIN)까지 감싸 커밋 전 락·커넥션을 오래 잡았다(idle-in-transaction 본류).
     // 쓰기 구간만 짧게 감싸 즉시 커밋하기 위해 프로그래매틱 트랜잭션을 쓴다.
     private final TransactionTemplate transactionTemplate;
+    // draft 읽기 캐시 — 조회는 캐시를 타고, 이 클래스의 모든 쓰기 경로가 커밋 직후 무효화한다.
+    private final QuoteDraftReadCache draftReadCache;
+    private final QuoteDraftHistoryStore historyStore;
 
+    @Autowired
     public QuoteDraftQueryService(
             JdbcTemplate jdbcTemplate,
             CurrentUserService currentUserService,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            QuoteDraftReadCache draftReadCache,
+            QuoteDraftHistoryStore historyStore
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.currentUserService = currentUserService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.draftReadCache = draftReadCache;
+        this.historyStore = historyStore;
+    }
+
+    // 기존 단위 테스트와 내부 편의 생성자는 이력 저장소 없이 기존 동작을 검증한다.
+    QuoteDraftQueryService(
+            JdbcTemplate jdbcTemplate,
+            CurrentUserService currentUserService,
+            PlatformTransactionManager transactionManager,
+            QuoteDraftReadCache draftReadCache
+    ) {
+        this(jdbcTemplate, currentUserService, transactionManager, draftReadCache, null);
     }
 
     public Map<String, Object> current(String authorization) {
         Long userId = currentUserId(authorization);
-        Map<String, Object> draft = activeDraft(userId);
-        if (draft == null) {
-            return emptyDraft();
-        }
-        return draftMap(draft);
+        return draftReadCache.response(userId, () -> {
+            Map<String, Object> draft = activeDraft(userId);
+            if (draft == null) {
+                return emptyDraft();
+            }
+            return draftMap(draft);
+        });
     }
 
     public Map<String, Object> putItem(String authorization, String partId, Map<String, Object> request) {
+        return putItem(authorization, partId, request, null);
+    }
+
+    public Map<String, Object> putItem(
+            String authorization,
+            String partId,
+            Map<String, Object> request,
+            String changeGroup
+    ) {
         Long userId = currentUserId(authorization);
         Map<String, Object> part = part(partId);
         String category = DbValueMapper.string(part, "category");
         int quantity = quantity(request.get("quantity"), category);
-        transactionTemplate.executeWithoutResult(status -> {
+        // draft touch(UPDATE ... RETURNING)가 응답용 draft 행을 함께 돌려준다 — 커밋 후
+        // activeDraft 재조회(순수 중복 1쿼리)를 없앤다. items read-back은 여전히 트랜잭션 밖이다.
+        Map<String, Object> draft = transactionTemplate.execute(status -> {
             Long draftId = ensureActiveDraftId(userId);
+            lockDraft(draftId);
+            if (historyStore != null) {
+                Map<String, Object> existing = activeItem(draftId, category, longValue(part, "internal_id"));
+                if (sameItem(existing, longValue(part, "internal_id"), quantity)) {
+                    return draftById(draftId);
+                }
+                String actionType = existing == null
+                        ? "ITEM_ADD"
+                        : Objects.equals(longValue(existing, "part_id"), longValue(part, "internal_id"))
+                                ? "QUANTITY_CHANGE"
+                                : "ITEM_REPLACE";
+                captureHistory(
+                        draftId,
+                        changeGroup,
+                        actionType,
+                        List.of(category),
+                        Map.of("partId", partId)
+                );
+            }
             upsertDraftItem(draftId, part, quantity);
+            return touchDraftReturning(draftId);
         });
-        // read-back은 커밋 후 트랜잭션 밖에서 — 응답 조립이 락 보유 시간을 늘리지 않게 한다.
-        return draftMap(activeDraft(userId));
+        // 커밋 직후 무효화 — 응답은 아래에서 직접 재조립하고(캐시에 되쓰지 않음), 다음 읽기가 재적재한다.
+        draftReadCache.invalidate(userId);
+        return draftMap(draft);
     }
 
     public Map<String, Object> applyAiBuild(String authorization, Map<String, Object> request) {
+        return applyAiBuild(authorization, request, null);
+    }
+
+    public Map<String, Object> applyAiBuild(
+            String authorization,
+            Map<String, Object> request,
+            String changeGroup
+    ) {
         Long userId = currentUserId(authorization);
         if (!"REPLACE".equals(text(request.get("conflictPolicy")))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "conflictPolicy는 REPLACE만 지원합니다.");
         }
         // 부품 해석·검증은 트랜잭션 진입 전에 끝낸다 — 실패해도 드래프트는 건드리지 않는다(기존 의미 유지).
         List<ResolvedAiItem> items = resolveAiItems(request.get("items"));
-        transactionTemplate.executeWithoutResult(status -> {
+        Map<String, Object> draft = transactionTemplate.execute(status -> {
             Long draftId = ensureActiveDraftId(userId);
+            lockDraft(draftId);
+            if (historyStore != null && sameComposition(draftId, items)) {
+                return draftById(draftId);
+            }
+            Map<String, Object> metadata = text(request.get("buildId")) == null
+                    ? Map.of()
+                    : Map.of("buildId", text(request.get("buildId")));
+            captureHistory(
+                    draftId,
+                    changeGroup,
+                    "AI_BUILD_APPLY",
+                    items.stream().map(ResolvedAiItem::category).distinct().toList(),
+                    metadata
+            );
             jdbcTemplate.update("""
                     UPDATE quote_draft_items
                     SET deleted_at = now(),
@@ -89,33 +164,61 @@ public class QuoteDraftQueryService {
                                     DbValueMapper.integer(item.part(), "price")
                             })
                             .toList());
-            jdbcTemplate.update("UPDATE quote_drafts SET updated_at = now() WHERE id = ?", draftId);
+            return touchDraftReturning(draftId);
         });
-        return draftMap(activeDraft(userId));
+        draftReadCache.invalidate(userId);
+        return draftMap(draft);
     }
 
     public Map<String, Object> patchItem(String authorization, String partId, Map<String, Object> request) {
+        return patchItem(authorization, partId, request, null);
+    }
+
+    public Map<String, Object> patchItem(
+            String authorization,
+            String partId,
+            Map<String, Object> request,
+            String changeGroup
+    ) {
         Long userId = currentUserId(authorization);
-        Map<String, Object> draft = requireActiveDraft(userId);
         // 담긴 뒤 단종/비활성된 부품도 수량 변경·정리는 가능해야 한다 — 상태 무관 조회(신규 담기만 ACTIVE 요구).
         Map<String, Object> part = partAnyStatus(partId);
-        int quantity = quantity(request.get("quantity"), DbValueMapper.string(part, "category"));
-        // 쓰기가 단일 UPDATE라 그 자체로 원자적 — 트랜잭션 없이 자동 커밋(드래프트 touch 안 함, 기존 유지).
-        int updated = jdbcTemplate.update("""
-                UPDATE quote_draft_items
-                SET quantity = ?,
-                    updated_at = now()
-                WHERE quote_draft_id = ?
-                  AND part_id = ?
-                  AND deleted_at IS NULL
-                """, quantity, longValue(draft, "internal_id"), longValue(part, "internal_id"));
-        if (updated == 0) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "견적초안에 담긴 부품을 찾을 수 없습니다.");
-        }
-        return draftMap(activeDraft(userId));
+        String category = DbValueMapper.string(part, "category");
+        int quantity = quantity(request.get("quantity"), category);
+        Map<String, Object> draft = transactionTemplate.execute(status -> {
+            Map<String, Object> active = requireActiveDraft(userId);
+            long draftId = longValue(active, "internal_id");
+            lockDraft(draftId);
+            Map<String, Object> existing = activeItem(draftId, category, longValue(part, "internal_id"));
+            if (existing == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "견적초안에 담긴 부품을 찾을 수 없습니다.");
+            }
+            if (DbValueMapper.integer(existing, "quantity") == quantity) {
+                return draftById(draftId);
+            }
+            captureHistory(
+                    draftId,
+                    changeGroup,
+                    "QUANTITY_CHANGE",
+                    List.of(category),
+                    Map.of("partId", partId)
+            );
+            jdbcTemplate.update("""
+                    UPDATE quote_draft_items
+                    SET quantity = ?, updated_at = now()
+                    WHERE quote_draft_id = ? AND part_id = ? AND deleted_at IS NULL
+                    """, quantity, draftId, longValue(part, "internal_id"));
+            return touchDraftReturning(draftId);
+        });
+        draftReadCache.invalidate(userId);
+        return draftMap(draft);
     }
 
     public Map<String, Object> deleteItem(String authorization, String partId) {
+        return deleteItem(authorization, partId, null);
+    }
+
+    public Map<String, Object> deleteItem(String authorization, String partId, String changeGroup) {
         Long userId = currentUserId(authorization);
         Map<String, Object> draft = activeDraft(userId);
         if (draft == null) {
@@ -123,16 +226,30 @@ public class QuoteDraftQueryService {
         }
         // 삭제는 부품의 판매 상태와 무관해야 한다 — 비활성 부품이 견적에 남아 지울 수 없는 잠금 방지.
         Map<String, Object> part = partAnyStatus(partId);
-        // 쓰기가 단일 UPDATE(soft-delete)라 그 자체로 원자적 — 트랜잭션 없이 자동 커밋(드래프트 touch 안 함, 기존 유지).
-        jdbcTemplate.update("""
-                UPDATE quote_draft_items
-                SET deleted_at = now(),
-                    updated_at = now()
-                WHERE quote_draft_id = ?
-                  AND part_id = ?
-                  AND deleted_at IS NULL
-                """, longValue(draft, "internal_id"), longValue(part, "internal_id"));
-        return draftMap(activeDraft(userId));
+        String category = DbValueMapper.string(part, "category");
+        draft = transactionTemplate.execute(status -> {
+            long draftId = longValue(requireActiveDraft(userId), "internal_id");
+            lockDraft(draftId);
+            Map<String, Object> existing = activeItem(draftId, category, longValue(part, "internal_id"));
+            if (existing == null) {
+                return draftById(draftId);
+            }
+            captureHistory(
+                    draftId,
+                    changeGroup,
+                    "ITEM_REMOVE",
+                    List.of(category),
+                    Map.of("partId", partId)
+            );
+            jdbcTemplate.update("""
+                    UPDATE quote_draft_items
+                    SET deleted_at = now(), updated_at = now()
+                    WHERE quote_draft_id = ? AND part_id = ? AND deleted_at IS NULL
+                    """, draftId, longValue(part, "internal_id"));
+            return touchDraftReturning(draftId);
+        });
+        draftReadCache.invalidate(userId);
+        return draftMap(draft);
     }
 
     private Long currentUserId(String authorization) {
@@ -165,6 +282,82 @@ public class QuoteDraftQueryService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "활성 견적초안을 찾을 수 없습니다.");
         }
         return draft;
+    }
+
+    private Map<String, Object> draftById(long draftId) {
+        return jdbcTemplate.queryForList("""
+                        SELECT id AS internal_id,
+                               public_id::text AS id,
+                               status,
+                               name,
+                               created_at,
+                               updated_at
+                        FROM quote_drafts
+                        WHERE id = ? AND deleted_at IS NULL
+                        """, draftId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "활성 견적초안을 찾을 수 없습니다."));
+    }
+
+    private void lockDraft(long draftId) {
+        if (historyStore != null) {
+            historyStore.lockDraft(draftId);
+        }
+    }
+
+    private void captureHistory(
+            long draftId,
+            String changeGroup,
+            String actionType,
+            List<String> categories,
+            Map<String, Object> metadata
+    ) {
+        if (historyStore != null) {
+            historyStore.captureBeforeMutation(draftId, changeGroup, actionType, categories, metadata);
+        }
+    }
+
+    private Map<String, Object> activeItem(long draftId, String category, long partInternalId) {
+        boolean multi = MULTI_ITEM_CATEGORIES.contains(category);
+        String predicate = multi ? "qdi.part_id = ?" : "qdi.category = ?";
+        Object value = multi ? partInternalId : category;
+        return jdbcTemplate.queryForList("""
+                        SELECT qdi.part_id, qdi.category, qdi.quantity
+                        FROM quote_draft_items qdi
+                        WHERE qdi.quote_draft_id = ?
+                          AND qdi.deleted_at IS NULL
+                          AND %s
+                        LIMIT 1
+                        """.formatted(predicate), draftId, value)
+                .stream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static boolean sameItem(Map<String, Object> existing, long partInternalId, int quantity) {
+        return existing != null
+                && Objects.equals(longValue(existing, "part_id"), partInternalId)
+                && DbValueMapper.integer(existing, "quantity") == quantity;
+    }
+
+    private boolean sameComposition(long draftId, List<ResolvedAiItem> desired) {
+        List<String> current = jdbcTemplate.queryForList("""
+                        SELECT qdi.part_id, qdi.category, qdi.quantity
+                        FROM quote_draft_items qdi
+                        WHERE qdi.quote_draft_id = ? AND qdi.deleted_at IS NULL
+                        ORDER BY qdi.category, qdi.part_id
+                        """, draftId)
+                .stream()
+                .map(row -> DbValueMapper.string(row, "category") + ":"
+                        + longValue(row, "part_id") + ":" + DbValueMapper.integer(row, "quantity"))
+                .sorted()
+                .toList();
+        List<String> target = desired.stream()
+                .map(item -> item.category() + ":" + longValue(item.part(), "internal_id") + ":" + item.quantity())
+                .sorted()
+                .toList();
+        return current.equals(target);
     }
 
     // 동시 첫 담기 2건이 둘 다 INSERT로 가면 부분 유니크(ux_quote_drafts_active_user) 23505로 500이 났다.
@@ -262,7 +455,20 @@ public class QuoteDraftQueryService {
         } else {
             upsertSingleCategoryItem(draftId, part, quantity);
         }
-        jdbcTemplate.update("UPDATE quote_drafts SET updated_at = now() WHERE id = ?", draftId);
+    }
+
+    // draft touch와 응답용 draft 행 조회를 RETURNING 한 문장으로 합친다 — 커밋 후 activeDraft
+    // 재조회를 없애면서 응답의 updatedAt은 touch 직후 값 그대로다.
+    private Map<String, Object> touchDraftReturning(Long draftId) {
+        return jdbcTemplate.queryForList("""
+                UPDATE quote_drafts
+                SET updated_at = now()
+                WHERE id = ?
+                RETURNING id AS internal_id, public_id::text AS id, status, name, created_at, updated_at
+                """, draftId)
+                .stream()
+                .findFirst()
+                .orElse(null);
     }
 
     // UPDATE→0행→INSERT 수동 업서트는 동시 PUT 2건이 둘 다 INSERT로 가서 23505로 터졌다(부하 실측 500의 범인).

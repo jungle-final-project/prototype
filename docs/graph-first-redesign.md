@@ -44,6 +44,7 @@
 | 단일 부품 카테고리 추천 | `PartRecommendationCards`, `appliedPartPreferences` 흐름 | `PART_RECOMMEND` |
 | 일반 설명/상담 | — | `EXPLAIN_CURRENT` (LLM_FULL은 예산 견적·명확화의 fallback으로만 유지) |
 
+- *(2026-07 정정: 위 '화면 이동/네비게이션 제거'는 2026-07-04 시점 계획이며 이후 되살아났다. PR #263·#264로 `POST /api/ai/build-chat` 응답이 다시 `actions=[OPEN_ROUTE]`를 내려보내고 프론트가 실제로 이동한다. 현재 계약은 `docs/API_CONTRACT.md`·`docs/openapi.yaml`의 `AiChatNavigationAction`과 `docs/ROUTE_OWNERSHIP.md` 내부 service 경계 절을 따른다.)*
 - `AiDraftAction` 액션 처리에서 남는 것은 `ADD_BUILD_TO_DRAFT`(견적 적용)와 `ASK_FOLLOW_UP`(명확화)뿐이다.
 - 제거되는 intent의 semantic cache 서명, 프롬프트 템플릿, 테스트도 함께 정리한다.
 - `docs/openapi.yaml`의 `/api/ai/build-chat` 요청/응답 계약을 함께 갱신한다.

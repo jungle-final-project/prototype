@@ -100,6 +100,7 @@ class BuildChatIntentRouterTest {
                 c("컴퓨터가 갑자기 재부팅돼", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("부팅이 안돼", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("게임 프레임이 갑자기 뚝뚝 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
+                c("화면이 끊기고 그래픽 오류가 반복돼", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("팬 소리가 커지고 너무 뜨거워", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("SSD 디스크가 계속 100퍼센트야", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("인터넷이 자꾸 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
@@ -341,6 +342,57 @@ class BuildChatIntentRouterTest {
         assertThat(balanceRequest.ambiguityReasons()).doesNotContain("RECIPIENT_CONTEXT");
     }
 
+    // 감사 재현(BG-AUDIT-004): "개발과 게임 균형 CPU"가 현재 견적 점수 설명으로 빠졌다.
+    // "균형"은 그 자체로 평가 요청이 아니다 — 무엇을 평가할지가 함께 있어야 점수 설명이다.
+    @Test
+    void balanceWordAloneIsNotAScoreExplanationSignal() {
+        for (String message : List.of("개발과 게임 균형 CPU", "밸런스 좋은 CPU 추천해줘", "균형 잡힌 램 골라줘")) {
+            BuildChatIntentDecision decision = router.decide(draftRequest(message), message);
+            assertThat(decision.intent()).as(message).isNotEqualTo(BuildChatIntent.EXPLAIN_BUILD_SCORE);
+        }
+    }
+
+    @Test
+    void balanceWordStaysAScoreExplanationSignalWhenItPointsAtTheCurrentBuild() {
+        for (String message : List.of(
+                "지금 견적 균형이 맞아?",
+                "이 견적 밸런스 어때?",
+                "종합점수 기준으로 균형이 안 맞는 부분 알려줘")) {
+            BuildChatIntentDecision decision = router.decide(draftRequest(message), message);
+            assertThat(decision.intent()).as(message).isEqualTo(BuildChatIntent.EXPLAIN_BUILD_SCORE);
+        }
+    }
+
+    // CPU와 GPU를 나란히 놓고 균형을 묻는 문장은 별도 신호(cpuGpuContrast)가 계속 잡는다.
+    @Test
+    void cpuGpuBalanceQuestionStillRoutesToScoreExplanation() {
+        String message = "CPU랑 GPU 균형이 왜 이래?";
+        BuildChatIntentDecision decision = router.decide(draftRequest(message), message);
+        assertThat(decision.intent()).isEqualTo(BuildChatIntent.EXPLAIN_BUILD_SCORE);
+    }
+
+    @Test
+    void draftHistoryCommandsRequireSelfQuoteCapabilityAndNeverBecomeMutation() {
+        Map<String, String> modes = Map.of(
+                "변경 기록 보여줘", "LIST",
+                "이전 견적과 비교해줘", "COMPARE",
+                "방금 전으로 돌려줘", "RESTORE_CONFIRM"
+        );
+        modes.forEach((message, mode) -> {
+            BuildChatIntentDecision decision = router.decide(historyRequest(message), message);
+            assertThat(decision.intent()).as(message).isEqualTo(BuildChatIntent.OPEN_DRAFT_HISTORY);
+            assertThat(decision.sideEffectRisk()).isEqualTo("NONE");
+            assertThat(decision.cachePolicy()).isEqualTo("NONE");
+            assertThat(decision.ambiguityReasons()).containsExactly(mode);
+        });
+
+        BuildChatIntentDecision withoutCapability = router.decide(
+                Map.of("message", "방금 전으로 돌려줘"),
+                "방금 전으로 돌려줘"
+        );
+        assertThat(withoutCapability.intent()).isNotEqualTo(BuildChatIntent.OPEN_DRAFT_HISTORY);
+    }
+
     private static Case c(String message, BuildChatIntent intent) {
         return new Case(message, Map.of("message", message), intent);
     }
@@ -365,6 +417,16 @@ class BuildChatIntentRouterTest {
 
     private static Map<String, Object> boardUiContext() {
         return Map.of("surface", "SELF_QUOTE", "capabilities", List.of("BOARD_PART_FOCUS"));
+    }
+
+    private static Map<String, Object> historyRequest(String message) {
+        return Map.of(
+                "message", message,
+                "uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("QUOTE_DRAFT_HISTORY")
+                )
+        );
     }
 
     private static Map<String, Object> draftRequest(String message) {

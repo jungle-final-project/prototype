@@ -30,6 +30,8 @@ class AgentAsJpaMappingTest {
         assertTable(AsTicketEntity.class, "as_tickets");
         assertTable(RemoteSupportSessionEntity.class, "remote_support_sessions");
         assertTable(VisitSupportReservationEntity.class, "visit_support_reservations");
+        assertTable(PcAgentDiagnosisEventEntity.class, "pc_agent_diagnosis_events");
+        assertTable(PcAgentDiagnosisResultEntity.class, "pc_agent_diagnosis_results");
     }
 
     @Test
@@ -70,8 +72,8 @@ class AgentAsJpaMappingTest {
         assertEnumValues(AsReviewStatus.class, "NOT_REQUIRED", "REQUIRED", "IN_REVIEW", "APPROVED", "REJECTED");
         assertEnumValues(AsSupportDecision.class, "SELF_SOLVABLE", "REMOTE_POSSIBLE", "VISIT_REQUIRED", "REPAIR_OR_REPLACE", "NEEDS_MORE_INFO", "MONITOR_ONLY", "UNSUPPORTED");
         assertEnumValues(RiskLevel.class, "LOW", "MEDIUM", "HIGH");
-        assertEnumValues(RemoteSupportProvider.class, "EXTERNAL_LINK", "ANYDESK", "TEAMVIEWER", "ZOOM", "GOOGLE_MEET");
-        assertEnumValues(RemoteSupportStatus.class, "REQUESTED", "LINK_SENT", "IN_PROGRESS", "COMPLETED", "CANCELLED");
+        assertEnumValues(RemoteSupportProvider.class, "EXTERNAL_LINK", "CHROME_REMOTE_DESKTOP", "ANYDESK", "TEAMVIEWER", "ZOOM", "GOOGLE_MEET");
+        assertEnumValues(RemoteSupportStatus.class, "REQUESTED", "LINK_SENT", "WAITING_FOR_CODE", "CODE_READY", "IN_PROGRESS", "COMPLETED", "CANCELLED");
         assertEnumValues(VisitTimeSlot.class, "MORNING", "AFTERNOON", "EVENING");
         assertEnumValues(VisitReservationStatus.class, "REQUESTED", "SCHEDULED", "RESCHEDULE_REQUESTED", "VISIT_IN_PROGRESS", "COMPLETED", "CANCELLED");
     }
@@ -92,6 +94,8 @@ class AgentAsJpaMappingTest {
         assertJpaRepository(AsTicketRepository.class, AsTicketEntity.class);
         assertJpaRepository(RemoteSupportSessionRepository.class, RemoteSupportSessionEntity.class);
         assertJpaRepository(VisitSupportReservationRepository.class, VisitSupportReservationEntity.class);
+        assertJpaRepository(PcAgentDiagnosisEventRepository.class, PcAgentDiagnosisEventEntity.class);
+        assertJpaRepository(PcAgentDiagnosisResultRepository.class, PcAgentDiagnosisResultEntity.class);
     }
 
     private static void assertTable(Class<?> entityType, String tableName) {

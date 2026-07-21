@@ -82,6 +82,11 @@ export type RecommendationEventBulkRequest = {
   events: RecommendationEventRequest[];
 };
 
+export type RecommendationEventBulkAcceptedResponse = {
+  accepted: boolean;
+  queued: number;
+};
+
 export type PartSearchParams = {
   category?: string;
   q?: string;
@@ -181,6 +186,80 @@ export type QuoteDraft = {
   itemCount: number;
   createdAt?: string | null;
   updatedAt?: string | null;
+};
+
+export type QuoteDraftHistoryEntry = {
+  id: string;
+  actionType: 'ITEM_ADD' | 'ITEM_REPLACE' | 'ITEM_REMOVE' | 'QUANTITY_CHANGE' | 'AI_BUILD_APPLY' | 'RESTORE';
+  actionLabel: string;
+  relatedCategories: string[];
+  totalPrice: number;
+  itemCount: number;
+  evaluationStatus: 'PENDING' | 'RUNNING' | 'VALID' | 'INVALID' | 'UNAVAILABLE';
+  score?: number | null;
+  maxScore?: number | null;
+  issueCodes: string[];
+  evaluatedAt?: string | null;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export type QuoteDraftHistoryList = {
+  items: QuoteDraftHistoryEntry[];
+  retentionDays: number;
+  maxItems: number;
+  maxProblemItems: number;
+};
+
+export type QuoteDraftHistorySnapshotItem = {
+  partId: string;
+  category: string;
+  name: string;
+  manufacturer?: string | null;
+  quantity: number;
+  unitPriceAtAdd: number;
+  lineTotal: number;
+};
+
+export type QuoteDraftHistoryIssue = {
+  code?: string | null;
+  severity?: string | null;
+  title?: string | null;
+  description?: string | null;
+  relatedCategories?: string[] | null;
+};
+
+export type QuoteDraftHistoryComparisonSide = {
+  items: QuoteDraftHistorySnapshotItem[];
+  totalPrice: number;
+  itemCount: number;
+  compositeScore?: { score: number; maxScore: number; grade?: string; label?: string; summary?: string } | null;
+  fps?: { gameTitle?: string; resolution?: string; graphicsPreset?: string; avgFps?: number; sourceName?: string } | null;
+  issues: QuoteDraftHistoryIssue[];
+  evaluationAvailable: boolean;
+};
+
+export type QuoteDraftHistoryDifference = {
+  category: string;
+  categoryLabel: string;
+  changeType: 'ADDED' | 'REMOVED' | 'REPLACED' | 'QUANTITY_CHANGED';
+  beforeItems: QuoteDraftHistorySnapshotItem[];
+  afterItems: QuoteDraftHistorySnapshotItem[];
+};
+
+export type QuoteDraftHistoryComparison = {
+  history: QuoteDraftHistoryEntry;
+  past: QuoteDraftHistoryComparisonSide;
+  current: QuoteDraftHistoryComparisonSide;
+  differences: QuoteDraftHistoryDifference[];
+  issueChanges: { added: QuoteDraftHistoryIssue[]; resolved: QuoteDraftHistoryIssue[] };
+  game: string;
+  resolution: 'fhd' | 'qhd' | '4k';
+  restorable: boolean;
+  unavailableItems: Array<{ partId: string; category: string; name: string }>;
+  requiresCompatibilityConfirmation: boolean;
+  evaluationBasis: 'CURRENT_CATALOG_DATA';
+  historicalPriceBasis: 'SNAPSHOT_UNIT_PRICE';
 };
 
 export type ToolRow = {

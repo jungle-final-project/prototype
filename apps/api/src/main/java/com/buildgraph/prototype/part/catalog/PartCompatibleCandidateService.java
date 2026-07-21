@@ -7,6 +7,7 @@ import com.buildgraph.prototype.part.tool.BuildSizeFitPolicy;
 import com.buildgraph.prototype.part.tool.ToolApplicabilityPolicy;
 import com.buildgraph.prototype.part.tool.ToolBuildPart;
 import com.buildgraph.prototype.part.tool.ToolCheckService;
+import com.buildgraph.prototype.quote.QuoteDraftReadCache;
 import com.buildgraph.prototype.user.CurrentUserService;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,12 +30,15 @@ public class PartCompatibleCandidateService {
     private final JdbcTemplate jdbcTemplate;
     private final ToolCheckService toolCheckService;
     private final PartQuery partQuery;
+    // draft 파츠의 단일 출처(쓰기 즉시 무효화) — test-only 생성자에서는 null이라 기존 SQL 폴백을 탄다.
+    private final QuoteDraftReadCache draftReadCache;
 
     @Autowired
-    public PartCompatibleCandidateService(JdbcTemplate jdbcTemplate, ToolCheckService toolCheckService, PartQuery partQuery) {
+    public PartCompatibleCandidateService(JdbcTemplate jdbcTemplate, ToolCheckService toolCheckService, PartQuery partQuery, QuoteDraftReadCache draftReadCache) {
         this.jdbcTemplate = jdbcTemplate;
         this.toolCheckService = toolCheckService;
         this.partQuery = partQuery;
+        this.draftReadCache = draftReadCache;
     }
 
     /* Test-only constructor; the Spring bean uses the shared PartQuery constructor above. */
@@ -42,6 +46,7 @@ public class PartCompatibleCandidateService {
         this.jdbcTemplate = jdbcTemplate;
         this.toolCheckService = toolCheckService;
         this.partQuery = null;
+        this.draftReadCache = null;
     }
 
     public Map<String, Object> compatibleCandidates(CurrentUserService.CurrentUser user, Map<String, Object> request) {
@@ -120,8 +125,8 @@ public class PartCompatibleCandidateService {
         List<CandidatePart> candidates = rows.stream()
                 .map(row -> new CandidatePart(toolPart(row), responsePart(row)))
                 .toList();
-        // 후보 패널은 카테고리 전수(M개)를 평가한다 — 후보마다 performance 툴이 벤치마크를 조회하던
-        // N+1(M회)을 드래프트+후보 전체 1회 배치 로드로 대체한다.
+        // 호출자가 준 후보 집합(기본·호환 정렬은 카테고리 전수, 명시적 정렬은 페이지 행)을 평가한다 —
+        // 후보마다 performance 툴이 벤치마크를 조회하던 N+1을 드래프트+후보 전체 1회 배치 로드로 대체한다.
         Map<Long, Map<String, Object>> benchmarks = prefetchBenchmarks(baseParts, candidates.stream().map(CandidatePart::toolPart), checkedTools);
         return candidates.stream()
                 .map(candidate -> {
@@ -327,6 +332,10 @@ public class PartCompatibleCandidateService {
     }
 
     private List<ToolBuildPart> currentQuoteDraftParts(CurrentUserService.CurrentUser user) {
+        // draft read 캐시가 있으면(운영 빈) 활성 draft 조회+파츠 조회를 캐시 1곳으로 대체한다.
+        if (draftReadCache != null) {
+            return draftReadCache.toolParts(user.internalId());
+        }
         List<Map<String, Object>> drafts = jdbcTemplate.queryForList("""
                 SELECT id AS internal_id,
                        public_id::text AS id,
@@ -455,7 +464,9 @@ public class PartCompatibleCandidateService {
      * performance 툴이 DB를 조회하던 N+1 회피. 판정 로직·결과는 프리페치 유무와 무관하게 동일하다.
      */
     private Map<Long, Map<String, Object>> prefetchBenchmarks(List<ToolBuildPart> baseParts, Stream<ToolBuildPart> candidates, List<String> checkedTools) {
-        if (checkedTools.isEmpty()) {
+        // 벤치마크는 performance 툴만 소비한다 — performance를 검사하지 않는 카테고리(CPU/RAM/보드 등)
+        // 경로에서 요청당 1회씩 나가던 배치 조회를 없앤다.
+        if (!checkedTools.contains("performance")) {
             return Map.of();
         }
         return toolCheckService.loadLatestBenchmarks(Stream.concat(baseParts.stream(), candidates).toList());
@@ -509,10 +520,11 @@ public class PartCompatibleCandidateService {
                     .toList());
             nextParts.add(candidate.toolPart());
         }
-        List<Map<String, Object>> toolResults = toolCheckService.checkBuild(nextParts, total(nextParts), prefetchedBenchmarks);
+        // 적용 가능 판정을 실행 '전'에 내려 필요한 툴만 돌린다 — 5개 전부 실행 후 버리던
+        // 카테고리 무관 툴(호환성 경로 CPU의 대부분)이 실행 자체를 건너뛴다. 결과는 종전과 동일하다.
         List<String> applicableCheckedTools = ToolApplicabilityPolicy.applicableCandidateTools(checkedTools, nextParts);
+        List<Map<String, Object>> toolResults = toolCheckService.checkBuildTools(applicableCheckedTools, nextParts, total(nextParts), prefetchedBenchmarks);
         List<Map<String, Object>> relevantResults = toolResults.stream()
-                .filter(result -> applicableCheckedTools.contains(text(result.get("tool"))))
                 .map(result -> projectCandidateResult(category, result))
                 .toList();
         String status = worstStatus(relevantResults);

@@ -361,6 +361,7 @@ Index:
 - unique: `refresh_tokens.token_hash`
 - index: `refresh_tokens.user_id`
 - index: `refresh_tokens.expires_at`
+- 서비스는 로그인·refresh 직후 사용자별 활성 refresh token을 최신 3개만 유지하고 초과분은 `revoked_at`으로 폐기한다. 기본 제한값은 `BUILDGRAPH_AUTH_REFRESH_TOKEN_MAX_ACTIVE_PER_USER=3`이다.
 
 ### requirements
 
@@ -531,6 +532,43 @@ Index:
 - index: `quote_draft_items.quote_draft_id`
 - index: `quote_draft_items.part_id`
 - index: `quote_draft_items.deleted_at`
+
+### quote_draft_history_entries
+
+목적: 현재 셀프견적의 의미 있는 변경 직전 상태를 비교·전체 복원할 수 있도록 30일 snapshot을 저장한다. 저장 견적 A/B 비교와는 별도 기능이다.
+
+Owner: 2번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 기록 ID |
+| `quote_draft_id` | `BIGINT` | no | `quote_drafts.id` | 대상 active draft |
+| `change_group_id` | `UUID` | no | - | 한 사용자 동작의 여러 mutation을 묶는 ID |
+| `action_type` | `VARCHAR(40)` | no | - | 추가·교체·삭제·수량·AI 적용·복원 |
+| `action_label` | `VARCHAR(160)` | no | - | 사용자 표시용 변경 전 설명 |
+| `related_categories` | `JSONB` | no | - | 관련 부품 카테고리 |
+| `metadata` | `JSONB` | no | - | part/build/history 식별 보조값 |
+| `snapshot_payload` | `JSONB` | no | - | 부품 ID·이름·카테고리·수량·변경 직전 `parts.price` |
+| `snapshot_fingerprint` | `VARCHAR(64)` | no | - | 동일 상태 중복 방지 SHA-256 |
+| `evaluation_status` | `VARCHAR(20)` | no | - | `PENDING/RUNNING/VALID/INVALID/UNAVAILABLE` |
+| `evaluation_score` | `INTEGER` | yes | - | 백그라운드 평가한 종합점수. 평가 전·불가 시 NULL |
+| `evaluation_max_score` | `INTEGER` | yes | - | 종합점수 만점 |
+| `evaluation_issue_signature` | `VARCHAR(64)` | yes | - | 연속된 동일 0점 원인 압축용 SHA-256 |
+| `evaluation_issue_codes` | `JSONB` | no | - | Tool FAIL·점수 조언 근거 코드 |
+| `evaluation_started_at` | `TIMESTAMPTZ` | yes | - | worker 평가 시작 시각 |
+| `evaluation_attempts` | `INTEGER` | no | - | 평가 claim 누적 횟수. 기본 0, 최대 재시도 판정에 사용 |
+| `evaluation_next_attempt_at` | `TIMESTAMPTZ` | yes | - | 일시 장애 후 다음 평가 가능 시각 |
+| `evaluation_last_error_code` | `VARCHAR(80)` | yes | - | 내부 평가 오류 분류. 사용자 응답에는 노출하지 않음 |
+| `evaluation_last_error_at` | `TIMESTAMPTZ` | yes | - | 마지막 평가 오류 시각 |
+| `evaluated_at` | `TIMESTAMPTZ` | yes | - | 평가 완료 시각 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 기록 시각 |
+| `expires_at` | `TIMESTAMPTZ` | no | - | 기본 30일 만료 시각 |
+
+- raw 사용자 대화나 개인정보는 snapshot에 저장하지 않는다.
+- 정상 기록은 draft별 최근 20건, 0점 문제 기록은 최근 5건을 독립적으로 유지한다. 같은 실패 signature가 연속되면 최신 문제 기록 하나만 남긴다.
+- snapshot은 변경 transaction에서 즉시 저장하고 Tool·종합점수 평가는 commit 이후 전용 executor가 후처리한다. 전역 scheduler가 꺼진 배포에서도 동작하며 startup에서 미완료 row를 다시 claim한다. 일시 오류는 최대 3회 지수 백오프로 재시도하고, 실제 부품 소실 또는 재시도 소진인 `UNAVAILABLE`은 호환 실패 0점인 `INVALID`와 구분한다.
+- 복원은 이 snapshot 전체를 사용하며 비활성·삭제 부품이 있으면 부분 복원하지 않는다.
 
 ### parts
 
@@ -1473,7 +1511,7 @@ Index:
 
 ### remote_support_sessions
 
-목적: AS 티켓에 대한 원격 지원 세션(외부 도구 링크) 이력을 저장한다 (V56).
+목적: AS 티켓에 대한 원격 지원 세션 상태와 외부 지원 도구 정보를 저장한다 (V56, Chrome Remote Desktop 코드 필드는 V130).
 
 Owner: 4번
 
@@ -1483,10 +1521,12 @@ Owner: 4번
 | `public_id` | `UUID` | no | - | 외부 ID |
 | `as_ticket_id` | `BIGINT` | no | `as_tickets.id` | 기준 AS 티켓 |
 | `device_id` | `BIGINT` | yes | `agent_devices.id` | 관련 디바이스 |
-| `provider` | `VARCHAR(80)` | no | - | `EXTERNAL_LINK`, `ANYDESK`, `TEAMVIEWER`, `ZOOM`, `GOOGLE_MEET` |
+| `provider` | `VARCHAR(80)` | no | - | `EXTERNAL_LINK`, `CHROME_REMOTE_DESKTOP`, `ANYDESK`, `TEAMVIEWER`, `ZOOM`, `GOOGLE_MEET` |
 | `session_url` | `TEXT` | yes | - | 세션 URL |
-| `status` | `VARCHAR(30)` | no | - | `REQUESTED`, `LINK_SENT`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
+| `status` | `VARCHAR(30)` | no | - | `REQUESTED`, `LINK_SENT`, `WAITING_FOR_CODE`, `CODE_READY`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
 | `requested_by_admin_id` | `BIGINT` | yes | `users.id` | 요청 관리자 |
+| `access_code` | `TEXT` | yes | - | Chrome Remote Desktop 일회용 지원 코드. 민감 데이터이며 완료·취소·티켓 종료 시 제거 |
+| `access_code_registered_at` | `TIMESTAMPTZ` | yes | - | 현재 일회용 지원 코드 등록 또는 교체 시각 |
 | `started_at` | `TIMESTAMPTZ` | yes | - | 시작 시각 |
 | `ended_at` | `TIMESTAMPTZ` | yes | - | 종료 시각 |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
@@ -1498,6 +1538,12 @@ Index:
 - index: `remote_support_sessions.device_id`
 - index: `remote_support_sessions.status`
 - index: `remote_support_sessions.created_at`
+
+보안 규칙:
+
+- `access_code`는 일반 티켓 목록·상세 DTO, 로그, 예외 메시지에 포함하지 않는다.
+- 담당 관리자 복사 API에서만 원문을 반환하고 기본 관리자 상태 응답은 마스킹한다.
+- 이번 범위에서는 기존 암호화 저장 유틸리티가 없어 평문 컬럼을 최소 권한으로 사용한다. 운영 환경에서는 DB 또는 애플리케이션 계층 암호화가 추가로 필요하다.
 
 ### visit_support_reservations
 
@@ -1714,6 +1760,7 @@ Owner: 4번
 | `upgrade_candidates` | `JSONB` | yes | - | 업그레이드 후보 배열 |
 | `admin_note` | `TEXT` | yes | - | 관리자 메모 |
 | `resolved_at` | `TIMESTAMPTZ` | yes | - | 해결 시각 |
+| `reviewed_at` | `TIMESTAMPTZ` | yes | - | 관리자 검토가 최종 승인 또는 반려된 시각 (V129) |
 | `created_at` | `TIMESTAMPTZ` | no | - | 생성 시각 |
 | `updated_at` | `TIMESTAMPTZ` | yes | - | 수정 시각 |
 | `deleted_at` | `TIMESTAMPTZ` | yes | - | soft delete |

@@ -54,6 +54,17 @@ class CurrentUserServiceTest {
     }
 
     @Test
+    void requireAuthenticatedSubjectVerifiesJwtWithoutLoadingUserRow() {
+        String subject = "00000000-0000-4000-8000-000000001004";
+        String token = jwtTokenService.issueAccessToken(userClaim(subject, "USER"));
+
+        String verifiedSubject = currentUserService.requireAuthenticatedSubject("Bearer " + token);
+
+        assertThat(verifiedSubject).isEqualTo(subject);
+        verifyNoInteractions(jdbcTemplate);
+    }
+
+    @Test
     void requireAdminRejectsUserRoleWithForbidden() {
         String token = jwtTokenService.issueAccessToken(userClaim("00000000-0000-4000-8000-000000001004", "USER"));
         when(jdbcTemplate.queryForList(anyString(), eq("00000000-0000-4000-8000-000000001004"))).thenReturn(List.of(Map.of(

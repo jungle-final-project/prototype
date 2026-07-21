@@ -86,6 +86,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             routeIntent.shouldNavigate는 사용자가 명확히 화면/페이지/목록/상세로 이동하려는 경우에만 true입니다.
             상품 상세 이동은 사용자가 특정 상품 상세를 보려는 경우에만 PART_DETAIL과 partQuery를 채우십시오. “5090 추천”, “5090 들어간 PC”처럼 후보가 여러 개인 요청은 PART_DETAIL이 아닙니다.
             확신이 낮거나 복합 명령이면 routeIntent.shouldNavigate=false, routeType=NONE, confidence=LOW로 두십시오.
+            반대로 shouldNavigate=true로 둘 때는 반드시 confidence=HIGH로 두십시오. HIGH가 아니면 이동이 실행되지 않아,
+            “이동할게요”라고 답해 놓고 화면이 그대로인 상태가 됩니다. PART_DETAIL이면 category도 함께 채우십시오.
             uiContext.surface=SELF_QUOTE이고 capabilities에 BOARD_PART_FOCUS가 있을 때, 사용자가 현재 구성도에서 부품의 물리적 위치를 묻는 순수 위치 질문이면 boardFocusIntent를 구조화하십시오.
             위치 질문은 “RAM 위치가 어디야”, “CPU와 RAM 자리 표시해줘”, “M.2 슬롯이 어디 있어”처럼 부품과 공간 의도가 함께 있는 경우입니다.
             추천·가격·구매·교체·담기·삭제·성능 비교가 섞인 요청은 위치 강조가 아니며 boardFocusIntent.shouldFocus=false로 두십시오.
@@ -122,6 +124,18 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private static final List<String> BUILD_CATEGORIES = List.of(
             "CPU", "MOTHERBOARD", "RAM", "GPU", "STORAGE", "PSU", "CASE", "COOLER"
     );
+    /** 상품 상세를 요청받았지만 하나로 특정하지 못해 카테고리 후보 목록으로 대신 보냈다는 표식. */
+    private static final String PART_DETAIL_LIST_FALLBACK = "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK";
+    /** 채팅에서 되물어 고르게 할 최대 후보 수. 이보다 많으면 칩 대신 후보 목록 화면으로 보낸다. */
+    private static final int MAX_ROUTE_CHOICE_CHIPS = 4;
+    /** 화면은 옮기는데 조건에 맞는 후보는 없을 때, 이동 사실을 먼저 알리고 서버 사유를 잇는다. */
+    private static final String NAVIGATED_NOTICE = "요청하신 화면으로 이동할게요. ";
+    /** '페이지'라는 낱말로 상세 화면을 약속하는 문구 — 이동 어휘 없이도 상세 약속으로 본다. */
+    private static final List<String> DETAIL_PAGE_PROMISES = List.of("상세페이지", "상품페이지", "제품페이지");
+    /** '페이지' 없이 상세를 약속하는 문구. 오검출이 쉬워 이동 어휘가 함께 있을 때만 약속으로 본다. */
+    private static final List<String> DETAIL_PROMISES_NEEDING_NAVIGATION = List.of("제품상세", "상품상세", "상세화면");
+    /** 이동 어휘. PartRouteResolver.hasProductRouteIntent와 같은 계보로 맞춘다. */
+    private static final List<String> ROUTE_NAVIGATION_VERBS = List.of("이동", "열어", "열게", "열어드", "보여", "띄워");
 
     private final JdbcTemplate jdbcTemplate;
     private final AgentTraceService agentTraceService;
@@ -257,9 +271,32 @@ public class DefaultAiChatEngine implements AiChatEngine {
             parsedContext.put("partConstraint", partConstraint);
         }
         String assistantMessage = firstText(text(plan.get("assistantMessage")), null);
-        EngineRouteIntent routeIntent = normalizeRouteIntent(objectMap(plan.get("routeIntent")), selectedCategory);
+        RoutePlan routePlan = planRoute(objectMap(plan.get("routeIntent")), selectedCategory);
+        EngineRouteIntent routeIntent = routePlan.routeIntent();
+        // 이 턴의 문구를 서버가 도착지를 근거로 직접 썼는지. 아래 빈-후보 가드가 이 문구를 덮으면
+        // 화면은 옮겨 놓고 "후보를 찾지 못했습니다"라고 답하는 턴이 된다.
+        boolean serverAuthoredRouteMessage = false;
         if (routeIntent != null) {
             parsedContext.put("routeIntent", routeIntent.context());
+            String correctedMessage = correctedRouteMessage(assistantMessage, routeIntent);
+            // '서버가 도착지를 근거로 썼다'고 인정하는 건 후보를 실제로 세어 본 목록 폴백 턴뿐이다.
+            // 후보를 안 세어 본 턴(LLM이 CATEGORY로 분류)에서 이 깃발을 세우면 아래 빈-후보 가드를
+            // 밀어내, 후보가 0건인데도 그 사실을 알리지 못하게 된다. 문구는 고치되 가드는 살려 둔다.
+            serverAuthoredRouteMessage = !Objects.equals(correctedMessage, assistantMessage)
+                    && PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason());
+            assistantMessage = correctedMessage;
+        }
+        if (!routePlan.choiceChips().isEmpty()) {
+            // 화면을 옮기는 대신 채팅에서 고르게 하는 턴 — 칩과 되묻기 문구가 LLM 원문을 대신한다.
+            parsedContext.put("routeChoiceChips", routePlan.choiceChips());
+            serverAuthoredRouteMessage = firstText(routePlan.message(), null) != null;
+            assistantMessage = firstText(routePlan.message(), assistantMessage);
+        }
+        if (routePlan.unresolved()) {
+            // 이동 의도는 있었는데 갈 곳이 없었다. 문구를 문자열로 판단하지 않고 이 상태로만 교정한다 —
+            // 문자열로 보면 이동을 약속하지 않은 평범한 답변까지 갈아치우게 된다.
+            serverAuthoredRouteMessage = firstText(routePlan.message(), null) != null;
+            assistantMessage = firstText(routePlan.message(), assistantMessage);
         }
         Map<String, Object> boardFocusIntent = normalizeBoardFocusIntent(objectMap(plan.get("boardFocusIntent")));
         Map<String, Object> supportIntent = normalizeSupportIntent(objectMap(plan.get("supportIntent")));
@@ -281,7 +318,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
             case ASK_FOLLOW_UP -> askFollowUpResponse(message);
         };
         base = withRouteAction(base, routeIntent);
-        return withLlmMetadata(base, assistantMessage, parsedContext, evidenceIds);
+        return withLlmMetadata(base, assistantMessage, parsedContext, evidenceIds,
+                serverAuthoredRouteMessage, routeIntent != null);
     }
 
     @Override
@@ -841,16 +879,17 @@ public class DefaultAiChatEngine implements AiChatEngine {
             AiChatEngineResponse response,
             String assistantMessage,
             Map<String, Object> parsedContext,
-            List<String> evidenceIds
+            List<String> evidenceIds,
+            boolean serverAuthoredRouteMessage,
+            boolean navigates
     ) {
         Map<String, Object> mergedContext = new LinkedHashMap<>(response.parsedContext() == null ? Map.of() : response.parsedContext());
         if (parsedContext != null) {
             mergedContext.putAll(parsedContext);
         }
         preserveServerHardConstraints(mergedContext, response.parsedContext());
-        String finalAssistantMessage = shouldKeepServerAssistantMessage(response, mergedContext)
-                ? response.assistantMessage()
-                : firstText(assistantMessage, response.assistantMessage());
+        String finalAssistantMessage = resolveAssistantMessage(
+                response, mergedContext, assistantMessage, serverAuthoredRouteMessage, navigates);
         return new AiChatEngineResponse(
                 finalAssistantMessage,
                 response.intent(),
@@ -862,6 +901,31 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 response.toolResults(),
                 response.agentSessionId()
         );
+    }
+
+    /**
+     * 빈-후보 가드(shouldKeepServerAssistantMessage)는 LLM이 없는 후보를 있다고 말하는 걸 막는 장치다.
+     * 그런데 이동하는 턴에서는 도착지를 설명하는 문구까지 덮어, 화면은 상세로 가 놓고
+     * "후보를 찾지 못했습니다"라고 답하는 턴을 만든다. 이동 사실과 후보 없음은 함께 말해야 한다.
+     */
+    private static String resolveAssistantMessage(
+            AiChatEngineResponse response,
+            Map<String, Object> mergedContext,
+            String assistantMessage,
+            boolean serverAuthoredRouteMessage,
+            boolean navigates
+    ) {
+        // 서버가 이 턴의 도착지를 보고 직접 쓴 문구다. LLM의 낙관을 막는 가드가 이걸 덮을 이유가 없다.
+        if (serverAuthoredRouteMessage) {
+            return firstText(assistantMessage, response.assistantMessage());
+        }
+        if (!shouldKeepServerAssistantMessage(response, mergedContext)) {
+            return firstText(assistantMessage, response.assistantMessage());
+        }
+        // 가드는 그대로 두되, 화면이 실제로 옮겨 가는 턴이면 그 사실을 앞에 붙여 도착지와 어긋나지 않게 한다.
+        return navigates
+                ? NAVIGATED_NOTICE + response.assistantMessage()
+                : response.assistantMessage();
     }
 
     private AiChatEngineResponse withRouteAction(AiChatEngineResponse response, EngineRouteIntent routeIntent) {
@@ -892,43 +956,143 @@ public class DefaultAiChatEngine implements AiChatEngine {
         );
     }
 
-    private EngineRouteIntent normalizeRouteIntent(Map<String, Object> source, String selectedCategory) {
+    /**
+     * "상세페이지로 이동할게요"라고 답해 놓고 실제로는 목록 화면으로 보내는 경우, 문구가 약속한 화면과
+     * 실제 도착지가 어긋난다. 그 어긋남이 있을 때만 사실대로 다시 쓴다 —
+     * LLM이 처음부터 "목록으로 이동"이라고 답했으면 손대지 않는다.
+     *
+     * 판정 기준은 '서버가 목록 폴백 표식을 남겼는가'가 아니라 **실제 도착지가 목록인가**다.
+     * LLM이 같은 요청을 routeType=CATEGORY로 분류하면 표식이 안 찍히는데, 그때도 도착지는 목록이라
+     * 표식으로 판정하면 "파워 상세 페이지로 이동할게요"라고 말하고 파워 목록에 떨구는 턴이 그대로 나간다.
+     */
+    private static String correctedRouteMessage(String assistantMessage, EngineRouteIntent routeIntent) {
+        if (!isCategoryListRoute(routeIntent.route()) || !promisesDetailPage(assistantMessage)) {
+            return assistantMessage;
+        }
+        // 카테고리는 컨텍스트가 아니라 route에서 되읽는다 — route는 화이트리스트 정규식을 이미 통과했고,
+        // 컨텍스트 값은 클라이언트가 보낸 selectedCategory가 검증 없이 반사될 수 있는 자리다.
+        String category = routeCategory(routeIntent.route());
+        if (!PART_DETAIL_LIST_FALLBACK.equals(routeIntent.reason())) {
+            // 서버가 후보를 세어 보지 않은 턴이다. 몇 개가 걸렸는지 모르면서 "후보 목록에서 확인해 주세요"라고
+            // 하면 없는 후보를 있다고 말하는 셈이라, 도착지만 바로잡고 후보 수는 말하지 않는다.
+            String listLabel = category == null ? "부품" : categoryLabel(category);
+            return listLabel + " 목록 화면으로 이동할게요. 특정 상품 상세를 보시려면 정확한 제품명을 알려주세요.";
+        }
+        // route의 q= 값과 같은 정제를 거친 문구를 인용한다 — 도착한 화면의 검색어와 답변이 어긋나지 않게.
+        String partQuery = text(PartRouteResolver.extractPartQuery(text(routeIntent.context().get("partQuery"))));
+        String label = category == null ? "부품" : categoryLabel(category);
+        String head = partQuery == null
+                ? "찾으시는 상품을 하나로 특정하지 못했어요. "
+                : "'" + partQuery + "'에 정확히 맞는 상품을 하나로 특정하지 못했어요. ";
+        return head + label + " 후보 목록에서 확인해 주세요.";
+    }
+
+    /**
+     * 도착지가 특정 카테고리의 부품 목록인가. 상품 상세(/parts/{id})는 약속과 도착지가 어긋나지 않고,
+     * 카테고리 없는 셀프견적(/self-quote)은 "무슨 목록"인지 말할 근거가 없어 둘 다 대상이 아니다.
+     * 후자를 포함하면 문구는 "파워 목록으로 이동할게요"라고 하고 버튼은 "셀프 견적 열기", 도착 화면은
+     * 카테고리 없는 셀프견적이 되어 셋이 서로 다른 곳을 가리킨다.
+     */
+    private static boolean isCategoryListRoute(String route) {
+        return route != null && route.startsWith("/self-quote?category=");
+    }
+
+    /** 이동하려 했으나 갈 곳을 해상하지 못했을 때, 이동을 약속하는 대신 사실대로 되묻는 문구. */
+    private static String unresolvedRouteMessage(String partQuery) {
+        String query = text(PartRouteResolver.extractPartQuery(partQuery));
+        return query == null
+                ? "찾으시는 화면을 특정하지 못했어요. 어떤 부품인지 정확한 제품명으로 알려주시면 바로 열어드릴게요."
+                : "'" + query + "'로 찾을 수 있는 상품이 없어요. 정확한 제품명을 알려주시면 바로 열어드릴게요.";
+    }
+
+    /**
+     * "상세페이지"라는 약속만 잡는다. 그냥 "상세"로 판단하면 "상세 스펙을 알려드릴게요"처럼
+     * 이동을 약속하지 않은 정상 답변까지 통째로 갈아치운다.
+     */
+    private static boolean promisesDetailPage(String assistantMessage) {
+        if (assistantMessage == null) {
+            return false;
+        }
+        String compact = assistantMessage.replaceAll("\\s+", "");
+        if (DETAIL_PAGE_PROMISES.stream().anyMatch(compact::contains)) {
+            return true;
+        }
+        // "제품 상세로 이동할게요"처럼 '페이지' 없이 상세 화면을 약속하는 문구도 잡는다.
+        // 다만 이동 어휘가 함께 있을 때만 — "제품 상세를 정리해 드릴게요" 같은 설명 답변은 건드리지 않는다.
+        return DETAIL_PROMISES_NEEDING_NAVIGATION.stream().anyMatch(compact::contains)
+                && ROUTE_NAVIGATION_VERBS.stream().anyMatch(compact::contains);
+    }
+
+    private RoutePlan planRoute(Map<String, Object> source, String selectedCategory) {
         if (!Boolean.TRUE.equals(source.get("shouldNavigate"))) {
-            return null;
+            return RoutePlan.NONE;
         }
         if (!"HIGH".equals(text(source.get("confidence")))) {
-            return null;
+            return RoutePlan.NONE;
         }
         String routeType = text(source.get("routeType"));
         String category = firstText(categoryFrom(text(source.get("category"))), selectedCategory);
         String reason = firstText(text(source.get("reason")), "LLM_ROUTE_INTENT");
-        String route = switch (routeType == null ? "NONE" : routeType) {
-            case "CATEGORY" -> category == null ? null : "/self-quote?category=" + category;
-            case "SELF_QUOTE" -> "/self-quote";
-            case "MY_QUOTES" -> "/my/quotes";
-            case "REQUIREMENT_NEW" -> "/requirements/new";
-            case "SUPPORT_NEW" -> "/support/new";
-            case "SUPPORT_AI_CHAT" -> "/support/ai-chat";
-            case "CHECKOUT" -> "/checkout";
-            case "PART_DETAIL" -> partRouteResolver.resolvePartDetailRoute(text(source.get("partQuery")), category);
-            default -> null;
-        };
-        if (route == null && "PART_DETAIL".equals(routeType) && category != null) {
-            route = partRouteResolver.resolveCategoryFilterRoute(text(source.get("partQuery")), category);
-            reason = firstText(reason, "PART_DETAIL_AMBIGUOUS_CATEGORY_FALLBACK");
+        String partQuery = text(source.get("partQuery"));
+        List<String> choices = List.of();
+        String route = null;
+        // 목록으로 대신 보낼 때 q에 실을 토큰이 이 안에 있다 — 블록 밖에서도 읽을 수 있게 끌어올린다.
+        PartRouteResolver.PartDetailResolution resolution = null;
+        if ("PART_DETAIL".equals(routeType)) {
+            resolution = partRouteResolver.resolvePartDetail(partQuery, category);
+            route = resolution.route();
+            choices = resolution.choices();
+        } else {
+            route = switch (routeType == null ? "NONE" : routeType) {
+                case "CATEGORY" -> category == null ? null : "/self-quote?category=" + category;
+                case "SELF_QUOTE" -> "/self-quote";
+                case "MY_QUOTES" -> "/my/quotes";
+                case "REQUIREMENT_NEW" -> "/requirements/new";
+                case "SUPPORT_NEW" -> "/support/new";
+                case "SUPPORT_AI_CHAT" -> "/support/ai-chat";
+                case "CHECKOUT" -> "/checkout";
+                default -> null;
+            };
+        }
+        // 후보가 두어 개뿐이면 화면을 옮기지 않고 채팅에서 바로 고르게 한다 —
+        // 두 개 중 하나 고르는 일에 목록 화면까지 이동시킬 이유가 없다.
+        if (route == null && choices.size() >= 2 && choices.size() <= MAX_ROUTE_CHOICE_CHIPS) {
+            return RoutePlan.choices(
+                    choices.stream().map(name -> name + " 상세페이지로 이동해").toList(),
+                    partQuery == null
+                            ? "말씀하신 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
+                            : "'" + partQuery + "'에 해당하는 상품이 " + choices.size() + "개예요. 어느 쪽인지 골라 주세요."
+            );
+        }
+        // 보여 줄 후보가 하나라도 있을 때만 목록으로 보낸다. 0건이면 화면을 옮겨 봐야 무관한 상품만 잔뜩 보여 주는 꼴이라,
+        // 아래 unresolved 경로로 떨어뜨려 "그런 상품이 없다"고 사실대로 되묻는다.
+        if (route == null && "PART_DETAIL".equals(routeType) && !resolution.choices().isEmpty()) {
+            // LLM이 category를 비워 보내도 상품명에서 되짚어 목록으로라도 보낸다 —
+            // 여기서 포기하면 "상세페이지로 이동할게요"라고 답해 놓고 아무 일도 일어나지 않는다.
+            String listCategory = firstText(category, PartRouteResolver.inferCategory(partQuery));
+            if (listCategory != null) {
+                // q에는 리졸버가 실제로 걸어 본 토큰만 싣는다 — 원문을 그대로 실으면 도착 목록이 0건이 된다.
+                route = partRouteResolver.categoryFilterRoute(listCategory, resolution);
+                category = listCategory;
+                // 상품을 하나로 특정하지 못해 목록으로 보낸다는 사실은 아래 문구 교정이 읽어야 하므로
+                // LLM이 써 준 reason 대신 이 표식을 남긴다.
+                reason = PART_DETAIL_LIST_FALLBACK;
+            }
         }
         if (!isAllowedRoute(route)) {
-            return null;
+            // 이동하려 했는데 갈 곳을 못 찾았다. 여기서 NONE을 돌려주면 LLM이 쓴 "이동할게요"가 그대로 나가
+            // 답만 하고 화면은 그대로인 상태가 된다 — 되묻기로 사실을 알린다.
+            return RoutePlan.unresolved(unresolvedRouteMessage(partQuery));
         }
-        return new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
+        return RoutePlan.route(new EngineRouteIntent(route, routeLabel(route), reason, MockData.map(
                 "shouldNavigate", true,
                 "routeType", routeType,
                 "category", category,
-                "partQuery", text(source.get("partQuery")),
+                "partQuery", partQuery,
                 "confidence", text(source.get("confidence")),
                 "resolvedRoute", route,
                 "reason", reason
-        ));
+        )));
     }
 
     private static Map<String, Object> normalizeBoardFocusIntent(Map<String, Object> source) {
@@ -1431,6 +1595,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
         PartQueryConstraints detected = partQueryConstraints(category, message);
         List<String> modelTokens = detected.modelTokens();
         Integer targetCapacityGb = detected.targetCapacityGb();
+        Integer targetWattageW = detected.targetWattageW();
+        String wattageMode = detected.wattageMode();
 
         // 전체 견적 문장에는 여러 카테고리의 숫자가 함께 등장한다. 범용 숫자 정규식 결과를 다른
         // 카테고리에 재사용하면 9950X3D가 GPU 모델로, 2TB가 RAM 용량으로 번질 수 있다.
@@ -1441,7 +1607,11 @@ public class DefaultAiChatEngine implements AiChatEngine {
             modelTokens = List.of();
             targetCapacityGb = inferScopedCapacityGb(category, message);
         } else if ("PSU".equals(category)) {
-            modelTokens = inferPsuWattageTokens(message);
+            // 정격 출력은 상품명/URL 부분 문자열이 아니라 숫자 속성으로 비교한다. 1200W 상품의
+            // 참고 URL에 "1000w"가 들어 있어 1000W 조건으로 오인되던 사례를 차단한다.
+            modelTokens = List.of();
+            targetWattageW = inferPsuWattage(message);
+            wattageMode = inferPsuWattageMode(message, targetWattageW);
         }
 
         List<String> keywords = new ArrayList<>();
@@ -1455,6 +1625,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (targetCapacityGb != null) {
             keywords.add(targetCapacityGb + "GB");
         }
+        if (targetWattageW != null) {
+            keywords.add(targetWattageW + "W");
+        }
         if (detected.targetModuleCount() != null) {
             keywords.add(detected.targetModuleCount() + "개");
         }
@@ -1463,6 +1636,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 detected.brandToken(),
                 modelTokens,
                 targetCapacityGb,
+                targetWattageW,
+                wattageMode,
                 detected.targetModuleCount(),
                 detected.targetQuantity(),
                 keywords.stream().distinct().toList()
@@ -1530,15 +1705,30 @@ public class DefaultAiChatEngine implements AiChatEngine {
         return unit.startsWith("t") || unit.startsWith("테라") ? value * 1000 : value;
     }
 
-    private static List<String> inferPsuWattageTokens(String message) {
+    private static Integer inferPsuWattage(String message) {
         Matcher matcher = Pattern.compile("(?i)(\\d{3,4})\\s*w(?:att)?").matcher(safe(message));
-        List<String> tokens = new ArrayList<>();
-        while (matcher.find()) {
-            if (!tokens.contains(matcher.group(1))) {
-                tokens.add(matcher.group(1));
-            }
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
+    private static String inferPsuWattageMode(String message, Integer wattage) {
+        if (wattage == null) {
+            return null;
         }
-        return tokens;
+        String normalized = safe(message).toLowerCase(Locale.ROOT);
+        String value = Pattern.quote(String.valueOf(wattage));
+        if (Pattern.compile("(?:최소|적어도|minimum|at\\s+least)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이상|부터|or\\s+more)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MIN";
+        }
+        if (Pattern.compile("(?:최대|maximum|at\\s+most)\\s*" + value + "\\s*w", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()
+                || Pattern.compile(value + "\\s*w\\s*(?:이하|이내|안으로|넘지|or\\s+less)", Pattern.CASE_INSENSITIVE)
+                .matcher(normalized).find()) {
+            return "MAX";
+        }
+        return "EXACT";
     }
 
     private static Map<String, PartQueryConstraints> mergeStructuredPartConstraints(
@@ -1570,6 +1760,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
                         null,
                         null,
                         null,
+                        null,
+                        null,
                         keywords
                 ));
                 continue;
@@ -1582,15 +1774,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
             if ("GPU".equals(category)) {
                 modelTokens.addAll(existing.modelTokens());
             }
-            modelTokens.addAll(keywords);
+            keywords.stream()
+                    .filter(keyword -> !"PSU".equals(category) || !keyword.matches("(?i)\\d{3,4}\\s*w?"))
+                    .forEach(modelTokens::add);
+            List<String> requiredKeywords = new ArrayList<>(existing.requiredPartKeywords());
+            requiredKeywords.addAll(keywords);
             merged.put(category, new PartQueryConstraints(
                     "CPU".equals(category) ? existing.cpuModelToken() : null,
                     null,
                     modelTokens.stream().distinct().toList(),
                     existing.targetCapacityGb(),
+                    existing.targetWattageW(),
+                    existing.wattageMode(),
                     existing.targetModuleCount(),
                     existing.targetQuantity(),
-                    modelTokens.stream().distinct().toList()
+                    requiredKeywords.stream().distinct().toList()
             ));
         }
         return merged;
@@ -1657,6 +1855,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 if (constraints.targetQuantity() != null) {
                     parsedContext.put("targetQuantity", constraints.targetQuantity());
                 }
+            } else if ("PSU".equals(entry.getKey()) && constraints.targetWattageW() != null) {
+                parsedContext.put("targetPsuWattageW", constraints.targetWattageW());
+                parsedContext.put("psuWattageMode", constraints.wattageMode());
             }
         }
         parsedContext.put("requiredPartKeywords", keywords.stream()
@@ -1768,6 +1969,21 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 return false;
             }
         }
+        if (constraints.targetWattageW() != null) {
+            Integer capacityW = firstPositiveNumber(
+                    attrNumber(part.attributes(), "capacityW"),
+                    attrNumber(part.attributes(), "wattage")
+            );
+            if (capacityW == null) {
+                return false;
+            }
+            String mode = constraints.wattageMode() == null ? "EXACT" : constraints.wattageMode();
+            if (("MIN".equals(mode) && capacityW < constraints.targetWattageW())
+                    || ("MAX".equals(mode) && capacityW > constraints.targetWattageW())
+                    || ("EXACT".equals(mode) && !capacityW.equals(constraints.targetWattageW()))) {
+                return false;
+            }
+        }
         if (constraints.targetModuleCount() != null) {
             // moduleCount 미존재 = 단품(1) 계약 — 키가 없다고 '싱글' 질의에서 제외하지 않는다.
             Integer moduleCount = attrNumber(part.attributes(), "moduleCount");
@@ -1790,9 +2006,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         values.add(text(part.attributes().get("cpuClass")));
         values.add(text(part.attributes().get("hardwareClass")));
         values.add(text(part.attributes().get("shortSpec")));
-        part.attributes().values().stream()
-                .map(DefaultAiChatEngine::text)
-                .forEach(values::add);
+        values.add(text(part.attributes().get("gpuClass")));
+        values.add(text(part.attributes().get("model")));
+        values.add(text(part.attributes().get("series")));
         return values.stream()
                 .map(DefaultAiChatEngine::compactToken)
                 .filter(Objects::nonNull)
@@ -2437,7 +2653,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
         }
         boolean symptom = containsAny(normalized,
                 "멈춰", "멈춤", "멈춘", "얼어붙", "프리징", "먹통", "검은 화면", "블랙스크린", "블루스크린",
-                "갑자기 꺼", "자꾸 꺼", "재부팅", "부팅이 안", "부팅 안", "전원이 안", "튕겨", "튕김", "크래시",
+                "화면이 끊", "화면 끊", "갑자기 꺼", "자꾸 꺼", "재부팅", "부팅이 안", "부팅 안", "전원이 안", "튕겨", "튕김", "크래시",
                 "프레임 드랍", "과열", "너무 뜨거", "팬 소리", "디스크 100", "저장공간 부족", "인터넷이 자꾸 끊",
                 "소리가 안", "소리 안 나", "갑자기 느려", "느려졌");
         boolean pcContext = containsAny(normalized,
@@ -2562,6 +2778,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
         String normalizedCategory = categoryFrom(category);
         String cpuModelToken = "CPU".equals(normalizedCategory) ? inferCpuModelToken(message) : null;
         Integer targetCapacityGb = "RAM".equals(normalizedCategory) || "STORAGE".equals(normalizedCategory) ? inferCapacityGb(message) : null;
+        Integer targetWattageW = "PSU".equals(normalizedCategory) ? inferPsuWattage(message) : null;
+        String wattageMode = inferPsuWattageMode(message, targetWattageW);
         Integer targetModuleCount = "RAM".equals(normalizedCategory) ? inferRamModuleCount(message) : null;
         Integer targetQuantity = targetModuleCount != null ? targetModuleCount : null;
         String brandToken = inferBrandToken(message);
@@ -2577,6 +2795,9 @@ public class DefaultAiChatEngine implements AiChatEngine {
         if (targetCapacityGb != null) {
             keywords.add(targetCapacityGb + "GB");
         }
+        if (targetWattageW != null) {
+            keywords.add(targetWattageW + "W");
+        }
         if (targetModuleCount != null) {
             keywords.add(targetModuleCount + "개");
         }
@@ -2585,6 +2806,8 @@ public class DefaultAiChatEngine implements AiChatEngine {
                 brandToken,
                 modelTokens,
                 targetCapacityGb,
+                targetWattageW,
+                wattageMode,
                 targetModuleCount,
                 targetQuantity,
                 keywords
@@ -3611,11 +3834,36 @@ public class DefaultAiChatEngine implements AiChatEngine {
     private record EngineRouteIntent(String route, String label, String reason, Map<String, Object> context) {
     }
 
+    /**
+     * 이동 요청 처리 결과. 셋 중 하나다 — 바로 이동(routeIntent), 채팅에서 되묻기(choiceChips), 아무것도 아님.
+     */
+    private record RoutePlan(EngineRouteIntent routeIntent, List<String> choiceChips, String message, boolean unresolved) {
+        static final RoutePlan NONE = new RoutePlan(null, List.of(), null, false);
+
+        static RoutePlan route(EngineRouteIntent routeIntent) {
+            return new RoutePlan(routeIntent, List.of(), null, false);
+        }
+
+        static RoutePlan choices(List<String> chips, String message) {
+            return new RoutePlan(null, chips, message, false);
+        }
+
+        /**
+         * 이동하려 했지만 어디로 갈지 끝내 해상하지 못한 상태. "이동 의도 없음"(NONE)과 반드시 구분해야 한다 —
+         * 둘을 같은 값으로 두면 "이동할게요"라고 답해 놓고 아무 일도 안 일어나는 턴을 잡아낼 수 없다.
+         */
+        static RoutePlan unresolved(String message) {
+            return new RoutePlan(null, List.of(), message, true);
+        }
+    }
+
     private record PartQueryConstraints(
             String cpuModelToken,
             String brandToken,
             List<String> modelTokens,
             Integer targetCapacityGb,
+            Integer targetWattageW,
+            String wattageMode,
             Integer targetModuleCount,
             Integer targetQuantity,
             List<String> requiredPartKeywords
@@ -3625,6 +3873,7 @@ public class DefaultAiChatEngine implements AiChatEngine {
                     || brandToken != null
                     || !modelTokens.isEmpty()
                     || targetCapacityGb != null
+                    || targetWattageW != null
                     || targetModuleCount != null;
         }
 

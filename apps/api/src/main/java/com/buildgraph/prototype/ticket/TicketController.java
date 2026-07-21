@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -65,6 +66,26 @@ public class TicketController {
     ) {
         CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
         return ticketQueryService.requestRemoteSupport(id, request == null ? Map.of() : request, user);
+    }
+
+    @GetMapping("/as-tickets/{id}/remote-support")
+    Map<String, Object> remoteSupport(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        return ticketQueryService.userRemoteSupport(id, user);
+    }
+
+    @PutMapping("/as-tickets/{id}/remote-support/access-code")
+    Map<String, Object> registerRemoteSupportAccessCode(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> request,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        CurrentUserService.CurrentUser user = currentUserService.requireUser(authorization);
+        Object accessCode = request == null ? null : request.get("accessCode");
+        return ticketQueryService.registerRemoteAccessCode(id, accessCode, user);
     }
 
     @PostMapping("/as-tickets/{id}/feedback")

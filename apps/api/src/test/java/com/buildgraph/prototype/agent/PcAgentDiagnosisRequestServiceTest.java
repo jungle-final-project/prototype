@@ -42,6 +42,8 @@ class PcAgentDiagnosisRequestServiceTest {
         when(broker.isConnected("device-1")).thenReturn(true);
         when(jdbcTemplate.update(contains("INSERT INTO pc_agent_diagnosis_requests"), any(Object[].class)))
                 .thenReturn(1);
+        when(jdbcTemplate.update(contains("UPDATE pc_agent_diagnosis_requests"), any(Object[].class)))
+                .thenReturn(1);
         when(broker.dispatchAndAwait(any())).thenReturn(
                 new PcAgentDiagnosisSocketBroker.AgentResponse("ACCEPTED", "수신 완료")
         );
@@ -59,6 +61,7 @@ class PcAgentDiagnosisRequestServiceTest {
         assertThat(captor.getValue().expiresAt()).isEqualTo(Instant.parse("2026-07-13T01:02:00Z"));
         assertThat(result).containsEntry("status", "ACCEPTED");
         verify(jdbcTemplate).update(contains("INSERT INTO pc_agent_diagnosis_requests"), any(Object[].class));
+        verify(jdbcTemplate).update(contains("SET request_status = ?"), any(Object[].class));
     }
 
     @Test
@@ -72,5 +75,43 @@ class PcAgentDiagnosisRequestServiceTest {
         )))
                 .isInstanceOf(ApiException.class)
                 .satisfies(error -> assertThat(((ApiException) error).code()).isEqualTo("AGENT_DISCONNECTED"));
+    }
+
+    @Test
+    void connectionStatusChecksOnlyTheCurrentUsersRegisteredDevices() {
+        when(jdbcTemplate.queryForList(contains("FROM agent_devices"), eq(7L)))
+                .thenReturn(List.of(
+                        MockData.map("device_id", "device-1"),
+                        MockData.map("device_id", "device-2")
+                ));
+        when(broker.isConnected("device-1")).thenReturn(false);
+        when(broker.isConnected("device-2")).thenReturn(true);
+
+        assertThat(service.connectionStatus(USER)).containsEntry("connected", true);
+    }
+
+    @Test
+    void preservesExplicitDemoModeAcrossStoredRequestAndAgentDispatch() {
+        when(jdbcTemplate.queryForList(contains("FROM agent_devices"), eq(7L)))
+                .thenReturn(List.of(MockData.map("device_id", "device-1")));
+        when(broker.isConnected("device-1")).thenReturn(true);
+        when(jdbcTemplate.update(contains("INSERT INTO pc_agent_diagnosis_requests"), any(Object[].class)))
+                .thenReturn(1);
+        when(jdbcTemplate.update(contains("UPDATE pc_agent_diagnosis_requests"), any(Object[].class)))
+                .thenReturn(1);
+        when(broker.dispatchAndAwait(any())).thenReturn(
+                new PcAgentDiagnosisSocketBroker.AgentResponse("ACCEPTED", "수신 완료")
+        );
+
+        Map<String, Object> result = service.create(USER, new PcAgentDiagnosisRequestService.CreateRequest(
+                "게임 중 화면이 잠깐 꺼졌다가 다시 켜지고, 이후 게임이 심하게 느려졌어요.",
+                List.of("gpu"),
+                "demo"
+        ));
+
+        ArgumentCaptor<PcAgentDiagnosisRequest> captor = ArgumentCaptor.forClass(PcAgentDiagnosisRequest.class);
+        verify(broker).dispatchAndAwait(captor.capture());
+        assertThat(captor.getValue().mode()).isEqualTo("DEMO");
+        assertThat(result).containsEntry("mode", "DEMO");
     }
 }

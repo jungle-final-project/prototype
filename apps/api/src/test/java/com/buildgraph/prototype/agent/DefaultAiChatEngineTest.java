@@ -1022,6 +1022,24 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void deterministicChatTreatsConjugatedDisplayInterruptionAsSupportGuidance() {
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "화면이 끊기고 그래픽 오류가 반복됩니다.",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.intent()).isEqualTo(AiChatIntent.SUPPORT_GUIDANCE);
+        assertThat(response.recommendations()).isEmpty();
+        assertThat(response.partRecommendations()).isEmpty();
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredBuildChatUsesStructuredPlanAndKeepsExplicitRtx5090Constraint() {
         when(openAiResponsesClient.isConfigured()).thenReturn(true);
         when(agentRagRetrievalService.retrieveEvidenceSet(any(), eq(AgentRunProfiles.requirementParse()), anyString(), anyInt()))
@@ -1292,6 +1310,49 @@ class DefaultAiChatEngineTest {
                     .satisfies(part -> assertThat(part.attributes()).containsEntry("capacityW", 1000));
         });
         verifyNoJdbcWrites();
+    }
+
+    @Test
+    void fullBuildMatchesPsuWattageByNumericSpecInsteadOfReferenceUrlText() {
+        doAnswer(invocation -> {
+                    String category = String.valueOf((Object) invocation.getArgument(1));
+                    int limit = invocation.getArgument(2);
+                    if ("PSU".equals(category)) {
+                        return List.of(
+                                partRow(category, "psu-url-trap", "1200W PSU", 250_000, Map.of(
+                                        "toolReady", true,
+                                        "capacityW", 1200,
+                                        "specReferenceUrl", "https://example.test/1000w-review"
+                                )),
+                                partRow(category, "psu-exact", "1000W PSU", 260_000, Map.of(
+                                        "toolReady", true,
+                                        "capacityW", 1000
+                                ))
+                        ).stream().limit(limit).toList();
+                    }
+                    return partRows(category).stream().limit(limit).toList();
+                })
+                .when(jdbcTemplate)
+                .queryForList(anyString(), anyString(), anyInt());
+
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "2TB SSD와 1000W 파워를 포함한 500만원 PC 추천해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.recommendations()).hasSize(3).allSatisfy(recommendation ->
+                assertThat(recommendation.items())
+                        .filteredOn(part -> "PSU".equals(part.category()))
+                        .singleElement()
+                        .satisfies(part -> assertThat(part.attributes()).containsEntry("capacityW", 1000)));
+        assertThat(response.parsedContext())
+                .containsEntry("targetPsuWattageW", 1000)
+                .containsEntry("psuWattageMode", "EXACT");
     }
 
     @Test
@@ -1800,6 +1861,733 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void llmRequiredPartDetailRouteRewritesTheDetailPagePromiseWhenOnlyAListCanBeShown() {
+        // 취급하지 않는 모델명(9700X3D)을 상세로 요청하면 상세 화면을 못 만든다.
+        // 그런데도 "상세페이지로 이동할게요"라고 답한 뒤 후보 목록으로 보내면 약속과 도착지가 어긋난다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 상세페이지로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        // q에는 리졸버가 실제로 걸어 본 토큰이 들어간다(정규화된 대문자) — 원문을 통짜로 실으면 도착 목록이 0건이 된다.
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload())
+                        .containsEntry("route", "/self-quote?category=CPU&q=9700X3D"));
+        assertThat(response.assistantMessage())
+                .doesNotContain("상세페이지")
+                .contains("9700x3d")
+                .contains("CPU 후보 목록");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredPartDetailRouteFallsBackToTheCategoryInferredFromTheProductNameWhenLlmOmitsIt() {
+        // LLM이 category를 비워 보내면 예전에는 route가 통째로 사라져 "이동할게요"라고 답만 하고 끝났다.
+        // 상품명에서 카테고리를 되짚어 후보 목록으로라도 보낸다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 상세페이지로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": null,
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        // category를 비워 보냈으므로 리졸버는 카테고리 없는 검색을 돈다(파라미터 3개).
+        when(jdbcTemplate.queryForList(anyString(), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload())
+                        .containsEntry("route", "/self-quote?category=CPU&q=9700X3D"));
+        assertThat(response.assistantMessage()).contains("CPU 후보 목록");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredPartDetailRouteDoesNotRewriteAnswersThatMerelyMentionSpecs() {
+        // "상세"만 보고 판단하면 이동을 약속하지 않은 정상 답변까지 통째로 갈아치운다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 상세 스펙을 확인해 볼게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 스펙 알려줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).isEqualTo("9700x3d 상세 스펙을 확인해 볼게요.");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredPartDetailRouteKeepsAnHonestListMessageUntouched() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "GPU 목록으로 이동하겠습니다.",
+                  "selectedCategory": "GPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "GPU",
+                    "partQuery": "5090",
+                    "confidence": "HIGH",
+                    "reason": "상품 후보가 여러 개일 수 있습니다."
+                  }
+                }
+                """);
+
+        when(jdbcTemplate.queryForList(anyString(), eq("GPU"), eq("5090"), eq("5090"), eq("5090")))
+                .thenReturn(candidateRows("GPU", "5090", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "5090 보여줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).isEqualTo("GPU 목록으로 이동하겠습니다.");
+        verifyNoJdbcWrites();
+    }
+
+    /**
+     * 목록 대체 이동을 검증하려면 "보여 줄 후보가 있는" 상태를 만들어야 한다 —
+     * 후보가 0건이면 서버는 목록으로 보내지 않고 "그런 상품이 없다"고 되묻는다.
+     */
+    private List<Map<String, Object>> candidateRows(String category, String searchTerm, int count) {
+        List<Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (int index = 0; index < count; index += 1) {
+            rows.add(Map.of(
+                    "id", "00000000-0000-4000-8000-00000000000" + index,
+                    "category", category,
+                    "name", "TEST " + category + " 후보" + index + " " + searchTerm,
+                    "manufacturer", "TEST"));
+        }
+        return rows;
+    }
+
+    @Test
+    void llmRequiredNavigationKeepsPromisingDetailPageWithoutThePageWord() {
+        // "제품 상세로 이동할게요"처럼 '페이지'라는 낱말 없이 상세를 약속하는 문구도 교정 대상이다 —
+        // 안 잡으면 약속은 상세, 도착은 목록이 된다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9700x3d 제품 상세로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9700x3d",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        when(jdbcTemplate.queryForList(anyString(), eq("CPU"), eq("9700X3D"), eq("9700X3D"), eq("9700X3D")))
+                .thenReturn(candidateRows("CPU", "9700X3D", 5));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9700x3d 제품 상세로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).contains("CPU 후보 목록");
+        verifyNoJdbcWrites();
+    }
+
+    // 실서버 재현: "삼성 램"이 통째로 미해상이 되어 "그런 상품이 없어요"가 나갔다. 검색 토큰에 세 글자
+    // 하한이 걸려 있어 '램'(1자)은 토큰에서 빠지고 '삼성'(2자)은 하한에 걸려, 쓸 토큰이 하나도 안 남았다.
+    // 한글 브랜드는 두 글자가 흔하다(삼성·인텔·조텍) — 두 글자도 받는다.
+    @Test
+    void llmRequiredPartDetailUsesTwoLetterKoreanBrandAsSearchTerm() {
+        stubBuildChatPlan(partDetailPlan("삼성 램 상세페이지로 이동할게요.", "RAM", "삼성 램"));
+        when(jdbcTemplate.queryForList(anyString(), eq("RAM"), eq("삼성"), eq("삼성"), eq("삼성")))
+                .thenReturn(List.of(
+                        Map.of(
+                                "id", "33333333-3333-4333-8333-333333333333",
+                                "category", "RAM",
+                                "name", "삼성전자 DDR5-5600 32GB",
+                                "manufacturer", "삼성전자"),
+                        Map.of(
+                                "id", "44444444-4444-4444-8444-444444444444",
+                                "category", "RAM",
+                                "name", "삼성전자 DDR5-4800 16GB",
+                                "manufacturer", "삼성전자")));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "삼성 램 상세페이지로 이동해", "HOME", null, null, null, Map.of(), 1L));
+
+        assertThat(response.assistantMessage()).doesNotContain("찾을 수 있는 상품이 없어요");
+        assertThat(response.parsedContext().get("routeChoiceChips"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.list(String.class))
+                .containsExactly(
+                        "삼성전자 DDR5-5600 32GB 상세페이지로 이동해",
+                        "삼성전자 DDR5-4800 16GB 상세페이지로 이동해");
+        verifyNoJdbcWrites();
+    }
+
+    // '삼성 메모리'에서 '메모리'를 검색어로 고르면 삼성과 무관한 RAM이 통째로 나온다.
+    // 카테고리 이름은 이미 category=로 걸러졌으니, 무엇을 찾는지 말해 주는 토큰을 먼저 쓴다.
+    @Test
+    void llmRequiredPartDetailPrefersTheRealSearchTermOverACategoryNoun() {
+        stubBuildChatPlan(partDetailPlan("삼성 메모리 상세페이지로 이동할게요.", "RAM", "삼성 메모리"));
+        when(jdbcTemplate.queryForList(anyString(), eq("RAM"), eq("삼성"), eq("삼성"), eq("삼성")))
+                .thenReturn(List.of(
+                        Map.of(
+                                "id", "33333333-3333-4333-8333-333333333333",
+                                "category", "RAM",
+                                "name", "삼성전자 DDR5-5600 32GB",
+                                "manufacturer", "삼성전자"),
+                        Map.of(
+                                "id", "44444444-4444-4444-8444-444444444444",
+                                "category", "RAM",
+                                "name", "삼성전자 DDR5-4800 16GB",
+                                "manufacturer", "삼성전자")));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "삼성 메모리 상세페이지로 이동해", "HOME", null, null, null, Map.of(), 1L));
+
+        assertThat(response.parsedContext().get("routeChoiceChips"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.list(String.class))
+                .hasSize(2);
+        verifyNoJdbcWrites();
+    }
+
+    // 머지 전 검수에서 잡힌 회귀: "최신 메인보드"는 '최신'(상품명에 없는 수식어)이 두 글자 후보로
+    // 먼저 뽑혀 0건으로 끝났다. 검색어 후보를 하나만 확정하면 그걸로 못 찾았을 때 되돌아갈 길이 없다 —
+    // 후보를 순서대로 물어 카테고리 이름까지 내려가야 종전처럼 목록으로 간다.
+    @Test
+    void llmRequiredPartDetailRetriesWithTheCategoryNounWhenTheFirstSearchTermFindsNothing() {
+        stubBuildChatPlan(partDetailPlan("최신 메인보드 상세페이지로 이동할게요.", "MOTHERBOARD", "최신 메인보드"));
+        when(jdbcTemplate.queryForList(anyString(), eq("MOTHERBOARD"), eq("최신"), eq("최신"), eq("최신")))
+                .thenReturn(List.of());
+        when(jdbcTemplate.queryForList(anyString(), eq("MOTHERBOARD"), eq("메인보드"), eq("메인보드"), eq("메인보드")))
+                .thenReturn(candidateRows("MOTHERBOARD", "메인보드", 6));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "최신 메인보드 상세페이지로 이동해", "HOME", null, null, null, Map.of(), 1L));
+
+        assertThat(response.assistantMessage()).doesNotContain("찾을 수 있는 상품이 없어요");
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload().get("route"))
+                        .isEqualTo("/self-quote?category=MOTHERBOARD"));
+        verifyNoJdbcWrites();
+    }
+
+    // 퇴행 가드: 카테고리 이름 하나뿐인 요청은 그걸로라도 찾아 목록으로 보낸다.
+    // 카테고리 이름을 검색어에서 통째로 빼면 '메인보드 보여줘'가 미해상으로 떨어져 종전 길이 막힌다.
+    @Test
+    void llmRequiredPartDetailStillFallsBackToACategoryNounWhenItIsTheOnlyToken() {
+        stubBuildChatPlan(partDetailPlan("메인보드 상세페이지로 이동할게요.", "MOTHERBOARD", "메인보드"));
+        when(jdbcTemplate.queryForList(anyString(), eq("MOTHERBOARD"), eq("메인보드"), eq("메인보드"), eq("메인보드")))
+                .thenReturn(candidateRows("MOTHERBOARD", "메인보드", 6));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "메인보드 상세페이지로 이동해", "HOME", null, null, null, Map.of(), 1L));
+
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload().get("route"))
+                        // q는 카테고리 이름이라 싣지 않는다 — 이미 category=로 거른 목록이 또 잘린다.
+                        .isEqualTo("/self-quote?category=MOTHERBOARD"));
+        verifyNoJdbcWrites();
+    }
+
+    private static String partDetailPlan(String assistantMessage, String category, String partQuery) {
+        return """
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "%s",
+                  "selectedCategory": "%s",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "%s",
+                    "partQuery": "%s",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 상품 상세를 요청했습니다."
+                  }
+                }
+                """.formatted(assistantMessage, category, category, partQuery);
+    }
+
+    // 실서버 재현: "쿨러마스터 파워 상세페이지로 이동해"를 LLM이 PART_DETAIL이 아니라 CATEGORY로 분류하면
+    // 서버가 목록 폴백 표식을 찍지 않는다. 표식으로 문구 교정 여부를 판정하던 시절에는 교정이 통째로
+    // 건너뛰어져, "상세 페이지로 이동할게요"라고 말하고 파워 목록에 떨구는 턴이 그대로 나갔다.
+    @Test
+    void llmRequiredCategoryRouteStopsPromisingADetailPageItDoesNotOpen() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "파워서플라이 상세 페이지로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "CATEGORY",
+                    "category": "PSU",
+                    "partQuery": "쿨러마스터 파워",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 파워 카테고리를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "쿨러마스터 파워 상세페이지로 이동해",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        // 도착지는 그대로 카테고리 목록이다 — 고치는 것은 문구지 이동이 아니다.
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .singleElement()
+                .satisfies(action -> assertThat(action.payload().get("route")).isEqualTo("/self-quote?category=PSU"));
+        assertThat(response.assistantMessage()).doesNotContain("상세 페이지로 이동");
+        assertThat(response.assistantMessage()).contains("목록");
+        // 후보를 세어 보지 않은 턴이므로 후보가 몇 개 있다고 단언하지 않는다.
+        assertThat(response.assistantMessage()).doesNotContain("후보 목록에서 확인");
+        verifyNoJdbcWrites();
+    }
+
+    // 반대편 경계: LLM이 처음부터 목록으로 안내했으면 그 문구를 서버가 갈아치우지 않는다.
+    @Test
+    void llmRequiredCategoryRouteKeepsAnHonestListMessageAsIs() {
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "쿨러마스터 파워 상품 목록으로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "CATEGORY",
+                    "category": "PSU",
+                    "partQuery": "쿨러마스터 파워",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 파워 카테고리를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "쿨러마스터 파워 목록 보여줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.assistantMessage()).isEqualTo("쿨러마스터 파워 상품 목록으로 이동할게요.");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredNavigationThatResolvesNowhereStopsPromisingToNavigate() {
+        // 실서버 재현: "커세어 상세페이지로 이동해줘"는 브랜드명뿐이라 상품도 카테고리도 특정되지 않는다.
+        // 예전에는 route만 조용히 사라지고 LLM이 쓴 "이동할게요"가 그대로 나가 아무 일도 안 일어났다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "커세어 상세페이지로 이동할게요.",
+                  "selectedCategory": null,
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": null,
+                    "partQuery": "커세어",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "커세어 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .isEmpty();
+        assertThat(response.assistantMessage())
+                .doesNotContain("이동할게요")
+                .contains("커세어");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
+    void llmRequiredPartDetailAsksWhichProductInChatWhenOnlyAFewCandidatesMatch() {
+        // 후보가 둘뿐이면 목록 화면까지 옮길 이유가 없다 — 채팅에서 바로 고르게 한다.
+        stubBuildChatPlan("""
+                {
+                  "intent": "ASK_FOLLOW_UP",
+                  "assistantMessage": "9800X3D 상세페이지로 이동할게요.",
+                  "selectedCategory": "CPU",
+                  "parsedContext": {
+                    "budget": null,
+                    "usageTags": [],
+                    "resolution": null,
+                    "preferredVendors": [],
+                    "priority": null,
+                    "performanceTier": "STANDARD",
+                    "budgetPolicy": "UNSPECIFIED",
+                    "mustHave": [],
+                    "requiredGpuClasses": [],
+                    "requiredPartKeywords": [],
+                    "hardConstraintPolicy": "NONE",
+                    "confidence": {}
+                  },
+                  "draftEdit": {
+                    "operation": "NONE",
+                    "category": null,
+                    "priceDirection": "ANY",
+                    "targetMaxPrice": null,
+                    "targetQuantity": null,
+                    "reason": null
+                  },
+                  "routeIntent": {
+                    "shouldNavigate": true,
+                    "routeType": "PART_DETAIL",
+                    "category": "CPU",
+                    "partQuery": "9800X3D",
+                    "confidence": "HIGH",
+                    "reason": "사용자가 특정 CPU 상품 상세를 요청했습니다."
+                  }
+                }
+                """);
+        when(jdbcTemplate.queryForList(
+                anyString(),
+                eq("CPU"),
+                eq("9800X3D"),
+                eq("9800X3D"),
+                eq("9800X3D")
+        )).thenReturn(List.of(
+                Map.of(
+                        "id", "11111111-1111-4111-8111-111111111111",
+                        "category", "CPU",
+                        "name", "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩)",
+                        "manufacturer", "AMD"
+                ),
+                Map.of(
+                        "id", "22222222-2222-4222-8222-222222222222",
+                        "category", "CPU",
+                        "name", "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티",
+                        "manufacturer", "AMD"
+                )
+        ));
+
+        AiChatEngineResponse response = engine.respondLlmRequired(new AiChatEngineRequest(
+                "9800X3D 상세페이지로 이동해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        // 화면 이동은 하지 않는다 — 고르고 나서 옮긴다.
+        assertThat(response.actions())
+                .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
+                .isEmpty();
+        assertThat(response.parsedContext().get("routeChoiceChips"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.list(String.class))
+                .containsExactly(
+                        "AMD 라이젠7-6세대 9800X3D 그래니트 릿지 정품(멀티팩) 상세페이지로 이동해",
+                        "AMD 라이젠7-6세대 9800X3D (그래니트 릿지) (멀티팩 정품) - 아이티 상세페이지로 이동해");
+        assertThat(response.assistantMessage())
+                .isEqualTo("'9800X3D'에 해당하는 상품이 2개예요. 어느 쪽인지 골라 주세요.");
+        verifyNoJdbcWrites();
+    }
+
+    @Test
     void llmRequiredPartDetailRouteAvoidsAmbiguousProductAutoNavigation() {
         stubBuildChatPlan("""
                 {
@@ -1856,6 +2644,24 @@ class DefaultAiChatEngineTest {
                         "category", "GPU",
                         "name", "MSI GeForce RTX 5090 SUPRIM 32GB",
                         "manufacturer", "MSI"
+                ),
+                Map.of(
+                        "id", "00000000-0000-4000-8000-000000005092",
+                        "category", "GPU",
+                        "name", "GIGABYTE GeForce RTX 5090 AORUS MASTER 32GB",
+                        "manufacturer", "GIGABYTE"
+                ),
+                Map.of(
+                        "id", "00000000-0000-4000-8000-000000005093",
+                        "category", "GPU",
+                        "name", "ZOTAC GeForce RTX 5090 SOLID 32GB",
+                        "manufacturer", "ZOTAC"
+                ),
+                Map.of(
+                        "id", "00000000-0000-4000-8000-000000005094",
+                        "category", "GPU",
+                        "name", "PALIT GeForce RTX 5090 GameRock 32GB",
+                        "manufacturer", "PALIT"
                 )
         ));
 
@@ -1869,10 +2675,12 @@ class DefaultAiChatEngineTest {
                 1L
         ));
 
+        // 특정 상품을 임의로 고르지 않는다. 후보가 칩으로 되묻기엔 너무 많으므로 후보 목록 화면으로 보낸다.
         assertThat(response.actions())
                 .filteredOn(action -> action.type() == AiChatActionType.OPEN_ROUTE)
                 .singleElement()
                 .satisfies(action -> assertThat(action.payload()).containsEntry("route", "/self-quote?category=GPU&q=5090"));
+        assertThat(response.parsedContext()).doesNotContainKey("routeChoiceChips");
         verifyNoJdbcWrites();
     }
 
