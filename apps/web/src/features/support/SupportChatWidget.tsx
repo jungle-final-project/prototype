@@ -328,7 +328,7 @@ export function SupportChatWidget() {
   }
 
   return (
-    <section className="fixed bottom-4 left-4 z-50 flex h-[min(620px,calc(100vh-2rem))] w-[min(390px,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+    <section className="fixed bottom-4 left-4 z-50 flex h-[min(calc(100vh-2rem),clamp(460px,78vh,930px))] w-[min(calc(100vw-2rem),clamp(390px,52vw,585px))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
       <div className="flex items-center justify-between border-b border-slate-200 bg-[#ce7237] px-4 py-3 text-white">
         <div className="flex min-w-0 items-center gap-3">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-[#ce7237]">
