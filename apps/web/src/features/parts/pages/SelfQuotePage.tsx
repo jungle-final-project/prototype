@@ -19,6 +19,7 @@ import {
   saveSelectedAiBuild,
   type AiBuildItem,
   type AiBoardFocus,
+  type AiDraftHistoryCommand,
   type AiRecommendedBuild,
   type BuildGraphFocus,
   type BuildGraphResolveResponse,
@@ -36,6 +37,7 @@ import { QuoteComparePanel } from '../components/slot-board/QuoteComparePanel';
 import { QuotePerformancePanel, type QuotePerformanceView } from '../components/slot-board/QuotePerformancePanel';
 import { SlotBoard, type SlotBoardVisualMode } from '../components/slot-board/SlotBoard';
 import { SlotCandidatePanel } from '../components/slot-board/SlotCandidatePanel';
+import { QuoteDraftHistoryPanel } from '../components/slot-board/QuoteDraftHistoryPanel';
 import { QuoteCheckoutActions, SlotStatusBar } from '../components/slot-board/SlotStatusBar';
 import { RECOMMENDED_SLOT_ORDER, SLOT_CONFIGS, SLOT_COUNT, isSlotCategory } from '../components/slot-board/slotBoardConfig';
 import { handlePartImageError, partImageUrl } from '../partDisplay';
@@ -69,16 +71,40 @@ function allPartsRedirectTarget(searchParams: URLSearchParams) {
   return `/parts${query ? `?${query}` : ''}`;
 }
 
+const quantityChangeGroups = new Map<string, { id: string; expiresAt: number }>();
+
+function quantityChangeGroup(partId: string) {
+  const now = Date.now();
+  const existing = quantityChangeGroups.get(partId);
+  if (existing && existing.expiresAt > now) return existing.id;
+  const next = { id: crypto.randomUUID(), expiresAt: now + 10_000 };
+  quantityChangeGroups.set(partId, next);
+  return next.id;
+}
+
+function historyModeFrom(value: string | null): 'LIST' | 'COMPARE' | 'RESTORE_CONFIRM' {
+  return value === 'COMPARE' || value === 'RESTORE_CONFIRM' ? value : 'LIST';
+}
+
+function performanceResolution(value?: string): 'fhd' | 'qhd' | '4k' {
+  return value === 'fhd' || value === 'qhd' || value === '4k' ? value : 'qhd';
+}
+
 function SelfQuoteSlotBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [performanceView, setPerformanceView] = useState<QuotePerformanceView | null>(null);
   const rememberPerformanceView = useCallback((view: QuotePerformanceView) => {
+    setPerformanceView(view);
     rememberAiDraftPerformanceView({ ...view, updatedAt: new Date().toISOString() });
   }, []);
   const categoryParam = searchParams.get('category');
   const selectedCategory: PartCategory | null = isSlotCategory(categoryParam) ? categoryParam : null;
+  const historyOpen = searchParams.get('panel') === 'history';
+  const historyId = searchParams.get('historyId');
+  const historyMode = historyModeFrom(searchParams.get('historyMode'));
   const previousSelectedCategoryRef = useRef<PartCategory | null>(selectedCategory);
   useEffect(() => {
     const previousCategory = previousSelectedCategoryRef.current;
@@ -118,15 +144,15 @@ function SelfQuoteSlotBoardPage() {
     void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
   };
   const addMutation = useMutation({
-    mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => putQuoteDraftItem(partId, quantity),
+    mutationFn: ({ partId, quantity, changeGroup }: { partId: string; quantity: number; changeGroup?: string }) => putQuoteDraftItem(partId, quantity, changeGroup),
     onSuccess: invalidateQuoteDraft
   });
   const updateQuantityMutation = useMutation({
-    mutationFn: ({ partId, quantity }: { partId: string; quantity: number }) => patchQuoteDraftItem(partId, quantity),
+    mutationFn: ({ partId, quantity, changeGroup }: { partId: string; quantity: number; changeGroup?: string }) => patchQuoteDraftItem(partId, quantity, changeGroup),
     onSuccess: invalidateQuoteDraft
   });
   const deleteMutation = useMutation({
-    mutationFn: (partId: string) => deleteQuoteDraftItem(partId),
+    mutationFn: ({ partId, changeGroup }: { partId: string; changeGroup?: string }) => deleteQuoteDraftItem(partId, changeGroup),
     onSuccess: invalidateQuoteDraft
   });
   const saveQuoteMutation = useMutation({
@@ -190,11 +216,12 @@ function SelfQuoteSlotBoardPage() {
    * 연계 부품을 먼저 담아 중간 상태에서도 전력이 모자라지 않게 한다.
    */
   const applyComparisonTarget = useCallback(async (target: PerfCompareTarget) => {
+    const changeGroup = crypto.randomUUID();
     for (const linked of target.linkedChanges ?? []) {
       if (!linked.partId || linked.category === target.category) continue;
-      await addMutation.mutateAsync({ partId: linked.partId, quantity: 1 });
+      await addMutation.mutateAsync({ partId: linked.partId, quantity: 1, changeGroup });
     }
-    return addMutation.mutateAsync({ partId: target.partId, quantity: 1 });
+    return addMutation.mutateAsync({ partId: target.partId, quantity: 1, changeGroup });
   }, [addMutation]);
 
   // 성능 비교 시작: 비교 대상을 저장하고 성능 패널로 부드럽게 이동한다(패널은 그리드 아래에 있어 안 보일 수 있다).
@@ -240,7 +267,7 @@ function SelfQuoteSlotBoardPage() {
           category: item.category,
           quantity: item.quantity
         }))
-      });
+      }, crypto.randomUUID());
       saveSelectedAiBuild(build);
       setAiBuild(readSelectedAiBuild());
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
@@ -265,6 +292,23 @@ function SelfQuoteSlotBoardPage() {
       const nextParams = new URLSearchParams(current);
       nextParams.delete('category');
       nextParams.delete('q');
+      nextParams.delete('panel');
+      nextParams.delete('historyId');
+      nextParams.delete('historyMode');
+      return nextParams;
+    });
+  }, [setSearchParams]);
+
+  const openHistory = useCallback((command?: AiDraftHistoryCommand) => {
+    clearAiPartPicks();
+    setSearchParams((current) => {
+      const nextParams = new URLSearchParams(current);
+      nextParams.delete('category');
+      nextParams.delete('q');
+      nextParams.set('panel', 'history');
+      if (command?.historyId) nextParams.set('historyId', command.historyId);
+      else nextParams.delete('historyId');
+      nextParams.set('historyMode', command?.mode ?? 'LIST');
       return nextParams;
     });
   }, [setSearchParams]);
@@ -283,6 +327,9 @@ function SelfQuoteSlotBoardPage() {
       nextParams.set('category', category);
       // 다른 슬롯으로 옮기면 AI가 넘겨준 검색어는 더 이상 그 슬롯의 조건이 아니다.
       nextParams.delete('q');
+      nextParams.delete('panel');
+      nextParams.delete('historyId');
+      nextParams.delete('historyMode');
       return nextParams;
     });
   };
@@ -305,16 +352,16 @@ function SelfQuoteSlotBoardPage() {
       navigate(loginHref);
       throw new Error('로그인이 필요합니다.');
     }
-    await addMutation.mutateAsync({ partId: part.id, quantity: 1 });
+    await addMutation.mutateAsync({ partId: part.id, quantity: 1, changeGroup: crypto.randomUUID() });
     closePanel();
   };
 
-  const removeItem = (partId: string) => {
+  const removeItem = (partId: string, changeGroup: string = crypto.randomUUID()) => {
     if (!hasToken) {
       navigate(loginHref);
       return;
     }
-    deleteMutation.mutate(partId);
+    deleteMutation.mutate({ partId, changeGroup });
   };
 
   const updateQuantity = (partId: string, quantity: number) => {
@@ -323,10 +370,10 @@ function SelfQuoteSlotBoardPage() {
       return;
     }
     if (quantity <= 0) {
-      deleteMutation.mutate(partId);
+      deleteMutation.mutate({ partId, changeGroup: quantityChangeGroup(partId) });
       return;
     }
-    updateQuantityMutation.mutate({ partId, quantity });
+    updateQuantityMutation.mutate({ partId, quantity, changeGroup: quantityChangeGroup(partId) });
   };
 
   const isMutating = addMutation.isPending || updateQuantityMutation.isPending || deleteMutation.isPending;
@@ -458,6 +505,7 @@ function SelfQuoteSlotBoardPage() {
             onSelect={selectSlot}
             onClearSelection={closePanel}
             onRemoveItem={removeItem}
+            onOpenHistory={() => openHistory()}
             isRemovePending={deleteMutation.isPending}
             statusByCategory={statusByCategory}
           />
@@ -495,7 +543,12 @@ function SelfQuoteSlotBoardPage() {
             />
           </div>
           <div className="min-h-0 min-w-0 max-w-full lg:col-start-3 lg:row-span-3 lg:row-start-1 lg:h-full">
-            <AiBuildAssistant surface="self-quote" variant="embedded" onBoardFocus={handleBoardFocus} />
+            <AiBuildAssistant
+              surface="self-quote"
+              variant="embedded"
+              onBoardFocus={handleBoardFocus}
+              onDraftHistory={openHistory}
+            />
           </div>
 
           {/* 보조 상태 지표: 작업 영역 아래에서 총액·장착 수·호환·SSD를 짧게 확인한다. */}
@@ -529,6 +582,15 @@ function SelfQuoteSlotBoardPage() {
           </div>
         </div>
       </div>
+      {historyOpen ? (
+        <QuoteDraftHistoryPanel
+          onClose={closePanel}
+          initialHistoryId={historyId}
+          initialMode={historyMode}
+          game={performanceView?.gameQuery ?? 'pubg'}
+          resolution={performanceResolution(performanceView?.resolutionQuery)}
+        />
+      ) : null}
     </Screen>
   );
 }
@@ -603,6 +665,7 @@ function QuoteChecklist({
   onSelect,
   onClearSelection,
   onRemoveItem,
+  onOpenHistory,
   isRemovePending,
   statusByCategory
 }: {
@@ -612,7 +675,8 @@ function QuoteChecklist({
   nextCategory: PartCategory | null;
   onSelect: (category: PartCategory) => void;
   onClearSelection: () => void;
-  onRemoveItem: (partId: string) => void;
+  onRemoveItem: (partId: string, changeGroup?: string) => void;
+  onOpenHistory: () => void;
   isRemovePending: boolean;
   statusByCategory: Map<PartCategory, 'PASS' | 'WARN' | 'FAIL'>;
 }) {
@@ -636,11 +700,13 @@ function QuoteChecklist({
   };
 
   const removeCategoryItems = (items: QuoteDraftItem[]) => {
-    items.forEach((item) => onRemoveItem(item.partId));
+    const changeGroup = crypto.randomUUID();
+    items.forEach((item) => onRemoveItem(item.partId, changeGroup));
   };
 
   const removeAllItems = () => {
-    draftItems.forEach((item) => onRemoveItem(item.partId));
+    const changeGroup = crypto.randomUUID();
+    draftItems.forEach((item) => onRemoveItem(item.partId, changeGroup));
   };
 
   return (
@@ -649,6 +715,14 @@ function QuoteChecklist({
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-black text-commerce-ink">견적 체크리스트</h2>
         <span className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="quote-history-open"
+            onClick={onOpenHistory}
+            className="rounded-md border border-commerce-line bg-white px-2 py-1 text-[10px] font-black text-slate-600 transition hover:border-commerce-ink"
+          >
+            변경 기록
+          </button>
           <span data-testid="quote-checklist-progress" className="text-[11px] font-black text-slate-500">
             {filledCount}/{RECOMMENDED_SLOT_ORDER.length} 완료
           </span>

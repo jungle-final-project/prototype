@@ -383,6 +383,151 @@ test('renders 8 empty slots on the slot board without the legacy list workspace'
   await expect(page.getByTestId('graph-flow-canvas')).toHaveCount(0);
 });
 
+test('opens draft history, compares with current draft, and restores only after confirmation', async ({ page }) => {
+  await loginAsUser(page);
+  const historyId = '11111111-1111-4111-8111-111111111111';
+  let restoreRequested = false;
+  let changeGroupHeader: string | null = null;
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(checkoutDraft) });
+  });
+  await page.route('**/api/quote-drafts/current/history', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        retentionDays: 30,
+        maxItems: 20,
+        maxProblemItems: 5,
+        items: [{
+          id: historyId,
+          actionType: 'ITEM_REPLACE',
+          actionLabel: 'GPU 교체 전',
+          relatedCategories: ['GPU'],
+          totalPrice: 1320000,
+          itemCount: 2,
+          evaluationStatus: 'VALID',
+          score: 710,
+          maxScore: 1000,
+          issueCodes: [],
+          evaluatedAt: '2026-07-21T01:00:01Z',
+          createdAt: '2026-07-21T01:00:00Z',
+          expiresAt: '2026-08-20T01:00:00Z'
+        }]
+      })
+    });
+  });
+  await page.route(`**/api/quote-drafts/current/history/${historyId}/comparison**`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        history: { id: historyId, actionType: 'ITEM_REPLACE', actionLabel: 'GPU 교체 전', relatedCategories: ['GPU'], totalPrice: 1320000, itemCount: 2, evaluationStatus: 'VALID', score: 710, maxScore: 1000, issueCodes: [], evaluatedAt: '2026-07-21T01:00:01Z', createdAt: '2026-07-21T01:00:00Z', expiresAt: '2026-08-20T01:00:00Z' },
+        past: { items: [{ partId: 'old-gpu', category: 'GPU', name: 'RTX 5060', quantity: 1, unitPriceAtAdd: 900000, lineTotal: 900000 }], totalPrice: 1320000, itemCount: 2, compositeScore: { score: 710, maxScore: 1000 }, fps: { avgFps: 120 }, issues: [], evaluationAvailable: true },
+        current: { items: [{ partId: 'part-checkout-gpu', category: 'GPU', name: 'RTX 5070 구매 테스트', quantity: 1, unitPriceAtAdd: 980000, lineTotal: 980000 }], totalPrice: 1400000, itemCount: 2, compositeScore: { score: 760, maxScore: 1000 }, fps: { avgFps: 140 }, issues: [], evaluationAvailable: true },
+        differences: [{ category: 'GPU', categoryLabel: 'GPU', changeType: 'REPLACED', beforeItems: [{ partId: 'part-checkout-gpu', category: 'GPU', name: 'RTX 5070 구매 테스트', quantity: 1, unitPriceAtAdd: 980000, lineTotal: 980000 }], afterItems: [{ partId: 'old-gpu', category: 'GPU', name: 'RTX 5060', quantity: 1, unitPriceAtAdd: 900000, lineTotal: 900000 }] }],
+        issueChanges: { added: [], resolved: [] },
+        game: 'pubg', resolution: 'qhd', restorable: true, unavailableItems: [], requiresCompatibilityConfirmation: false,
+        evaluationBasis: 'CURRENT_CATALOG_DATA', historicalPriceBasis: 'SNAPSHOT_UNIT_PRICE'
+      })
+    });
+  });
+  await page.route(`**/api/quote-drafts/current/history/${historyId}/restore`, async (route) => {
+    restoreRequested = true;
+    changeGroupHeader = route.request().headers()['x-quote-draft-change-group'] ?? null;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(checkoutDraft) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByTestId('checklist-CPU').click();
+  await expect(page.getByTestId('slot-candidate-panel')).toBeVisible();
+  await page.getByTestId('quote-history-open').click({ force: true });
+  await expect(page.getByTestId('slot-candidate-panel')).toHaveCount(0);
+  const panel = page.getByTestId('quote-draft-history-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('GPU 교체 전');
+  await panel.getByTestId('quote-history-entry').click();
+  await expect(panel).toContainText('RTX 5060');
+  await expect(panel).toContainText('RTX 5070 구매 테스트');
+  await expect(panel).toContainText('710 / 1000');
+  await expect(panel).toContainText('760 / 1000');
+  const historyVisual = panel.getByTestId('quote-history-performance-comparison');
+  await expect(historyVisual).toBeVisible();
+  await expect(historyVisual).toContainText('현재 견적 → 복원 후');
+  await expect(historyVisual.getByTestId('quote-history-score-ghost-gauge')).toBeVisible();
+  await expect(historyVisual.getByTestId('quote-history-score-ghost-base')).toHaveText('760');
+  await expect(historyVisual.getByTestId('quote-history-score-compare-score')).toHaveText('710');
+  await expect(historyVisual.getByTestId('quote-history-score-compare-delta')).toHaveText('-50점');
+  await expect(historyVisual.getByTestId('quote-history-price-comparison')).toContainText('1,320,000원');
+  await expect(historyVisual.getByTestId('quote-history-price-comparison')).toContainText('1,400,000원');
+  await expect(historyVisual.getByTestId('quote-history-fps-comparison')).toContainText('120FPS');
+  await expect(historyVisual.getByTestId('quote-history-fps-comparison')).toContainText('140FPS');
+  await expect(panel).toContainText('현재 RTX 5070 구매 테스트');
+  await expect(panel).toContainText('복원 후 RTX 5060');
+  await expect(panel).toContainText('가격은 기록 당시 단가');
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await panel.getByTestId('quote-history-restore').click();
+  await expect.poll(() => restoreRequested).toBe(true);
+  expect(changeGroupHeader).toMatch(/^[0-9a-f-]{36}$/);
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-view', 'LIST');
+  await expect(panel.getByTestId('quote-history-restore-success')).toContainText('견적을 복원했습니다');
+  await expect(panel.getByTestId('quote-history-restore')).toHaveCount(0);
+  await page.getByTestId('quote-draft-history-panel-backdrop').dispatchEvent('click');
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: '변경 기록 닫기' }).click();
+  await expect(panel).toHaveCount(0);
+});
+
+test('keeps valid draft history visible while collapsing zero-score and pending records', async ({ page }) => {
+  await loginAsUser(page);
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(checkoutDraft) });
+  });
+  await page.route('**/api/quote-drafts/current/history', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        retentionDays: 30,
+        maxItems: 20,
+        maxProblemItems: 5,
+        items: [
+          {
+            id: '11111111-1111-4111-8111-111111111111', actionType: 'ITEM_REPLACE', actionLabel: '정상 GPU 교체 전', relatedCategories: ['GPU'],
+            totalPrice: 1320000, itemCount: 8, evaluationStatus: 'VALID', score: 710, maxScore: 1000, issueCodes: [],
+            evaluatedAt: '2026-07-21T01:00:01Z', createdAt: '2026-07-21T01:00:00Z', expiresAt: '2026-08-20T01:00:00Z'
+          },
+          {
+            id: '22222222-2222-4222-8222-222222222222', actionType: 'ITEM_REPLACE', actionLabel: '호환 불가 케이스 교체 전', relatedCategories: ['CASE'],
+            totalPrice: 1290000, itemCount: 8, evaluationStatus: 'INVALID', score: 0, maxScore: 1000, issueCodes: ['CASE_GPU_CLEARANCE_FAIL'],
+            evaluatedAt: '2026-07-21T01:01:01Z', createdAt: '2026-07-21T01:01:00Z', expiresAt: '2026-08-20T01:01:00Z'
+          },
+          {
+            id: '33333333-3333-4333-8333-333333333333', actionType: 'ITEM_REPLACE', actionLabel: '평가 대기 메인보드 교체 전', relatedCategories: ['MOTHERBOARD'],
+            totalPrice: 1350000, itemCount: 8, evaluationStatus: 'PENDING', score: null, maxScore: null, issueCodes: [],
+            evaluatedAt: null, createdAt: '2026-07-21T01:02:00Z', expiresAt: '2026-08-20T01:02:00Z'
+          }
+        ]
+      })
+    });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByTestId('quote-history-open').click();
+  const panel = page.getByTestId('quote-draft-history-panel');
+  await expect(panel.getByTestId('quote-history-valid-group')).toContainText('정상 견적 기록 1건');
+  await expect(panel.getByTestId('quote-history-valid-group')).toContainText('710점');
+  await expect(panel.getByTestId('quote-history-pending-group')).toContainText('평가 중인 기록 1건');
+  const problemGroup = panel.getByTestId('quote-history-problem-group');
+  await expect(problemGroup).toContainText('호환 문제 기록 1건');
+  await expect(problemGroup.getByText('호환 불가 케이스 교체 전')).toBeHidden();
+  await problemGroup.getByText('호환 문제 기록 1건').click();
+  await expect(problemGroup.getByText('호환 불가 케이스 교체 전')).toBeVisible();
+  await expect(problemGroup).toContainText('0점 · 호환 문제');
+});
+
 test('keeps self quote and the primary navigation inside a mobile viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await loginAsUser(page);
@@ -532,7 +677,7 @@ test('AI part location focus spotlights all 8 categories across fused, motherboa
     // 성능 문맥(게임·해상도)은 "더 부드럽게"처럼 목표 수치 없는 요청을 해석하는 기준이라 함께 실린다.
     expect(body.uiContext).toEqual({
       surface: 'SELF_QUOTE',
-      capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL', 'GAME_PERFORMANCE_COMPARE'],
+      capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL', 'GAME_PERFORMANCE_COMPARE', 'QUOTE_DRAFT_HISTORY'],
       performance: { gameQuery: 'pubg', resolution: '4K' }
     });
   }

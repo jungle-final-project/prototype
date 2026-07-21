@@ -1297,6 +1297,8 @@ paths:
       description: conflictPolicy=REPLACE만 지원한다. 현재 active 견적초안의 모든 항목을 soft delete한 뒤 요청 items를 하나의 AI 추천 조합으로 다시 담는다.
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QuoteDraftChangeGroup"
       requestBody:
         required: true
         content:
@@ -1322,6 +1324,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/QuoteDraftChangeGroup"
       requestBody:
         required: false
         content:
@@ -1346,6 +1349,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/QuoteDraftChangeGroup"
       requestBody:
         required: true
         content:
@@ -1370,6 +1374,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/QuoteDraftChangeGroup"
       responses:
         "200":
           description: 갱신된 견적초안
@@ -1377,6 +1382,76 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QuoteDraftDto"
+  /api/quote-drafts/current/history:
+    get:
+      summary: 현재 견적 변경 기록 목록
+      description: 부품 변경 직전 snapshot을 정상 점수 기록 최대 20건과 호환 문제 기록 최대 5건으로 나눠 반환한다. 기록은 30일 보관된다.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 변경 기록 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftHistoryList"
+  /api/quote-drafts/current/history/{historyId}/comparison:
+    get:
+      summary: 현재 견적과 선택 변경 기록의 복원 결과 비교
+      description: 선택 기록으로 복원할 때의 변화를 현재 견적에서 복원 후 견적 방향으로 반환한다. 가격은 기록 당시 단가를 사용하고 종합점수, Tool, FPS는 현재 평가 자산으로 계산한다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: historyId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: game
+          required: false
+          schema: { type: string, default: pubg }
+        - in: query
+          name: resolution
+          required: false
+          schema: { type: string, enum: [fhd, qhd, 4k], default: qhd }
+      responses:
+        "200":
+          description: 현재 견적에서 선택 기록으로 복원한 뒤의 변경점과 평가 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftHistoryComparison"
+        "404":
+          description: 기록 없음 또는 타 사용자 기록
+  /api/quote-drafts/current/history/{historyId}/restore:
+    post:
+      summary: 과거 견적 전체 복원
+      description: 비활성 부품은 전체 차단한다. Tool FAIL은 명시 확인 후 복원하며 복원 직전 상태도 새 기록으로 남긴다.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: historyId
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/QuoteDraftChangeGroup"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirmCompatibilityRisk: { type: boolean, default: false }
+      responses:
+        "200":
+          description: 복원된 현재 견적
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteDraftDto"
+        "409":
+          description: 비활성 부품 포함 또는 Tool FAIL 재확인 필요
   /api/assembly-requests:
     get:
       summary: 현재 사용자의 조립 요청 이력
@@ -4809,6 +4884,14 @@ components:
         minimum: 1
         maximum: 100
         default: 20
+    QuoteDraftChangeGroup:
+      in: header
+      name: X-Quote-Draft-Change-Group
+      required: false
+      description: 여러 draft mutation을 한 사용자 동작의 변경 기록 1건으로 묶는 UUID.
+      schema:
+        type: string
+        format: uuid
   requestBodies:
     ToolCheckRequestBody:
       required: true
@@ -5756,6 +5839,11 @@ components:
           description: 셀프 견적 구성도에서 부품의 물리적 위치를 강조하는 읽기 전용 명령. uiContext가 SELF_QUOTE이고 BOARD_PART_FOCUS capability가 있을 때, 서버가 HIGH 확신으로 판정한 순수 위치 질문에만 반환한다. URL, 선택 카테고리, 견적초안은 변경하지 않는다.
           allOf:
             - $ref: "#/components/schemas/AiBoardFocusDto"
+        draftHistory:
+          nullable: true
+          description: 셀프 견적 변경 기록 패널을 여는 읽기 전용 명령. RESTORE_CONFIRM도 실제 복원을 수행하지 않는다.
+          allOf:
+            - $ref: "#/components/schemas/AiDraftHistoryCommandDto"
         partRecommendation:
           nullable: true
           description: >
@@ -5795,7 +5883,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [BOARD_PART_FOCUS, PART_CANDIDATE_PANEL, GAME_PERFORMANCE_COMPARE]
+            enum: [BOARD_PART_FOCUS, PART_CANDIDATE_PANEL, GAME_PERFORMANCE_COMPARE, QUOTE_DRAFT_HISTORY]
         performance:
           type: object
           description: >
@@ -5937,6 +6025,20 @@ components:
         label:
           type: string
           example: CPU · RAM 위치
+    AiDraftHistoryCommandDto:
+      type: object
+      required: [type, mode]
+      properties:
+        type:
+          type: string
+          enum: [QUOTE_DRAFT_HISTORY]
+        mode:
+          type: string
+          enum: [LIST, COMPARE, RESTORE_CONFIRM]
+        historyId:
+          type: string
+          format: uuid
+          nullable: true
     AiSupportGuidanceDto:
       type: object
       required: [type, scope, symptomCategory, title, summary, possibleCauses, beforeDiagnosisChecks, agentRecommendation, actions, disclaimer]
@@ -7803,6 +7905,115 @@ components:
           type: string
           format: date-time
           nullable: true
+    QuoteDraftHistoryList:
+      type: object
+      required: [items, retentionDays, maxItems, maxProblemItems]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuoteDraftHistoryEntry"
+        retentionDays: { type: integer, example: 30 }
+        maxItems: { type: integer, example: 20 }
+        maxProblemItems: { type: integer, example: 5 }
+    QuoteDraftHistoryEntry:
+      type: object
+      required: [id, actionType, actionLabel, relatedCategories, totalPrice, itemCount, evaluationStatus, issueCodes, createdAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        actionType:
+          type: string
+          enum: [ITEM_ADD, ITEM_REPLACE, ITEM_REMOVE, QUANTITY_CHANGE, AI_BUILD_APPLY, RESTORE]
+        actionLabel: { type: string, example: GPU 교체 전 }
+        relatedCategories:
+          type: array
+          items: { $ref: "#/components/schemas/PartCategory" }
+        totalPrice: { type: integer, minimum: 0 }
+        itemCount: { type: integer, minimum: 0 }
+        evaluationStatus:
+          type: string
+          enum: [PENDING, RUNNING, VALID, INVALID, UNAVAILABLE]
+        score: { type: integer, minimum: 0, nullable: true }
+        maxScore: { type: integer, minimum: 1, nullable: true }
+        issueCodes:
+          type: array
+          items: { type: string }
+        evaluatedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    QuoteDraftHistorySnapshotItem:
+      type: object
+      required: [partId, category, name, quantity, unitPriceAtAdd, lineTotal]
+      properties:
+        partId: { type: string, format: uuid }
+        category: { $ref: "#/components/schemas/PartCategory" }
+        name: { type: string }
+        manufacturer: { type: string, nullable: true }
+        quantity: { type: integer, minimum: 1 }
+        unitPriceAtAdd: { type: integer, minimum: 0 }
+        lineTotal: { type: integer, minimum: 0 }
+    QuoteDraftHistoryComparisonSide:
+      type: object
+      required: [items, totalPrice, itemCount, issues, evaluationAvailable]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/QuoteDraftHistorySnapshotItem" }
+        totalPrice: { type: integer, minimum: 0 }
+        itemCount: { type: integer, minimum: 0 }
+        compositeScore:
+          type: object
+          nullable: true
+          additionalProperties: true
+        fps:
+          type: object
+          nullable: true
+          additionalProperties: true
+        issues:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        evaluationAvailable: { type: boolean }
+    QuoteDraftHistoryComparison:
+      type: object
+      required: [history, past, current, differences, issueChanges, game, resolution, restorable, unavailableItems, requiresCompatibilityConfirmation, evaluationBasis, historicalPriceBasis]
+      properties:
+        history: { $ref: "#/components/schemas/QuoteDraftHistoryEntry" }
+        past: { $ref: "#/components/schemas/QuoteDraftHistoryComparisonSide" }
+        current: { $ref: "#/components/schemas/QuoteDraftHistoryComparisonSide" }
+        differences:
+          type: array
+          items:
+            type: object
+            required: [category, categoryLabel, changeType, beforeItems, afterItems]
+            properties:
+              category: { $ref: "#/components/schemas/PartCategory" }
+              categoryLabel: { type: string }
+              changeType: { type: string, enum: [ADDED, REMOVED, REPLACED, QUANTITY_CHANGED] }
+              beforeItems:
+                description: 복원 전 현재 active draft의 해당 카테고리 부품
+                type: array
+                items: { $ref: "#/components/schemas/QuoteDraftHistorySnapshotItem" }
+              afterItems:
+                description: 선택 기록으로 복원한 뒤의 해당 카테고리 부품
+                type: array
+                items: { $ref: "#/components/schemas/QuoteDraftHistorySnapshotItem" }
+        issueChanges:
+          type: object
+          description: 현재 견적에서 선택 기록으로 복원할 때 added는 새로 생기는 경고, resolved는 해결되는 경고다.
+          additionalProperties: true
+        game: { type: string }
+        resolution: { type: string, enum: [fhd, qhd, 4k] }
+        restorable: { type: boolean }
+        unavailableItems:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        requiresCompatibilityConfirmation: { type: boolean }
+        evaluationBasis: { type: string, enum: [CURRENT_CATALOG_DATA] }
+        historicalPriceBasis: { type: string, enum: [SNAPSHOT_UNIT_PRICE] }
     QuoteDraftItemDto:
       type: object
       required: [id, partId, category, name, quantity, unitPriceAtAdd, currentPrice, lineTotal]

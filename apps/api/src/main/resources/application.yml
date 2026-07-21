@@ -107,6 +107,19 @@ management:
         "[http.server.requests]": 0.5, 0.95, 0.99
 
 buildgraph:
+  quote-draft-history:
+    evaluation:
+      # 변경 요청 트랜잭션에서는 snapshot만 저장하고, Tool·종합점수 평가는 전용 executor가 후처리한다.
+      # @Scheduled는 복구용이며, 배포에서 전역 scheduling이 꺼져도 커밋 이벤트와 startup wakeup으로 동작한다.
+      batch-size: ${QUOTE_DRAFT_HISTORY_EVALUATION_BATCH_SIZE:8}
+      max-drain-batches: ${QUOTE_DRAFT_HISTORY_EVALUATION_MAX_DRAIN_BATCHES:8}
+      retry-max-attempts: ${QUOTE_DRAFT_HISTORY_EVALUATION_RETRY_MAX_ATTEMPTS:3}
+      retry-base-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_RETRY_BASE_DELAY_MS:500}
+      retry-max-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_RETRY_MAX_DELAY_MS:5000}
+      executor-pool-size: ${QUOTE_DRAFT_HISTORY_EVALUATION_EXECUTOR_POOL_SIZE:1}
+      executor-shutdown-wait-seconds: ${QUOTE_DRAFT_HISTORY_EVALUATION_EXECUTOR_SHUTDOWN_WAIT_SECONDS:5}
+      initial-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_INITIAL_DELAY_MS:1000}
+      fixed-delay-ms: ${QUOTE_DRAFT_HISTORY_EVALUATION_FIXED_DELAY_MS:750}
   home:
     cache:
       prewarm:
