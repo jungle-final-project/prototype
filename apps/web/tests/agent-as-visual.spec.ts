@@ -457,7 +457,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   const ticketSummaryPanel = page.getByTestId('admin-as-ticket-summary-panel');
   await expect(ticketListPanel).toContainText('그래픽 장치 오류');
   await expect(ticketSummaryPanel).toContainText('최근 접수');
-  await expect(ticketSummaryPanel.getByRole('link', { name: '상세 보기', exact: true })).toHaveAttribute('href', '/admin/as-tickets/qa-ticket-code43');
+  await expect(ticketSummaryPanel.getByRole('link', { name: '상세 보기', exact: true })).toHaveAttribute('href', '/admin/as-tickets/qa-ticket-before');
   await expect(ticketSummaryPanel).not.toContainText('ticketId');
   for (const width of [1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
@@ -587,7 +587,7 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/support/qa-ticket-after');
   await expect(page.getByRole('main')).toContainText('원격 지원 가능');
-  await expect(page.getByRole('main')).toContainText('Remote support link sent.');
+  await expect(page.getByRole('main')).toContainText('원격 지원이 승인되었습니다');
   await page.screenshot({ path: `${screenshotDir}/05-mobile-ticket.png`, fullPage: true });
 
   await page.evaluate(() => {
