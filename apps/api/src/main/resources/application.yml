@@ -107,6 +107,8 @@ management:
         "[http.server.requests]": 0.5, 0.95, 0.99
 
 buildgraph:
+  technician-profile-images:
+    storage-path: ${TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH:data/technician-profile-images}
   quote-draft-history:
     evaluation:
       # 변경 요청 트랜잭션에서는 snapshot만 저장하고, Tool·종합점수 평가는 전용 executor가 후처리한다.

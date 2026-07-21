@@ -6,6 +6,7 @@ import type {
   PaymentStatus,
   PaymentSummary
 } from '../payment/paymentTypes';
+import { validateProfileImageFile } from './profileImageFile';
 
 export type AssemblyServiceType = 'FULL_SERVICE' | 'ASSEMBLY_ONLY';
 export type AssemblyDeliveryMethod = 'DELIVERY' | 'PICKUP';
@@ -39,6 +40,7 @@ export type AssemblyOffer = {
   technicianId: string;
   technicianName: string;
   initials: string;
+  profileImageUrl?: string | null;
   rating: number;
   completedJobs: number;
   responseMinutes: number;
@@ -191,6 +193,13 @@ export type Technician = {
 
 export type TechnicianPage = { items: Technician[]; page: number; size: number; total: number };
 
+export type ProfileImageUploadResponse = {
+  profileImageUrl: string;
+  fileName: string;
+  fileSize: number;
+  contentType: string;
+};
+
 export type TechnicianPayload = Pick<Technician,
   'displayName' | 'status' | 'serviceRegions' | 'serviceTypes' | 'specialties' | 'rating'
   | 'completedJobs' | 'avgResponseMinutes' | 'assemblyFee' | 'deliveryFee' | 'leadTimeDays'
@@ -233,6 +242,21 @@ export function rejectAdminTechnician(id: string, reason: string) {
     method: 'POST',
     body: JSON.stringify({ reason })
   });
+}
+
+export function uploadTechnicianProfileImage(file: File) {
+  return uploadProfileImage('/api/technician/profile-image', file);
+}
+
+export function uploadAdminTechnicianProfileImage(file: File) {
+  return uploadProfileImage('/api/admin/technicians/profile-image', file);
+}
+
+function uploadProfileImage(path: string, file: File) {
+  validateProfileImageFile(file);
+  const body = new FormData();
+  body.append('file', file);
+  return api<ProfileImageUploadResponse>(path, { method: 'POST', body });
 }
 
 export type TechnicianApplicationPayload = {

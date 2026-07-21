@@ -1,6 +1,9 @@
 package com.buildgraph.prototype.assembly;
 
 import java.util.Map;
+import org.springframework.core.io.Resource;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -11,14 +14,22 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api")
 public class AssemblyBrokerageController {
     private final AssemblyBrokerageService service;
+    private final TechnicianProfileImageService profileImageService;
 
-    public AssemblyBrokerageController(AssemblyBrokerageService service) {
+    public AssemblyBrokerageController(AssemblyBrokerageService service, TechnicianProfileImageService profileImageService) {
         this.service = service;
+        this.profileImageService = profileImageService;
+    }
+
+    @GetMapping("/technician-profile-images/{fileName:.+}")
+    ResponseEntity<Resource> technicianProfileImage(@PathVariable String fileName) {
+        return profileImageService.image(fileName);
     }
 
     @PostMapping("/assembly-requests")
@@ -85,6 +96,15 @@ public class AssemblyBrokerageController {
     @PostMapping("/admin/technicians")
     Map<String, Object> createTechnician(@RequestHeader(value = "Authorization", required = false) String authorization, @RequestBody Map<String, Object> request) {
         return service.createTechnician(authorization, request);
+    }
+
+    @PostMapping(value = "/admin/technicians/profile-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    Map<String, Object> uploadAdminTechnicianProfileImage(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam("file") MultipartFile file
+    ) {
+        service.requireAdminForProfileImageUpload(authorization);
+        return profileImageService.upload(file);
     }
 
     @GetMapping("/admin/technicians/{id}")

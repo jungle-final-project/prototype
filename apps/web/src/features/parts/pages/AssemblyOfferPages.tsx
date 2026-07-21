@@ -27,6 +27,7 @@ import {
   type AssemblyRequestStatus,
   type AssemblyRequestSummary
 } from '../assemblyApi';
+import { resolveProfileImageSrc } from '../profileImageFile';
 
 const STATUS_LABELS: Record<AssemblyRequestStatus, string> = {
   REQUESTED: '기사 제안 대기',
@@ -41,11 +42,19 @@ const STATUS_LABELS: Record<AssemblyRequestStatus, string> = {
 
 const LIVE_OFFER_STATUSES = new Set<AssemblyRequestStatus>(['REQUESTED', 'OFFERED']);
 const OFFER_LIST_REFETCH_INTERVAL_MS = 3000;
+type OfferSortKey = 'newest' | 'priceAsc' | 'leadTimeAsc' | 'ratingDesc';
+const OFFER_SORT_OPTIONS: Array<{ value: OfferSortKey; label: string }> = [
+  { value: 'newest', label: '최신순' },
+  { value: 'priceAsc', label: '낮은 가격순' },
+  { value: 'leadTimeAsc', label: '빠른 일정순' },
+  { value: 'ratingDesc', label: '평점 높은순' }
+];
 
 export function CheckoutOffersPage() {
   const navigate = useNavigate();
   const { requestId } = useParams();
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
+  const [offerSort, setOfferSort] = useState<OfferSortKey>('newest');
   const [newOfferNotice, setNewOfferNotice] = useState('');
   const previousAvailableCount = useRef<number | null>(null);
   const requestQuery = useQuery({
@@ -86,6 +95,7 @@ export function CheckoutOffersPage() {
   const activeOffers = request.offers.filter((offer) => ['AVAILABLE', 'SELECTED'].includes(offer.status));
   const internalOfferCount = activeOffers.filter((offer) => offer.providerType !== 'EXTERNAL').length;
   const externalOfferCount = activeOffers.filter((offer) => offer.providerType === 'EXTERNAL').length;
+  const sortedOffers = sortAssemblyOffers(request.offers, offerSort);
 
   return (
     <Screen>
@@ -101,6 +111,21 @@ export function CheckoutOffersPage() {
           <p className="mt-2 max-w-2xl break-keep text-sm leading-6 text-slate-600">기사별 부품 확인가, 조립비와 완료 일정을 비교한 뒤 한 건을 선택하세요.</p>
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-black"><span className="rounded bg-slate-100 px-2 py-1 text-commerce-ink">Dazzajo 기사 {internalOfferCount}/2</span><span className="rounded bg-blue-50 px-2 py-1 text-blue-800">외부 파트너 {externalOfferCount}/3</span></div>
         </div>
+        {request.offers.length > 1 ? (
+          <label className="flex min-h-10 w-full items-center justify-between gap-3 rounded-md border border-commerce-line bg-white px-3 text-sm font-black text-commerce-ink shadow-sm sm:w-auto sm:min-w-48">
+            <span className="shrink-0 text-xs text-slate-500">정렬</span>
+            <select
+              value={offerSort}
+              onChange={(event) => setOfferSort(event.target.value as OfferSortKey)}
+              className="min-w-0 flex-1 cursor-pointer bg-transparent text-right text-sm font-black outline-none"
+              aria-label="기사 제안 정렬"
+            >
+              {OFFER_SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </header>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -108,7 +133,7 @@ export function CheckoutOffersPage() {
           {newOfferNotice ? <StateMessage type="success" title="새 제안 도착" body={newOfferNotice} /> : null}
           {request.offers.length === 0 ? (
             <StateMessage type="info" title="기사 제안을 준비하고 있습니다" body="지역과 서비스 조건에 맞는 기사 제안이 등록되면 이 화면에서 바로 비교할 수 있습니다." />
-          ) : request.offers.map((offer) => (
+          ) : sortedOffers.map((offer) => (
             <AssemblyOfferCard
               key={offer.id}
               offer={offer}
@@ -134,7 +159,13 @@ export function CheckoutOffersPage() {
               <div className="border-t border-commerce-line pt-4">
                 {selectedOffer ? (
                   <div className="space-y-3">
-                    <div><div className="text-xs font-bold text-slate-500">선택 기사</div><div className="mt-1 text-lg font-black text-commerce-ink">{selectedOffer.technicianName}</div></div>
+                    <div className="flex items-center gap-3">
+                      <TechnicianAvatar offer={selectedOffer} compact />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-500">선택 기사</div>
+                        <div className="mt-1 truncate text-lg font-black text-commerce-ink">{selectedOffer.technicianName}</div>
+                      </div>
+                    </div>
                     <SummaryRow label="배송비" value={formatDeliveryFee(selectedOffer.deliveryFee)} />
                     <SummaryRow label="최종 제안가" value={`${selectedOffer.finalPrice.toLocaleString()}원`} strong />
                   </div>
@@ -286,7 +317,7 @@ function AssemblyOfferCard({ offer, serviceType, selected, selectable, onSelect 
     <article className={`rounded-lg border bg-white p-5 shadow-sm transition ${selected ? 'border-[#de6c2d] ring-2 ring-[#f8d7c4]' : offer.status === 'WITHDRAWN' || offer.status === 'EXPIRED' ? 'border-slate-200 opacity-55' : 'border-commerce-line'}`}>
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-[#de6c2d] text-sm font-black text-white">{offer.initials}</div>
+          <TechnicianAvatar offer={offer} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-black text-commerce-ink">{offer.technicianName}</h2><span className={`rounded px-2 py-1 text-[11px] font-black ${offer.providerType === 'EXTERNAL' ? 'bg-blue-50 text-blue-800' : 'bg-slate-100 text-commerce-ink'}`}>{offer.providerType === 'EXTERNAL' ? '외부 파트너' : 'Dazzajo 기사'}</span>{offer.verified ? <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-800"><BadgeCheck size={12} /> 검증 완료</span> : null}<span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-800"><ShieldCheck size={12} /> 표준 AS 적용</span>{offer.status !== 'AVAILABLE' ? <StatusBadge status={offer.status} /> : null}</div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1 text-amber-600"><Star size={13} fill="currentColor" /> {Number(offer.rating).toFixed(1)}</span><span>완료 {offer.completedJobs}건</span><span>평균 응답 {offer.responseMinutes}분</span>{specialty ? <span>{specialty}</span> : null}</div>
@@ -297,6 +328,25 @@ function AssemblyOfferCard({ offer, serviceType, selected, selectable, onSelect 
       <div className="mt-5 grid gap-3 border-t border-commerce-line pt-4 sm:grid-cols-2 lg:grid-cols-5"><OfferMetric label="부품 확인가" value={serviceType === 'FULL_SERVICE' ? `${offer.confirmedPartsPrice.toLocaleString()}원` : '사용자 준비'} /><OfferMetric label="조립비" value={`${offer.assemblyFee.toLocaleString()}원`} /><OfferMetric label="배송비" value={formatDeliveryFee(offer.deliveryFee)} /><OfferMetric label="완료 예상" value={`${offer.leadTimeDays}일`} /><OfferMetric label="최종 제안가" value={`${offer.finalPrice.toLocaleString()}원`} accent /></div>
       <div className="mt-3 flex items-center gap-2 text-xs font-bold text-emerald-700"><BadgeCheck size={14} /> {offer.stockStatus}</div>
     </article>
+  );
+}
+
+function TechnicianAvatar({ offer, compact = false }: { offer: Pick<AssemblyOffer, 'initials' | 'profileImageUrl' | 'technicianName'>; compact?: boolean }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageUrl = resolveProfileImageSrc(offer.profileImageUrl);
+  useEffect(() => setImageFailed(false), [imageUrl]);
+  const sizeClass = compact ? 'h-10 w-10 text-xs' : 'h-14 w-14 text-sm';
+  return (
+    <div className={`grid ${sizeClass} shrink-0 place-items-center overflow-hidden rounded-md bg-[#de6c2d] font-black text-white`}>
+      {imageUrl && !imageFailed ? (
+        <img
+          src={imageUrl}
+          alt={`${offer.technicianName} 기사 프로필`}
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : offer.initials}
+    </div>
   );
 }
 
@@ -348,6 +398,32 @@ function AssemblyHistoryCard({ request }: { request: AssemblyRequestSummary }) {
 
 function selectedOfferOf(request: AssemblyRequest) { return request.offers.find((offer) => offer.id === request.selectedOfferId || offer.status === 'SELECTED') ?? null; }
 function isLiveOfferStatus(status?: AssemblyRequestStatus) { return Boolean(status && LIVE_OFFER_STATUSES.has(status)); }
+function sortAssemblyOffers(offers: AssemblyOffer[], sortKey: OfferSortKey) {
+  return [...offers].sort((left, right) => {
+    const statusResult = offerStatusRank(left) - offerStatusRank(right);
+    if (statusResult !== 0) return statusResult;
+    if (sortKey === 'priceAsc') {
+      const priceResult = left.finalPrice - right.finalPrice;
+      if (priceResult !== 0) return priceResult;
+    }
+    if (sortKey === 'leadTimeAsc') {
+      const leadTimeResult = left.leadTimeDays - right.leadTimeDays;
+      if (leadTimeResult !== 0) return leadTimeResult;
+    }
+    if (sortKey === 'ratingDesc') {
+      const ratingResult = Number(right.rating) - Number(left.rating);
+      if (ratingResult !== 0) return ratingResult;
+      const completedResult = right.completedJobs - left.completedJobs;
+      if (completedResult !== 0) return completedResult;
+    }
+    return offerCreatedTime(right) - offerCreatedTime(left) || left.id.localeCompare(right.id);
+  });
+}
+function offerStatusRank(offer: AssemblyOffer) { return offer.status === 'SELECTED' ? 0 : offer.status === 'AVAILABLE' ? 1 : 2; }
+function offerCreatedTime(offer: AssemblyOffer) {
+  const time = offer.createdAt ? new Date(offer.createdAt).getTime() : 0;
+  return Number.isNaN(time) ? 0 : time;
+}
 function EmptySelection() { return <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-bold text-slate-500">비교할 기사 제안을 선택하세요.</div>; }
 function MissingAssemblyRequest() { return <StateWrap title="조립 요청 정보가 없습니다" body="현재 견적으로 조립 요청서를 먼저 작성해 주세요." action="/checkout" actionLabel="조립 요청서 작성" />; }
 function AssemblyLoading() { return <Screen><div className="rounded-lg border border-commerce-line bg-white p-8 text-sm font-bold text-slate-500">조립 요청 정보를 불러오는 중입니다.</div></Screen>; }

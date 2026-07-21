@@ -33,6 +33,9 @@ class AssemblyBrokerageControllerTest {
     @MockitoBean
     private AssemblyBrokerageService service;
 
+    @MockitoBean
+    private TechnicianProfileImageService profileImageService;
+
     @Test
     void createRequiresAuthenticatedUser() throws Exception {
         when(service.create(eq(null), eq("request-key"), anyMap()))

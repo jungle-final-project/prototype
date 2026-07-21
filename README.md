@@ -54,6 +54,7 @@ docker compose up --build
 | `NAVER_SEARCH_CLIENT_ID` | 가격/상품 갱신 시 필요 | 관리자 부품 offer 갱신, 내부 자산 후보 수집 | 없으면 seed에 저장된 내부 자산과 가격만 표시됩니다. |
 | `NAVER_SEARCH_CLIENT_SECRET` | 가격/상품 갱신 시 필요 | 관리자 부품 offer 갱신, 내부 자산 후보 수집 | 네이버 검색 API secret입니다. 커밋 금지입니다. |
 | `AGENT_RUNNER_MODE` | 선택 | Agent 실행 방식 | 기본값은 `deterministic`입니다. 실제 LLM summary를 보려면 `llm`으로 바꿉니다. |
+| `TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH` | 선택 | 기사 프로필 이미지 파일 저장소 | Docker Compose 기본값은 `/data/technician-profile-images`이고 named volume `technician-profile-image-data`에 보존됩니다. DB에는 `/api/technician-profile-images/{fileName}` 경로만 저장합니다. |
 | `PC_AGENT_DIAGNOSIS_CHAT_MODEL` | 선택 | PCAgent AI 진단 탭 | 기본값은 `gpt-5.4-mini`입니다. `OPENAI_API_KEY`가 있을 때만 사용하고, 실패 시 rule fallback으로 우회합니다. |
 | `PC_AGENT_DIAGNOSIS_CHAT_REASONING_EFFORT` | 선택 | PCAgent AI 진단 탭 | 기본값은 `low`입니다. |
 | `PC_AGENT_DIAGNOSIS_CHAT_MAX_OUTPUT_TOKENS` | 선택 | PCAgent AI 진단 탭 | 기본값은 `750`입니다. |

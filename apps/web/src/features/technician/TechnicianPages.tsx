@@ -1,14 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, BadgeCheck, BriefcaseBusiness, CheckCircle2, Clock3, MapPin, Save, ShieldCheck, Store, Wrench, XCircle } from 'lucide-react';
-import { FormEvent, useState } from 'react';
+import { ArrowLeft, BadgeCheck, BriefcaseBusiness, CheckCircle2, Clock3, ImagePlus, MapPin, Save, ShieldCheck, Store, Wrench, XCircle } from 'lucide-react';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage, StatusBadge } from '../../components/ui';
+import { PROFILE_IMAGE_ACCEPT, PROFILE_IMAGE_HELP_TEXT, profileImagePayloadValue, resolveProfileImageSrc } from '../parts/profileImageFile';
 import {
   applyAsTechnician,
   createTechnicianOffer,
   getTechnicianProfile,
   getTechnicianRequest,
   listTechnicianRequests,
+  uploadTechnicianProfileImage,
   updateTechnicianOffer,
   updateTechnicianProfile,
   withdrawTechnicianOffer,
@@ -124,6 +126,8 @@ export function TechnicianRequestDetailPage() {
 function TechnicianProfileForm({ profile, mode }: { profile: Technician | null; mode: 'apply' | 'update' }) {
   const queryClient = useQueryClient();
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
+  const [profileImageUrl, setProfileImageUrl] = useState(profile?.profileImageUrl ?? '');
+  const [profileImageUploading, setProfileImageUploading] = useState(false);
   const [businessName, setBusinessName] = useState(profile?.businessName ?? '');
   const [contactPhone, setContactPhone] = useState(profile?.contactPhone ?? '');
   const [regions, setRegions] = useState<string[]>(profile?.serviceRegions ?? ['서울']);
@@ -139,10 +143,110 @@ function TechnicianProfileForm({ profile, mode }: { profile: Technician | null; 
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    mutation.mutate({ displayName, businessName, contactPhone, serviceRegions: regions, serviceTypes, specialties: specialties.split(',').map((item) => item.trim()).filter(Boolean), assemblyFee: Number(assemblyFee), deliveryFee: Number(deliveryFee), leadTimeDays: Number(leadTimeDays), standardAsAccepted: asAccepted });
+    mutation.mutate({
+      displayName,
+      profileImageUrl: profileImagePayloadValue(profileImageUrl),
+      businessName,
+      contactPhone,
+      serviceRegions: regions,
+      serviceTypes,
+      specialties: specialties.split(',').map((item) => item.trim()).filter(Boolean),
+      assemblyFee: Number(assemblyFee),
+      deliveryFee: Number(deliveryFee),
+      leadTimeDays: Number(leadTimeDays),
+      standardAsAccepted: asAccepted
+    });
   };
   if (mutation.isSuccess && mode === 'apply') return <StateMessage type="success" title="기사 신청이 접수되었습니다" body="관리자 승인 후 조건 매칭 요청함을 사용할 수 있습니다." />;
-  return <form onSubmit={submit} className="mt-4 space-y-4"><div className="grid gap-3 sm:grid-cols-2"><Field label="기사 활동명" value={displayName} onChange={setDisplayName} required /><Field label="상호명 (선택)" value={businessName} onChange={setBusinessName} /><Field label="연락처" value={contactPhone} onChange={setContactPhone} required /><Field label="예상 소요일" value={leadTimeDays} onChange={setLeadTimeDays} type="number" required /><Field label="기본 조립비" value={assemblyFee} onChange={setAssemblyFee} type="number" required /><Field label="기본 배송비" value={deliveryFee} onChange={setDeliveryFee} type="number" required /></div><CheckboxGroup label="지원 지역" values={REGIONS} selected={regions} onChange={setRegions} /><CheckboxGroup label="서비스 방식" values={['FULL_SERVICE', 'ASSEMBLY_ONLY']} selected={serviceTypes} onChange={(values) => setServiceTypes(values as AssemblyServiceType[])} labels={{ FULL_SERVICE: '구매+조립', ASSEMBLY_ONLY: '조립만' }} /><Field label="전문 분야" value={specialties} onChange={setSpecialties} placeholder="게이밍 PC, 저소음 조립" /><label className="flex items-start gap-3 rounded-md border border-commerce-line bg-slate-50 p-3 text-sm font-bold"><input type="checkbox" checked={asAccepted} onChange={(event) => setAsAccepted(event.target.checked)} className="mt-1 accent-[#de6c2d]" /><span>BuildGraph 표준 AS 정책에 동의합니다.</span></label>{mutation.isError ? <StateMessage type="warn" title="저장 실패" body={mutation.error instanceof Error ? mutation.error.message : '기사 정보를 저장하지 못했습니다.'} /> : null}<button disabled={mutation.isPending || !asAccepted} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[#de6c2d] px-5 text-sm font-black text-white hover:bg-[#c45c22] disabled:bg-slate-300 disabled:hover:bg-slate-300"><Save size={16} /> {mutation.isPending ? '저장 중...' : mode === 'apply' ? '기사 신청 제출' : '프로필 저장'}</button></form>;
+  return (
+    <form onSubmit={submit} className="mt-4 space-y-4">
+      <ProfileImageFileField
+        displayName={displayName}
+        initials={displayName.slice(0, 1) || '기'}
+        value={profileImageUrl}
+        onChange={setProfileImageUrl}
+        onUploadingChange={setProfileImageUploading}
+      />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="기사 활동명" value={displayName} onChange={setDisplayName} required />
+        <Field label="상호명 (선택)" value={businessName} onChange={setBusinessName} />
+        <Field label="연락처" value={contactPhone} onChange={setContactPhone} required />
+        <Field label="예상 소요일" value={leadTimeDays} onChange={setLeadTimeDays} type="number" required />
+        <Field label="기본 조립비" value={assemblyFee} onChange={setAssemblyFee} type="number" required />
+        <Field label="기본 배송비" value={deliveryFee} onChange={setDeliveryFee} type="number" required />
+      </div>
+      <CheckboxGroup label="지원 지역" values={REGIONS} selected={regions} onChange={setRegions} />
+      <CheckboxGroup label="서비스 방식" values={['FULL_SERVICE', 'ASSEMBLY_ONLY']} selected={serviceTypes} onChange={(values) => setServiceTypes(values as AssemblyServiceType[])} labels={{ FULL_SERVICE: '구매+조립', ASSEMBLY_ONLY: '조립만' }} />
+      <Field label="전문 분야" value={specialties} onChange={setSpecialties} placeholder="게이밍 PC, 저소음 조립" />
+      <label className="flex items-start gap-3 rounded-md border border-commerce-line bg-slate-50 p-3 text-sm font-bold">
+        <input type="checkbox" checked={asAccepted} onChange={(event) => setAsAccepted(event.target.checked)} className="mt-1 accent-[#de6c2d]" />
+        <span>BuildGraph 표준 AS 정책에 동의합니다.</span>
+      </label>
+      {mutation.isError ? <StateMessage type="warn" title="저장 실패" body={mutation.error instanceof Error ? mutation.error.message : '기사 정보를 저장하지 못했습니다.'} /> : null}
+      <button disabled={mutation.isPending || profileImageUploading || !asAccepted} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[#de6c2d] px-5 text-sm font-black text-white hover:bg-[#c45c22] disabled:bg-slate-300 disabled:hover:bg-slate-300">
+        <Save size={16} /> {profileImageUploading ? '이미지 업로드 중...' : mutation.isPending ? '저장 중...' : mode === 'apply' ? '기사 신청 제출' : '프로필 저장'}
+      </button>
+    </form>
+  );
+}
+
+function ProfileImageFileField({ displayName, initials, value, onChange, onUploadingChange }: { displayName: string; initials: string; value: string; onChange: (value: string) => void; onUploadingChange: (value: boolean) => void }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const [error, setError] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const imageUrl = resolveProfileImageSrc(value);
+  const hasImage = Boolean(value.trim());
+  const setUploading = (next: boolean) => {
+    setIsUploading(next);
+    onUploadingChange(next);
+  };
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      setError('');
+      setUploading(true);
+      const uploaded = await uploadTechnicianProfileImage(file);
+      setImageFailed(false);
+      onChange(uploaded.profileImageUrl);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '이미지 파일을 업로드하지 못했습니다.');
+    } finally {
+      setUploading(false);
+      input.value = '';
+    }
+  };
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-commerce-line bg-slate-50 p-3 sm:flex-row sm:items-center">
+      <ProfileImagePreview imageUrl={imageUrl} imageFailed={imageFailed} onImageFailed={() => setImageFailed(true)} initials={initials} displayName={displayName || '기사'} />
+      <div className="min-w-0 flex-1">
+        <label className="text-sm font-black text-commerce-ink">프로필 이미지</label>
+        <input
+          type="file"
+          accept={PROFILE_IMAGE_ACCEPT}
+          disabled={isUploading}
+          onChange={handleFileChange}
+          className="mt-2 block w-full text-xs font-bold text-slate-600 file:mr-3 file:h-9 file:rounded-md file:border-0 file:bg-[#de6c2d] file:px-3 file:text-xs file:font-black file:text-white hover:file:bg-[#c45c22]"
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500"><ImagePlus size={13} /> {isUploading ? '이미지 업로드 중...' : PROFILE_IMAGE_HELP_TEXT}</span>
+          {hasImage ? <button type="button" disabled={isUploading} onClick={() => { setImageFailed(false); setError(''); onChange(''); }} className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-black text-slate-600 disabled:text-slate-400"><XCircle size={13} /> 이미지 제거</button> : null}
+        </div>
+        {error ? <p className="mt-1 text-[11px] font-black text-red-600">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function ProfileImagePreview({ imageUrl, imageFailed, onImageFailed, initials, displayName }: { imageUrl: string; imageFailed: boolean; onImageFailed: () => void; initials: string; displayName: string }) {
+  return (
+    <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md bg-[#de6c2d] text-lg font-black text-white">
+      {imageUrl && !imageFailed ? (
+        <img src={imageUrl} alt={`${displayName} 기사 프로필 미리보기`} className="h-full w-full object-cover" onError={onImageFailed} />
+      ) : initials}
+    </div>
+  );
 }
 
 function TechnicianOfferForm({ request, profile, onChanged }: { request: TechnicianRequest; profile: Technician; onChanged: () => Promise<void> }) {

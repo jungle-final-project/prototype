@@ -97,6 +97,7 @@ services:
       SUPPORT_CHAT_WS_TICKET_TTL_SECONDS: ${SUPPORT_CHAT_WS_TICKET_TTL_SECONDS:-60}
       AGENT_RUNNER_MODE: ${AGENT_RUNNER_MODE:-deterministic}
       AGENT_LOG_STORAGE_ROOT: ${AGENT_LOG_STORAGE_ROOT:-/data/agent-logs}
+      TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH: ${TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH:-/data/technician-profile-images}
       # 로컬/데모 편의를 위해 데모 등록 토큰을 켜 둔다. 프로덕션 배포에서는 이 값을 비우거나 DB 발급 토큰으로 대체.
       AGENT_DEMO_ACTIVATION_TOKEN: ${AGENT_DEMO_ACTIVATION_TOKEN:-demo-agent-activation-token}
       # 로컬 데모 스택에서만 데모 RSS 피드를 노출한다(프로덕션 기본 off).
@@ -239,6 +240,7 @@ services:
       - "8080:8080"
     volumes:
       - agent-log-data:/data/agent-logs
+      - technician-profile-image-data:/data/technician-profile-images
 
   web:
     build:
@@ -256,3 +258,4 @@ volumes:
   redis-data:
   recommendation-models:
   agent-log-data:
+  technician-profile-image-data:

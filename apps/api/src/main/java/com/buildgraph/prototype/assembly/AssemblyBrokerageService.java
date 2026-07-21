@@ -28,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AssemblyBrokerageService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int PROFILE_IMAGE_TEXT_MAX = 2_000;
     private static final Set<String> REGIONS = Set.of("서울", "경기", "인천", "대전", "대구", "부산", "광주");
     private static final Set<String> SERVICE_TYPES = Set.of("FULL_SERVICE", "ASSEMBLY_ONLY");
     private static final Set<String> DELIVERY_METHODS = Set.of("DELIVERY", "PICKUP");
@@ -55,6 +56,10 @@ public class AssemblyBrokerageService {
         this.quoteDraftQueryService = quoteDraftQueryService;
         this.buildGraphService = buildGraphService;
         this.buildGraphPointService = buildGraphPointService;
+    }
+
+    public void requireAdminForProfileImageUpload(String authorization) {
+        currentUserService.requireAdmin(authorization);
     }
 
     @Transactional
@@ -658,7 +663,8 @@ public class AssemblyBrokerageService {
     private List<Map<String, Object>> requestOffers(Long requestId) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT ao.id AS internal_id, ao.public_id::text AS id, ao.technician_id,
-                       t.public_id::text AS technician_public_id, ao.status, ao.technician_snapshot,
+                       t.public_id::text AS technician_public_id, t.profile_image_url AS technician_profile_image_url,
+                       ao.status, ao.technician_snapshot,
                        ao.confirmed_parts_price, ao.assembly_fee, ao.delivery_fee, ao.final_price,
                        ao.lead_time_days, ao.stock_status, ao.admin_note, ao.submitted_at,
                        t.provider_type, t.verification_status, ao.created_at, ao.updated_at
@@ -676,6 +682,9 @@ public class AssemblyBrokerageService {
                 "technicianId", DbValueMapper.string(row, "technician_public_id"),
                 "technicianName", text(snapshot.get("displayName")),
                 "initials", text(snapshot.get("initials")),
+                "profileImageUrl", text(snapshot.get("profileImageUrl") == null
+                        ? DbValueMapper.string(row, "technician_profile_image_url")
+                        : snapshot.get("profileImageUrl")),
                 "rating", snapshot.get("rating"),
                 "completedJobs", snapshot.get("completedJobs"),
                 "responseMinutes", snapshot.get("avgResponseMinutes"),
@@ -799,6 +808,7 @@ public class AssemblyBrokerageService {
         return MockData.map(
                 "displayName", DbValueMapper.string(row, "display_name"),
                 "initials", DbValueMapper.string(row, "initials"),
+                "profileImageUrl", DbValueMapper.string(row, "profile_image_url"),
                 "rating", row.get("rating") == null ? 0 : Double.valueOf(row.get("rating").toString()),
                 "completedJobs", DbValueMapper.integer(row, "completed_jobs"),
                 "avgResponseMinutes", DbValueMapper.integer(row, "avg_response_minutes"),
@@ -965,7 +975,9 @@ public class AssemblyBrokerageService {
         displayName = requiredLimitedText(displayName, 120, "기사 이름이 필요합니다.");
         String initials = value(body, existing, "initials", "initials");
         initials = initials == null || initials.isBlank() ? displayName.substring(0, 1) : requiredLimitedText(initials, 12, "이니셜은 12자 이하여야 합니다.");
-        String profileImageUrl = body.containsKey("profileImageUrl") ? optionalText(body.get("profileImageUrl"), 2000, "이미지 URL이 너무 깁니다.") : existing == null ? null : DbValueMapper.string(existing, "profile_image_url");
+        String profileImageUrl = body.containsKey("profileImageUrl")
+                ? profileImageValue(body.get("profileImageUrl"))
+                : existing == null ? null : DbValueMapper.string(existing, "profile_image_url");
         String status = allowed(value(body, existing, "status", "status"), TECHNICIAN_STATUSES, "지원하지 않는 기사 상태입니다.");
         List<String> regions = stringList(body.containsKey("serviceRegions") ? body.get("serviceRegions") : existing == null ? List.of() : DbValueMapper.json(existing, "service_regions", List.of()));
         if (regions.isEmpty() || !REGIONS.containsAll(regions)) throw validation("지원 지역을 한 개 이상 올바르게 선택해 주세요.");
@@ -1048,6 +1060,17 @@ public class AssemblyBrokerageService {
         if (text == null || text.isBlank()) return null;
         if (text.trim().length() > max) throw validation(message);
         return text.trim();
+    }
+
+    private static String profileImageValue(Object value) {
+        String text = optionalText(value, PROFILE_IMAGE_TEXT_MAX, "프로필 이미지가 너무 큽니다.");
+        if (text == null) return null;
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")
+                || lower.startsWith("/api/technician-profile-images/")) {
+            return text;
+        }
+        throw validation("프로필 이미지는 업로드된 이미지 경로 또는 HTTP(S) URL만 사용할 수 있습니다.");
     }
 
     private static long optionalNonnegativeLong(Object value, long fallback, String label) {
