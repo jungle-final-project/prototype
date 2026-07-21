@@ -6,7 +6,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -427,11 +433,35 @@ public class AssemblyPaymentService {
         return value == null ? null : Long.valueOf(value.toString());
     }
 
-    private static OffsetDateTime offsetDateTime(Object value) {
+    static OffsetDateTime offsetDateTime(Object value) {
         if (value instanceof OffsetDateTime offsetDateTime) {
             return offsetDateTime;
         }
-        return OffsetDateTime.parse(value.toString());
+        if (value instanceof Timestamp timestamp) {
+            return timestamp.toInstant().atOffset(ZoneOffset.UTC);
+        }
+        if (value instanceof Instant instant) {
+            return instant.atOffset(ZoneOffset.UTC);
+        }
+        if (value instanceof ZonedDateTime zonedDateTime) {
+            return zonedDateTime.toOffsetDateTime();
+        }
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime.atOffset(ZoneOffset.UTC);
+        }
+        if (value == null) {
+            throw new IllegalArgumentException("결제 시각 값이 없습니다.");
+        }
+        String normalized = value.toString().trim().replace(' ', 'T');
+        try {
+            return OffsetDateTime.parse(normalized);
+        } catch (DateTimeParseException ignored) {
+            try {
+                return LocalDateTime.parse(normalized).atOffset(ZoneOffset.UTC);
+            } catch (DateTimeParseException invalid) {
+                throw new IllegalArgumentException("결제 시각 형식이 올바르지 않습니다: " + value, invalid);
+            }
+        }
     }
 
     private static boolean nullableEquals(Object left, Object right) {

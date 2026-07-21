@@ -1313,6 +1313,49 @@ class DefaultAiChatEngineTest {
     }
 
     @Test
+    void fullBuildMatchesPsuWattageByNumericSpecInsteadOfReferenceUrlText() {
+        doAnswer(invocation -> {
+                    String category = String.valueOf((Object) invocation.getArgument(1));
+                    int limit = invocation.getArgument(2);
+                    if ("PSU".equals(category)) {
+                        return List.of(
+                                partRow(category, "psu-url-trap", "1200W PSU", 250_000, Map.of(
+                                        "toolReady", true,
+                                        "capacityW", 1200,
+                                        "specReferenceUrl", "https://example.test/1000w-review"
+                                )),
+                                partRow(category, "psu-exact", "1000W PSU", 260_000, Map.of(
+                                        "toolReady", true,
+                                        "capacityW", 1000
+                                ))
+                        ).stream().limit(limit).toList();
+                    }
+                    return partRows(category).stream().limit(limit).toList();
+                })
+                .when(jdbcTemplate)
+                .queryForList(anyString(), anyString(), anyInt());
+
+        AiChatEngineResponse response = engine.respond(new AiChatEngineRequest(
+                "2TB SSD와 1000W 파워를 포함한 500만원 PC 추천해줘",
+                "HOME",
+                null,
+                null,
+                null,
+                Map.of(),
+                1L
+        ));
+
+        assertThat(response.recommendations()).hasSize(3).allSatisfy(recommendation ->
+                assertThat(recommendation.items())
+                        .filteredOn(part -> "PSU".equals(part.category()))
+                        .singleElement()
+                        .satisfies(part -> assertThat(part.attributes()).containsEntry("capacityW", 1000)));
+        assertThat(response.parsedContext())
+                .containsEntry("targetPsuWattageW", 1000)
+                .containsEntry("psuWattageMode", "EXACT");
+    }
+
+    @Test
     void llmRequiredBuildModifyHonorsMotherboardBrandToken() {
         stubBuildChatPlan("""
                 {

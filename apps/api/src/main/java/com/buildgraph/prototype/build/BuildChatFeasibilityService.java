@@ -52,7 +52,8 @@ public class BuildChatFeasibilityService {
              * MAX("100만원 이하")면 상한이다. 이 값이 없으면 종전대로 상한으로 본다.
              * 전체 견적 추천에는 이미 있던 구분인데 부품 추천 경로에서만 버려지고 있었다.
              */
-            String budgetMode
+            String budgetMode,
+            String wattageMode
     ) {
         // 기존 6-인자 호출부(용량·VRAM·와트 위주)를 위한 편의 생성자 — 속성은 비운다.
         public SpecConstraint(
@@ -63,7 +64,7 @@ public class BuildChatFeasibilityService {
                 Integer quantity,
                 Integer maxBudgetWon
         ) {
-            this(category, minCapacityGb, minVramGb, minWattageW, quantity, maxBudgetWon, null, null, null, null);
+            this(category, minCapacityGb, minVramGb, minWattageW, quantity, maxBudgetWon, null, null, null, null, null);
         }
 
         /** 9-인자 기존 호출부 호환 — 예산 모드는 비운다(상한 해석). */
@@ -79,7 +80,7 @@ public class BuildChatFeasibilityService {
                 Boolean airflowFocused
         ) {
             this(category, minCapacityGb, minVramGb, minWattageW, quantity, maxBudgetWon,
-                    coolingType, pcieGeneration, airflowFocused, null);
+                    coolingType, pcieGeneration, airflowFocused, null, null);
         }
 
         /** "150만원 정도"처럼 그 가격대를 겨냥한 예산인가. */
@@ -105,7 +106,8 @@ public class BuildChatFeasibilityService {
                     stringValue(source.get("coolingType")),
                     intValue(source.get("pcieGeneration")),
                     boolValue(source.get("airflowFocused")),
-                    stringValue(source.get("budgetMode"))
+                    stringValue(source.get("budgetMode")),
+                    stringValue(source.get("wattageMode"))
             );
         }
 
@@ -175,7 +177,12 @@ public class BuildChatFeasibilityService {
             params.add(constraint.minVramGb());
         }
         if (constraint.minWattageW() != null) {
-            where.append(" AND ").append(numericAttribute("wattage", "capacityW")).append(" >= ?");
+            String operator = switch (constraint.wattageMode() == null ? "MIN" : constraint.wattageMode()) {
+                case "EXACT" -> " = ?";
+                case "MAX" -> " <= ?";
+                default -> " >= ?";
+            };
+            where.append(" AND ").append(numericAttribute("wattage", "capacityW")).append(operator);
             params.add(constraint.minWattageW());
         }
         // 닫힌 속성 술어 — 자연어 해석은 LLM이 끝냈고 여기서는 구조화된 값으로 조회만 한다.
