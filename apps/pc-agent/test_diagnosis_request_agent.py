@@ -192,6 +192,75 @@ class DiagnosisRequestProcessorTest(unittest.TestCase):
         self.assertIn("running-diagnosis", decision.message)
         self.assertEqual("running-diagnosis", self.store.session.request.diagnosis_id)
 
+    def test_disconnected_running_session_is_replaced_without_a_second_user_request(self):
+        replacements = []
+        processor = DiagnosisRequestProcessor(
+            self.store,
+            device_id="device-1",
+            now=lambda: NOW,
+            on_session_replaced=replacements.append,
+            running_session_is_active=lambda session: False,
+        )
+        self.assertEqual("ACCEPTED", processor.process(request_payload(diagnosis_id="disconnected-running"), True).status)
+        self.store.update_state("RUNNING")
+
+        decision = processor.process(request_payload(diagnosis_id="accepted-immediately"), True)
+
+        self.assertEqual("ACCEPTED", decision.status)
+        self.assertEqual("accepted-immediately", self.store.session.request.diagnosis_id)
+        self.assertEqual("REQUEST_RECEIVED", self.store.session.agent_state)
+        self.assertEqual("RUNNING_AGENT_UNAVAILABLE", replacements[0].reason)
+        self.assertEqual("disconnected-running", replacements[0].session.request.diagnosis_id)
+
+    def test_two_hour_old_running_session_without_worker_is_not_busy(self):
+        expired_request = DiagnosisRequest.from_payload(
+            request_payload(
+                diagnosis_id="two-hours-stale",
+                expires_at=NOW - timedelta(hours=2),
+            )
+        )
+        self.store.accept(DiagnosisSession(expired_request, "RUNNING"))
+        processor = DiagnosisRequestProcessor(
+            self.store,
+            device_id="device-1",
+            now=lambda: NOW,
+            running_session_is_active=lambda session: False,
+        )
+
+        decision = processor.process(request_payload(diagnosis_id="new-after-two-hours"), True)
+
+        self.assertEqual("ACCEPTED", decision.status)
+        self.assertEqual("new-after-two-hours", self.store.session.request.diagnosis_id)
+
+    def test_fail_running_is_idempotent_and_never_changes_a_newer_session(self):
+        self.assertEqual("ACCEPTED", self.processor.process(request_payload(diagnosis_id="running-to-fail"), True).status)
+        self.store.update_state("RUNNING")
+
+        failed = self.store.fail_running("running-to-fail")
+
+        self.assertEqual("FAILED", failed.agent_state)
+        self.assertIsNone(self.store.fail_running("running-to-fail"))
+        self.assertIsNone(self.store.fail_running("different-diagnosis"))
+        self.assertEqual("FAILED", self.store.session.agent_state)
+
+    def test_concurrent_duplicate_delivery_creates_one_session(self):
+        statuses = []
+        barrier = threading.Barrier(8)
+
+        def process_once() -> None:
+            barrier.wait()
+            statuses.append(self.processor.process(request_payload(diagnosis_id="concurrent-diagnosis"), True).status)
+
+        workers = [threading.Thread(target=process_once) for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(2)
+
+        self.assertEqual(1, statuses.count("ACCEPTED"))
+        self.assertEqual(7, statuses.count("DUPLICATE"))
+        self.assertEqual("concurrent-diagnosis", self.store.session.request.diagnosis_id)
+
     def test_terminal_states_allow_a_new_request(self):
         for state in ("COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:

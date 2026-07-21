@@ -607,6 +607,127 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
         self.assertNotEqual(request.diagnosis_id, result_store.result.diagnosis_id)
         self.assertEqual("COMPLETED", session_store.session.agent_state)
 
+    def test_stale_running_failure_accepts_and_completes_a_new_code43_diagnosis(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        old_request = DiagnosisRequest(
+            "diagnosis-stale-running",
+            "device-1",
+            "화면 끊김",
+            ("gpu",),
+            (STARTED_AT - timedelta(hours=2)).isoformat(),
+            (STARTED_AT - timedelta(hours=1, minutes=55)).isoformat(),
+            "LIVE",
+        )
+        session_store = agent.DiagnosisSessionStore(root / "session.json")
+        session_store.accept(DiagnosisSession(old_request, "RUNNING"))
+        metrics_store = agent.MetricsStore(root / "metrics.json")
+        log_store = agent.DiagnosisLogStore(root / "progress.json")
+        log_store.replace(agent.DiagnosisRunSnapshot(
+            diagnosis_id=old_request.diagnosis_id,
+            mode="LIVE",
+            state="DIAGNOSING",
+            progress=45,
+        ))
+        result_store = agent.DiagnosisResultStore(root / "result.json")
+        code43_snapshot = Code43RemoteSupportDemoGraphicsProvider(now=lambda: STARTED_AT).collect()
+        completed: list[agent.DiagnosisRunSnapshot] = []
+
+        def on_complete(snapshot: agent.DiagnosisRunSnapshot) -> None:
+            completed.append(snapshot)
+            if not agent.diagnosis_snapshot_matches_session(session_store.session, snapshot):
+                return
+            session_store.update_state(
+                "COMPLETED"
+                if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+                else snapshot.state
+            )
+
+        orchestrator = agent.DiagnosisOrchestrator(
+            lambda: metrics_store.snapshot,
+            log_store,
+            settings=agent.DiagnosisSettings(
+                task_weights=agent.GRAPHICS_DIAGNOSIS_TASK_WEIGHTS,
+                task_timeout_seconds=1.0,
+                session_timeout_seconds=5.0,
+                max_retries=1,
+            ),
+            task_handlers=agent.graphics_diagnosis_task_handlers(
+                lambda: session_store.session,
+                lambda: metrics_store.snapshot,
+                lambda: log_store.snapshot,
+                lambda: code43_snapshot,
+                observation_timeout_seconds=0.1,
+            ),
+            task_definitions=agent.GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
+            task_labels=agent.GRAPHICS_DIAGNOSIS_TASK_LABELS,
+            on_complete=on_complete,
+            now=lambda: STARTED_AT,
+        )
+        replacements: list[agent.DiagnosisSessionReplacement] = []
+
+        def replace_stale_running(replacement: agent.DiagnosisSessionReplacement) -> None:
+            replacements.append(replacement)
+            orchestrator.fail(
+                replacement.session.request.diagnosis_id,
+                "AGENT_SESSION_LOST",
+                "실행 중인 Agent 세션을 확인할 수 없어 이전 진단을 실패 처리했습니다.",
+            )
+
+        processor = agent.DiagnosisRequestProcessor(
+            session_store,
+            device_id="device-1",
+            now=lambda: STARTED_AT,
+            on_session_replaced=replace_stale_running,
+            running_session_is_active=lambda _session: False,
+        )
+        new_diagnosis_id = "diagnosis-recovered-after-stale-run"
+        decision = processor.process({
+            "diagnosisId": new_diagnosis_id,
+            "deviceId": "device-1",
+            "symptom": GRAPHICS_CODE43_REMOTE_SUPPORT_SYMPTOM,
+            "requestedChecks": ["gpu"],
+            "requestedAt": STARTED_AT.isoformat(),
+            "expiresAt": (STARTED_AT + timedelta(minutes=5)).isoformat(),
+            "mode": "DEMO",
+        }, authenticated=True)
+
+        self.assertEqual("ACCEPTED", decision.status)
+        self.assertEqual(new_diagnosis_id, session_store.session.request.diagnosis_id)
+        self.assertEqual("REQUEST_RECEIVED", session_store.session.agent_state)
+        self.assertEqual(1, len(replacements))
+        self.assertEqual("RUNNING_AGENT_UNAVAILABLE", replacements[0].reason)
+        self.assertEqual("FAILED", completed[0].state)
+
+        metrics_store.begin(new_diagnosis_id, "DEMO")
+        for index in range(3):
+            metrics_store.append(
+                new_diagnosis_id,
+                readings_at(STARTED_AT + timedelta(seconds=index), 20.0 + index),
+            )
+        metrics_store.complete(new_diagnosis_id)
+        started = agent.start_diagnosis_once(
+            decision.session,
+            session_store,
+            metrics_store,
+            orchestrator,
+            result_store,
+        )
+
+        self.assertIsNotNone(started)
+        self.assertTrue(orchestrator.wait(5.0))
+        new_snapshot = log_store.snapshot
+        new_result = agent.DiagnosisRuleEngine().evaluate(metrics_store.snapshot, new_snapshot)
+        result_store.save(new_result)
+
+        self.assertEqual(new_diagnosis_id, new_snapshot.diagnosis_id)
+        self.assertEqual("COMPLETED", new_snapshot.state)
+        self.assertEqual("COMPLETED", session_store.session.agent_state)
+        self.assertEqual("DEVICE_DRIVER_CONFIGURATION_ISSUE", new_result.diagnosis_type)
+        self.assertEqual("DEMO", new_result.data_mode)
+        self.assertEqual(GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID, new_result.scenario_id)
+
 
 if __name__ == "__main__":
     unittest.main()
