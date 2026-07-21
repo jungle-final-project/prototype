@@ -8,11 +8,11 @@ import { getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { downloadAgentPackage } from './agentDownload';
 import { prepareSupportLogFile } from './logFileProcessing';
-import { createSupportTicket, getRemoteSupportState, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, registerRemoteSupportAccessCode, requestPcAgentDiagnosis, requestRemoteSupport, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getRemoteSupportState, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, registerRemoteSupportAccessCode, requestPcAgentDiagnosis, submitSupportFeedback, uploadAgentLog } from './supportApi';
 import type { PcAgentDiagnosisResultDto } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
 import { SupportChatMessageContent } from './SupportChatMessageContent';
-import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, CauseCandidate, RemoteSupportStateDto, SupportChatContact } from './types';
+import type { AsRagAnalysisDto, AsTicketDraftDto, AsTicketDto, RemoteSupportStateDto, SupportChatContact } from './types';
 import { diagnosisStatus, usePcAgentDiagnosisPolling } from './usePcAgentDiagnosisPolling';
 import type { PcAgentDiagnosisPollingState } from './usePcAgentDiagnosisPolling';
 
@@ -1029,8 +1029,6 @@ function ragPreviewFailureMessage(cause: unknown) {
 export function SupportTicketPage() {
   const { ticketId = '00000000-0000-4000-8000-000000006001' } = useParams();
   const queryClient = useQueryClient();
-  const [remoteRequestReason, setRemoteRequestReason] = useState('원격지원으로 화면을 함께 확인하고 싶습니다.');
-  const [remoteRequestError, setRemoteRequestError] = useState('');
   const [remoteAccessCode, setRemoteAccessCode] = useState('');
   const [remoteAccessCodeError, setRemoteAccessCodeError] = useState('');
   const [feedbackRating, setFeedbackRating] = useState('5');
@@ -1047,29 +1045,6 @@ export function SupportTicketPage() {
     queryFn: () => getRemoteSupportState(ticketId),
     enabled: Boolean(ticketId && remoteSupportApproved),
     refetchInterval: 5_000
-  });
-  const remoteRequestMutation = useMutation({
-    mutationFn: async () => {
-      const reason = remoteRequestReason.trim();
-      return requestRemoteSupport(ticketId, {
-        reason: reason || '사용자가 원격지원을 요청했습니다.'
-      });
-    },
-    onSuccess: (updatedTicket) => {
-      setRemoteRequestError('');
-      queryClient.setQueryData(['support-ticket', ticketId], updatedTicket);
-    },
-    onError: (cause) => {
-      if (cause instanceof ApiError && cause.status === 409) {
-        setRemoteRequestError('이미 진행 중인 원격지원 요청이 있습니다.');
-        return;
-      }
-      if (cause instanceof ApiError && cause.status === 400) {
-        setRemoteRequestError('원격지원 요청 사유를 입력해 주세요.');
-        return;
-      }
-      setRemoteRequestError('원격지원 요청을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    }
   });
   const remoteAccessCodeMutation = useMutation({
     mutationFn: () => registerRemoteSupportAccessCode(ticketId, remoteAccessCode),
@@ -1121,11 +1096,9 @@ export function SupportTicketPage() {
     );
   }
 
-  const remoteRequestLocked = isActiveRemoteSupportStatus(ticket.remoteSupportStatus);
-
   return (
     <Screen>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_380px]">
         <Panel title={`AS 티켓 #${shortTicketId(ticket.id)}`} subtitle="접수 내용과 처리 상태를 확인할 수 있습니다.">
           <div className="mb-4 flex flex-wrap gap-2">
             <StatusBadge status={ticket.status} />
@@ -1137,11 +1110,7 @@ export function SupportTicketPage() {
           {hasAgentDiagnosis(ticket) ? <AgentDiagnosisPanel ticket={ticket} /> : null}
           <DataTable columns={['시간', '주체', '내용']} rows={ticketTimeline(ticket)} />
         </Panel>
-        <Panel title="담당자 확인 자료" subtitle="업로드한 로그를 바탕으로 담당자가 접수 내용을 확인합니다.">
-          <DataTable columns={['확인 항목', '내용', '상태']} rows={causeRows(ticket.causeCandidates)} />
-          <div className="mt-5">
-            <DataTable columns={['항목', '값']} rows={ticketDecisionRows(ticket)} />
-          </div>
+        <Panel title="지원 진행" subtitle="담당자가 진단 결과를 확인한 뒤 필요한 안내만 전달합니다.">
           {remoteSupportApproved ? (
             <UserRemoteSupportPanel
               state={remoteSupportQuery.data}
@@ -1154,31 +1123,18 @@ export function SupportTicketPage() {
               onSubmit={() => remoteAccessCodeMutation.mutate()}
             />
           ) : (
-            <form
-              className="mt-5 rounded border border-slate-200 bg-slate-50 p-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                remoteRequestMutation.mutate();
-              }}
-            >
-              <label className="mb-2 block text-sm font-bold text-slate-800">원격지원 요청</label>
-              <textarea
-                className="h-20 w-full rounded border border-slate-300 bg-white p-3 text-sm"
-                value={remoteRequestReason}
-                onChange={(event) => setRemoteRequestReason(event.target.value)}
-                disabled={remoteRequestMutation.isPending || remoteRequestLocked}
-              />
-              {remoteRequestError ? <p className="mt-2 text-xs font-semibold text-red-600">{remoteRequestError}</p> : null}
-              {remoteRequestLocked ? (
-                <p className="mt-2 text-xs font-semibold text-brand-blue">원격지원 상태: {statusLabel(ticket.remoteSupportStatus ?? 'REQUESTED')}</p>
-              ) : null}
-              <button
-                className="mt-3 rounded bg-brand-blue px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={remoteRequestMutation.isPending || remoteRequestLocked}
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+              <p className="text-base font-black text-blue-950">담당자 확인 중</p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-blue-900">
+                원격 지원이나 방문 점검이 필요하면 담당자가 상담방으로 안내합니다.
+              </p>
+              <Link
+                to={`/support/${ticketId}?chat=1`}
+                className="mt-4 inline-flex rounded bg-brand-blue px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700"
               >
-                {remoteRequestMutation.isPending ? '요청 저장 중...' : '원격지원 요청'}
-              </button>
-            </form>
+                상담방 열기
+              </Link>
+            </div>
           )}
           <form
             className="mt-5 rounded border border-slate-200 bg-white p-4"
@@ -1369,11 +1325,27 @@ function diagnosisEvidenceText(item: NonNullable<AsTicketDto['diagnosisEvidence'
   if (item.label) return item.label;
   const component = item.component?.toUpperCase();
   const metricType = item.metricType ? statusLabel(item.metricType) : undefined;
-  const measuredValue = item.value == null ? undefined : `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`;
+  const measuredValue = diagnosisEvidenceValueText(item.value, item.unit);
   const detail = [component, metricType, measuredValue, item.status ? statusLabel(item.status) : undefined]
     .filter(Boolean)
     .join(' · ');
   return detail || `측정 근거 ${index + 1}`;
+}
+
+function diagnosisEvidenceValueText(value: unknown, unit?: string | null) {
+  if (value == null) return undefined;
+  if (typeof value !== 'object') return `${String(value)}${unit ? ` ${unit}` : ''}`;
+  if (Array.isArray(value)) return `${value.length}건`;
+
+  const record = value as Record<string, unknown>;
+  const deviceName = typeof record.deviceName === 'string' ? record.deviceName : undefined;
+  const problemCode = record.problemCode == null ? undefined : `문제 코드 ${String(record.problemCode)}`;
+  const description = typeof record.description === 'string' ? record.description : undefined;
+  const message = typeof record.message === 'string' ? record.message : undefined;
+  const summary = [deviceName, problemCode, description, message].filter(Boolean).slice(0, 2).join(' · ');
+  if (summary) return summary;
+
+  return `${Object.keys(record).length}개 측정값`;
 }
 
 function SafetyNoticePanel({ ticket }: { ticket: AsTicketDto }) {
@@ -1398,10 +1370,6 @@ function hasSafetyAdvice(ticket: AsTicketDto) {
     (ticket.safetyAdviceLevel && ticket.safetyAdviceLevel !== 'NONE')
     || ticket.safetyNotices?.length
   );
-}
-
-function isActiveRemoteSupportStatus(status?: string | null) {
-  return status === 'REQUESTED' || status === 'LINK_SENT' || status === 'IN_PROGRESS';
 }
 
 function safetyAdviceMessage(level?: string | null) {
@@ -1432,29 +1400,6 @@ function ticketTimeline(ticket: AsTicketDto) {
       내용: ticket.supportDecision ? `지원 결정: ${statusLabel(ticket.supportDecision)}` : ticket.assignedAdminId ? '담당자 배정 완료' : '담당자 배정 대기'
     }
   ];
-}
-
-function ticketDecisionRows(ticket: AsTicketDto) {
-  return [
-    { 항목: '진단 상태', 값: ticket.analysisStatus ? <StatusBadge status={ticket.analysisStatus} /> : '-' },
-    { 항목: '검토 상태', 값: ticket.reviewStatus ? <StatusBadge status={ticket.reviewStatus} /> : '-' },
-    { 항목: '지원 결정', 값: ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-' },
-    { 항목: '위험도', 값: ticket.riskLevel ? <StatusBadge status={ticket.riskLevel} /> : '-' },
-    { 항목: '관리자 메모', 값: ticket.adminNote ?? '-' },
-    { 항목: '원격지원', 값: ticket.remoteSupportLink ? `${statusLabel(ticket.remoteSupportStatus ?? 'LINK_SENT')} · ${ticket.remoteSupportLink}` : ticket.remoteSupportStatus ? statusLabel(ticket.remoteSupportStatus) : '-' },
-    { 항목: '방문지원', 값: ticket.visitSupportRequired ? `${statusLabel(ticket.visitSupportStatus ?? 'REQUESTED')} ${ticket.visitPreferredDate ?? ''} ${visitSlotLabel(ticket.visitTimeSlot)}`.trim() : '-' }
-  ];
-}
-
-function causeRows(candidates: CauseCandidate[]) {
-  if (!candidates.length) {
-    return [{ '확인 항목': '로그 확인', 내용: '티켓 접수 완료', 상태: <StatusBadge status="LOW" /> }];
-  }
-  return candidates.map((candidate) => ({
-    '확인 항목': candidate.label ?? candidate.code ?? '로그 확인 항목',
-    내용: candidate.reason ?? (candidate.evidenceIds?.length ? candidate.evidenceIds.join(', ') : '업로드한 로그 기반 참고 자료'),
-    상태: <StatusBadge status={candidate.confidence ?? 'MEDIUM'} />
-  }));
 }
 
 function shortTicketId(id: string) {
