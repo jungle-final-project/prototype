@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Eye, Heart, Search, SlidersHorizontal, X } from 'lucide-react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay';
@@ -9,8 +9,8 @@ import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
 import { AI_PART_PICKS_CHANGED_EVENT, clearAiPartPicks, readAiPartPicks } from '../../../quote/aiSelection';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
-import { FLOATING_CONTROL_STRIP_HEIGHT, isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
-import { useBoardDrag, useIsDesktop } from './useBoardDrag';
+import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
+import { FloatingQuotePanel } from './FloatingQuotePanel';
 
 // CPU·GPU만 벤치마크 점수가 있어 교체 성능 비교가 의미 있다 — 그 외 카테고리는 버튼을 숨긴다.
 const PERF_COMPARABLE = new Set(['CPU', 'GPU']);
@@ -25,31 +25,6 @@ type CandidatePanelView = 'AI_RECOMMENDATION' | 'CATALOG';
 
 function normalizeAiPickedPartIds(partIds: string[]): string[] {
   return [...new Set(partIds.filter(Boolean))].slice(0, 3);
-}
-
-// 데스크톱 패널 초기 위치·크기: 보드 스테이지 좌측에 떠 있던 기존 배치를 재현하되,
-// 헤더 제거 리디자인 이후 스테이지 좌상단에 사는 플로팅 컨트롤(문제 칩·다음 가이드·AI 강조)을
-// 가리지 않도록 그 아래(+56px)에서 시작한다. 패널은 body 포탈이라 z-index로는 스트립을 못 이긴다.
-// 포탈(document.body) + position:fixed라 보드 밖으로도 드래그할 수 있다.
-const PANEL_TOP_OFFSET_FOR_FLOATING_CONTROLS = FLOATING_CONTROL_STRIP_HEIGHT;
-
-function panelInitialRect() {
-  const fallback = { left: 24, top: 96, width: 420, height: 560 };
-  if (typeof document === 'undefined') {
-    return fallback;
-  }
-  const stage = document.querySelector('[data-testid="slot-board-body-stage"]')
-    ?? document.querySelector('[data-testid="slot-board"]');
-  const rect = stage?.getBoundingClientRect();
-  if (!rect || rect.width === 0) {
-    return fallback;
-  }
-  return {
-    left: rect.left + 12,
-    top: rect.top + PANEL_TOP_OFFSET_FOR_FLOATING_CONTROLS,
-    width: Math.min(Math.min(520, Math.max(360, rect.width * 0.52)), rect.width) - 24,
-    height: Math.max(320, rect.height - PANEL_TOP_OFFSET_FOR_FLOATING_CONTROLS - 12)
-  };
 }
 
 type SlotCandidatePanelProps = {
@@ -138,42 +113,6 @@ export function SlotCandidatePanel({
   const activeFilterCount = [manufacturer, minPriceInput, maxPriceInput].filter(Boolean).length
     + (onlyWishlist ? 1 : 0)
     + (hideFail ? 1 : 0);
-  // 데스크톱 패널: 포탈+fixed로 띄워 헤더 드래그(보드 밖 허용, 화면 이탈만 방지)·꼭지점 리사이즈.
-  // 모바일 바텀시트는 고정. 한 번 옮겨두면 슬롯을 바꾸거나 닫았다 열어도 그 자리를 지키고,
-  // 핸들 더블클릭으로만 초기 위치·크기로 되돌린다.
-  const isDesktop = useIsDesktop();
-  const [initialRect, setInitialRect] = useState(() => panelInitialRect());
-  const {
-    targetRef: panelRef,
-    dragStyle,
-    isDragging,
-    startDrag: startPanelDrag,
-    resetDrag,
-    rememberedSize
-  } = useBoardDrag<HTMLElement>({
-    persistKey: 'slot-candidate-panel',
-    anchor: { left: initialRect.left, top: initialRect.top },
-    // 자리와 크기는 새로고침·다음 방문까지 남긴다. 부품 카테고리별로 쪼개지 않는다 —
-    // 사용자는 "부품 목록 창"을 하나로 인식하고, CPU에서 맞춘 자리를 케이스에서도 그대로 쓴다.
-    remember: 'local',
-    rememberSize: true
-  });
-  // URL로 페이지와 함께 마운트되면 첫 렌더 시점엔 보드가 아직 DOM에 없다 —
-  // 커밋 직후(페인트 전) 실제 스테이지 위치로 다시 잰다.
-  useLayoutEffect(() => {
-    setInitialRect(panelInitialRect());
-  }, []);
-  const applyInitialSize = () => {
-    const el = panelRef.current;
-    if (el && typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
-      el.style.width = `${initialRect.width}px`;
-      el.style.height = `${initialRect.height}px`;
-    }
-  };
-  const resetPanelPlacement = () => {
-    resetDrag();
-    applyInitialSize();
-  };
   const [wishlist, setWishlist] = useState<Set<string>>(() => readWishlist());
   const [quickViewPart, setQuickViewPart] = useState<PartRow | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
@@ -380,42 +319,18 @@ export function SlotCandidatePanel({
 
   const panelContent = (
     <>
-      <div aria-hidden="true" onClick={closeCandidatePanel} className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" />
-      <section
-        ref={panelRef}
-        data-testid="slot-candidate-panel"
-        data-placement={placement}
-        role="dialog"
-        aria-label={isAiRecommendationView ? `AI 추천 ${slot.label}` : `${slot.label} 부품 목록`}
-        data-view={panelView}
-        style={isDesktop
-          ? {
-              // 사용자가 맞춰 둔 크기가 있으면 그걸 쓴다(화면 밖으로 커지는 건 max-w/h 클래스가 막는다).
-              width: rememberedSize?.width ?? initialRect.width,
-              height: rememberedSize?.height ?? initialRect.height,
-              ...dragStyle
-            }
-          : dragStyle}
-        className="panel slot-candidate-panel slot-panel-in fixed inset-x-0 bottom-0 z-40 flex max-h-[72vh] flex-col overflow-hidden rounded-t-xl border-t border-commerce-line shadow-2xl lg:inset-auto lg:z-[55] lg:max-h-[92vh] lg:min-h-[280px] lg:w-auto lg:min-w-[320px] lg:max-w-[92vw] lg:rounded-xl lg:border lg:border-commerce-line lg:shadow-xl lg:[resize:both]"
-      >
-      <div
-        data-testid="slot-candidate-panel-handle"
-        title="드래그해서 옮기고, 더블클릭하면 원래 자리로 돌아옵니다"
-        onPointerDown={startPanelDrag}
-        onDoubleClick={resetPanelPlacement}
-        className={`slot-candidate-panel__header flex items-start justify-between gap-3 border-b border-commerce-line px-4 py-3 ${isDragging ? 'lg:cursor-grabbing' : 'lg:cursor-grab'} select-none lg:touch-none`}
-      >
-        <div className="min-w-0 flex-1">
-          <h2 className="text-base font-black text-commerce-ink">
-            {isAiRecommendationView ? `AI 추천 ${slot.label}` : `${slot.label} 부품 목록`}
-          </h2>
-          {isAiRecommendationView ? (
-            <p className="mt-0.5 text-[11px] font-bold text-slate-500">
-              현재 견적 기준 추천 {aiPickedPartIds.length}개
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+      <FloatingQuotePanel
+        testId="slot-candidate-panel"
+        ariaLabel={isAiRecommendationView ? `AI 추천 ${slot.label}` : `${slot.label} 부품 목록`}
+        title={isAiRecommendationView ? `AI 추천 ${slot.label}` : `${slot.label} 부품 목록`}
+        subtitle={isAiRecommendationView ? `현재 견적 기준 추천 ${aiPickedPartIds.length}개` : undefined}
+        persistKey="slot-candidate-panel"
+        closeLabel="후보 패널 닫기"
+        dataView={panelView}
+        dataPlacement={placement}
+        onClose={closeCandidatePanel}
+        headerActions={(
+          <>
           {isAiRecommendationView ? (
             <button
               type="button"
@@ -466,16 +381,9 @@ export function SlotCandidatePanel({
             </button>
           </>
           )}
-          <button
-            type="button"
-            aria-label="후보 패널 닫기"
-            onClick={closeCandidatePanel}
-            className="grid h-8 w-8 place-items-center rounded-md border border-commerce-line bg-white text-slate-600 hover:border-commerce-ink hover:text-commerce-ink"
-          >
-            <X size={15} />
-          </button>
-        </div>
-      </div>
+          </>
+        )}
+      >
 
       {/* 검색: 이름·제조사로 후보를 좁힌다(디바운스 300ms, 호환 검사·정렬은 그대로 유지). */}
       {!isAiRecommendationView ? (
@@ -807,7 +715,7 @@ export function SlotCandidatePanel({
           </button>
         ) : null}
       </div>
-      </section>
+      </FloatingQuotePanel>
       {quickViewPart ? (
         <PartQuickView
           part={quickViewPart}
@@ -819,8 +727,7 @@ export function SlotCandidatePanel({
     </>
   );
 
-  // 데스크톱은 body 포탈 — overflow-hidden인 보드 스테이지를 벗어나 화면 어디로든 옮길 수 있다.
-  return isDesktop ? createPortal(panelContent, document.body) : panelContent;
+  return panelContent;
 }
 
 const WISHLIST_KEY = 'buildgraph.wishlist';
@@ -866,7 +773,7 @@ function PartQuickView({
   const rows = specRows(part);
   const status = part.compatibility?.status;
 
-  return (
+  const content = (
     <div
       className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4"
       onClick={onClose}
@@ -936,4 +843,6 @@ function PartQuickView({
       </div>
     </div>
   );
+
+  return createPortal(content, document.body);
 }

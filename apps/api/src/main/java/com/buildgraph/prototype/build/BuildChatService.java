@@ -344,6 +344,12 @@ public class BuildChatService {
             logBuildChatPath("FAST_SUPPORT_GUIDANCE", startedNanos, userId, requestedAiProfile, false, BuildChatGuardStats.empty());
             return response;
         }
+        if (intentDecision.intent() == BuildChatIntent.OPEN_DRAFT_HISTORY) {
+            Map<String, Object> response = draftHistoryResponse(user, intentDecision);
+            logBuildChatPath("FAST_DRAFT_HISTORY", startedNanos, userId, requestedAiProfile, false,
+                    BuildChatGuardStats.empty());
+            return response;
+        }
         if (intentDecision.intent() == BuildChatIntent.LOCATE_BOARD_PART
                 && "HIGH".equals(intentDecision.confidence())
                 && !intentDecision.targetCategories().isEmpty()) {
@@ -1049,6 +1055,58 @@ public class BuildChatService {
                 "categories", safeCategories,
                 "label", label
         ));
+        return response;
+    }
+
+    private Map<String, Object> draftHistoryResponse(
+            CurrentUserService.CurrentUser user,
+            BuildChatIntentDecision decision
+    ) {
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
+        List<String> historyIds = jdbcTemplate.query(
+                """
+                SELECT h.public_id::text
+                FROM quote_draft_history_entries h
+                JOIN quote_drafts d ON d.id = h.quote_draft_id
+                WHERE d.user_id = ?
+                  AND d.status = 'ACTIVE'
+                  AND d.deleted_at IS NULL
+                  AND h.expires_at > NOW()
+                ORDER BY h.created_at DESC, h.id DESC
+                LIMIT 1
+                """,
+                (rs, rowNum) -> rs.getString(1),
+                user.internalId()
+        );
+        if (historyIds.isEmpty()) {
+            return fastResponse(
+                    "GENERAL",
+                    "아직 비교할 변경 기록이 없습니다. 부품을 추가하거나 교체하면 변경 직전 견적이 자동으로 기록됩니다.",
+                    List.of()
+            );
+        }
+        String mode = decision.ambiguityReasons().stream()
+                .filter(value -> Set.of("LIST", "COMPARE", "RESTORE_CONFIRM").contains(value))
+                .findFirst()
+                .orElse("LIST");
+        Map<String, Object> response = fastResponse(
+                "GENERAL",
+                "LIST".equals(mode)
+                        ? "현재 견적의 변경 기록을 열었습니다. 과거 시점을 선택하면 현재 견적과 비교할 수 있습니다."
+                        : "RESTORE_CONFIRM".equals(mode)
+                                ? "방금 전 견적과 현재 견적을 비교했습니다. 내용을 확인한 뒤 복원할 수 있습니다."
+                                : "이전 견적과 현재 견적의 변경점을 비교했습니다.",
+                List.of()
+        );
+        Map<String, Object> command = new LinkedHashMap<>();
+        command.put("type", "QUOTE_DRAFT_HISTORY");
+        command.put("mode", mode);
+        if (!"LIST".equals(mode)) {
+            command.put("historyId", historyIds.getFirst());
+        }
+        response.put("draftHistory", command);
         return response;
     }
 
@@ -5964,7 +6022,7 @@ public class BuildChatService {
         return switch (standaloneIntent) {
             // 새 증상·점수·위치 질문은 그 자체로 대상이 완결된다. 이전 상담/추천 문장을 합치면
             // 라우터 우선순위 때문에 다른 기능이 가로채므로 새 의도로 시작한다.
-            case SUPPORT_GUIDANCE, EXPLAIN_BUILD_SCORE, LOCATE_BOARD_PART -> true;
+            case SUPPORT_GUIDANCE, EXPLAIN_BUILD_SCORE, LOCATE_BOARD_PART, OPEN_DRAFT_HISTORY -> true;
             // "CPU를 9700X로 바꾸면?"처럼 원문에 대상이 명시된 비교는 독립 요청이다. 반면 변경
             // 미리보기 직후의 "바꾸면 얼마나 달라져?"는 이전 후보가 대상이므로 문맥을 합친다.
             case SIMULATE_REPLACEMENT -> detectPartCategory(message) != null

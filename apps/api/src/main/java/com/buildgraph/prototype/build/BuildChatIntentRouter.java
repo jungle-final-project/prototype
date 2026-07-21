@@ -63,6 +63,21 @@ public class BuildChatIntentRouter {
                     "FAST_PART_DETAIL_ROUTE", "NONE", null, List.of("ROUTE_CHOICE_SELECTION"));
         }
 
+        String historyMode = draftHistoryMode(body, normalized);
+        if (historyMode != null) {
+            return decision(
+                    BuildChatIntent.OPEN_DRAFT_HISTORY,
+                    "HIGH",
+                    "NONE",
+                    (String) null,
+                    null,
+                    "FAST_DRAFT_HISTORY",
+                    "NONE",
+                    null,
+                    List.of(historyMode)
+            );
+        }
+
         if (isSimulationIntent(normalized, category)) {
             List<String> reasons = new ArrayList<>();
             if (partQuery == null && category != null) {
@@ -172,6 +187,31 @@ public class BuildChatIntentRouter {
 
     private static boolean isNavigationCommand(String normalized) {
         return containsAny(normalized, "열어", "보여", "이동", "화면", "페이지", "목록", "상세");
+    }
+
+    private static String draftHistoryMode(Map<String, Object> body, String normalized) {
+        Map<String, Object> uiContext = objectMap(body.get("uiContext"));
+        if (!"SELF_QUOTE".equalsIgnoreCase(text(uiContext.get("surface")))) {
+            return null;
+        }
+        boolean supported = stringList(uiContext.get("capabilities")).stream()
+                .anyMatch(capability -> "QUOTE_DRAFT_HISTORY".equalsIgnoreCase(capability));
+        if (!supported) {
+            return null;
+        }
+        if (containsAny(normalized,
+                "방금전으로돌", "직전으로돌", "이전견적으로돌", "과거견적으로돌", "견적복원", "되돌려")) {
+            return "RESTORE_CONFIRM";
+        }
+        if (containsAny(normalized,
+                "이전견적과비교", "과거견적과비교", "방금전과비교", "변경전과비교", "견적변경비교")) {
+            return "COMPARE";
+        }
+        if (containsAny(normalized,
+                "변경기록", "견적기록", "과거견적", "이전견적", "견적히스토리", "변경내역")) {
+            return "LIST";
+        }
+        return null;
     }
 
     private static boolean isExplanationQuestion(String normalized) {

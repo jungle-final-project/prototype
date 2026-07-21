@@ -37,6 +37,7 @@ import {
   type AiBuildAssessment,
   type AiChatMessage,
   type AiBoardFocus,
+  type AiDraftHistoryCommand,
   type AiPerformanceSimulation,
   type AiQuickReplyCommand,
   type AiRecommendedBuild,
@@ -50,6 +51,7 @@ type AiBuildAssistantProps = {
   surface?: 'home' | 'self-quote';
   variant?: 'floating' | 'embedded';
   onBoardFocus?: (focus: AiBoardFocus) => void;
+  onDraftHistory?: (command: AiDraftHistoryCommand) => void;
 };
 
 type AiChatMessageSize = 'default' | 'large';
@@ -161,7 +163,7 @@ function isCurrentSelfQuoteCategory(
   return new URLSearchParams(location.search).get('category') === category;
 }
 
-export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoardFocus }: AiBuildAssistantProps) {
+export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoardFocus, onDraftHistory }: AiBuildAssistantProps) {
   const navigate = useNavigate();
   // 늦게 도착한 응답이 화면을 낚아채지 않도록 '보낼 때 있던 화면'과 '지금 화면'을 비교한다.
   const location = useLocation();
@@ -580,7 +582,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         uiContext: surface === 'self-quote'
           ? {
               surface: 'SELF_QUOTE',
-              capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL', 'GAME_PERFORMANCE_COMPARE'],
+              capabilities: ['BOARD_PART_FOCUS', 'PART_CANDIDATE_PANEL', 'GAME_PERFORMANCE_COMPARE', 'QUOTE_DRAFT_HISTORY'],
               performance: readPerformanceView()
             }
           : { surface: 'HOME', capabilities: ['PART_CANDIDATE_PANEL'] },
@@ -595,6 +597,9 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       const boardFocus = normalizeBoardFocus(response.boardFocus);
       if (boardFocus && onBoardFocus) {
         onBoardFocus(boardFocus);
+      }
+      if (response.draftHistory?.type === 'QUOTE_DRAFT_HISTORY' && onDraftHistory) {
+        onDraftHistory(response.draftHistory);
       }
       setPendingClarification(
         response.clarification?.originalMessage
@@ -770,7 +775,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           category: item.category,
           quantity: item.quantity
         }))
-      });
+      }, crypto.randomUUID());
       saveSelectedAiBuild(build);
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
       void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
@@ -888,7 +893,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           category: item.category,
           quantity: item.quantity
         }))
-      });
+      }, crypto.randomUUID());
       // 적용이 성공한 뒤에만 선택 빌드를 저장한다. 실패 시 /self-quote 패널이 미적용 빌드를 보여주는 불일치를 막는다.
       saveSelectedAiBuild(normalizedBuild);
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);

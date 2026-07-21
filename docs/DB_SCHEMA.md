@@ -533,6 +533,43 @@ Index:
 - index: `quote_draft_items.part_id`
 - index: `quote_draft_items.deleted_at`
 
+### quote_draft_history_entries
+
+목적: 현재 셀프견적의 의미 있는 변경 직전 상태를 비교·전체 복원할 수 있도록 30일 snapshot을 저장한다. 저장 견적 A/B 비교와는 별도 기능이다.
+
+Owner: 2번
+
+| 컬럼명 | 타입 | nullable | FK | 설명 |
+|---|---|---:|---|---|
+| `id` | `BIGINT` | no | - | 내부 PK |
+| `public_id` | `UUID` | no | - | 외부 기록 ID |
+| `quote_draft_id` | `BIGINT` | no | `quote_drafts.id` | 대상 active draft |
+| `change_group_id` | `UUID` | no | - | 한 사용자 동작의 여러 mutation을 묶는 ID |
+| `action_type` | `VARCHAR(40)` | no | - | 추가·교체·삭제·수량·AI 적용·복원 |
+| `action_label` | `VARCHAR(160)` | no | - | 사용자 표시용 변경 전 설명 |
+| `related_categories` | `JSONB` | no | - | 관련 부품 카테고리 |
+| `metadata` | `JSONB` | no | - | part/build/history 식별 보조값 |
+| `snapshot_payload` | `JSONB` | no | - | 부품 ID·이름·카테고리·수량·변경 직전 `parts.price` |
+| `snapshot_fingerprint` | `VARCHAR(64)` | no | - | 동일 상태 중복 방지 SHA-256 |
+| `evaluation_status` | `VARCHAR(20)` | no | - | `PENDING/RUNNING/VALID/INVALID/UNAVAILABLE` |
+| `evaluation_score` | `INTEGER` | yes | - | 백그라운드 평가한 종합점수. 평가 전·불가 시 NULL |
+| `evaluation_max_score` | `INTEGER` | yes | - | 종합점수 만점 |
+| `evaluation_issue_signature` | `VARCHAR(64)` | yes | - | 연속된 동일 0점 원인 압축용 SHA-256 |
+| `evaluation_issue_codes` | `JSONB` | no | - | Tool FAIL·점수 조언 근거 코드 |
+| `evaluation_started_at` | `TIMESTAMPTZ` | yes | - | worker 평가 시작 시각 |
+| `evaluation_attempts` | `INTEGER` | no | - | 평가 claim 누적 횟수. 기본 0, 최대 재시도 판정에 사용 |
+| `evaluation_next_attempt_at` | `TIMESTAMPTZ` | yes | - | 일시 장애 후 다음 평가 가능 시각 |
+| `evaluation_last_error_code` | `VARCHAR(80)` | yes | - | 내부 평가 오류 분류. 사용자 응답에는 노출하지 않음 |
+| `evaluation_last_error_at` | `TIMESTAMPTZ` | yes | - | 마지막 평가 오류 시각 |
+| `evaluated_at` | `TIMESTAMPTZ` | yes | - | 평가 완료 시각 |
+| `created_at` | `TIMESTAMPTZ` | no | - | 기록 시각 |
+| `expires_at` | `TIMESTAMPTZ` | no | - | 기본 30일 만료 시각 |
+
+- raw 사용자 대화나 개인정보는 snapshot에 저장하지 않는다.
+- 정상 기록은 draft별 최근 20건, 0점 문제 기록은 최근 5건을 독립적으로 유지한다. 같은 실패 signature가 연속되면 최신 문제 기록 하나만 남긴다.
+- snapshot은 변경 transaction에서 즉시 저장하고 Tool·종합점수 평가는 commit 이후 전용 executor가 후처리한다. 전역 scheduler가 꺼진 배포에서도 동작하며 startup에서 미완료 row를 다시 claim한다. 일시 오류는 최대 3회 지수 백오프로 재시도하고, 실제 부품 소실 또는 재시도 소진인 `UNAVAILABLE`은 호환 실패 0점인 `INVALID`와 구분한다.
+- 복원은 이 snapshot 전체를 사용하며 비활성·삭제 부품이 있으면 부분 복원하지 않는다.
+
 ### parts
 
 목적: PC 부품 카탈로그와 현재 기준 가격을 저장한다.

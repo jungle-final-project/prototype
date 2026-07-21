@@ -371,6 +371,28 @@ class BuildChatIntentRouterTest {
         assertThat(decision.intent()).isEqualTo(BuildChatIntent.EXPLAIN_BUILD_SCORE);
     }
 
+    @Test
+    void draftHistoryCommandsRequireSelfQuoteCapabilityAndNeverBecomeMutation() {
+        Map<String, String> modes = Map.of(
+                "변경 기록 보여줘", "LIST",
+                "이전 견적과 비교해줘", "COMPARE",
+                "방금 전으로 돌려줘", "RESTORE_CONFIRM"
+        );
+        modes.forEach((message, mode) -> {
+            BuildChatIntentDecision decision = router.decide(historyRequest(message), message);
+            assertThat(decision.intent()).as(message).isEqualTo(BuildChatIntent.OPEN_DRAFT_HISTORY);
+            assertThat(decision.sideEffectRisk()).isEqualTo("NONE");
+            assertThat(decision.cachePolicy()).isEqualTo("NONE");
+            assertThat(decision.ambiguityReasons()).containsExactly(mode);
+        });
+
+        BuildChatIntentDecision withoutCapability = router.decide(
+                Map.of("message", "방금 전으로 돌려줘"),
+                "방금 전으로 돌려줘"
+        );
+        assertThat(withoutCapability.intent()).isNotEqualTo(BuildChatIntent.OPEN_DRAFT_HISTORY);
+    }
+
     private static Case c(String message, BuildChatIntent intent) {
         return new Case(message, Map.of("message", message), intent);
     }
@@ -395,6 +417,16 @@ class BuildChatIntentRouterTest {
 
     private static Map<String, Object> boardUiContext() {
         return Map.of("surface", "SELF_QUOTE", "capabilities", List.of("BOARD_PART_FOCUS"));
+    }
+
+    private static Map<String, Object> historyRequest(String message) {
+        return Map.of(
+                "message", message,
+                "uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("QUOTE_DRAFT_HISTORY")
+                )
+        );
     }
 
     private static Map<String, Object> draftRequest(String message) {

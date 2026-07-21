@@ -4,6 +4,8 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -28,6 +30,9 @@ class QuoteDraftControllerTest {
 
     @MockitoBean
     private QuoteDraftQueryService quoteDraftQueryService;
+
+    @MockitoBean
+    private QuoteDraftHistoryService quoteDraftHistoryService;
 
     @Test
     void applyAiBuildReturnsUnauthorizedWhenTokenIsMissing() throws Exception {
@@ -99,5 +104,36 @@ class QuoteDraftControllerTest {
                 .andExpect(jsonPath("$.totalPrice").value(420000));
 
         verify(quoteDraftQueryService).applyAiBuild(eq(USER_TOKEN), anyMap());
+    }
+
+    @Test
+    void listsComparesAndRestoresOwnedDraftHistory() throws Exception {
+        String historyId = "11111111-1111-4111-8111-111111111111";
+        when(quoteDraftHistoryService.list(USER_TOKEN)).thenReturn(Map.of(
+                "items", List.of(Map.of("id", historyId, "actionLabel", "GPU 교체 전")),
+                "retentionDays", 30,
+                "maxItems", 20
+        ));
+        when(quoteDraftHistoryService.comparison(USER_TOKEN, historyId, "pubg", "qhd"))
+                .thenReturn(Map.of("restorable", true, "differences", List.of(Map.of("category", "GPU"))));
+        when(quoteDraftHistoryService.restore(eq(USER_TOKEN), eq(historyId), anyMap(), eq("22222222-2222-4222-8222-222222222222")))
+                .thenReturn(Map.of("status", "ACTIVE", "items", List.of(), "totalPrice", 0, "itemCount", 0));
+
+        mockMvc.perform(get("/api/quote-drafts/current/history").header("Authorization", USER_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].actionLabel").value("GPU 교체 전"));
+        mockMvc.perform(get("/api/quote-drafts/current/history/{historyId}/comparison", historyId)
+                        .header("Authorization", USER_TOKEN)
+                        .queryParam("game", "pubg")
+                        .queryParam("resolution", "qhd"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.restorable").value(true));
+        mockMvc.perform(post("/api/quote-drafts/current/history/{historyId}/restore", historyId)
+                        .header("Authorization", USER_TOKEN)
+                        .header("X-Quote-Draft-Change-Group", "22222222-2222-4222-8222-222222222222")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"confirmCompatibilityRisk\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
     }
 }

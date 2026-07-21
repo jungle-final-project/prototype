@@ -340,7 +340,7 @@ export type AiBuildChatRequest = {
      * - BOARD_PART_FOCUS: 보드에서 부품 위치를 강조할 수 있다
      * - PART_CANDIDATE_PANEL: 부품 목록 패널을 띄울 수 있다(상품 나열을 말풍선 대신 패널이 맡는다)
      */
-    capabilities: Array<'BOARD_PART_FOCUS' | 'PART_CANDIDATE_PANEL' | 'GAME_PERFORMANCE_COMPARE'>;
+    capabilities: Array<'BOARD_PART_FOCUS' | 'PART_CANDIDATE_PANEL' | 'GAME_PERFORMANCE_COMPARE' | 'QUOTE_DRAFT_HISTORY'>;
     /**
      * 성능 패널이 지금 보여주는 게임·해상도. "더 부드럽게"처럼 목표 수치가 없는 요청을
      * 이 기준으로 해석한다. FPS 숫자는 보내지 않는다 — 서버가 현재 draft와 DB 근거로 다시 계산한다.
@@ -361,6 +361,12 @@ export type AiBoardFocus = {
   type: 'PART_LOCATION';
   categories: PartCategory[];
   label: string;
+};
+
+export type AiDraftHistoryCommand = {
+  type: 'QUOTE_DRAFT_HISTORY';
+  mode: 'LIST' | 'COMPARE' | 'RESTORE_CONFIRM';
+  historyId?: string;
 };
 
 /** 칩이 무엇을 뜻하는지. ROUTE_CHOICE = 후보 상품 중 하나 고르기(상세 이동 후보). */
@@ -396,6 +402,8 @@ export type AiBuildChatResponse = {
   quickReplyCommands?: AiQuickReplyCommand[];
   /** 셀프 견적 구성도에서만 소비하는 읽기 전용 부품 위치 강조 명령. */
   boardFocus?: AiBoardFocus | null;
+  /** 셀프 견적 변경 기록 패널을 여는 읽기 전용 명령. 복원 자체는 사용자의 확인 후 별도 API가 수행한다. */
+  draftHistory?: AiDraftHistoryCommand | null;
   clarification?: { missingSlots: string[]; originalMessage: string } | null;
 };
 
