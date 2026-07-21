@@ -382,7 +382,7 @@ class DiagnosisOrchestrator:
         self.on_complete = on_complete or (lambda snapshot: None)
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.monotonic = monotonic or time.monotonic
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
 
@@ -411,7 +411,7 @@ class DiagnosisOrchestrator:
                 state="COLLECTING",
                 tasks=tasks,
             )
-            self._publish(snapshot, reset=reset)
+            self._publish(snapshot, reset=reset or existing.diagnosis_id != diagnosis_id)
             return True
 
     def start(self, diagnosis_id: str, mode: str, requested_checks: tuple[str, ...] = ()) -> bool:
@@ -472,6 +472,55 @@ class DiagnosisOrchestrator:
             self._cancel.set()
             return True
 
+    def is_running(self, diagnosis_id: str | None = None) -> bool:
+        with self._lock:
+            thread = self._thread
+            snapshot = self.store.snapshot
+            return bool(
+                thread is not None
+                and thread.is_alive()
+                and snapshot.state not in FINAL_SESSION_STATES
+                and (diagnosis_id is None or snapshot.diagnosis_id == diagnosis_id)
+            )
+
+    def fail(self, diagnosis_id: str, error_code: str, failure_reason: str) -> bool:
+        with self._lock:
+            snapshot = self.store.snapshot
+            if snapshot.diagnosis_id != diagnosis_id or snapshot.state in FINAL_SESSION_STATES:
+                return False
+            self._cancel.set()
+            tasks = tuple(
+                replace(
+                    task,
+                    status="FAILED",
+                    completed_at=self._timestamp(),
+                    error_code=error_code,
+                    failure_reason=failure_reason,
+                )
+                if task.status == "RUNNING" else task
+                for task in snapshot.tasks
+            )
+            failed = replace(
+                snapshot,
+                state="FAILED",
+                tasks=tasks,
+                current_task_id=None,
+                completed_at=self._timestamp(),
+                transition_allowed=False,
+            )
+            failed = self._append_event(
+                failed,
+                "DIAGNOSIS_FAILED",
+                failure_reason,
+                metadata={"errorCode": error_code},
+            )
+            failure_event_id = failed.events[-1].event_id
+            stored = self._publish(failed)
+        if not any(event.event_id == failure_event_id for event in stored.events):
+            return False
+        self.on_complete(stored)
+        return True
+
     def retry(self) -> bool:
         snapshot = self.store.snapshot
         if snapshot.state not in {"FAILED", "TIMED_OUT"} or snapshot.retry_count >= self.settings.max_retries:
@@ -517,7 +566,7 @@ class DiagnosisOrchestrator:
         try:
             while True:
                 snapshot = self.store.snapshot
-                if snapshot.diagnosis_id != diagnosis_id:
+                if snapshot.diagnosis_id != diagnosis_id or snapshot.state in FINAL_SESSION_STATES:
                     return
                 if self._cancel.is_set():
                     self._finish_cancelled(snapshot)
@@ -549,6 +598,9 @@ class DiagnosisOrchestrator:
                 self._publish(snapshot)
                 timeout = min(self.settings.task_timeout_seconds, remaining)
                 outcome = self._execute_task(started_task, snapshot.tasks, timeout)
+                current = self.store.snapshot
+                if current.diagnosis_id != diagnosis_id or current.state in FINAL_SESSION_STATES:
+                    return
                 if self._cancel.is_set():
                     self._finish_cancelled(self.store.snapshot)
                     return
@@ -584,8 +636,10 @@ class DiagnosisOrchestrator:
                     "진단 실행 중 내부 오류가 발생했습니다.",
                     metadata={"errorCode": "DIAGNOSIS_INTERNAL_ERROR"},
                 )
-                self._publish(snapshot)
-                self.on_complete(snapshot)
+                failure_event_id = snapshot.events[-1].event_id
+                stored = self._publish(snapshot)
+                if any(event.event_id == failure_event_id for event in stored.events):
+                    self.on_complete(stored)
 
     def _execute_task(
         self,
@@ -763,8 +817,10 @@ class DiagnosisOrchestrator:
             transition_allowed=allowed,
         )
         snapshot = self._append_event(snapshot, event_type, message, metadata={"progress": progress, "state": state})
-        self._publish(snapshot)
-        self.on_complete(snapshot)
+        terminal_event_id = snapshot.events[-1].event_id
+        stored = self._publish(snapshot)
+        if any(event.event_id == terminal_event_id for event in stored.events):
+            self.on_complete(stored)
 
     def _finish_cancelled(self, snapshot: DiagnosisRunSnapshot) -> None:
         tasks = tuple(
@@ -781,8 +837,10 @@ class DiagnosisOrchestrator:
             transition_allowed=False,
         )
         snapshot = self._append_event(snapshot, "DIAGNOSIS_CANCELLED", "사용자가 하드웨어 진단을 취소했습니다.")
-        self._publish(snapshot)
-        self.on_complete(snapshot)
+        terminal_event_id = snapshot.events[-1].event_id
+        stored = self._publish(snapshot)
+        if any(event.event_id == terminal_event_id for event in stored.events):
+            self.on_complete(stored)
 
     def _finish_timed_out(self, snapshot: DiagnosisRunSnapshot) -> None:
         tasks = tuple(
@@ -804,11 +862,20 @@ class DiagnosisOrchestrator:
             "전체 진단 시간이 초과되었습니다.",
             metadata={"errorCode": "SESSION_TIMEOUT"},
         )
-        self._publish(snapshot)
-        self.on_complete(snapshot)
+        terminal_event_id = snapshot.events[-1].event_id
+        stored = self._publish(snapshot)
+        if any(event.event_id == terminal_event_id for event in stored.events):
+            self.on_complete(stored)
 
     def _publish(self, snapshot: DiagnosisRunSnapshot, reset: bool = False) -> DiagnosisRunSnapshot:
-        stored = self.store.replace(snapshot, reset=reset)
+        with self._lock:
+            current = self.store.snapshot
+            if not reset and current.diagnosis_id:
+                if snapshot.diagnosis_id != current.diagnosis_id:
+                    return current
+                if current.state in FINAL_SESSION_STATES:
+                    return current
+            stored = self.store.replace(snapshot, reset=reset)
         self.on_update(stored)
         return stored
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from dataclasses import replace
@@ -236,6 +237,68 @@ class DiagnosisOrchestratorTest(unittest.TestCase):
         self.assertEqual("CANCELLED", store.snapshot.state)
         self.assertFalse(store.snapshot.transition_allowed)
         self.assertIn("DIAGNOSIS_CANCELLED", [event.event_type for event in store.snapshot.events])
+
+    def test_fail_marks_running_worker_terminal_immediately_and_is_idempotent(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        completed = []
+
+        def blocking_initial(*_args):
+            started.set()
+            release.wait(1)
+            return TaskOutcome("COMPLETED")
+
+        store = DiagnosisLogStore()
+        orchestrator = DiagnosisOrchestrator(
+            lambda: complete_metrics(),
+            store,
+            task_handlers={"initial_snapshot": blocking_initial},
+            on_complete=completed.append,
+        )
+        self.assertTrue(orchestrator.start("diag-1", "LIVE"))
+        self.assertTrue(started.wait(1))
+        self.assertTrue(orchestrator.is_running("diag-1"))
+
+        self.assertTrue(orchestrator.fail("diag-1", "AGENT_CONNECTION_LOST", "Agent 연결이 종료됐습니다."))
+        self.assertFalse(orchestrator.fail("diag-1", "AGENT_CONNECTION_LOST", "Agent 연결이 종료됐습니다."))
+        self.assertEqual("FAILED", store.snapshot.state)
+        self.assertFalse(store.snapshot.transition_allowed)
+        self.assertFalse(orchestrator.is_running("diag-1"))
+        self.assertEqual(["FAILED"], [snapshot.state for snapshot in completed])
+
+        release.set()
+        self.assertTrue(orchestrator.wait(1))
+        self.assertEqual("FAILED", store.snapshot.state)
+        self.assertNotIn("DIAGNOSIS_COMPLETED", [event.event_type for event in store.snapshot.events])
+        self.assertEqual(["FAILED"], [snapshot.state for snapshot in completed])
+
+    def test_late_progress_and_complete_cannot_replace_failed_or_newer_diagnosis(self) -> None:
+        updates = []
+        completions = []
+        store = DiagnosisLogStore()
+        orchestrator = DiagnosisOrchestrator(
+            lambda: complete_metrics(),
+            store,
+            on_update=updates.append,
+            on_complete=completions.append,
+        )
+        orchestrator.prepare("old-diagnosis", "LIVE")
+        running = replace(store.snapshot, state="DIAGNOSING", progress=40)
+        orchestrator._publish(running)
+        self.assertTrue(orchestrator.fail("old-diagnosis", "AGENT_SESSION_LOST", "Agent 세션이 소실됐습니다."))
+
+        late_progress = replace(running, progress=80)
+        orchestrator._publish(late_progress)
+        orchestrator._finish_session(late_progress)
+
+        self.assertEqual("FAILED", store.snapshot.state)
+        self.assertEqual("old-diagnosis", store.snapshot.diagnosis_id)
+        self.assertEqual(["FAILED"], [snapshot.state for snapshot in completions])
+
+        orchestrator.prepare("new-diagnosis", "LIVE")
+        orchestrator._publish(replace(late_progress, progress=90))
+        self.assertEqual("new-diagnosis", store.snapshot.diagnosis_id)
+        self.assertEqual("COLLECTING", store.snapshot.state)
 
     def test_failed_required_task_can_retry_once_without_duplicate_weight(self) -> None:
         attempts = {"count": 0}

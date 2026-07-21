@@ -203,7 +203,7 @@ SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
 SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.19"
+DEFAULT_AGENT_VERSION = "0.1.20"
 DEFAULT_POLICY_VERSION = "policy-v1"
 
 
@@ -695,24 +695,85 @@ def diagnosis_session_replacement_sync_detail(
     occurred_at: datetime | None = None,
 ) -> dict[str, Any]:
     timestamp = (occurred_at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
-    message = (
-        "만료된 미시작 진단 요청을 정리했습니다."
-        if replacement.reason == "REQUEST_EXPIRED"
-        else "새 진단 요청이 접수되어 이전 미시작 요청을 취소했습니다."
-    )
+    running_failed = replacement.reason == "RUNNING_AGENT_UNAVAILABLE"
+    if running_failed:
+        message = "실행 중인 Agent 세션을 확인할 수 없어 이전 진단을 실패 처리했습니다."
+    elif replacement.reason == "REQUEST_EXPIRED":
+        message = "만료된 미시작 진단 요청을 정리했습니다."
+    else:
+        message = "새 진단 요청이 접수되어 이전 미시작 요청을 취소했습니다."
     return {
         "diagnosisId": replacement.session.request.diagnosis_id,
         "eventId": str(uuid.uuid4()),
         "taskId": "diagnosis-request-lifecycle",
-        "eventType": "DIAGNOSIS_CANCELLED",
-        "status": "CANCELLED",
-        "sessionState": "CANCELLED",
+        "eventType": "DIAGNOSIS_FAILED" if running_failed else "DIAGNOSIS_CANCELLED",
+        "status": "FAILED" if running_failed else "CANCELLED",
+        "sessionState": "FAILED" if running_failed else "CANCELLED",
         "progress": 0,
         "progressPercent": 0,
         "message": message,
         "occurredAt": timestamp,
         "metadata": {"reason": replacement.reason},
     }
+
+
+def diagnosis_snapshot_matches_session(
+    session: DiagnosisSession | None,
+    snapshot: DiagnosisRunSnapshot,
+) -> bool:
+    if not isinstance(session, DiagnosisSession) or session.request.diagnosis_id != snapshot.diagnosis_id:
+        return False
+    if session.agent_state == "RUNNING":
+        return True
+    if session.agent_state == "COMPLETED":
+        return snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
+    return session.agent_state == snapshot.state
+
+
+def running_diagnosis_is_active(
+    session: DiagnosisSession,
+    client: AgentDiagnosisWebSocketClient | None,
+    orchestrator: DiagnosisOrchestrator,
+) -> bool:
+    return (
+        session.agent_state == "RUNNING"
+        and client is not None
+        and client.is_connected()
+        and orchestrator.is_running(session.request.diagnosis_id)
+    )
+
+
+def fail_running_diagnosis_session(
+    diagnosis_store: DiagnosisSessionStore,
+    diagnosis_orchestrator: DiagnosisOrchestrator,
+    diagnosis_id: str,
+    error_code: str,
+    failure_reason: str,
+) -> tuple[DiagnosisSession | None, bool]:
+    failed = diagnosis_store.fail_running(diagnosis_id)
+    if failed is None:
+        return None, False
+    published = diagnosis_orchestrator.fail(diagnosis_id, error_code, failure_reason)
+    return failed, published
+
+
+def fail_running_diagnosis_on_connection_state(
+    state: str,
+    diagnosis_store: DiagnosisSessionStore,
+    diagnosis_orchestrator: DiagnosisOrchestrator,
+) -> tuple[DiagnosisSession | None, bool]:
+    if state not in {"DISCONNECTED", "FAILED"}:
+        return None, False
+    session = diagnosis_store.session
+    if not isinstance(session, DiagnosisSession) or session.agent_state != "RUNNING":
+        return None, False
+    return fail_running_diagnosis_session(
+        diagnosis_store,
+        diagnosis_orchestrator,
+        session.request.diagnosis_id,
+        "AGENT_CONNECTION_LOST",
+        "Agent 실행 중 연결이 종료되어 진단을 실패 처리했습니다.",
+    )
 
 
 def graphics_diagnosis_task_handlers(
@@ -8346,8 +8407,30 @@ def run_background(
             if "value" in diagnosis_client_holder else False,
         )
 
+        def queue_diagnosis_status(detail: dict[str, Any]) -> None:
+            client = diagnosis_client_holder.get("value")
+            if client is None or not client.send_diagnosis_status(detail):
+                pending_replacement_statuses.append(detail)
+
+        def fail_active_running_diagnosis(state: str) -> bool:
+            orchestrator = diagnosis_orchestrator_holder.get("value")
+            if orchestrator is None:
+                return False
+            failed, published = fail_running_diagnosis_on_connection_state(
+                state,
+                diagnosis_store,
+                orchestrator,
+            )
+            if failed is not None and not published and failed.request.source == WEB_REQUEST:
+                queue_diagnosis_status(diagnosis_session_replacement_sync_detail(
+                    DiagnosisSessionReplacement(failed, "RUNNING_AGENT_UNAVAILABLE")
+                ))
+            return failed is not None
+
         def on_connection_state_changed(state: str) -> None:
             connection_state["value"] = state
+            if state in {"DISCONNECTED", "FAILED"}:
+                fail_active_running_diagnosis(state)
             # 연결 상태가 바뀌면 열린 뷰어를 다시 그린다 — 진단 종료 후 홈 복귀 시
             # 재접속 중 순간의 '연결 끊김'이 화면에 박제되는 문제를 막는다.
             viewer_controller.refresh_metrics()
@@ -8357,7 +8440,7 @@ def run_background(
 
         def sync_diagnosis_events(snapshot: DiagnosisRunSnapshot) -> None:
             client = diagnosis_client_holder.get("value")
-            if client is None:
+            if client is None or not diagnosis_snapshot_matches_session(diagnosis_store.session, snapshot):
                 return
             for event in snapshot.events:
                 if event.event_id in forwarded_event_ids:
@@ -8367,6 +8450,8 @@ def run_background(
                     forwarded_event_ids.add(event.event_id)
 
         def on_diagnosis_updated(snapshot: DiagnosisRunSnapshot) -> None:
+            if not diagnosis_snapshot_matches_session(diagnosis_store.session, snapshot):
+                return
             sync_diagnosis_events(snapshot)
             viewer_controller.refresh_metrics()
 
@@ -8379,6 +8464,8 @@ def run_background(
                 client.send_diagnosis_result(detail)
 
         def on_diagnosis_complete(snapshot: DiagnosisRunSnapshot) -> None:
+            if not diagnosis_snapshot_matches_session(diagnosis_store.session, snapshot):
+                return
             initial_metrics_coordinator.stop()
             if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
                 try:
@@ -8485,12 +8572,16 @@ def run_background(
 
         def on_session_replaced(replacement: DiagnosisSessionReplacement) -> None:
             initial_metrics_coordinator.stop()
+            if replacement.reason == "RUNNING_AGENT_UNAVAILABLE":
+                diagnosis_orchestrator.fail(
+                    replacement.session.request.diagnosis_id,
+                    "AGENT_SESSION_LOST",
+                    "실행 중인 Agent 세션을 확인할 수 없어 이전 진단을 실패 처리했습니다.",
+                )
             if replacement.session.request.source != WEB_REQUEST:
                 return
             detail = diagnosis_session_replacement_sync_detail(replacement)
-            client = diagnosis_client_holder.get("value")
-            if client is None or not client.send_diagnosis_status(detail):
-                pending_replacement_statuses.append(detail)
+            queue_diagnosis_status(detail)
 
         try:
             current_config = load_config(path)
@@ -8501,28 +8592,26 @@ def run_background(
             device_id=current_config.device_id if current_config else None,
             on_request=on_diagnosis_request,
             on_session_replaced=on_session_replaced,
+            running_session_is_active=lambda session: running_diagnosis_is_active(
+                session,
+                diagnosis_client_holder.get("value"),
+                diagnosis_orchestrator,
+            ),
         )
         existing_session = diagnosis_store.session
         existing_metrics = metrics_store.snapshot
         if isinstance(existing_session, DiagnosisSession) and existing_session.agent_state == "RUNNING":
-            if (
-                existing_metrics.diagnosis_id == existing_session.request.diagnosis_id
-                and existing_metrics.initial_complete
-            ):
-                existing_diagnosis = diagnosis_log_store.snapshot
-                if existing_diagnosis.diagnosis_id == existing_session.request.diagnosis_id and existing_diagnosis.state in FINAL_SESSION_STATES:
-                    on_diagnosis_complete(existing_diagnosis)
-                else:
-                    diagnosis_orchestrator.prepare(
-                        existing_session.request.diagnosis_id,
-                        existing_session.request.mode,
-                        existing_session.request.requested_checks,
-                    )
-                    diagnosis_orchestrator.start(
-                        existing_session.request.diagnosis_id,
-                        existing_session.request.mode,
-                        existing_session.request.requested_checks,
-                    )
+            failed, published = fail_running_diagnosis_session(
+                diagnosis_store,
+                diagnosis_orchestrator,
+                existing_session.request.diagnosis_id,
+                "AGENT_SESSION_LOST",
+                "Agent 재시작으로 이전 실행 세션이 소실되어 진단을 실패 처리했습니다.",
+            )
+            if failed is not None and not published and failed.request.source == WEB_REQUEST:
+                pending_replacement_statuses.append(diagnosis_session_replacement_sync_detail(
+                    DiagnosisSessionReplacement(failed, "RUNNING_AGENT_UNAVAILABLE")
+                ))
         elif (
             isinstance(existing_session, DiagnosisSession)
             and existing_session.agent_state == "REQUEST_RECEIVED"

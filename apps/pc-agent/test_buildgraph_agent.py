@@ -1352,6 +1352,106 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual({"reason": "SUPERSEDED"}, detail["metadata"])
         self.assertEqual("2026-07-13T00:00:00+00:00", detail["occurredAt"])
 
+    def test_stale_running_replacement_is_synced_as_failed(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-stale-running",
+            device_id="device-1",
+            symptom="화면 멈춤",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        replacement = agent.DiagnosisSessionReplacement(
+            DiagnosisSession(request, "RUNNING"),
+            "RUNNING_AGENT_UNAVAILABLE",
+        )
+
+        detail = agent.diagnosis_session_replacement_sync_detail(
+            replacement,
+            datetime(2026, 7, 13, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual("DIAGNOSIS_FAILED", detail["eventType"])
+        self.assertEqual("FAILED", detail["status"])
+        self.assertEqual("FAILED", detail["sessionState"])
+        self.assertEqual({"reason": "RUNNING_AGENT_UNAVAILABLE"}, detail["metadata"])
+
+    def test_websocket_disconnect_fails_running_session_immediately(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-disconnected",
+            device_id="device-1",
+            symptom="화면 멈춤",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            store = agent.DiagnosisSessionStore(Path(directory) / "session.json")
+            store.accept(DiagnosisSession(request, "RUNNING"))
+            orchestrator = SimpleNamespace(fail=MagicMock(return_value=True))
+
+            failed, published = agent.fail_running_diagnosis_on_connection_state(
+                "DISCONNECTED",
+                store,
+                orchestrator,
+            )
+
+        self.assertEqual("FAILED", failed.agent_state)
+        self.assertTrue(published)
+        orchestrator.fail.assert_called_once_with(
+            request.diagnosis_id,
+            "AGENT_CONNECTION_LOST",
+            "Agent 실행 중 연결이 종료되어 진단을 실패 처리했습니다.",
+        )
+
+    def test_connected_running_requires_both_websocket_and_worker(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-active",
+            device_id="device-1",
+            symptom="화면 멈춤",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request, "RUNNING")
+        connected = SimpleNamespace(is_connected=MagicMock(return_value=True))
+        disconnected = SimpleNamespace(is_connected=MagicMock(return_value=False))
+        worker = SimpleNamespace(is_running=MagicMock(return_value=True))
+        stopped_worker = SimpleNamespace(is_running=MagicMock(return_value=False))
+
+        self.assertTrue(agent.running_diagnosis_is_active(session, connected, worker))
+        self.assertFalse(agent.running_diagnosis_is_active(session, disconnected, worker))
+        self.assertFalse(agent.running_diagnosis_is_active(session, connected, stopped_worker))
+        self.assertFalse(agent.running_diagnosis_is_active(session, None, worker))
+
+    def test_failed_session_only_accepts_matching_failed_snapshot(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-failed",
+            device_id="device-1",
+            symptom="화면 멈춤",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request, "FAILED")
+
+        self.assertTrue(agent.diagnosis_snapshot_matches_session(
+            session,
+            agent.DiagnosisRunSnapshot(diagnosis_id=request.diagnosis_id, state="FAILED"),
+        ))
+        self.assertFalse(agent.diagnosis_snapshot_matches_session(
+            session,
+            agent.DiagnosisRunSnapshot(diagnosis_id=request.diagnosis_id, state="COMPLETED"),
+        ))
+        self.assertFalse(agent.diagnosis_snapshot_matches_session(
+            session,
+            agent.DiagnosisRunSnapshot(diagnosis_id="new-diagnosis", state="FAILED"),
+        ))
+
     def test_system_sensor_provider_keeps_web_symptom_and_suspected_component(self) -> None:
         class Collector:
             def collect(self, ts: datetime, index: int) -> dict:

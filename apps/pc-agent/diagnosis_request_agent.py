@@ -207,12 +207,16 @@ class DiagnosisSessionStore:
         with self._lock:
             return diagnosis_id in self._processed_ids
 
-    def is_busy(self, now: datetime | None = None) -> bool:
+    def is_busy(
+        self,
+        now: datetime | None = None,
+        running_session_is_active: Callable[[DiagnosisSession], bool] | None = None,
+    ) -> bool:
         with self._lock:
             if self._session is None:
                 return False
             if self._session.agent_state == "RUNNING":
-                return True
+                return running_session_is_active(self._session) if running_session_is_active else True
             if self._session.agent_state != "REQUEST_RECEIVED" or self._session.request.source == STANDALONE:
                 return False
             expires_at = parse_server_datetime(self._session.request.expires_at)
@@ -236,6 +240,7 @@ class DiagnosisSessionStore:
         self,
         session: DiagnosisSession,
         now: datetime,
+        running_session_is_active: Callable[[DiagnosisSession], bool] | None = None,
     ) -> tuple[str, DiagnosisSessionReplacement | None, DiagnosisSession | None]:
         with self._lock:
             if session.request.diagnosis_id in self._processed_ids:
@@ -243,7 +248,9 @@ class DiagnosisSessionStore:
             current = self._session
             replacement = None
             if current is not None and current.agent_state == "RUNNING":
-                return "BUSY", None, current
+                if running_session_is_active is None or running_session_is_active(current):
+                    return "BUSY", None, current
+                replacement = DiagnosisSessionReplacement(current, "RUNNING_AGENT_UNAVAILABLE")
             if current is not None and current.agent_state == "REQUEST_RECEIVED":
                 expires_at = parse_server_datetime(current.request.expires_at)
                 reason = "REQUEST_EXPIRED" if expires_at is None or expires_at <= now else "SUPERSEDED"
@@ -253,6 +260,18 @@ class DiagnosisSessionStore:
             self._processed_ids = self._processed_ids[-PROCESSED_DIAGNOSIS_LIMIT:]
             self._save_locked()
             return "ACCEPTED", replacement, None
+
+    def fail_running(self, diagnosis_id: str | None = None) -> DiagnosisSession | None:
+        with self._lock:
+            current = self._session
+            if current is None or current.agent_state != "RUNNING":
+                return None
+            if diagnosis_id is not None and current.request.diagnosis_id != diagnosis_id:
+                return None
+            failed = DiagnosisSession(current.request, "FAILED")
+            self._session = failed
+            self._save_locked()
+            return failed
 
     def accept(self, session: DiagnosisSession) -> None:
         with self._lock:
@@ -312,12 +331,17 @@ class DiagnosisRequestProcessor:
         now: Callable[[], datetime] | None = None,
         on_request: Callable[[DiagnosisSession], None] | None = None,
         on_session_replaced: Callable[[DiagnosisSessionReplacement], None] | None = None,
+        running_session_is_active: Callable[[DiagnosisSession], bool] | None = None,
     ) -> None:
         self.store = store
         self.device_id = device_id
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.on_request = on_request or (lambda session: None)
         self.on_session_replaced = on_session_replaced or (lambda replacement: None)
+        self.running_session_is_active = running_session_is_active or (lambda session: True)
+
+    def is_busy(self) -> bool:
+        return self.store.is_busy(self.now(), self.running_session_is_active)
 
     def bind_authenticated_device(self, device_id: str) -> bool:
         value = device_id.strip()
@@ -345,7 +369,11 @@ class DiagnosisRequestProcessor:
         if expires_at is None or expires_at <= current_time:
             return DiagnosisDecision("EXPIRED", request.diagnosis_id, "만료된 진단 요청입니다.")
         session = DiagnosisSession(request=request)
-        status, replacement, active = self.store.accept_request(session, current_time)
+        status, replacement, active = self.store.accept_request(
+            session,
+            current_time,
+            self.running_session_is_active,
+        )
         if status == "DUPLICATE":
             return DiagnosisDecision("DUPLICATE", request.diagnosis_id, "이미 처리한 진단 요청입니다.")
         if status == "BUSY":
@@ -432,6 +460,9 @@ class AgentDiagnosisWebSocketClient:
         if self._thread is None or not self._thread.is_alive():
             self.start()
         return True
+
+    def is_connected(self) -> bool:
+        return self.authenticated and self.state not in {"CONNECTING", "DISCONNECTED", "FAILED"}
 
     def send_diagnosis_status(self, detail: dict[str, Any]) -> bool:
         event_id = detail.get("eventId")
@@ -530,7 +561,7 @@ class AgentDiagnosisWebSocketClient:
             self.on_device_identified(device_id)
             self.authenticated = True
             self.ready_once = True
-            self._set_state("REQUEST_RECEIVED" if self.processor.store.is_busy() else "IDLE")
+            self._set_state("REQUEST_RECEIVED" if self.processor.is_busy() else "IDLE")
             with self._status_lock:
                 self._pending_status_event_ids.update(self._status_frames)
                 self._pending_result_ids.update(self._result_frames)
