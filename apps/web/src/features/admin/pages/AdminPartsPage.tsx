@@ -898,14 +898,14 @@ export function AdminPartsPage() {
   return (
     <AdminShell title="부품 / 가격 관리자">
       {partsListOpen ? (
-        <div className="grid grid-cols-[minmax(0,1fr)_440px] gap-5">
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_440px]">
           <Panel
             title="부품 DB 관리"
             subtitle="내부 쇼핑몰 자산의 생성, 수정, 게시, 삭제, 대표 가격을 운영합니다."
             action={<SectionToggleButton expanded={partsListOpen} label="부품 DB 관리" onClick={() => setPartsListOpen((open) => !open)} />}
           >
             <>
-              <div className="mb-4 grid grid-cols-6 gap-2">
+              <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                 <select value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })} className="rounded border border-slate-300 px-3 py-2 text-xs">
                   <option value="">전체 카테고리</option>
                   {CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
@@ -926,7 +926,7 @@ export function AdminPartsPage() {
                 <button type="button" onClick={handleNewPart} className="rounded bg-brand-blue px-3 py-2 text-xs font-black text-white">신규 부품</button>
                 <input value={filters.minPrice} onChange={(event) => setFilters({ ...filters, minPrice: event.target.value })} placeholder="최소가" className="rounded border border-slate-300 px-3 py-2 text-xs" />
                 <input value={filters.maxPrice} onChange={(event) => setFilters({ ...filters, maxPrice: event.target.value })} placeholder="최대가" className="rounded border border-slate-300 px-3 py-2 text-xs" />
-                <label className="col-span-2 flex items-center gap-2 rounded border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600">
+                <label className="flex items-center gap-2 rounded border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 sm:col-span-2">
                   <input type="checkbox" checked={filters.includeDeleted} onChange={(event) => setFilters({ ...filters, includeDeleted: event.target.checked })} />
                   삭제 항목 포함
                 </label>
@@ -964,7 +964,7 @@ export function AdminPartsPage() {
             </div>
           ) : null}
           {activeTab === '스펙' ? (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {specFields.map((field) => (
                 <SpecFieldControl
                   key={field.key}
@@ -979,7 +979,7 @@ export function AdminPartsPage() {
             <div className="space-y-4">
               <div className="rounded border border-slate-200 p-3">
                 <div className="text-sm font-black text-commerce-ink">대표가 수동 보정</div>
-                <div className="mt-3 grid grid-cols-[1fr_1fr] gap-2">
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <input value={manualPrice} onChange={(event) => setManualPrice(event.target.value)} placeholder="대표 가격" className="rounded border border-slate-300 px-3 py-2 text-xs" />
                   <input value={manualPriceReason} onChange={(event) => setManualPriceReason(event.target.value)} placeholder="보정 사유" className="rounded border border-slate-300 px-3 py-2 text-xs" />
                 </div>
@@ -1087,7 +1087,7 @@ export function AdminPartsPage() {
               {refreshOffersMutation.data ? <div className="mb-4"><StateMessage type="success" title="offer 재검색 완료" body={`후보 검색 결과를 갱신했습니다. 현재가: ${refreshOffersMutation.data.lowPrice ? `${refreshOffersMutation.data.lowPrice.toLocaleString()}원` : '없음'}`} /></div> : null}
 
           {intakeTab === '추적 Source' ? (
-            <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
               <div>
                 <div className="mb-3 flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
                   <div>
@@ -1111,7 +1111,7 @@ export function AdminPartsPage() {
                   <div className="text-sm font-black text-commerce-ink">{selectedSourceId ? 'Source 수정' : '새 Source'}</div>
                   <button type="button" onClick={newSource} className="rounded border border-slate-300 px-3 py-2 text-xs font-black text-slate-700">새 source</button>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <FormInput label="제조사" value={sourceDraft.manufacturer} onChange={(value) => setSourceDraft({ ...sourceDraft, manufacturer: value })} />
                   <FormSelect label="카테고리 범위" value={sourceDraft.categoryScope} options={['ALL', ...CATEGORIES]} onChange={(value) => setSourceDraft({ ...sourceDraft, categoryScope: value })} />
                   <FormSelect label="Source Type" value={sourceDraft.sourceType} options={SOURCE_TYPES} onChange={(value) => setSourceDraft({ ...sourceDraft, sourceType: value })} />
@@ -1139,7 +1139,7 @@ export function AdminPartsPage() {
           ) : null}
 
           {intakeTab === '감지 게시글' ? (
-            <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
               <div>
                 {postsQuery.isLoading ? <StateMessage type="info" title="게시글 로딩 중" body="manufacturer_posts에서 최근 감지 결과를 불러오고 있습니다." /> : null}
                 {postsQuery.isError ? <StateMessage type="warn" title="게시글 조회 실패" body="GET /api/admin/manufacturer-posts 응답을 확인해야 합니다." /> : null}
@@ -1154,7 +1154,7 @@ export function AdminPartsPage() {
                   <div className="text-sm font-black text-commerce-ink">{selectedPostId ? '게시글 수정' : '게시글 수동 등록'}</div>
                   <button type="button" onClick={newPost} className="rounded border border-slate-300 px-3 py-2 text-xs font-black text-slate-700">새 게시글</button>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <FormSelect label="Source" value={postDraft.sourceId} options={sources.map((source) => source.id)} onChange={(value) => setPostDraft({ ...postDraft, sourceId: value })} />
                   <FormSelect label="분류 상태" value={postDraft.classificationStatus} options={POST_STATUSES} onChange={(value) => setPostDraft({ ...postDraft, classificationStatus: value })} />
                   <FormSelect label="감지 카테고리" value={postDraft.detectedCategory} options={['', ...CATEGORIES]} onChange={(value) => setPostDraft({ ...postDraft, detectedCategory: value })} />
@@ -1179,7 +1179,7 @@ export function AdminPartsPage() {
           ) : null}
 
           {intakeTab === '신제품 후보함' ? (
-            <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
               <div>
                 {candidatesQuery.isLoading ? <StateMessage type="info" title="후보 로딩 중" body="part_catalog_candidates에서 신제품 후보를 불러오고 있습니다." /> : null}
                 {candidatesQuery.isError ? <StateMessage type="warn" title="후보 조회 실패" body="GET /api/admin/part-catalog-candidates 응답을 확인해야 합니다." /> : null}
@@ -1191,7 +1191,7 @@ export function AdminPartsPage() {
               </div>
               <div className="rounded-md border border-slate-200 p-4">
                 <div className="mb-3 text-sm font-black text-commerce-ink">후보 상세 보정</div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <FormSelect label="카테고리" value={candidateDraft.category} options={CATEGORIES} onChange={(value) => setCandidateDraft({ ...candidateDraft, category: value })} />
                   <FormInput label="가격" value={candidateDraft.lowPrice} onChange={(value) => setCandidateDraft({ ...candidateDraft, lowPrice: value })} />
                   <FormInput label="제조사 추정" value={candidateDraft.manufacturerGuess} onChange={(value) => setCandidateDraft({ ...candidateDraft, manufacturerGuess: value })} />
@@ -1225,7 +1225,7 @@ export function AdminPartsPage() {
               {qualityReportQuery.isError ? <StateMessage type="warn" title="품질 리포트 조회 실패" body="GET /api/admin/parts/quality-report 응답을 확인해야 합니다." /> : null}
               {!qualityReportQuery.isLoading && !qualityReportQuery.isError && qualityReport ? (
                 <>
-                  <div className="grid grid-cols-6 gap-3">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
                     <MetricCard label="ACTIVE 자산" value={qualityReport.summary.activeParts} />
                     <MetricCard label="Tool-ready 누락" value={qualityReport.summary.toolReadyMissing} tone={qualityReport.summary.toolReadyMissing ? 'warn' : 'ok'} />
                     <MetricCard label="필수 스펙 누락" value={qualityReport.summary.requiredSpecMissing} tone={qualityReport.summary.requiredSpecMissing ? 'warn' : 'ok'} />
@@ -1255,7 +1255,7 @@ export function AdminPartsPage() {
           ) : null}
 
           {intakeTab === 'Alias/스펙 검수 큐' ? (
-            <div className="grid grid-cols-[minmax(0,1fr)_420px] gap-5">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
               <div className="space-y-5">
                 <div>
                   <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1263,7 +1263,7 @@ export function AdminPartsPage() {
                       <div className="text-sm font-black text-commerce-ink">검수 큐 필터</div>
                       <div className="text-xs font-bold text-slate-500">열린 항목 {aliasReviewQuery.data?.total ?? 0}개</div>
                     </div>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
                       <FormSelect label="상태" value={aliasReviewFilters.status} options={ALIAS_REVIEW_STATUSES} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, status: value })} />
                       <FormSelect label="카테고리" value={aliasReviewFilters.category} options={['', ...CATEGORIES]} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, category: value })} />
                       <FormInput label="대상 필드" value={aliasReviewFilters.targetField} onChange={(value) => setAliasReviewFilters({ ...aliasReviewFilters, targetField: value })} />
@@ -1296,7 +1296,7 @@ export function AdminPartsPage() {
               </div>
               <div className="rounded-md border border-slate-200 p-4">
                 <div className="mb-3 text-sm font-black text-commerce-ink">Alias / 스펙 기준 보정</div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <FormSelect label="카테고리" value={aliasReviewDraft.category} options={CATEGORIES} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, category: value })} />
                   <FormInput label="대상 필드" value={aliasReviewDraft.targetField} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, targetField: value })} />
                   <FormInput label="alias text" value={aliasReviewDraft.aliasText} onChange={(value) => setAliasReviewDraft({ ...aliasReviewDraft, aliasText: value })} />

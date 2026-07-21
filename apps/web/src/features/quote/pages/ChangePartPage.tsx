@@ -37,7 +37,7 @@ export function ChangePartPage() {
 
   return (
     <Screen>
-      <div className="grid grid-cols-[330px_1fr_360px] gap-5">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(260px,330px)_minmax(0,1fr)_minmax(280px,360px)]">
         <Panel title="변경 후보 부품" subtitle="카테고리를 고르고 후보를 선택하면 비교가 실행됩니다.">
           <div className="mb-4 grid grid-cols-2 gap-2">
             {changeCategories.map(([value, label]) => (

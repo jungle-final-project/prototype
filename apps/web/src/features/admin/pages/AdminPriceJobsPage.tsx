@@ -72,7 +72,7 @@ export function AdminPriceJobsPage() {
         title: '네이버 현재가 후보와 다나와 현재가 스냅샷 갱신 작업을 실행합니다.'
       }}
     >
-      <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-5">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="가격 수집 작업" subtitle="가격 작업과 작업 처리기 기준 상태">
           {jobsQuery.isLoading ? (
             <StateMessage type="info" title="가격 작업 로딩 중" body="가격 작업 목록을 조회하고 있습니다." />
