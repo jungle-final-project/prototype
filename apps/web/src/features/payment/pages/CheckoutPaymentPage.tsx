@@ -37,13 +37,14 @@ export function CheckoutPaymentPage() {
   });
   const tossWindowMutation = useMutation({
     mutationFn: async () => {
-      const amount = requestQuery.data?.payment?.amount;
-      if (!amount) throw new Error('결제 금액을 확인할 수 없습니다.');
+      const paymentRequest = requestQuery.data;
+      const amount = paymentRequest?.payment?.amount;
+      if (!paymentRequest || !amount) throw new Error('결제 금액을 확인할 수 없습니다.');
 
       await openTossPointPaymentWindow({
         amount,
         orderId: requestId!,
-        orderName: `PC 조립 요청 ${requestQuery.data?.requestNo ?? requestId}`,
+        orderName: paymentOrderName(paymentRequest),
         onPaymentRequestError: setTossPaymentError
       });
     }
@@ -58,6 +59,7 @@ export function CheckoutPaymentPage() {
 
   const balance = pointWalletQuery.data?.balance ?? 0;
   const insufficientPoints = pointWalletQuery.isSuccess && balance < request.payment.amount;
+  const orderName = paymentOrderName(request);
 
   return (
     <Screen mainClassName="mx-auto flex min-h-[calc(100vh-160px)] w-full max-w-[1550px] items-start px-4 py-6 sm:px-6 lg:items-center lg:px-8 xl:px-0">
@@ -80,7 +82,12 @@ export function CheckoutPaymentPage() {
             </div>
           </Panel>
           <section className="rounded-lg border border-commerce-line bg-white p-5 shadow-product">
-            <div className="text-sm font-black text-slate-500">최종 결제 금액</div>
+            <div role="note" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-black text-amber-800">
+              테스트 환경이에요. 실제로 결제되지 않아요.
+            </div>
+            <div className="mt-4 text-[11px] font-bold text-slate-500">상품명</div>
+            <div title={orderName} className="mt-1 break-keep text-sm font-black leading-5 text-commerce-ink">{orderName}</div>
+            <div className="mt-4 border-t border-commerce-line pt-4 text-sm font-black text-slate-500">최종 결제 금액</div>
             <div className="mt-2 text-3xl font-black text-[#de6c2d]">{request.payment.amount.toLocaleString()}원</div>
             <div className="mt-5 space-y-3 border-t border-commerce-line pt-4">
               <SummaryRow label="부품 확인가" value={`${offer.confirmedPartsPrice.toLocaleString()}원`} />
@@ -118,6 +125,16 @@ export function CheckoutPaymentPage() {
       </div>
     </Screen>
   );
+}
+
+function paymentOrderName(request: AssemblyRequest) {
+  const firstItemName = request.items[0]?.name;
+  if (!firstItemName) return `PC 조립 요청 ${request.requestNo}`;
+
+  const remainingItemCount = Math.max(request.items.length - 1, 0);
+  return remainingItemCount > 0
+    ? `${firstItemName} 외 ${remainingItemCount}개 부품 조립`
+    : `${firstItemName} 조립`;
 }
 
 function selectedOfferOf(request: AssemblyRequest) {
