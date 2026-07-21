@@ -29,7 +29,15 @@ export function AdminTicketsPage() {
     '결정': ticket.supportDecision ? <StatusBadge status={ticket.supportDecision} /> : '-',
     'Agent 진단': <span className="line-clamp-2 min-w-48 text-xs leading-5 text-slate-600">{agentDiagnosisSummary(ticket)}</span>,
     '추천 서비스': <span className="inline-block whitespace-nowrap">{recommendedSupportLabel(ticket)}</span>,
-    '증상': <Link className="font-bold text-slate-800 hover:text-brand-blue" to={`/admin/as-tickets/${ticket.id}`}>{ticket.title ?? firstLine(ticket.symptom)}</Link>,
+    '증상': (
+      <Link
+        className="line-clamp-2 block min-w-28 max-w-36 text-sm font-bold leading-5 text-slate-800 hover:text-brand-blue"
+        title={ticketSymptomText(ticket)}
+        to={`/admin/as-tickets/${ticket.id}`}
+      >
+        {symptomSummary(ticket)}
+      </Link>
+    ),
     '사용자': userLabel(ticket),
     '접수 시간': <span className="whitespace-nowrap">{formatDateTime(ticket.createdAt)}</span>,
     '담당자': <span className="whitespace-nowrap">{ticket.assignedAdminId ? shortId(ticket.assignedAdminId) : '미배정'}</span>,
@@ -85,21 +93,47 @@ export function AdminTicketsPage() {
         </div>
 
         <div data-testid="admin-as-ticket-summary-panel">
-          <Panel title="최근 티켓 요약">
+          <Panel title="최근 티켓 요약" subtitle="가장 최근 접수의 상태와 지원 방향을 빠르게 확인합니다.">
             {selected ? (
-              <>
-                <DataTable columns={['필드', '값']} rows={[
-                  { 필드: 'ticketId', 값: selected.id },
-                  { 필드: '상태', 값: <StatusBadge status={selected.status} /> },
-                  { 필드: '분석 상태', 값: selected.analysisStatus ? <StatusBadge status={selected.analysisStatus} /> : '-' },
-                  { 필드: '검토 상태', 값: selected.reviewStatus ? <StatusBadge status={selected.reviewStatus} /> : '-' },
-                  { 필드: '지원 결정', 값: selected.supportDecision ? <StatusBadge status={selected.supportDecision} /> : '-' },
-                  { 필드: '로그 업로드', 값: selected.logUploadId ?? '-' },
-                  { 필드: '원인 후보', 값: `${selected.causeCandidates.length}건` },
-                  { 필드: '추천 조치', 값: `${selected.upgradeCandidates.length}건` }
-                ]} />
-                <Link to={`/admin/as-tickets/${selected.id}`} className="mt-5 block rounded bg-brand-blue px-4 py-3 text-center text-sm font-bold text-white">상세 열기</Link>
-              </>
+              <article className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-500">최근 접수 · {formatDateTime(selected.createdAt)}</p>
+                    <p className="mt-1 truncate text-lg font-black text-slate-950" title={ticketSymptomText(selected)}>
+                      {symptomSummary(selected)}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">티켓 {shortId(selected.id)}</p>
+                  </div>
+                  <Link
+                    to={`/admin/as-tickets/${selected.id}`}
+                    className="inline-flex h-9 shrink-0 items-center justify-center rounded border border-brand-blue px-3 text-sm font-bold text-brand-blue transition hover:bg-blue-50"
+                  >
+                    상세 보기
+                  </Link>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                  <StatusBadge status={selected.status} />
+                  {selected.analysisStatus ? <StatusBadge status={selected.analysisStatus} /> : null}
+                  {selected.reviewStatus ? <StatusBadge status={selected.reviewStatus} /> : null}
+                  {selected.supportDecision ? <StatusBadge status={selected.supportDecision} /> : null}
+                </div>
+
+                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                  <div className="rounded-md bg-slate-50 px-3 py-2">
+                    <dt className="text-xs font-bold text-slate-500">추천 지원</dt>
+                    <dd className="mt-1 font-bold text-slate-900">{recommendedSupportLabel(selected)}</dd>
+                  </div>
+                  <div className="rounded-md bg-slate-50 px-3 py-2">
+                    <dt className="text-xs font-bold text-slate-500">사용자</dt>
+                    <dd className="mt-1 truncate font-bold text-slate-900" title={userLabel(selected)}>{userLabel(selected)}</dd>
+                  </div>
+                  <div className="rounded-md bg-slate-50 px-3 py-2">
+                    <dt className="text-xs font-bold text-slate-500">담당자</dt>
+                    <dd className="mt-1 font-bold text-slate-900">{selected.assignedAdminId ? shortId(selected.assignedAdminId) : '미배정'}</dd>
+                  </div>
+                </dl>
+              </article>
             ) : (
               <StateMessage type="info" title="선택 티켓 없음" body="티켓이 생성되면 최근 항목 요약이 표시됩니다." />
             )}
@@ -116,6 +150,27 @@ function userLabel(ticket: AdminAsTicket) {
 
 function agentDiagnosisSummary(ticket: AdminAsTicket) {
   return ticket.diagnosisSummary ?? ticket.logSummaryText ?? firstLine(ticket.symptom);
+}
+
+function ticketSymptomText(ticket: AdminAsTicket) {
+  return ticket.title?.trim() || firstLine(ticket.symptom);
+}
+
+function symptomSummary(ticket: AdminAsTicket) {
+  const source = [ticket.title, ticket.symptom, ticket.diagnosisSummary, ticket.logSummaryText]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (source.includes('problem code 43') || source.includes('그래픽 장치 오류') || source.includes('검은 화면')) return '그래픽 장치 오류';
+  if (source.includes('frame drop') || source.includes('프레임 저하') || source.includes('프레임 급락')) return '게임 프레임 저하';
+  if (source.includes('warning') || source.includes('경고')) return '견적 경고 문의';
+  if (source.includes('온도') || source.includes('과열') || source.includes('thermal')) return '발열·온도 이상';
+  if (source.includes('부팅')) return '부팅 문제';
+  if (source.includes('전원') || source.includes('power')) return '전원 문제';
+
+  const value = ticketSymptomText(ticket);
+  return value.length > 18 ? `${value.slice(0, 18)}…` : value;
 }
 
 function recommendedSupportLabel(ticket: AdminAsTicket) {

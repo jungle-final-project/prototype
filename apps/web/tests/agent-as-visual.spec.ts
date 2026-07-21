@@ -225,7 +225,6 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     [diagnosisOnlyTicket.id, diagnosisOnlyTicket]
   ]);
   let reviewActionPayload: Record<string, unknown> | undefined;
-  let remoteRequestPayload: Record<string, unknown> | undefined;
   let feedbackPayload: Record<string, unknown> | undefined;
   let deletedTicketId: string | undefined;
 
@@ -264,21 +263,6 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());
     await fulfillTicket(route, tickets.get(ticketId));
-  });
-  await page.route(/\/api\/as-tickets\/[^/]+\/remote-support-requests$/, async (route) => {
-    recordApiCall(apiCalls, route.request());
-    const match = new URL(route.request().url()).pathname.match(/\/api\/as-tickets\/([^/]+)\/remote-support-requests$/);
-    const ticketId = match?.[1] ?? beforeDecisionTicket.id;
-    remoteRequestPayload = route.request().postDataJSON() as Record<string, unknown>;
-    const current = tickets.get(ticketId) ?? beforeDecisionTicket;
-    const updated = {
-      ...current,
-      requestType: 'REMOTE_SUPPORT',
-      remoteSupportStatus: 'REQUESTED',
-      reviewStatus: 'REQUIRED'
-    };
-    tickets.set(ticketId, updated);
-    await fulfillTicket(route, updated);
   });
   await page.route(/\/api\/as-tickets\/[^/]+\/feedback$/, async (route) => {
     recordApiCall(apiCalls, route.request());
@@ -427,14 +411,13 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).toContainText('규칙 진단 완료');
   await expect(page.getByRole('main')).toContainText('검토 필요');
   await expect(page.getByRole('main')).toContainText('추가 정보 필요');
-  await expect(page.getByRole('main')).toContainText('GPU thermal throttling');
   await expect(page.getByRole('main')).toContainText('안전 안내');
   await expect(page.getByRole('main')).toContainText('고부하 작업을 중지');
-  await page.getByRole('button', { name: '원격지원 요청' }).click();
-  await expect(page.getByRole('main')).toContainText('원격지원 상태: 신청됨');
-  expect(remoteRequestPayload).toMatchObject({
-    reason: '원격지원으로 화면을 함께 확인하고 싶습니다.'
-  });
+  await expect(page.getByRole('main')).not.toContainText('담당자 확인 자료');
+  await expect(page.getByRole('main')).not.toContainText('[object Object]');
+  await expect(page.getByRole('main')).toContainText('지원 진행');
+  await expect(page.getByRole('main')).toContainText('담당자 확인 중');
+  await expect(page.getByRole('link', { name: '상담방 열기' })).toHaveAttribute('href', '/support/qa-ticket-before?chat=1');
   await page.getByRole('button', { name: '피드백 저장' }).click();
   await expect(page.getByRole('main')).toContainText('저장된 평점 5/5');
   expect(feedbackPayload).toMatchObject({
@@ -472,6 +455,10 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
 
   const ticketListPanel = page.getByTestId('admin-as-ticket-list-panel');
   const ticketSummaryPanel = page.getByTestId('admin-as-ticket-summary-panel');
+  await expect(ticketListPanel).toContainText('그래픽 장치 오류');
+  await expect(ticketSummaryPanel).toContainText('최근 접수');
+  await expect(ticketSummaryPanel.getByRole('link', { name: '상세 보기', exact: true })).toHaveAttribute('href', '/admin/as-tickets/qa-ticket-code43');
+  await expect(ticketSummaryPanel).not.toContainText('ticketId');
   for (const width of [1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     const listBox = await ticketListPanel.boundingBox();
