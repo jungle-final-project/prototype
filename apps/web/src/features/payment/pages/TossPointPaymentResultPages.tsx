@@ -56,7 +56,7 @@ export function TossPointPaymentFailPage() {
   const [searchParams] = useSearchParams();
   const message = searchParams.get('message') || '토스 결제가 취소되었거나 인증을 완료하지 못했습니다.';
 
-  return <ResultState type="error" title="토스 결제가 완료되지 않았습니다" body={`${message} 포인트는 차감되지 않았습니다.`} requestId={requestId} />;
+  return <ResultState type="error" title="결제가 완료되지 않았습니다" body={`${message} 포인트는 차감되지 않았습니다.`} requestId={requestId} />;
 }
 
 function validateTossResult(requestId: string | undefined, expectedAmount: number | undefined, searchParams: URLSearchParams) {
