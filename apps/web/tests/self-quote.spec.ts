@@ -1264,10 +1264,10 @@ test('suppresses same-tool insight wording when an edge reason already covers th
   await popover.getByRole('button', { name: '문제 사유 닫기' }).click();
   await expect(popover).toHaveCount(0);
 
-  // 문제 배너에도 같은 원칙 — 엣지 행(수치문)과 power 인사이트 행만 남는다.
+  // 큰 문제 배너는 FAIL만 집계하되, 상세 모달에는 함께 발생한 WARN 근거도 남는다.
   const banner = page.getByTestId('slot-board-problem-banner');
-  await expect(banner).toContainText('호환 불가 1건');
-  await expect(banner).toContainText('주의 필요 1건');
+  await expect(banner).toContainText('호환 불가 건수가 1건 있습니다');
+  await expect(banner).not.toContainText('주의 필요');
   await banner.click();
   const problemList = page.getByTestId('slot-board-problem-list');
   await expect(problemList).toContainText(edgeSummary);
@@ -2220,54 +2220,17 @@ test('shows graph edge labels on the fallback topology relationships', async ({ 
   await expect(page.getByTestId('relation-map-node-CPU')).toBeVisible();
   await expect(page.locator('[data-testid^="relation-map-node-"]')).toHaveCount(8);
   await expect(page.getByTestId('relation-map-edges')).toBeVisible();
-  const relationMapProblemBanner = page.getByTestId('slot-board-problem-banner');
-  await expect(relationMapProblemBanner).toBeVisible();
+  // WARN 관계는 관계선과 노드에 남지만, 사용 가능한 견적에 큰 호환 불가 창을 띄우지 않는다.
+  await expect(page.getByTestId('slot-board-problem-banner')).toHaveCount(0);
+  await expect(page.getByTestId('slot-board-status-region')).toHaveCount(0);
+  await expect(page.locator('[data-testid^="relation-map-node-"][data-status="WARN"]').first()).toBeVisible();
   await expect(page.getByTestId('relation-map-bottom-banner')).toHaveCount(0);
-  const relationMapStatusRegion = page.getByTestId('slot-board-status-region');
-  await expect(relationMapStatusRegion).toHaveAttribute('data-placement', 'overlay');
-  // 헤더 제거 리디자인: 문제 칩은 보드 스테이지 좌상단 공용 스트립 소속 — 관계도에서도 판 상단 영역에 떠 있다.
-  await expect.poll(async () => relationMapStatusRegion.evaluate((node) => (
-    Boolean(node.parentElement?.closest('[data-testid="slot-board-widget"]'))
-  ))).toBe(true);
-  await expect.poll(async () => {
-    const [statusBox, boardBox] = await Promise.all([
-      relationMapStatusRegion.boundingBox(),
-      page.getByTestId('relation-map-frame').boundingBox()
-    ]);
-    return Boolean(
-      statusBox
-      && boardBox
-      && statusBox.y >= boardBox.y - 24
-      && statusBox.y + statusBox.height <= boardBox.y + boardBox.height
-      && statusBox.y <= boardBox.y + boardBox.height * 0.24
-    );
-  }).toBe(true);
   const relationMapLegend = page.getByTestId('slot-board-legend');
   await expect(relationMapLegend).toBeVisible();
   await expect(relationMapLegend).toContainText('정상');
   await expect(relationMapLegend).toContainText('주의');
   await expect(relationMapLegend).toContainText('불가');
   await expect(relationMapLegend).toContainText('대기');
-  await expect.poll(async () => {
-    const [bannerBox, legendBox] = await Promise.all([
-      relationMapProblemBanner.boundingBox(),
-      relationMapLegend.boundingBox()
-    ]);
-    return Boolean(bannerBox && legendBox && legendBox.y >= bannerBox.y + bannerBox.height + 12);
-  }).toBe(true);
-  const legendBoxBeforeExpand = await relationMapLegend.boundingBox();
-  if (!legendBoxBeforeExpand) {
-    throw new Error('relation map legend bounding box is missing before expanding the problem list');
-  }
-  await relationMapProblemBanner.click();
-  await expect(page.getByTestId('slot-board-problem-list')).toBeVisible();
-  await expect.poll(async () => {
-    const legendBoxAfterExpand = await relationMapLegend.boundingBox();
-    return legendBoxAfterExpand ? Math.abs(legendBoxAfterExpand.y - legendBoxBeforeExpand.y) : Number.POSITIVE_INFINITY;
-  }).toBeLessThanOrEqual(1);
-  // 리디자인: 문제 목록은 모달이라 열린 채로는 뒤 조작을 막는다 — 확인 후 닫고 진행.
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('slot-board-problem-list')).toHaveCount(0);
   const relationMapFitsBoard = await page.getByTestId('relation-map-stage').evaluate((stage) => {
     const board = stage.closest('[data-testid="slot-board"]');
     if (!(board instanceof HTMLElement)) return false;
@@ -2524,7 +2487,7 @@ test('submits the server-authoritative score explanation and renders the assessm
   await expect(page.getByTestId('ai-build-assessment')).not.toContainText('성능 430');
 });
 
-test('shows the measured fit reason in the board banner and sends the same Tool focus to AI', async ({ page }) => {
+test('keeps the measured WARN fit reason in slot details and sends the same Tool focus to AI', async ({ page }) => {
   await loginAsUser(page);
   await page.addInitScript(() => {
     localStorage.setItem('buildgraph.authUser', JSON.stringify({
@@ -2592,20 +2555,20 @@ test('shows the measured fit reason in the board banner and sends the same Tool 
 
   await page.goto('/self-quote');
 
-  const banner = page.getByTestId('slot-board-problem-banner');
-  // \uCE69\uC740 \uAC74\uC218 \uB098\uC5F4\uC774 \uC544\uB2C8\uB77C \uBB38\uC7A5\uC73C\uB85C \uB9D0\uD55C\uB2E4 \u2014 \uD45C\uC9C0\uD310\uCC98\uB7FC \uC77D\uD600 \uADF8\uB0E5 \uC9C0\uB098\uCE58\uB294 \uAC83\uC744 \uB9C9\uB294\uB2E4.
-  await expect(banner).toContainText('\uC8FC\uC758 \uD544\uC694 \uAC74\uC218\uAC00 2\uAC74 \uC788\uC2B5\uB2C8\uB2E4');
-  await expect(banner).not.toHaveText('높이 157mm');
-  await banner.click();
-  const problemList = page.getByTestId('slot-board-problem-list');
-  const fitProblem = problemList.locator('li').filter({ hasText: fitSummary });
-  await expect(fitProblem).toContainText(fitSummary);
-  await fitProblem.getByTestId('slot-problem-ai-explain').click();
+  // WARN-only는 큰 경고창을 만들지 않지만, 슬롯의 경고와 상세 사유·AI 설명은 그대로 제공한다.
+  await expect(page.getByTestId('slot-board-problem-banner')).toHaveCount(0);
+  const coolerArea = page.getByTestId('slot-fused-area-COOLER');
+  await expect(page.getByTestId('slot-fused-area-wrap-COOLER')).toHaveAttribute('data-status', 'WARN');
+  await coolerArea.click();
+  const problemPopover = page.getByTestId('slot-problem-popover');
+  await expect(problemPopover).toContainText(fitSummary);
+  await problemPopover.getByTestId('slot-problem-ai-explain').click();
 
 
   await expect.poll(() => chatRequest['assessmentContext']).toEqual({
     source: 'QUOTE_DRAFT_CURRENT',
     focusType: 'ISSUE',
+    category: 'COOLER',
     tool: 'size'
   });
 
@@ -2813,6 +2776,51 @@ test('does not reserve a board status row when the graph has no warning or failu
 
   await expect(page.getByTestId('slot-board-status-region')).toHaveCount(0);
   await expect(page.getByTestId('slot-board')).toBeVisible();
+});
+
+test('closes the open FAIL problem modal when the refreshed graph becomes WARN-only', async ({ page }) => {
+  await loginAsUser(page);
+  let hasFail = true;
+  let draft = fullDraft;
+
+  await page.route('**/api/quote-drafts/current**', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      hasFail = false;
+      const items = fullDraftItems.filter((item) => item.category !== 'GPU');
+      draft = {
+        ...fullDraft,
+        items,
+        totalPrice: items.reduce((sum, item) => sum + item.lineTotal, 0),
+        itemCount: items.reduce((sum, item) => sum + item.quantity, 0)
+      };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
+  });
+  await page.route('**/api/build-graphs/resolve', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(hasFail ? problemGraphResponse() : buildGraphResponse())
+    });
+  });
+  await page.route('**/api/parts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], page: 0, size: 20, total: 0 }) });
+  });
+
+  await page.goto('/self-quote');
+  await page.getByRole('button', { name: '실장도 보기' }).click();
+  await page.getByTestId('slot-board-problem-banner').click();
+  await expect(page.getByTestId('slot-board-problem-list')).toBeVisible();
+
+  // 열린 모달이 포인터 입력을 막고 있어도 실제 mutation 완료에 따른 graph 갱신을 재현한다.
+  const removeGpuButton = page.getByRole('button', { name: '풀보드 RTX GPU 견적에서 제거' });
+  await expect(removeGpuButton).toBeAttached();
+  await removeGpuButton.evaluate((button: HTMLButtonElement) => button.click());
+
+  await expect.poll(() => hasFail).toBe(false);
+  await expect(page.getByTestId('slot-board-problem-list')).toHaveCount(0);
+  await expect(page.getByTestId('slot-board-problem-banner')).toHaveCount(0);
+  await expect(page.getByTestId('slot-PSU')).toHaveAttribute('data-status', 'WARN');
 });
 
 test('shows game FPS reference in the performance panel with game and resolution selectors', async ({ page }) => {
@@ -4010,6 +4018,9 @@ test('keeps purchase enabled when the current quote has only WARN issues', async
   const psuSlot = page.getByTestId('slot-PSU');
   await expect(psuSlot).toHaveAttribute('data-status', 'WARN');
   await expect(psuSlot.getByText('간섭 주의')).toBeVisible();
+  await expect(page.getByTestId('slot-board-problem-banner')).toHaveCount(0);
+  await psuSlot.click();
+  await expect(page.getByTestId('slot-problem-popover')).toBeVisible();
   await expect(page.getByTestId('quote-checkout-actions').getByRole('link', { name: '구매하기' })).toHaveAttribute('href', '/checkout');
 });
 

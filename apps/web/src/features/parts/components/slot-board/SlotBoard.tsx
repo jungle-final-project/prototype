@@ -182,7 +182,7 @@ export function SlotBoard({
     >
       <div data-testid="slot-board-body-stage" className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* 헤더 밴드 제거 리디자인: 제목 칸을 없애고 판 전체를 시각화에 쓴다.
-            컨트롤은 판 위 플로팅 — 좌: 문제 칩(클릭=모달)·다음 가이드·AI 강조, 우: 3D 정보 스위치·보기 전환.
+            컨트롤은 판 위 플로팅 — 좌: FAIL 문제 칩(클릭=모달)·다음 가이드·AI 강조, 우: 3D 정보 스위치·보기 전환.
             모바일은 카드 목록을 가리지 않게 정적 행으로 폴백. */}
         <div className="z-50 flex items-start justify-between gap-2 px-3 py-2 lg:pointer-events-none lg:absolute lg:inset-x-0 lg:top-0 lg:z-[60] lg:py-0 lg:pt-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2 lg:pointer-events-auto">
@@ -2056,8 +2056,9 @@ type SlotBoardBannerProblem = {
 };
 
 /**
- * 좌상단 문제 칩 + 클릭 모달 — 구 아코디언 배너(SlotBoardProblemBanner)의 대체.
- * 칩은 건수만(호환 불가 N건 · 주의 필요 M건), 상세는 모달이 담당한다.
+ * 좌상단 FAIL 문제 칩 + 클릭 모달 — 구 아코디언 배너(SlotBoardProblemBanner)의 대체.
+ * WARN-only 견적은 개별 슬롯과 관계선에만 표시하고, FAIL이 있을 때만 큰 칩을 노출한다.
+ * 칩은 FAIL 건수만 표시하지만 모달은 함께 발생한 WARN 상세도 보존한다.
  * 항목 클릭 = 해당 슬롯으로 점프, '왜 안 되나요' = AI 설명(전파 차단으로 점프와 분리).
  */
 function SlotBoardProblemChip({
@@ -2070,12 +2071,13 @@ function SlotBoardProblemChip({
   onJumpToSlot?: (category: PartCategory) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
 
   useEffect(() => {
-    if (problems.length === 0) {
+    if (failCount === 0) {
       setIsOpen(false);
     }
-  }, [problems.length]);
+  }, [failCount]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -2090,31 +2092,18 @@ function SlotBoardProblemChip({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
 
-  if (problems.length === 0) {
+  if (failCount === 0) {
     return null;
   }
 
-  const failCount = problems.filter((problem) => problem.status === 'FAIL').length;
-  const warnCount = problems.length - failCount;
-  const overallStatus: SlotProblemStatus = failCount > 0 ? 'FAIL' : 'WARN';
-  // 건수만 나열하면 표지판처럼 읽혀 그냥 지나친다 — 문장으로 말해 준다.
-  // 둘 다 있을 때는 "…가 …건 있습니다"를 두 번 반복하지 않고 한 문장으로 묶는다.
-  const countsLabel = (
-    <span>
-      {failCount > 0 && warnCount > 0
-        ? <>호환 불가 {failCount}건, 주의 필요 {warnCount}건이 있습니다</>
-        : failCount > 0
-          ? <>호환 불가 건수가 {failCount}건 있습니다</>
-          : <>주의 필요 건수가 {warnCount}건 있습니다</>}
-    </span>
-  );
+  const countsLabel = <span>호환 불가 건수가 {failCount}건 있습니다</span>;
 
   return (
     <div data-testid="slot-board-status-region" data-placement="overlay" className="relative shrink-0">
       <button
         type="button"
         data-testid="slot-board-problem-banner"
-        data-status={overallStatus}
+        data-status="FAIL"
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         onClick={() => setIsOpen(true)}
@@ -2123,14 +2112,10 @@ function SlotBoardProblemChip({
           // 두 단 크게, 테두리도 두 배로 준다. 작게 두면 판 위 다른 칩들과 구분이 안 된다.
           // 크기 기준은 하단 요약의 '호환 상태' 카드(211×51) — 판 위와 아래에서 같은 무게로 읽히게 맞춘다.
           'flex items-center gap-2 rounded-xl border-2 bg-white px-5 py-3.5 text-base font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-          overallStatus === 'FAIL'
-            ? 'slot-board-fail-banner-pulse border-red-500 text-red-600 shadow-[0_12px_26px_rgba(239,68,68,0.28)] hover:border-red-600 hover:bg-red-50 focus-visible:ring-red-300'
-            : 'border-amber-500 text-amber-700 shadow-[0_12px_26px_rgba(245,158,11,0.22)] hover:border-amber-600 hover:bg-amber-50 focus-visible:ring-amber-300'
+          'slot-board-fail-banner-pulse border-red-500 text-red-600 shadow-[0_12px_26px_rgba(239,68,68,0.28)] hover:border-red-600 hover:bg-red-50 focus-visible:ring-red-300'
         ].join(' ')}
       >
-        {overallStatus === 'FAIL'
-          ? <CircleX size={22} aria-hidden="true" className="shrink-0" />
-          : <AlertTriangle size={22} aria-hidden="true" className="shrink-0" />}
+        <CircleX size={22} aria-hidden="true" className="shrink-0" />
         {countsLabel}
       </button>
       {isOpen ? (
@@ -2143,21 +2128,13 @@ function SlotBoardProblemChip({
             className="absolute inset-0 cursor-default bg-slate-900/45"
           />
           <div
-            className={[
-              'relative w-full max-w-[576px] overflow-hidden rounded-xl border bg-white shadow-2xl',
-              overallStatus === 'FAIL' ? 'border-red-300' : 'border-amber-300'
-            ].join(' ')}
+            className="relative w-full max-w-[576px] overflow-hidden rounded-xl border border-red-300 bg-white shadow-2xl"
           >
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
               <span
-                className={[
-                  'inline-flex items-center gap-2 text-sm font-black',
-                  overallStatus === 'FAIL' ? 'text-red-600' : 'text-amber-700'
-                ].join(' ')}
+                className="inline-flex items-center gap-2 text-sm font-black text-red-600"
               >
-                {overallStatus === 'FAIL'
-                  ? <CircleX size={17} aria-hidden="true" className="shrink-0" />
-                  : <AlertTriangle size={17} aria-hidden="true" className="shrink-0" />}
+                <CircleX size={17} aria-hidden="true" className="shrink-0" />
                 {countsLabel}
               </span>
               <button
