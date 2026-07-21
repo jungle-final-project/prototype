@@ -48,6 +48,8 @@ vi .env.prod
 - `BUILDGRAPH_CORS_ALLOWED_ORIGINS`: CloudFront 생성 전에는 임시로 `http://<EC2_PUBLIC_DNS>`를 넣고, CloudFront 생성 후 `https://<distribution>.cloudfront.net`으로 교체
 - `OPENAI_API_KEY`, `NAVER_SEARCH_CLIENT_ID`, `NAVER_SEARCH_CLIENT_SECRET`: 실제 외부 연동이 필요할 때만 입력
 
+기사 프로필 이미지는 기본적으로 API 컨테이너의 `TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH=/data/technician-profile-images`에 저장되고, `compose.prod.yaml`의 named volume `technician-profile-image-data`가 이 경로를 보존한다. 같은 EC2에서 컨테이너를 재생성하거나 이미지를 다시 빌드해도 파일은 유지된다. EC2 인스턴스 교체나 다중 인스턴스 배포까지 안전하게 하려면 이후 S3 또는 EFS 저장소로 전환한다.
+
 ## 수동 배포
 
 ```bash

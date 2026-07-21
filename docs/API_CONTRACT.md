@@ -385,6 +385,7 @@ Google OAuth 정책:
 - 같은 사용자와 `Idempotency-Key`는 하나의 요청만 만들며 fingerprint가 다르면 409다.
 - 신규 요청에는 ACTIVE, APPROVED, non-deleted, 표준 AS 동의, 지역·서비스 일치 `INTERNAL` 기사 제안을 최대 2건 자동 생성한다. 대상이 없으면 `REQUESTED`로 남긴다.
 - `AssemblyOfferDto`는 기사 식별 정보로 `technicianName`, `initials`, nullable `profileImageUrl`을 제공한다. `profileImageUrl`은 HTTP(S) URL 또는 `/api/technician-profile-images/{fileName}` 형식의 업로드된 이미지 경로만 허용하며, 클라이언트는 사진이 없거나 로드에 실패하면 이니셜을 표시한다.
+- 업로드된 기사 프로필 이미지 파일은 `TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH`에 저장하고 DB에는 이미지 URL 문자열만 저장한다. Docker Compose 배포에서는 named volume `technician-profile-image-data`가 이 경로를 보존한다.
 - 승인된 `EXTERNAL` 기사는 지역·서비스 방식이 맞고 외부 `AVAILABLE` 제안이 3건 미만인 요청에 직접 제안할 수 있다. 기사당 요청별 1건이며 철회 후 재입찰은 허용하지 않는다.
 - 외부 기사 제안은 별도 관리자 승인을 거치지 않고 사용자 제안 비교 화면에 즉시 노출된다. 사용자가 하나를 선택하면 나머지 내부·외부 제안은 `EXPIRED`가 된다.
 - 사용자의 `/my/assembly-requests` 목록과 진행 상세는 열린 요청을 polling한다. `OFFERED` 상태에는 `/checkout/offers/{id}` 진입 동선을 제공해 화면을 나갔다 돌아와도 기사 제안을 비교·선택할 수 있다.

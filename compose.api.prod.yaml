@@ -60,6 +60,7 @@ services:
       SUPPORT_CHAT_WS_TICKET_TTL_SECONDS: ${SUPPORT_CHAT_WS_TICKET_TTL_SECONDS:-60}
       AGENT_RUNNER_MODE: ${AGENT_RUNNER_MODE:-deterministic}
       AGENT_LOG_STORAGE_ROOT: ${AGENT_LOG_STORAGE_ROOT:-/data/agent-logs}
+      TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH: ${TECHNICIAN_PROFILE_IMAGE_STORAGE_PATH:-/data/technician-profile-images}
       AGENT_DEMO_ACTIVATION_TOKEN: ${AGENT_DEMO_ACTIVATION_TOKEN:-}
       PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED: ${PART_MANUFACTURER_RELEASE_DEMO_FEED_ENABLED:-false}
       DEMO_FREEZE_MUTATIONS: ${DEMO_FREEZE_MUTATIONS:-false}
@@ -134,6 +135,7 @@ services:
       - "8080"
     volumes:
       - agent-log-data:/data/agent-logs
+      - technician-profile-image-data:/data/technician-profile-images
     depends_on:
       xgb-reranker:
         condition: service_healthy
@@ -166,3 +168,4 @@ services:
 volumes:
   recommendation-models:
   agent-log-data:
+  technician-profile-image-data:

@@ -732,7 +732,7 @@ ASG 배포는 다음 흐름을 목표로 한다.
 
 ### 12.3 Local artifact
 
-`agent-log-data`, `recommendation-models` 같은 local Docker volume은 instance replacement 시 함께 삭제되고 다른 instance가 볼 수 없다. 공유 storage 또는 immutable artifact 계약이 끝나기 전에는 다중 인스턴스 안전 조건을 통과한 것으로 보지 않는다.
+`agent-log-data`, `recommendation-models`, `technician-profile-image-data` 같은 local Docker volume은 instance replacement 시 함께 삭제되고 다른 instance가 볼 수 없다. 공유 storage 또는 immutable artifact 계약이 끝나기 전에는 다중 인스턴스 안전 조건을 통과한 것으로 보지 않는다.
 
 ### 12.4 Scheduler
 
