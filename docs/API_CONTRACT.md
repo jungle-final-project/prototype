@@ -358,12 +358,15 @@ Google OAuth 정책:
 | `POST` | `/api/assembly-requests/{id}/cancel` | USER | 2번 | `{ "reason":"일정 변경" }` | `status=CANCELLED`, 결제 후면 `REFUNDED` | 조립 중개 전체 table |
 | `POST` | `/api/technician/applications` | USER | 2번 | 기본 프로필, 지역, 서비스 방식, 전문 분야, 요금, 소요일, 표준 AS 동의 | `verificationStatus=PENDING` 기사 프로필 | `technicians` |
 | `GET/PATCH` | `/api/technician/profile` | USER | 2번 | 본인 외부 기사 프로필 조회·보정. GET은 미신청 사용자에게 오류 대신 `204 No Content` 반환 | `TechnicianDto` 또는 `204` | `technicians` |
+| `POST` | `/api/technician/profile-image` | USER | 2번 | `multipart/form-data` `{ file }`, JPG/PNG/WebP 최대 1MiB | 업로드된 `{ profileImageUrl, fileName, fileSize, contentType }` | 서버 파일 저장소 |
+| `GET` | `/api/technician-profile-images/{fileName}` | 공개 | 2번 | - | 캐시 가능한 이미지 바이너리 | 서버 파일 저장소 |
 | `GET` | `/api/technician/assembly-requests` | 승인 기사 USER | 2번 | `?scope=OPEN|SELECTED&page=0&size=20` | 익명 공개 요청 또는 낙찰 작업 목록 | `assembly_requests`, `assembly_offers`, `assembly_payments` |
 | `GET` | `/api/technician/assembly-requests/{id}` | 승인 기사 USER | 2번 | - | 익명 요청 상세. 본인 제안 선택 + 가상 결제 완료 후에만 연락처·주소·메모 포함 | 조립 중개 전체 table |
 | `POST` | `/api/technician/assembly-requests/{id}/offers` | 승인 기사 USER | 2번 | 부품 확인가, 조립비, 배송비, 소요일, 재고 문구, 메모 | 본인 `AVAILABLE` 제안을 포함한 익명 요청 | `assembly_offers`, `assembly_offer_activities` |
 | `PATCH` | `/api/technician/offers/{id}` | 제안 소유 기사 USER | 2번 | 가격·소요일·재고 문구 보정 | `AVAILABLE` 본인 제안 | `assembly_offers`, `assembly_offer_activities` |
 | `POST` | `/api/technician/offers/{id}/withdraw` | 제안 소유 기사 USER | 2번 | `{ "reason":"일정 불가" }` | `WITHDRAWN` 본인 제안 | `assembly_offers`, `assembly_offer_activities` |
 | `GET/POST` | `/api/admin/technicians` | ADMIN | 2번 | `providerType`, `verificationStatus` 필터 또는 내부 기사 생성 | `TechnicianPage` / `TechnicianDto` | `technicians`, `admin_audit_logs` |
+| `POST` | `/api/admin/technicians/profile-image` | ADMIN | 2번 | `multipart/form-data` `{ file }`, JPG/PNG/WebP 최대 1MiB | 업로드된 `{ profileImageUrl, fileName, fileSize, contentType }` | 서버 파일 저장소 |
 | `GET/PATCH/DELETE` | `/api/admin/technicians/{id}` | ADMIN | 2번 | 기사 수정 | `TechnicianDto` 또는 soft delete 결과 | `technicians`, `admin_audit_logs` |
 | `POST` | `/api/admin/technicians/{id}/restore` | ADMIN | 2번 | - | 복구 후 `status=INACTIVE` | `technicians`, `admin_audit_logs` |
 | `POST` | `/api/admin/technicians/{id}/approve` | ADMIN | 2번 | - | 외부 기사 `APPROVED/ACTIVE` | `technicians`, `admin_audit_logs` |
@@ -381,6 +384,7 @@ Google OAuth 정책:
 - `compatibility`, `power`, `size` Tool FAIL이나 graph FAIL이 있으면 아무 row도 만들지 않고 `409 CONFLICT_STATE`를 반환한다.
 - 같은 사용자와 `Idempotency-Key`는 하나의 요청만 만들며 fingerprint가 다르면 409다.
 - 신규 요청에는 ACTIVE, APPROVED, non-deleted, 표준 AS 동의, 지역·서비스 일치 `INTERNAL` 기사 제안을 최대 2건 자동 생성한다. 대상이 없으면 `REQUESTED`로 남긴다.
+- `AssemblyOfferDto`는 기사 식별 정보로 `technicianName`, `initials`, nullable `profileImageUrl`을 제공한다. `profileImageUrl`은 HTTP(S) URL 또는 `/api/technician-profile-images/{fileName}` 형식의 업로드된 이미지 경로만 허용하며, 클라이언트는 사진이 없거나 로드에 실패하면 이니셜을 표시한다.
 - 승인된 `EXTERNAL` 기사는 지역·서비스 방식이 맞고 외부 `AVAILABLE` 제안이 3건 미만인 요청에 직접 제안할 수 있다. 기사당 요청별 1건이며 철회 후 재입찰은 허용하지 않는다.
 - 외부 기사 제안은 별도 관리자 승인을 거치지 않고 사용자 제안 비교 화면에 즉시 노출된다. 사용자가 하나를 선택하면 나머지 내부·외부 제안은 `EXPIRED`가 된다.
 - 사용자의 `/my/assembly-requests` 목록과 진행 상세는 열린 요청을 polling한다. `OFFERED` 상태에는 `/checkout/offers/{id}` 진입 동선을 제공해 화면을 나갔다 돌아와도 기사 제안을 비교·선택할 수 있다.

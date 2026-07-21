@@ -27,6 +27,7 @@ import {
   type AssemblyRequestStatus,
   type AssemblyRequestSummary
 } from '../assemblyApi';
+import { resolveProfileImageSrc } from '../profileImageFile';
 
 const STATUS_LABELS: Record<AssemblyRequestStatus, string> = {
   REQUESTED: '기사 제안 대기',
@@ -158,7 +159,13 @@ export function CheckoutOffersPage() {
               <div className="border-t border-commerce-line pt-4">
                 {selectedOffer ? (
                   <div className="space-y-3">
-                    <div><div className="text-xs font-bold text-slate-500">선택 기사</div><div className="mt-1 text-lg font-black text-commerce-ink">{selectedOffer.technicianName}</div></div>
+                    <div className="flex items-center gap-3">
+                      <TechnicianAvatar offer={selectedOffer} compact />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-500">선택 기사</div>
+                        <div className="mt-1 truncate text-lg font-black text-commerce-ink">{selectedOffer.technicianName}</div>
+                      </div>
+                    </div>
                     <SummaryRow label="배송비" value={formatDeliveryFee(selectedOffer.deliveryFee)} />
                     <SummaryRow label="최종 제안가" value={`${selectedOffer.finalPrice.toLocaleString()}원`} strong />
                   </div>
@@ -310,7 +317,7 @@ function AssemblyOfferCard({ offer, serviceType, selected, selectable, onSelect 
     <article className={`rounded-lg border bg-white p-5 shadow-sm transition ${selected ? 'border-[#de6c2d] ring-2 ring-[#f8d7c4]' : offer.status === 'WITHDRAWN' || offer.status === 'EXPIRED' ? 'border-slate-200 opacity-55' : 'border-commerce-line'}`}>
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-[#de6c2d] text-sm font-black text-white">{offer.initials}</div>
+          <TechnicianAvatar offer={offer} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-black text-commerce-ink">{offer.technicianName}</h2><span className={`rounded px-2 py-1 text-[11px] font-black ${offer.providerType === 'EXTERNAL' ? 'bg-blue-50 text-blue-800' : 'bg-slate-100 text-commerce-ink'}`}>{offer.providerType === 'EXTERNAL' ? '외부 파트너' : 'Dazzajo 기사'}</span>{offer.verified ? <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-800"><BadgeCheck size={12} /> 검증 완료</span> : null}<span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-800"><ShieldCheck size={12} /> 표준 AS 적용</span>{offer.status !== 'AVAILABLE' ? <StatusBadge status={offer.status} /> : null}</div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1 text-amber-600"><Star size={13} fill="currentColor" /> {Number(offer.rating).toFixed(1)}</span><span>완료 {offer.completedJobs}건</span><span>평균 응답 {offer.responseMinutes}분</span>{specialty ? <span>{specialty}</span> : null}</div>
@@ -321,6 +328,25 @@ function AssemblyOfferCard({ offer, serviceType, selected, selectable, onSelect 
       <div className="mt-5 grid gap-3 border-t border-commerce-line pt-4 sm:grid-cols-2 lg:grid-cols-5"><OfferMetric label="부품 확인가" value={serviceType === 'FULL_SERVICE' ? `${offer.confirmedPartsPrice.toLocaleString()}원` : '사용자 준비'} /><OfferMetric label="조립비" value={`${offer.assemblyFee.toLocaleString()}원`} /><OfferMetric label="배송비" value={formatDeliveryFee(offer.deliveryFee)} /><OfferMetric label="완료 예상" value={`${offer.leadTimeDays}일`} /><OfferMetric label="최종 제안가" value={`${offer.finalPrice.toLocaleString()}원`} accent /></div>
       <div className="mt-3 flex items-center gap-2 text-xs font-bold text-emerald-700"><BadgeCheck size={14} /> {offer.stockStatus}</div>
     </article>
+  );
+}
+
+function TechnicianAvatar({ offer, compact = false }: { offer: Pick<AssemblyOffer, 'initials' | 'profileImageUrl' | 'technicianName'>; compact?: boolean }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageUrl = resolveProfileImageSrc(offer.profileImageUrl);
+  useEffect(() => setImageFailed(false), [imageUrl]);
+  const sizeClass = compact ? 'h-10 w-10 text-xs' : 'h-14 w-14 text-sm';
+  return (
+    <div className={`grid ${sizeClass} shrink-0 place-items-center overflow-hidden rounded-md bg-[#de6c2d] font-black text-white`}>
+      {imageUrl && !imageFailed ? (
+        <img
+          src={imageUrl}
+          alt={`${offer.technicianName} 기사 프로필`}
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : offer.initials}
+    </div>
   );
 }
 

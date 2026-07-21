@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class TechnicianMarketplaceService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int PROFILE_IMAGE_TEXT_MAX = 2_000;
     private static final Set<String> REGIONS = Set.of("서울", "경기", "인천", "대전", "대구", "부산", "광주");
     private static final Set<String> SERVICE_TYPES = Set.of("FULL_SERVICE", "ASSEMBLY_ONLY");
     private static final Set<String> SCOPES = Set.of("OPEN", "SELECTED");
@@ -30,6 +31,10 @@ public class TechnicianMarketplaceService {
     public TechnicianMarketplaceService(JdbcTemplate jdbcTemplate, CurrentUserService currentUserService) {
         this.jdbcTemplate = jdbcTemplate;
         this.currentUserService = currentUserService;
+    }
+
+    public void requireProfileImageUpload(String authorization) {
+        requireRegularUser(authorization);
     }
 
     @Transactional
@@ -440,7 +445,9 @@ public class TechnicianMarketplaceService {
         String initials = stringValue(body, existing, "initials", "initials");
         if (initials == null || initials.isBlank()) initials = displayName.substring(0, 1);
         initials = required(initials, 12, "이니셜은 12자 이하여야 합니다.");
-        String profileImageUrl = optionalValue(body, existing, "profileImageUrl", "profile_image_url", 2000);
+        String profileImageUrl = body.containsKey("profileImageUrl")
+                ? profileImageValue(body.get("profileImageUrl"))
+                : existing == null ? null : DbValueMapper.string(existing, "profile_image_url");
         String businessName = optionalValue(body, existing, "businessName", "business_name", 160);
         String contactPhone = phone(body.containsKey("contactPhone") ? body.get("contactPhone") : existing == null ? null : existing.get("contact_phone"));
         List<String> regions = listValue(body, existing, "serviceRegions", "service_regions");
@@ -560,6 +567,7 @@ public class TechnicianMarketplaceService {
         return MockData.map(
                 "displayName", DbValueMapper.string(row, "display_name"),
                 "initials", DbValueMapper.string(row, "initials"),
+                "profileImageUrl", DbValueMapper.string(row, "profile_image_url"),
                 "rating", row.get("rating"),
                 "completedJobs", DbValueMapper.integer(row, "completed_jobs"),
                 "avgResponseMinutes", DbValueMapper.integer(row, "avg_response_minutes"),
@@ -612,6 +620,17 @@ public class TechnicianMarketplaceService {
         if (text.isBlank()) return null;
         if (text.length() > max) throw validation("입력값이 너무 깁니다.");
         return text;
+    }
+
+    private static String profileImageValue(Object value) {
+        String text = optional(value, PROFILE_IMAGE_TEXT_MAX);
+        if (text == null) return null;
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")
+                || lower.startsWith("/api/technician-profile-images/")) {
+            return text;
+        }
+        throw validation("프로필 이미지는 업로드된 이미지 경로 또는 HTTP(S) URL만 사용할 수 있습니다.");
     }
 
     private static String allowed(Object value, Set<String> allowed, String message) {

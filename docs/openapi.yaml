@@ -1464,6 +1464,67 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/technician/profile-image:
+    post:
+      summary: 본인 기사 프로필 이미지 업로드
+      description: JPG, PNG, WebP 파일을 최대 1MiB까지 업로드하고 프로필 저장에 사용할 이미지 경로를 반환한다.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: 업로드된 프로필 이미지 경로
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianProfileImageUploadResponse"
+        "400":
+          description: 이미지 파일 검증 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/technician-profile-images/{fileName}:
+    get:
+      summary: 기사 프로필 이미지 조회
+      description: 업로드된 기사 프로필 이미지를 캐시 가능한 공개 이미지 리소스로 반환한다.
+      security: []
+      parameters:
+        - in: path
+          name: fileName
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 프로필 이미지 바이너리
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: 프로필 이미지를 찾을 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/technician/assembly-requests:
     get:
       summary: 외부 기사 요청함 또는 낙찰 작업 목록
@@ -1632,6 +1693,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TechnicianDto"
+  /api/admin/technicians/profile-image:
+    post:
+      summary: 관리자 기사 프로필 이미지 업로드
+      description: 관리자가 기사 프로필에 연결할 JPG, PNG, WebP 이미지를 최대 1MiB까지 업로드한다.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: 업로드된 프로필 이미지 경로
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianProfileImageUploadResponse"
+        "400":
+          description: 이미지 파일 검증 실패
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/admin/technicians/{id}:
     get:
       summary: 관리자 기사 상세
@@ -8876,6 +8965,10 @@ components:
         technicianId: { type: string, format: uuid }
         technicianName: { type: string }
         initials: { type: string }
+        profileImageUrl:
+          type: string
+          nullable: true
+          description: HTTP(S) URL 또는 /api/technician-profile-images/{fileName} 형식의 업로드된 프로필 이미지 경로.
         rating: { type: number, format: double }
         completedJobs: { type: integer }
         responseMinutes: { type: integer }
@@ -8950,13 +9043,32 @@ components:
         leadTimeDays: { type: integer, minimum: 1 }
         stockStatus: { type: string }
         adminNote: { type: string, nullable: true }
+    TechnicianProfileImageUploadResponse:
+      type: object
+      required: [profileImageUrl, fileName, fileSize, contentType]
+      properties:
+        profileImageUrl:
+          type: string
+          example: /api/technician-profile-images/7f3b7bb3-60d6-48b0-a235-a3f648db8c89.jpg
+        fileName:
+          type: string
+          example: 7f3b7bb3-60d6-48b0-a235-a3f648db8c89.jpg
+        fileSize:
+          type: integer
+          format: int64
+        contentType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
     TechnicianMutationRequest:
       type: object
       required: [displayName, status, serviceRegions, serviceTypes, standardAsAccepted]
       properties:
         displayName: { type: string, maxLength: 120 }
         initials: { type: string, maxLength: 12 }
-        profileImageUrl: { type: string, nullable: true }
+        profileImageUrl:
+          type: string
+          nullable: true
+          description: HTTP(S) URL 또는 /api/technician-profile-images/{fileName} 형식의 업로드된 프로필 이미지 경로.
         status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
         serviceRegions: { type: array, items: { type: string } }
         serviceTypes: { type: array, items: { type: string, enum: [FULL_SERVICE, ASSEMBLY_ONLY] } }
@@ -8976,7 +9088,10 @@ components:
       properties:
         displayName: { type: string, maxLength: 120 }
         initials: { type: string, maxLength: 12 }
-        profileImageUrl: { type: string, nullable: true }
+        profileImageUrl:
+          type: string
+          nullable: true
+          description: HTTP(S) URL 또는 /api/technician-profile-images/{fileName} 형식의 업로드된 프로필 이미지 경로.
         businessName: { type: string, maxLength: 160, nullable: true }
         contactPhone: { type: string, maxLength: 40 }
         serviceRegions: { type: array, minItems: 1, items: { type: string } }
