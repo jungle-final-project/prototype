@@ -41,11 +41,19 @@ const STATUS_LABELS: Record<AssemblyRequestStatus, string> = {
 
 const LIVE_OFFER_STATUSES = new Set<AssemblyRequestStatus>(['REQUESTED', 'OFFERED']);
 const OFFER_LIST_REFETCH_INTERVAL_MS = 3000;
+type OfferSortKey = 'newest' | 'priceAsc' | 'leadTimeAsc' | 'ratingDesc';
+const OFFER_SORT_OPTIONS: Array<{ value: OfferSortKey; label: string }> = [
+  { value: 'newest', label: '최신순' },
+  { value: 'priceAsc', label: '낮은 가격순' },
+  { value: 'leadTimeAsc', label: '빠른 일정순' },
+  { value: 'ratingDesc', label: '평점 높은순' }
+];
 
 export function CheckoutOffersPage() {
   const navigate = useNavigate();
   const { requestId } = useParams();
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
+  const [offerSort, setOfferSort] = useState<OfferSortKey>('newest');
   const [newOfferNotice, setNewOfferNotice] = useState('');
   const previousAvailableCount = useRef<number | null>(null);
   const requestQuery = useQuery({
@@ -86,6 +94,7 @@ export function CheckoutOffersPage() {
   const activeOffers = request.offers.filter((offer) => ['AVAILABLE', 'SELECTED'].includes(offer.status));
   const internalOfferCount = activeOffers.filter((offer) => offer.providerType !== 'EXTERNAL').length;
   const externalOfferCount = activeOffers.filter((offer) => offer.providerType === 'EXTERNAL').length;
+  const sortedOffers = sortAssemblyOffers(request.offers, offerSort);
 
   return (
     <Screen>
@@ -101,6 +110,21 @@ export function CheckoutOffersPage() {
           <p className="mt-2 max-w-2xl break-keep text-sm leading-6 text-slate-600">기사별 부품 확인가, 조립비와 완료 일정을 비교한 뒤 한 건을 선택하세요.</p>
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-black"><span className="rounded bg-slate-100 px-2 py-1 text-commerce-ink">Dazzajo 기사 {internalOfferCount}/2</span><span className="rounded bg-blue-50 px-2 py-1 text-blue-800">외부 파트너 {externalOfferCount}/3</span></div>
         </div>
+        {request.offers.length > 1 ? (
+          <label className="flex min-h-10 w-full items-center justify-between gap-3 rounded-md border border-commerce-line bg-white px-3 text-sm font-black text-commerce-ink shadow-sm sm:w-auto sm:min-w-48">
+            <span className="shrink-0 text-xs text-slate-500">정렬</span>
+            <select
+              value={offerSort}
+              onChange={(event) => setOfferSort(event.target.value as OfferSortKey)}
+              className="min-w-0 flex-1 cursor-pointer bg-transparent text-right text-sm font-black outline-none"
+              aria-label="기사 제안 정렬"
+            >
+              {OFFER_SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </header>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -108,7 +132,7 @@ export function CheckoutOffersPage() {
           {newOfferNotice ? <StateMessage type="success" title="새 제안 도착" body={newOfferNotice} /> : null}
           {request.offers.length === 0 ? (
             <StateMessage type="info" title="기사 제안을 준비하고 있습니다" body="지역과 서비스 조건에 맞는 기사 제안이 등록되면 이 화면에서 바로 비교할 수 있습니다." />
-          ) : request.offers.map((offer) => (
+          ) : sortedOffers.map((offer) => (
             <AssemblyOfferCard
               key={offer.id}
               offer={offer}
@@ -348,6 +372,32 @@ function AssemblyHistoryCard({ request }: { request: AssemblyRequestSummary }) {
 
 function selectedOfferOf(request: AssemblyRequest) { return request.offers.find((offer) => offer.id === request.selectedOfferId || offer.status === 'SELECTED') ?? null; }
 function isLiveOfferStatus(status?: AssemblyRequestStatus) { return Boolean(status && LIVE_OFFER_STATUSES.has(status)); }
+function sortAssemblyOffers(offers: AssemblyOffer[], sortKey: OfferSortKey) {
+  return [...offers].sort((left, right) => {
+    const statusResult = offerStatusRank(left) - offerStatusRank(right);
+    if (statusResult !== 0) return statusResult;
+    if (sortKey === 'priceAsc') {
+      const priceResult = left.finalPrice - right.finalPrice;
+      if (priceResult !== 0) return priceResult;
+    }
+    if (sortKey === 'leadTimeAsc') {
+      const leadTimeResult = left.leadTimeDays - right.leadTimeDays;
+      if (leadTimeResult !== 0) return leadTimeResult;
+    }
+    if (sortKey === 'ratingDesc') {
+      const ratingResult = Number(right.rating) - Number(left.rating);
+      if (ratingResult !== 0) return ratingResult;
+      const completedResult = right.completedJobs - left.completedJobs;
+      if (completedResult !== 0) return completedResult;
+    }
+    return offerCreatedTime(right) - offerCreatedTime(left) || left.id.localeCompare(right.id);
+  });
+}
+function offerStatusRank(offer: AssemblyOffer) { return offer.status === 'SELECTED' ? 0 : offer.status === 'AVAILABLE' ? 1 : 2; }
+function offerCreatedTime(offer: AssemblyOffer) {
+  const time = offer.createdAt ? new Date(offer.createdAt).getTime() : 0;
+  return Number.isNaN(time) ? 0 : time;
+}
 function EmptySelection() { return <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-bold text-slate-500">비교할 기사 제안을 선택하세요.</div>; }
 function MissingAssemblyRequest() { return <StateWrap title="조립 요청 정보가 없습니다" body="현재 견적으로 조립 요청서를 먼저 작성해 주세요." action="/checkout" actionLabel="조립 요청서 작성" />; }
 function AssemblyLoading() { return <Screen><div className="rounded-lg border border-commerce-line bg-white p-8 text-sm font-bold text-slate-500">조립 요청 정보를 불러오는 중입니다.</div></Screen>; }
