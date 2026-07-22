@@ -484,6 +484,84 @@ class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
             self.assertEqual([detail], [frame["detail"] for frame in status_frames])
             self.assertEqual([True], ready)
 
+    def test_start_status_waits_for_server_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+
+            class AckingSocket(FakeSocket):
+                def send(self, payload):
+                    super().send(payload)
+                    frame = self.sent[-1]
+                    if frame.get("type") == "DIAGNOSIS_STATUS":
+                        client._on_message(self, json.dumps({
+                            "type": "DIAGNOSIS_STATUS_ACK",
+                            "detail": {"eventId": frame["detail"]["eventId"]},
+                        }))
+
+            socket = AckingSocket()
+            client._socket = socket
+            client.authenticated = True
+            client._set_state("IDLE")
+            detail = {
+                "diagnosisId": "diagnosis-1",
+                "eventId": "event-start",
+                "eventType": "DIAGNOSIS_STARTED",
+            }
+
+            self.assertTrue(client.send_diagnosis_status_and_wait_for_ack(detail, 0.2))
+            self.assertNotIn("event-start", client._status_frames)
+
+    def test_start_status_timeout_does_not_leave_replayable_frame(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            client._socket = FakeSocket()
+            client.authenticated = True
+            client._set_state("IDLE")
+            detail = {
+                "diagnosisId": "diagnosis-1",
+                "eventId": "event-start",
+                "eventType": "DIAGNOSIS_STARTED",
+            }
+
+            self.assertFalse(client.send_diagnosis_status_and_wait_for_ack(detail, 0.01))
+            self.assertNotIn("event-start", client._status_frames)
+            self.assertNotIn("event-start", client._pending_status_event_ids)
+
+    def test_terminal_status_timeout_remains_available_for_reconnect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgentDiagnosisWebSocketClient(
+                "http://localhost:8080",
+                "secret",
+                DiagnosisRequestProcessor(DiagnosisSessionStore(Path(directory) / "state.json")),
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            client._socket = FakeSocket()
+            client.authenticated = True
+            client._set_state("RUNNING")
+            detail = {
+                "diagnosisId": "diagnosis-1",
+                "eventId": "event-complete",
+                "eventType": "DIAGNOSIS_COMPLETED",
+            }
+
+            self.assertFalse(client.send_diagnosis_status_and_wait_for_ack(
+                detail,
+                0.01,
+                retain_unacknowledged=True,
+            ))
+            self.assertIn("event-complete", client._status_frames)
+            self.assertIn("event-complete", client._pending_status_event_ids)
+
     def test_reconnect_resends_same_event_id_for_server_deduplication(self):
         with tempfile.TemporaryDirectory() as directory:
             client = AgentDiagnosisWebSocketClient(

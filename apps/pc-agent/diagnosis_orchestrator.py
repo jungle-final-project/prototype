@@ -366,6 +366,7 @@ class DiagnosisOrchestrator:
         task_handlers: Mapping[str, TaskHandler] | None = None,
         task_definitions: tuple[tuple[str, str, bool], ...] | None = None,
         task_labels: Mapping[str, str] | None = None,
+        on_start: Callable[[DiagnosisRunSnapshot], bool] | None = None,
         on_update: Callable[[DiagnosisRunSnapshot], None] | None = None,
         on_complete: Callable[[DiagnosisRunSnapshot], None] | None = None,
         now: Callable[[], datetime] | None = None,
@@ -378,6 +379,7 @@ class DiagnosisOrchestrator:
         self.task_handlers = dict(task_handlers or {})
         self.task_definitions = tuple(task_definitions or self.TASK_DEFINITIONS)
         self.task_labels = {**self.TASK_LABELS, **dict(task_labels or {})}
+        self.on_start = on_start or (lambda snapshot: True)
         self.on_update = on_update or (lambda snapshot: None)
         self.on_complete = on_complete or (lambda snapshot: None)
         self.now = now or (lambda: datetime.now(timezone.utc))
@@ -455,6 +457,8 @@ class DiagnosisOrchestrator:
                 "하드웨어 진단을 시작했습니다.",
                 metadata={"mode": normalized_mode, "retryCount": snapshot.retry_count},
             )
+            if not self.on_start(snapshot):
+                return False
             self._publish(snapshot)
             self._thread = threading.Thread(
                 target=self._run,

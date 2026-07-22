@@ -576,13 +576,22 @@ def start_diagnosis_once(
         current_session.request.requested_checks,
         reset=True,
     )
-    diagnosis_store.update_state("RUNNING")
+    if not diagnosis_store.transition_state(
+        current_session.request.diagnosis_id,
+        {"REQUEST_RECEIVED"},
+        "RUNNING",
+    ):
+        return None
     if not diagnosis_orchestrator.start(
         current_session.request.diagnosis_id,
         current_session.request.mode,
         current_session.request.requested_checks,
     ):
-        diagnosis_store.update_state("REQUEST_RECEIVED")
+        diagnosis_store.transition_state(
+            current_session.request.diagnosis_id,
+            {"RUNNING"},
+            "REQUEST_RECEIVED",
+        )
         return None
     return diagnosis_store.session
 
@@ -600,21 +609,28 @@ def start_initial_metrics_session(
 ) -> DiagnosisSession | None:
     active_session = session
     if not isinstance(active_session, DiagnosisSession):
-        normalized_mode = mode.upper()
-        if normalized_mode not in {"LIVE", "DEMO"}:
-            return None
-        requested_at = (now or (lambda: datetime.now(timezone.utc)))()
-        active_session = DiagnosisSession(DiagnosisRequest(
-            diagnosis_id=f"standalone-{uuid.uuid4()}",
-            device_id=device_id or "standalone",
-            symptom="",
-            requested_checks=("cpu", "gpu", "memory", "disk", "cooling"),
-            requested_at=requested_at.isoformat(),
-            expires_at=(requested_at + timedelta(hours=1)).isoformat(),
-            mode=normalized_mode,
-            source=STANDALONE,
-        ))
-        diagnosis_store.accept(active_session)
+        stored_session = diagnosis_store.session
+        if (
+            isinstance(stored_session, DiagnosisSession)
+            and stored_session.agent_state in {"REQUEST_RECEIVED", "RUNNING"}
+        ):
+            active_session = stored_session
+        else:
+            normalized_mode = mode.upper()
+            if normalized_mode not in {"LIVE", "DEMO"}:
+                return None
+            requested_at = (now or (lambda: datetime.now(timezone.utc)))()
+            active_session = DiagnosisSession(DiagnosisRequest(
+                diagnosis_id=f"standalone-{uuid.uuid4()}",
+                device_id=device_id or "standalone",
+                symptom="",
+                requested_checks=("cpu", "gpu", "memory", "disk", "cooling"),
+                requested_at=requested_at.isoformat(),
+                expires_at=(requested_at + timedelta(hours=1)).isoformat(),
+                mode=normalized_mode,
+                source=STANDALONE,
+            ))
+            diagnosis_store.accept(active_session)
     current_session = diagnosis_store.session
     if (
         not isinstance(current_session, DiagnosisSession)
@@ -728,6 +744,51 @@ def diagnosis_snapshot_matches_session(
     if session.agent_state == "COMPLETED":
         return snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}
     return session.agent_state == snapshot.state
+
+
+TERMINAL_DIAGNOSIS_EVENT_TYPES = {
+    "DIAGNOSIS_COMPLETED",
+    "DIAGNOSIS_FAILED",
+    "DIAGNOSIS_CANCELLED",
+}
+
+
+def confirm_diagnosis_start_sync(
+    session: DiagnosisSession | None,
+    snapshot: DiagnosisRunSnapshot,
+    client: AgentDiagnosisWebSocketClient | None,
+    forwarded_event_ids: set[str],
+) -> bool:
+    if not diagnosis_snapshot_matches_session(session, snapshot):
+        return False
+    if session.request.source != WEB_REQUEST:
+        return True
+    if client is None or not client.is_connected() or not snapshot.events:
+        return False
+    event = snapshot.events[-1]
+    if event.event_type != "DIAGNOSIS_STARTED":
+        return False
+    detail = diagnosis_event_sync_detail(snapshot, event, session)
+    if not client.send_diagnosis_status_and_wait_for_ack(detail):
+        return False
+    forwarded_event_ids.add(event.event_id)
+    return True
+
+
+def diagnosis_terminal_sync_confirmed(
+    session: DiagnosisSession | None,
+    snapshot: DiagnosisRunSnapshot,
+    forwarded_event_ids: set[str],
+) -> bool:
+    if not isinstance(session, DiagnosisSession) or session.request.source != WEB_REQUEST:
+        return True
+    if not snapshot.events:
+        return False
+    terminal_event = snapshot.events[-1]
+    return (
+        terminal_event.event_type in TERMINAL_DIAGNOSIS_EVENT_TYPES
+        and terminal_event.event_id in forwarded_event_ids
+    )
 
 
 def running_diagnosis_is_active(
@@ -8438,22 +8499,44 @@ def run_background(
         def on_metrics_updated(metrics: MetricsSnapshot) -> None:
             viewer_controller.refresh_metrics()
 
-        def sync_diagnosis_events(snapshot: DiagnosisRunSnapshot) -> None:
+        def sync_diagnosis_events(
+            snapshot: DiagnosisRunSnapshot,
+            wait_for_terminal_ack: bool = True,
+        ) -> bool:
             client = diagnosis_client_holder.get("value")
             if client is None or not diagnosis_snapshot_matches_session(diagnosis_store.session, snapshot):
-                return
+                return False
+            synchronized = True
             for event in snapshot.events:
                 if event.event_id in forwarded_event_ids:
                     continue
                 detail = diagnosis_event_sync_detail(snapshot, event, diagnosis_store.session)
-                if client.send_diagnosis_status(detail):
+                if event.event_type in TERMINAL_DIAGNOSIS_EVENT_TYPES and wait_for_terminal_ack:
+                    sent = client.send_diagnosis_status_and_wait_for_ack(
+                        detail,
+                        retain_unacknowledged=True,
+                    )
+                else:
+                    sent = client.send_diagnosis_status(detail)
+                if sent:
                     forwarded_event_ids.add(event.event_id)
+                else:
+                    synchronized = False
+            return synchronized
 
         def on_diagnosis_updated(snapshot: DiagnosisRunSnapshot) -> None:
             if not diagnosis_snapshot_matches_session(diagnosis_store.session, snapshot):
                 return
             sync_diagnosis_events(snapshot)
             viewer_controller.refresh_metrics()
+
+        def confirm_diagnosis_started(snapshot: DiagnosisRunSnapshot) -> bool:
+            return confirm_diagnosis_start_sync(
+                diagnosis_store.session,
+                snapshot,
+                diagnosis_client_holder.get("value"),
+                forwarded_event_ids,
+            )
 
         def sync_diagnosis_result() -> None:
             client = diagnosis_client_holder.get("value")
@@ -8467,6 +8550,11 @@ def run_background(
             if not diagnosis_snapshot_matches_session(diagnosis_store.session, snapshot):
                 return
             initial_metrics_coordinator.stop()
+            terminal_confirmed = diagnosis_terminal_sync_confirmed(
+                diagnosis_store.session,
+                snapshot,
+                forwarded_event_ids,
+            )
             if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"}:
                 try:
                     result = compact_result_evidence(
@@ -8479,6 +8567,12 @@ def run_background(
                     diagnosis_store.update_state("FAILED")
             elif snapshot.state in {"FAILED", "TIMED_OUT", "CANCELLED"}:
                 diagnosis_store.update_state(snapshot.state)
+            if not terminal_confirmed:
+                diagnosis_store.transition_state(
+                    snapshot.diagnosis_id,
+                    {"COMPLETED", "RUNNING"},
+                    "FAILED",
+                )
             viewer_controller.refresh_metrics()
 
         windows_graphics_provider = WindowsGraphicsDiagnosticsProvider(
@@ -8506,6 +8600,7 @@ def run_background(
             ),
             task_definitions=GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
             task_labels=GRAPHICS_DIAGNOSIS_TASK_LABELS,
+            on_start=confirm_diagnosis_started,
             on_update=on_diagnosis_updated,
             on_complete=on_diagnosis_complete,
         )
@@ -8629,7 +8724,10 @@ def run_background(
                     for detail in tuple(pending_replacement_statuses):
                         if client.send_diagnosis_status(detail):
                             pending_replacement_statuses.remove(detail)
-                sync_diagnosis_events(diagnosis_log_store.snapshot)
+                sync_diagnosis_events(
+                    diagnosis_log_store.snapshot,
+                    wait_for_terminal_ack=False,
+                )
                 sync_diagnosis_result()
 
             diagnosis_client = AgentDiagnosisWebSocketClient(

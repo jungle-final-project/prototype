@@ -238,6 +238,48 @@ class DiagnosisOrchestratorTest(unittest.TestCase):
         self.assertFalse(store.snapshot.transition_allowed)
         self.assertIn("DIAGNOSIS_CANCELLED", [event.event_type for event in store.snapshot.events])
 
+    def test_start_confirmation_happens_before_worker_runs(self) -> None:
+        order = []
+        worker_started = threading.Event()
+
+        def confirm(snapshot):
+            order.append(("confirmed", snapshot.events[-1].event_type))
+            return True
+
+        def initial_task(*_args):
+            order.append(("worker", None))
+            worker_started.set()
+            return TaskOutcome("COMPLETED")
+
+        store = DiagnosisLogStore()
+        orchestrator = DiagnosisOrchestrator(
+            lambda: complete_metrics(),
+            store,
+            task_handlers={"initial_snapshot": initial_task},
+            on_start=confirm,
+        )
+
+        self.assertTrue(orchestrator.start("diag-1", "LIVE"))
+        self.assertTrue(worker_started.wait(1))
+        self.assertTrue(orchestrator.wait(2))
+        self.assertEqual(("confirmed", "DIAGNOSIS_STARTED"), order[0])
+        self.assertEqual("worker", order[1][0])
+
+    def test_failed_start_confirmation_prevents_local_worker(self) -> None:
+        worker_started = threading.Event()
+        store = DiagnosisLogStore()
+        orchestrator = DiagnosisOrchestrator(
+            lambda: complete_metrics(),
+            store,
+            task_handlers={"initial_snapshot": lambda *_args: worker_started.set()},
+            on_start=lambda snapshot: False,
+        )
+
+        self.assertFalse(orchestrator.start("diag-1", "LIVE"))
+        self.assertFalse(worker_started.wait(0.05))
+        self.assertFalse(orchestrator.is_running("diag-1"))
+        self.assertNotIn("DIAGNOSIS_STARTED", [event.event_type for event in store.snapshot.events])
+
     def test_fail_marks_running_worker_terminal_immediately_and_is_idempotent(self) -> None:
         started = threading.Event()
         release = threading.Event()
