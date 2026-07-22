@@ -45,11 +45,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class BuildChatService {
     private static final Logger log = LoggerFactory.getLogger(BuildChatService.class);
     private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(만원|만)");
-    // 숫자+'만'(원 없음) 뒤에 오면 금액이 아니라 수량·규모임을 알리는 단위/대상/연결어미. after 시작에서만 본다.
-    // 주의: 이 검사는 normalizeKoreanNumerals 이후 문자열에 적용되므로, 여기 넣는 토큰은 일~구 동음이
-    // 없는 것으로 고른다("구독자"는 구→9로 깨져 무의미). 대상 명사(유튜버/시청자)로 잡는다.
+    // 숫자+'만'(원 없음) 뒤에 오면 금액이 아니라 수량·규모임을 알리는 단위/대상 명사. after 시작에서만 본다.
+    // 주의 1: normalizeKoreanNumerals 이후 문자열에 적용되므로 일~구 동음 토큰은 못 쓴다
+    //         ("구독자"는 구→9로 깨짐 — 대상 명사 유튜버/시청으로 잡는다).
+    // 주의 2: 예산 구어와 겹치는 토큰은 넣지 않는다 — '대'("300만대 게이밍"=가격대),
+    //         '일'("300만 일시불"), '위'("300만 위아래로")는 실예산 표현이라 제외.
     private static final Pattern QUANTITY_UNIT_AFTER_MAN = Pattern.compile(
-            "^(?:판|회|명|번|개|대|뷰|시간|년|개월|일|곳|종|위|장|건|승|패|킬|골|점|조회|시청|유튜버|유튜브|스트리머|하면|하니|했)");
+            "^(?:판|회|명|번|개|뷰|시간|년|개월|곳|종|장|건|승|패|킬|골|점|조회|시청|유튜버|유튜브|스트리머)");
+    // '하면/하니/했'은 "이만하면/그만하면" 같은 관용어에서만 억제한다 — "300만 하면 돼?"는 실예산 질문이라
+    // 큰 수(10만 이상)에는 적용하지 않는다(이/그/저 수사는 치환 후 1~9의 작은 수로만 나타난다).
+    private static final Pattern IDIOM_CONNECTIVE_AFTER_MAN = Pattern.compile("^(?:하면|하니|했)");
     private static final Pattern BUDGET_BAEKMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*백\\s*만\\s*원?");
     private static final Pattern BUDGET_CHEONMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)?\\s*천\\s*(?:(\\d+(?:\\.\\d+)?)\\s*백)?\\s*만\\s*(원)?");
     // 선행 숫자 필수 — "억 소리 나네" 같은 관용구의 숫자 없는 "억"은 예산으로 보지 않는다
@@ -1315,11 +1320,13 @@ public class BuildChatService {
                 boolean fpsContext = before.contains("프레임") || before.contains("fps") || before.contains("헤르츠") || before.contains("hz")
                         || after.startsWith("나오") || after.startsWith("나5") || after.startsWith("나왔") || after.startsWith("찍")
                         || after.startsWith("뽑") || after.startsWith("유지") || after.startsWith("hz");
-                // 수량·규모 문맥: 뒤에 단위 명사(판/회/명/뷰/유튜버/시청…)나 연결어미(하면/하니/했)가
-                // 오거나, 앞에 세는 대상(조회수)이 있으면 금액이 아니다. (원본 message로도 대상어를 본다 —
-                // normalized는 구독자→9독자처럼 깨져 신뢰할 수 없다.)
+                // 수량·규모 문맥: 뒤에 단위 명사(판/회/명/뷰/유튜버/시청…)가 오거나 앞에 세는
+                // 대상(조회수)이 있으면 금액이 아니다. 연결어미(하면/하니/했)는 "이만하면"류
+                // 관용어 영역(치환된 작은 수 1~9)에서만 억제한다 — "300만 하면 돼?"는 실예산.
+                boolean smallIdiomNumber = Double.parseDouble(manWonMatcher.group(1)) < 10;
                 boolean quantityContext = QUANTITY_UNIT_AFTER_MAN.matcher(after).lookingAt()
-                        || before.contains("조회수");
+                        || before.contains("조회수")
+                        || (smallIdiomNumber && IDIOM_CONNECTIVE_AFTER_MAN.matcher(after).lookingAt());
                 if (fpsContext || quantityContext) {
                     continue;
                 }

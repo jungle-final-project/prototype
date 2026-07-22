@@ -218,13 +218,11 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [pendingAutoApplyBuild, setPendingAutoApplyBuild] = useState<AiRecommendedBuild | null>(null);
   const autoApplyBuildRef = useRef<string | null>(null);
   const [runningQuickReplyCommandId, setRunningQuickReplyCommandId] = useState<string | null>(null);
-  // 전송 대기를 큐로 둔다 — in-flight 중 두 번째 큐잉(빠른 칩 클릭·autoSubmit 겹침)이 첫 요청을
-  // 조용히 덮어써 유실되던 문제를 막고, 들어온 순서대로 한 건씩 보낸다.
-  const [pendingSubmits, setPendingSubmits] = useState<Array<{
+  const [pendingSubmit, setPendingSubmit] = useState<{
     text: string;
     assessmentContext?: AiAssessmentContext;
     quickReplySource?: AiQuickReplyKind;
-  }>>([]);
+  } | null>(null);
   const [centerScrollbar, setCenterScrollbar] = useState<CenterScrollbarState>({
     canScroll: false,
     visible: false,
@@ -281,7 +279,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       setOpen(true);
       if (detail?.prefill) {
         if (detail.autoSubmit) {
-          setPendingSubmits((queue) => [...queue, { text: detail.prefill!, assessmentContext: detail.assessmentContext }]);
+          setPendingSubmit({ text: detail.prefill, assessmentContext: detail.assessmentContext });
         } else {
           setPrompt(detail.prefill);
         }
@@ -464,12 +462,12 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   }, [open, placement, session.messages.length, updateCenterScrollbar]);
 
   useEffect(() => {
-    if (pendingSubmits.length === 0 || isSending) return;
-    const [submission, ...rest] = pendingSubmits;
-    setPendingSubmits(rest);
+    if (!pendingSubmit || isSending) return;
+    const submission = pendingSubmit;
+    setPendingSubmit(null);
     void sendMessage(submission.text, submission.assessmentContext, submission.quickReplySource);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingSubmits, isSending]);
+  }, [pendingSubmit, isSending]);
 
   useEffect(() => () => {
     if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
@@ -857,7 +855,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     quickReplyKind?: AiQuickReplyKind
   ) => {
     if (!command) {
-      setPendingSubmits((queue) => [...queue, { text: reply, quickReplySource: quickReplyKind }]);
+      setPendingSubmit({ text: reply, quickReplySource: quickReplyKind });
       return;
     }
     const commandId = `${messageId ?? 'quick-reply'}:${command.partId}`;

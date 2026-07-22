@@ -972,10 +972,14 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.parseBudgetWon("롤 300만 판 한 사람인데 새 컴 추천해줘")).isNull();
         assertThat(BuildChatService.parseBudgetWon("구독자 50만 유튜버 방송용 PC")).isNull();
         assertThat(BuildChatService.parseBudgetWon("이만하면 좋은 걸로 추천해줘")).isNull();
-        // 진짜 예산 표현은 계속 인식한다(과잉 억제 방지).
+        // 진짜 예산 표현은 계속 인식한다(과잉 억제 방지) — 시연 중 관객 구어까지 포함.
         assertThat(BuildChatService.parseBudgetWon("300만으로 게임용 PC 추천")).isEqualTo(3_000_000);
         assertThat(BuildChatService.parseBudgetWon("200만 정도로 맞춰줘")).isEqualTo(2_000_000);
         assertThat(BuildChatService.parseBudgetWon("300만원 게이밍 PC")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("300만대 게이밍 PC 추천")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("300만 일시불로 살게")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("300만 위아래로 맞춰줘")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("300만 하면 살 수 있어?")).isEqualTo(3_000_000);
     }
 
     @Test
