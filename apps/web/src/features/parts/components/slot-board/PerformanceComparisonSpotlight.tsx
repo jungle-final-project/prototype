@@ -26,25 +26,19 @@ export type PerformanceComparisonSpotlightProps = {
 export function PerformanceComparisonSpotlight(props: PerformanceComparisonSpotlightProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
+  // 닫힘은 오른쪽 위 X 버튼 하나로만 — 배경 클릭·Esc로도 닫히면 시연 중 오클릭 한 번에
+  // 중앙 비교가 사라진다(시연 안정성 제언 반영). 강조는 이 카드 한 번뿐이라 명시적 닫기가 안전하다.
   useEffect(() => {
     if (!props.open) return;
     const previousActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     dialogRef.current?.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      props.onDismiss();
-    };
-    document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = previousOverflow;
       previousActiveElement?.focus();
     };
-  }, [props.open, props.onDismiss]);
+  }, [props.open]);
 
   if (!props.open || typeof document === 'undefined') return null;
 
@@ -66,7 +60,6 @@ export function PerformanceComparisonSpotlight(props: PerformanceComparisonSpotl
     <div
       data-testid="performance-comparison-spotlight-backdrop"
       className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[1px]"
-      onClick={props.onDismiss}
     >
       <div
         ref={dialogRef}
@@ -159,7 +152,7 @@ export function PerformanceComparisonSpotlight(props: PerformanceComparisonSpotl
             변경 조합에 호환성 또는 장착 문제가 있습니다. 적용 전 상단 경고를 확인해 주세요.
           </p>
         ) : null}
-        <p className="mt-4 text-center text-[11px] font-bold text-slate-400">아무 곳이나 누르면 비교 강조가 닫힙니다.</p>
+        <p className="mt-4 text-center text-[11px] font-bold text-slate-400">오른쪽 위 닫기(X) 버튼으로 비교 강조를 닫을 수 있습니다.</p>
       </div>
     </div>,
     document.body
