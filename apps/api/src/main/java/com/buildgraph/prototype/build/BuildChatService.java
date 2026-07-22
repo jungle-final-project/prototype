@@ -45,6 +45,11 @@ import org.springframework.web.server.ResponseStatusException;
 public class BuildChatService {
     private static final Logger log = LoggerFactory.getLogger(BuildChatService.class);
     private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(만원|만)");
+    // 숫자+'만'(원 없음) 뒤에 오면 금액이 아니라 수량·규모임을 알리는 단위/대상/연결어미. after 시작에서만 본다.
+    // 주의: 이 검사는 normalizeKoreanNumerals 이후 문자열에 적용되므로, 여기 넣는 토큰은 일~구 동음이
+    // 없는 것으로 고른다("구독자"는 구→9로 깨져 무의미). 대상 명사(유튜버/시청자)로 잡는다.
+    private static final Pattern QUANTITY_UNIT_AFTER_MAN = Pattern.compile(
+            "^(?:판|회|명|번|개|대|뷰|시간|년|개월|일|곳|종|위|장|건|승|패|킬|골|점|조회|시청|유튜버|유튜브|스트리머|하면|하니|했)");
     private static final Pattern BUDGET_BAEKMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*백\\s*만\\s*원?");
     private static final Pattern BUDGET_CHEONMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)?\\s*천\\s*(?:(\\d+(?:\\.\\d+)?)\\s*백)?\\s*만\\s*(원)?");
     // 선행 숫자 필수 — "억 소리 나네" 같은 관용구의 숫자 없는 "억"은 예산으로 보지 않는다
@@ -1296,22 +1301,36 @@ public class BuildChatService {
         }
         Matcher manWonMatcher = BUDGET_MANWON.matcher(normalized);
         while (manWonMatcher.find()) {
+            // 음수 부호가 바로 앞에 붙은 금액("예산 -100만원")은 예산으로 인정하지 않는다 — 부호가
+            // 조용히 무시돼 양수 예산으로 둔갑하던 문제를 막는다.
+            if (precededByMinus(normalized, manWonMatcher.start())) {
+                continue;
+            }
             // '원' 없는 "N만"은 조사 '만'(only)일 수 있다 — "프레임 144만 나오면 돼"는 예산이 아니라
-            // 144FPS 희망이다. 앞에 프레임/fps가 붙거나 뒤에 산출 동사(나오/찍/뽑)가 오면 건너뛴다.
+            // 144FPS 희망이고, "조회수 100만", "롤 300만 판", "이만하면"의 '만'도 금액이 아니다.
             if ("만".equals(manWonMatcher.group(2))) {
                 String before = normalized.substring(Math.max(0, manWonMatcher.start() - 10), manWonMatcher.start());
                 String after = normalized.substring(manWonMatcher.end()).stripLeading();
                 // 주의: 이 시점의 문자열은 한글 수사가 치환된 상태다 — "나오게"는 '오'→'5'로 "나5게"가 된다.
-                if (before.contains("프레임") || before.contains("fps") || before.contains("헤르츠") || before.contains("hz")
+                boolean fpsContext = before.contains("프레임") || before.contains("fps") || before.contains("헤르츠") || before.contains("hz")
                         || after.startsWith("나오") || after.startsWith("나5") || after.startsWith("나왔") || after.startsWith("찍")
-                        || after.startsWith("뽑") || after.startsWith("유지") || after.startsWith("hz")) {
+                        || after.startsWith("뽑") || after.startsWith("유지") || after.startsWith("hz");
+                // 수량·규모 문맥: 뒤에 단위 명사(판/회/명/뷰/유튜버/시청…)나 연결어미(하면/하니/했)가
+                // 오거나, 앞에 세는 대상(조회수)이 있으면 금액이 아니다. (원본 message로도 대상어를 본다 —
+                // normalized는 구독자→9독자처럼 깨져 신뢰할 수 없다.)
+                boolean quantityContext = QUANTITY_UNIT_AFTER_MAN.matcher(after).lookingAt()
+                        || before.contains("조회수");
+                if (fpsContext || quantityContext) {
                     continue;
                 }
             }
             return clampWon(Double.parseDouble(manWonMatcher.group(1)) * 10_000);
         }
         Matcher wonMatcher = BUDGET_WON.matcher(normalized);
-        if (wonMatcher.find()) {
+        while (wonMatcher.find()) {
+            if (precededByMinus(normalized, wonMatcher.start())) {
+                continue;
+            }
             // 원 단위 숫자는 상한이 없으므로 Integer 범위를 넘으면 NumberFormatException으로 500이 났다.
             // 다른 예산 파서(만원/백만원/천만원)와 동일하게 포화 캐스팅한다.
             try {
@@ -1378,6 +1397,15 @@ public class BuildChatService {
     // 그리디 엔진에 유입됐다. Integer.MAX_VALUE로 포화시켜 방지한다.
     private static int clampWon(double won) {
         return (int) Math.min(Math.round(won), (long) Integer.MAX_VALUE);
+    }
+
+    // 매칭 금액 바로 앞(공백 무시)에 음수 부호가 붙어 있으면 예산으로 보지 않는다.
+    private static boolean precededByMinus(String normalized, int start) {
+        int cursor = start - 1;
+        while (cursor >= 0 && Character.isWhitespace(normalized.charAt(cursor))) {
+            cursor -= 1;
+        }
+        return cursor >= 0 && normalized.charAt(cursor) == '-';
     }
 
     static BudgetIntent budgetIntent(String message) {
@@ -6778,6 +6806,18 @@ public class BuildChatService {
             if (minimumFloor) {
                 return List.of();
             }
+            // TARGET(명시 예산) 밴드 안 조합이 하나도 없다는 건, 예산이 내부 자산으로 조립 가능한 상한을
+            // 넘어섰다는 뜻이다(밴드 하한조차 못 미침). 예산 '미달' 안내와 대칭으로, 빈 화면 대신
+            // 예산 이하 최고가 조합(MAX 의미)으로 강등해 "예산에 못 미치는 최대 구성"을 제시한다.
+            // MAX 재귀는 targetBand=false라 다시 이 분기로 들어오지 않아 무한 재귀가 없다.
+            if (targetBand) {
+                List<Map<String, Object>> maxBuilds =
+                        nearBudgetLadderBuilds(budgetWon, "MAX", evidenceIds, warnings, guardStats);
+                if (!maxBuilds.isEmpty()) {
+                    warnings.add("요청 예산은 내부 자산으로 조립 가능한 상한을 넘어, 예산 이하로 구성 가능한 최고가 조합을 추천합니다.");
+                    return maxBuilds;
+                }
+            }
             // 사다리가 전부 빈손이어도 예산이 최소 구성가 이상이면, 이미 검증된 최소 구성 경로로
             // '가능한 최소 구성' 카드 1개는 제공해 빈 화면을 막는다.
             int minimumTotal = minimumBuildTotal();
@@ -7817,8 +7857,9 @@ public class BuildChatService {
         return distinct(badges);
     }
 
-    private static String formatBudgetLabel(int budgetWon) {
-        return budgetWon % 10_000 == 0 ? (budgetWon / 10_000) + "만원" : String.format("%,d원", budgetWon);
+    static String formatBudgetLabel(int budgetWon) {
+        // 만원 단위도 콤마를 넣는다 — "10000만원"(1억)처럼 자릿수가 커도 읽히도록.
+        return budgetWon % 10_000 == 0 ? String.format("%,d만원", budgetWon / 10_000) : String.format("%,d원", budgetWon);
     }
 
     private static int totalPrice(List<PartCandidate> parts) {

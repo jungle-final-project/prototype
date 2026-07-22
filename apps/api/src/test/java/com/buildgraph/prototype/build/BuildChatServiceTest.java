@@ -966,6 +966,34 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void ignoresQuantityAndScaleManThatIsNotBudget() {
+        // 수량·규모의 'N만'(원 없음)은 예산이 아니다 — 조회수/판/구독자/이만하면.
+        assertThat(BuildChatService.parseBudgetWon("유튜브 100만 조회수 영상 편집용 PC 추천해줘")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("롤 300만 판 한 사람인데 새 컴 추천해줘")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("구독자 50만 유튜버 방송용 PC")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("이만하면 좋은 걸로 추천해줘")).isNull();
+        // 진짜 예산 표현은 계속 인식한다(과잉 억제 방지).
+        assertThat(BuildChatService.parseBudgetWon("300만으로 게임용 PC 추천")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("200만 정도로 맞춰줘")).isEqualTo(2_000_000);
+        assertThat(BuildChatService.parseBudgetWon("300만원 게이밍 PC")).isEqualTo(3_000_000);
+    }
+
+    @Test
+    void ignoresNegativeBudgetSign() {
+        // 음수 부호가 붙은 금액은 예산으로 보지 않는다(부호가 조용히 무시돼 양수로 둔갑하던 문제).
+        assertThat(BuildChatService.parseBudgetWon("예산 -100만원으로 추천")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("-2000000원으로 맞춰줘")).isNull();
+    }
+
+    @Test
+    void formatsLargeBudgetLabelWithSeparators() {
+        // 억 단위 예산 라벨에도 콤마가 들어간다("10,000만원").
+        assertThat(BuildChatService.formatBudgetLabel(100_000_000)).isEqualTo("10,000만원");
+        assertThat(BuildChatService.formatBudgetLabel(1_234_000)).isEqualTo("1,234,000원");
+        assertThat(BuildChatService.formatBudgetLabel(1_500_000)).isEqualTo("150만원");
+    }
+
+    @Test
     void detectsPartQuestionCategories() {
         assertThat(BuildChatService.detectPartCategory("GPU 추천해줘")).isEqualTo("GPU");
         assertThat(BuildChatService.detectPartCategory("CPU는 뭐가 좋아?")).isEqualTo("CPU");
