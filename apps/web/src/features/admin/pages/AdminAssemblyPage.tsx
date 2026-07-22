@@ -265,7 +265,7 @@ function TechniciansAdmin() {
                         {technician.seeded ? <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800">테스트 기사</span> : null}
                       </Td>
                       <Td>
-                        <span className="font-black">{technician.providerType === 'EXTERNAL' ? '외부 파트너' : 'BuildGraph'}</span>
+                        <span className="font-black">{technician.providerType === 'EXTERNAL' ? '외부 파트너' : 'Dazzajo'}</span>
                         <br />
                         <StatusBadge status={technician.verificationStatus} />
                       </Td>
@@ -322,7 +322,7 @@ function TechnicianForm({ technician, saving, onSave, onApprove, onReject, onDel
           <h2 className="text-lg font-black text-slate-950">{technician ? technician.displayName : '신규 기사'}</h2>
           <div className="mt-1 flex flex-wrap gap-1">
             {technician?.seeded ? <span className="rounded bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">테스트 기사</span> : null}
-            {technician ? <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue">{technician.providerType === 'EXTERNAL' ? '외부 파트너' : 'BuildGraph 기사'}</span> : null}
+            {technician ? <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-black text-brand-blue">{technician.providerType === 'EXTERNAL' ? '외부 파트너' : 'Dazzajo 기사'}</span> : null}
           </div>
         </div>
         <div className="space-y-1 text-right">
@@ -350,7 +350,7 @@ function TechnicianForm({ technician, saving, onSave, onApprove, onReject, onDel
       <CheckboxGroup label="서비스 지역" values={REGIONS} selected={draft.serviceRegions} onToggle={(value) => toggle('serviceRegions', value)} />
       <CheckboxGroup label="서비스 방식" values={['FULL_SERVICE', 'ASSEMBLY_ONLY']} selected={draft.serviceTypes} onToggle={(value) => toggle('serviceTypes', value)} />
       <label className="flex items-center gap-2 text-xs font-black text-slate-700">
-        <input type="checkbox" checked={draft.standardAsAccepted} onChange={(event) => setDraft({ ...draft, standardAsAccepted: event.target.checked })} /> BuildGraph 표준 AS 동의
+        <input type="checkbox" checked={draft.standardAsAccepted} onChange={(event) => setDraft({ ...draft, standardAsAccepted: event.target.checked })} /> Dazzajo 표준 AS 동의
       </label>
       {error ? <AdminMutationError error={error} /> : null}
       <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">

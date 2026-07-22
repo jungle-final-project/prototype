@@ -13,7 +13,7 @@ export function quoteDraftToRecommendedBuild(draft: QuoteDraft): AiRecommendedBu
       partId: item.partId,
       category: item.category,
       name: item.name,
-      manufacturer: item.manufacturer ?? 'BuildGraph',
+      manufacturer: item.manufacturer ?? 'Dazzajo',
       quantity: item.quantity,
       price: item.currentPrice,
       note: '셀프 견적 장바구니에서 저장'

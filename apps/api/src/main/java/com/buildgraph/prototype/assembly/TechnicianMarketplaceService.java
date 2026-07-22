@@ -46,7 +46,7 @@ public class TechnicianMarketplaceService {
         }
         ProfileInput input = profileInput(body, existing);
         if (!input.standardAsAccepted()) {
-            throw validation("BuildGraph 표준 AS 정책 동의가 필요합니다.");
+            throw validation("Dazzajo 표준 AS 정책 동의가 필요합니다.");
         }
         if (existing == null) {
             jdbcTemplate.update("""
@@ -102,7 +102,7 @@ public class TechnicianMarketplaceService {
             throw conflict("거절된 신청은 재신청으로 제출해 주세요.");
         }
         ProfileInput input = profileInput(body, existing);
-        if (!input.standardAsAccepted()) throw validation("BuildGraph 표준 AS 정책 동의가 필요합니다.");
+        if (!input.standardAsAccepted()) throw validation("Dazzajo 표준 AS 정책 동의가 필요합니다.");
         jdbcTemplate.update("""
                 UPDATE technicians SET display_name = ?, initials = ?, profile_image_url = ?,
                     business_name = ?, contact_phone = ?, service_regions = ?::jsonb,
