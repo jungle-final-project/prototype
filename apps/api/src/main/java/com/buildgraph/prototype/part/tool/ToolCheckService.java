@@ -87,7 +87,11 @@ public class ToolCheckService {
         }
         Map<String, Object> context = objectMap(body.get("context"));
         int currentTotalPrice = firstNumber(context.get("currentTotalPrice"), total(parts));
+        // 예산이 안 왔는데 총액을 예산으로 대입하면 price가 항등 비교로 항상 "예산 안"이 된다 —
+        // 대입은 유지하되(하위 계산 호환) 검사 수행 여부를 함께 넘겨 문구가 거짓말하지 않게 한다.
+        boolean budgetProvided = firstNumber(context.get("budget"), 0) > 0;
         int budget = firstNumber(context.get("budget"), currentTotalPrice);
+        context.put("budgetProvided", budgetProvided);
         return checkResolvedTool(tool, parts, budget, currentTotalPrice, context);
     }
 
@@ -100,7 +104,10 @@ public class ToolCheckService {
         }
         int total = total(rootParts.parts());
         int budget = rootParts.budget() == null || rootParts.budget() <= 0 ? total : rootParts.budget();
-        Map<String, Object> context = MockData.map("rootType", rootType, "rootId", rootId);
+        Map<String, Object> context = MockData.map(
+                "rootType", rootType,
+                "rootId", rootId,
+                "budgetProvided", rootParts.budget() != null && rootParts.budget() > 0);
         return tools.stream()
                 .map(tool -> checkResolvedTool(tool, rootParts.parts(), budget, total, context))
                 .toList();
@@ -131,7 +138,9 @@ public class ToolCheckService {
             case "power" -> power(byCategory, parts);
             case "size" -> size(byCategory);
             case "performance" -> performance(byCategory, context, prefetchedBenchmarks);
-            case "price" -> price(parts, budget, currentTotalPrice);
+            // budgetProvided 마커가 명시적으로 false일 때만 '예산 미지정'으로 본다 — 마커를 안 싣는
+            // 기존 경로(chat 등, 실제 예산을 넘김)는 종전 동작 그대로다.
+            case "price" -> price(parts, budget, currentTotalPrice, !Boolean.FALSE.equals(context.get("budgetProvided")));
             default -> throw new IllegalArgumentException("지원하지 않는 Tool입니다: " + tool);
         };
     }
@@ -316,13 +325,40 @@ public class ToolCheckService {
             warnReasons.add(message);
             issues.add(issue("WARN", message, "COOLER", "CPU"));
         }
+        // PASS 요약은 실제 검사한 항목만 말한다(size의 checkedLabels 관례) — GPU+케이스만 담긴
+        // 드래프트에 "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다" 같은 고정 확정문을 내지 않는다.
+        List<String> checkedLabels = new ArrayList<>();
+        if (socketChecked) {
+            checkedLabels.add("CPU-메인보드 소켓");
+        }
+        if (memoryTypeChecked) {
+            checkedLabels.add("메모리 규격");
+        }
+        if (coolerSocketChecked) {
+            checkedLabels.add("쿨러 소켓");
+        }
+        if (coolerTdpChecked) {
+            checkedLabels.add("쿨러 냉각 용량");
+        }
+        if (ramFormFactorChecked) {
+            checkedLabels.add("RAM 폼팩터");
+        }
+        if (ramSlotsChecked) {
+            checkedLabels.add("RAM 슬롯 수");
+        }
+        if (m2SlotsChecked) {
+            checkedLabels.add("M.2 슬롯 수");
+        }
+        String passSummary = checkedLabels.isEmpty()
+                ? "호환성 검사를 수행할 부품 조합이 아직 없습니다."
+                : String.join(" · ", checkedLabels) + " 검사를 통과했습니다.";
         String summary = !pass
                 ? failReasons.get(0)
                 : !warnReasons.isEmpty()
                         ? String.join(" · ", warnReasons)
                         : coolerTdpMarginLow
                                 ? "쿨러 TDP 여유가 20% 미만이라 고부하 시 냉각 여유가 빠듯합니다."
-                                : "CPU, 메인보드, RAM, 쿨러 기본 호환성이 맞습니다.";
+                                : passSummary;
         // status는 PASS/FAIL 2-상태가 기본이다 — TDP 마진 WARN을 툴 status로 올리면 compatibility를
         // 구독하는 RAM/메인보드 후보 전체가 후보와 무관한 쿨러 마진으로 '간섭 주의'가 된다.
         // 마진 경고는 details(coolerTdpMarginLow)와 summary로 내리고, CPU-쿨러 엣지가 WARN을 그린다.
@@ -404,11 +440,17 @@ public class ToolCheckService {
         int psuCapacity = intAttr(psu, "capacityW", 0);
         int vendorRecommendedPsu = intAttr(gpu, "requiredSystemPowerW", 0);
         int requiredRatedCapacity = Math.max(vendorRecommendedPsu, estimatedWattage + 120);
-        // 소비전력 데이터가 없어 부하 합산에서 0으로 빠진 부품(현재 기본값 0은 GPU 계열뿐) —
-        // 숫자를 지어내지 않는 대신 신뢰도를 낮추고 문구에 명시한다. 판정 자체는 뒤집지 않는다.
+        // 소비전력 데이터가 없는 부품 — 숫자를 지어내지 않는 대신 신뢰도를 낮추고 문구에 명시한다.
+        // 판정 자체는 뒤집지 않는다. GPU는 기본값 0이라 draw<=0으로 잡히지만, CPU는 결측이어도
+        // 통상값 65W로 합산돼 조용히 빠져나간다(170W급 CPU가 65W로 계산돼 HIGH 신뢰 PASS가 나던 구멍).
+        // 고부하 카테고리(CPU)는 명시 데이터(wattage/tdpW)가 없으면 결측으로 본다 — 소액 상수를 쓰는
+        // 보드·RAM 등은 오차가 유계라 종전대로 둔다.
         List<String> wattageUnknownCategories = parts.stream()
                 .filter(part -> part != null && !"PSU".equals(part.category()))
-                .filter(part -> estimatedPartPowerDraw(part) <= 0)
+                .filter(part -> estimatedPartPowerDraw(part) <= 0
+                        || ("CPU".equals(part.category())
+                                && intAttr(part, "wattage", 0) <= 0
+                                && intAttr(part, "tdpW", 0) <= 0))
                 .map(ToolBuildPart::category)
                 .distinct()
                 .toList();
@@ -445,7 +487,10 @@ public class ToolCheckService {
         boolean estimateShortfall = psuCapacity < estimatedWattage + 120 || loadPercent > 85;
         String summary;
         if (pass) {
-            summary = "PSU 정격 출력이 예상 지속 부하와 GPU 권장 정격 파워를 충족합니다.";
+            // GPU 권장 파워 데이터가 없으면(또는 GPU 미장착) 검사한 적 없는 항목을 충족했다고 말하지 않는다.
+            summary = vendorRecommendedPsu > 0
+                    ? "PSU 정격 출력이 예상 지속 부하와 GPU 권장 정격 파워를 충족합니다."
+                    : "PSU 정격 출력이 예상 지속 부하를 충족합니다.";
         } else if (warn) {
             List<String> reasons = new ArrayList<>();
             if (vendorShortfall) {
@@ -792,6 +837,9 @@ public class ToolCheckService {
         Double gpuScore = benchmarkScore(benchmarkRows, gpu);
         int vramGb = intAttr(gpu, "vramGb", 0);
         boolean benchmarkBacked = cpuScore != null || gpuScore != null;
+        // 벤치마크도 vramGb도 없으면 근거가 0이다 — 이때 '성능 부족' 확정문을 내면 미검증이
+        // 부정 판정으로 둔갑한다(결측=미검증 관례). 문구도 실제 근거(점수 vs 단일 스펙)만 말한다.
+        boolean dataMissing = !benchmarkBacked && vramGb <= 0;
         boolean pass = benchmarkBacked
                 ? (gpuScore == null || gpuScore >= 70.0) && (cpuScore == null || cpuScore >= 60.0)
                 : vramGb >= 12;
@@ -808,23 +856,41 @@ public class ToolCheckService {
                 "usageTags", context.getOrDefault("usageTags", List.of()),
                 "gameFpsEvidence", gameFpsEvidence,
                 "benchmarkSource", benchmarkBacked ? "benchmark_summaries" : "attributes_fallback",
+                "performanceChecked", !dataMissing,
                 "guaranteePolicy", "NO_EXACT_FPS_OR_RENDER_TIME_GUARANTEE"
         );
         if (!gameFpsEvidence.isEmpty()) {
             details.put("gameFpsEvidenceStatus", gameFpsEvidenceStatus);
         }
+        String summary;
+        if (dataMissing) {
+            summary = "벤치마크 점수와 GPU 스펙 정보가 없어 적합도를 검증하지 못했습니다";
+        } else if (pass) {
+            summary = benchmarkBacked
+                    ? "공개 벤치마크 적합도 점수상 요구 작업에 무리가 적은 조합입니다. 점수는 참고용이며 실제 성능을 보장하지 않습니다."
+                    : "GPU 메모리 용량 기준으로 요구 작업에 무리가 적은 조합입니다. 벤치마크 점수 근거는 없으며 실제 성능을 보장하지 않습니다.";
+        } else {
+            summary = benchmarkBacked
+                    ? "성능 또는 작업 적합도 여유가 낮아 상위 부품을 검토해야 합니다"
+                    : "GPU 메모리 용량 기준으로 여유가 낮아 상위 부품을 검토해야 합니다";
+        }
         return tool("performance",
-                pass ? "PASS" : "WARN",
-                benchmarkBacked ? "HIGH" : "MEDIUM",
-                pass
-                        ? "공개 벤치마크/공식 스펙 기반 적합도 점수상 요구 작업에 무리가 적은 조합입니다. 점수는 참고용이며 실제 성능을 보장하지 않습니다."
-                        : "성능 또는 작업 적합도 여유가 낮아 상위 부품을 검토해야 합니다",
+                dataMissing || !pass ? "WARN" : "PASS",
+                dataMissing ? "LOW" : benchmarkBacked ? "HIGH" : "MEDIUM",
+                summary,
                 details);
     }
 
     /** Evaluates saved current prices against the selected budget. */
-    private Map<String, Object> price(List<ToolBuildPart> parts, int budget, int currentTotalPrice) {
+    private Map<String, Object> price(List<ToolBuildPart> parts, int budget, int currentTotalPrice, boolean budgetProvided) {
         int total = currentTotalPrice > 0 ? currentTotalPrice : total(parts);
+        if (!budgetProvided) {
+            // 예산이 안 온 호출에 총액=예산 항등 비교로 "예산 안에 들어옵니다"를 내던 문제 —
+            // 검사한 적 없는 예산 준수를 단정하지 않고 총액만 알린다.
+            return tool("price", "PASS", "HIGH",
+                    "설정된 예산이 없어 예산 검사를 건너뛰었습니다. 저장된 현재가 기준 총액은 " + won(total) + "원입니다.",
+                    MockData.map("budget", null, "totalPrice", total, "priceDiff", null, "budgetChecked", false));
+        }
         int overBudget = total - budget;
         String status = total <= budget ? "PASS" : total <= Math.round(budget * 1.08) ? "WARN" : "FAIL";
         // 초과면 얼마나 초과인지 실값(예산·총액·차액)을 말한다 — WARN(8% 유예 이내)과 FAIL을 문구로 구분한다.
@@ -1021,14 +1087,36 @@ public class ToolCheckService {
     private Map<String, Object> seedBackedToolResult(String tool) {
         Map<String, Object> rule = ruleFor(tool);
         String category = categoryForTool(tool);
-        String status = rule == null ? defaultStatus(tool) : DbValueMapper.string(rule, "status");
-        String summary = rule == null ? "DB seed result for " + tool : DbValueMapper.string(rule, "summary");
-        return tool(tool, status, "MEDIUM", summary, MockData.map(
+        if (rule == null) {
+            // 부품 0개 + 시드 룰 없음 = 검사한 것이 아무것도 없다 — PASS·영어 디버그 문구·실제로
+            // 검사하지 않은 checkedPartIds로 '통과한 척'하지 않는다(결측=미검증 관례).
+            return tool(tool, "WARN", "LOW",
+                    "담긴 부품이 없어 " + toolDisplayLabel(tool) + " 검사를 수행하지 못했습니다.",
+                    MockData.map(
+                            "checkedPartIds", List.of(),
+                            "candidateCategory", category,
+                            "source", "db-seed",
+                            "toolName", tool
+                    ));
+        }
+        return tool(tool, DbValueMapper.string(rule, "status"), "MEDIUM", DbValueMapper.string(rule, "summary"), MockData.map(
                 "checkedPartIds", toolReadyPartIds(category, 3),
                 "candidateCategory", category,
                 "source", "db-seed",
                 "toolName", tool
         ));
+    }
+
+    /** 사용자 언어 툴 이름 — 원어(compatibility 등)를 문구에 노출하지 않는다. */
+    private static String toolDisplayLabel(String tool) {
+        return switch (tool) {
+            case "compatibility" -> "호환성";
+            case "power" -> "전력";
+            case "size" -> "장착";
+            case "performance" -> "성능";
+            case "price" -> "가격";
+            default -> tool;
+        };
     }
 
     /**
@@ -1445,10 +1533,6 @@ public class ToolCheckService {
     }
 
     /** Supplies legacy fallback statuses for seed Tool calls. */
-    private static String defaultStatus(String toolName) {
-        return "compatibility".equals(toolName) || "size".equals(toolName) ? "PASS" : "WARN";
-    }
-
     /** Normalizes supported Tool names from route input. */
     private static String normalizeToolName(String value) {
         String tool = text(value);
