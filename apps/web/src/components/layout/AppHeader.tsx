@@ -14,6 +14,7 @@ export function AppHeader() {
   const [searchInput, setSearchInput] = useState('');
   const [headerSearchMode, setHeaderSearchMode] = useState<'general' | 'ai'>('ai');
   const [isSelfQuoteHeaderOpen, setIsSelfQuoteHeaderOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const isSelfQuoteRoute = location.pathname === '/self-quote';
   useEffect(() => {
     setIsSelfQuoteHeaderOpen(false);
@@ -81,11 +82,15 @@ export function AppHeader() {
   }, []);
 
   async function logout() {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
     const refreshToken = getRefreshToken();
     try {
       if (refreshToken) await logoutApi(refreshToken);
     } finally {
       clearToken();
+      setUser(null);
+      setIsLoggingOut(false);
       navigate('/login');
     }
   }
@@ -179,10 +184,18 @@ export function AppHeader() {
                       label="기사 포털"
                     />
                   ) : null}
-                  <button type="button" onClick={logout} className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-slate-600 transition hover:bg-slate-100 hover:text-commerce-ink focus:outline-none focus:bg-slate-100">
-                    <LogOut size={16} aria-hidden="true" />
-                    로그아웃
-                  </button>
+                  <div className="mt-1 border-t border-commerce-line pt-1">
+                    <button
+                      type="button"
+                      aria-label="로그아웃"
+                      onClick={logout}
+                      disabled={isLoggingOut}
+                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-red-600 transition hover:bg-red-50 hover:text-red-700 focus:bg-red-50 focus:outline-none disabled:cursor-wait disabled:text-red-300 disabled:hover:bg-white"
+                    >
+                      <LogOut size={16} aria-hidden="true" />
+                      <span>{isLoggingOut ? '로그아웃 중...' : '로그아웃'}</span>
+                    </button>
+                  </div>
                 </div>
               </details>
             ) : (

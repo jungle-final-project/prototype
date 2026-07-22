@@ -369,7 +369,7 @@ export function CheckoutPage() {
 
               <label className="flex cursor-pointer items-start gap-3 rounded-md border border-commerce-line bg-slate-50 p-4 text-sm">
                 <input type="checkbox" checked={asPolicyAccepted} onChange={(event) => setAsPolicyAccepted(event.target.checked)} className="mt-0.5 h-4 w-4 accent-blue-600" />
-                <span><strong className="font-black text-commerce-ink">BuildGraph 표준 AS 정책 적용에 동의합니다.</strong><span className="mt-1 block text-xs font-bold leading-5 text-slate-500">선택 가능한 모든 기사는 동일한 표준 AS 정책을 따릅니다.</span></span>
+                <span><strong className="font-black text-commerce-ink">Dazzajo 표준 AS 정책 적용에 동의합니다.</strong><span className="mt-1 block text-xs font-bold leading-5 text-slate-500">선택 가능한 모든 기사는 동일한 표준 AS 정책을 따릅니다.</span></span>
               </label>
               {formError ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{formError}</div> : null}
               </form>

@@ -35,7 +35,7 @@ export function TechnicianApplyPage() {
     <Screen>
       <TechnicianHeader />
       <div className="mx-auto max-w-3xl">
-        <Panel title={profileQuery.data ? '외부 기사 재신청' : '외부 기사로 참여'} subtitle="기본 활동 정보와 BuildGraph 표준 AS 동의를 확인합니다.">
+        <Panel title={profileQuery.data ? '외부 기사 재신청' : '외부 기사로 참여'} subtitle="기본 활동 정보와 Dazzajo 표준 AS 동의를 확인합니다.">
           {profileQuery.data?.rejectionReason ? <StateMessage type="warn" title="이전 신청 보완 필요" body={profileQuery.data.rejectionReason} /> : null}
           <TechnicianProfileForm profile={profileQuery.data ?? null} mode="apply" />
         </Panel>
@@ -110,7 +110,7 @@ export function TechnicianRequestDetailPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-5">
           <Panel title={request.requestNo} subtitle="사용자 개인정보 없이 조립 조건과 부품 snapshot만 표시합니다.">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="지역" value={request.region} /><Metric label="희망 일정" value={request.preferredDate} /><Metric label="서비스" value={request.serviceType === 'FULL_SERVICE' ? '구매+조립' : '조립만'} /><Metric label="예상 부품가" value={`${request.estimatedPartsPrice.toLocaleString()}원`} /></div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="지역" value={request.region} /><Metric label="희망 일정" value={formatPreferredDate(request.preferredDate)} /><Metric label="서비스" value={request.serviceType === 'FULL_SERVICE' ? '구매+조립' : '조립만'} /><Metric label="예상 부품가" value={`${request.estimatedPartsPrice.toLocaleString()}원`} /></div>
           </Panel>
           <Panel title={`부품 ${request.itemCount}개`} subtitle="이 구성을 기준으로 재고와 가격을 확인하세요.">
             <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3">분류</th><th className="p-3">부품</th><th className="p-3">수량</th><th className="p-3 text-right">snapshot 가격</th></tr></thead><tbody>{request.items.map((item) => <tr key={item.partId} className="border-t border-slate-100"><td className="p-3 font-black">{item.category}</td><td className="p-3"><div className="font-bold text-commerce-ink">{item.name}</div><div className="text-xs text-slate-500">{item.manufacturer}</div></td><td className="p-3">{item.quantity}</td><td className="p-3 text-right font-black">{item.lineTotal.toLocaleString()}원</td></tr>)}</tbody></table></div>
@@ -180,7 +180,7 @@ function TechnicianProfileForm({ profile, mode }: { profile: Technician | null; 
       <Field label="전문 분야" value={specialties} onChange={setSpecialties} placeholder="게이밍 PC, 저소음 조립" />
       <label className="flex items-start gap-3 rounded-md border border-commerce-line bg-slate-50 p-3 text-sm font-bold">
         <input type="checkbox" checked={asAccepted} onChange={(event) => setAsAccepted(event.target.checked)} className="mt-1 accent-[#de6c2d]" />
-        <span>BuildGraph 표준 AS 정책에 동의합니다.</span>
+        <span>Dazzajo 표준 AS 정책에 동의합니다.</span>
       </label>
       {mutation.isError ? <StateMessage type="warn" title="저장 실패" body={mutation.error instanceof Error ? mutation.error.message : '기사 정보를 저장하지 못했습니다.'} /> : null}
       <button disabled={mutation.isPending || profileImageUploading || !asAccepted} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[#de6c2d] px-5 text-sm font-black text-white hover:bg-[#c45c22] disabled:bg-slate-300 disabled:hover:bg-slate-300">
@@ -264,8 +264,36 @@ function TechnicianOfferForm({ request, profile, onChanged }: { request: Technic
   return <div className="mt-4 space-y-3">{offer ? <div className="flex items-center justify-between"><StatusBadge status={offer.status} /><span className="text-xs font-black text-slate-500">최종 {offer.finalPrice.toLocaleString()}원</span></div> : null}<div className="grid gap-3 sm:grid-cols-2"><Field label="부품 확인가" value={partsPrice} onChange={setPartsPrice} type="number" disabled={locked} /><Field label="조립비" value={assemblyFee} onChange={setAssemblyFee} type="number" disabled={locked} /><Field label="배송비" value={deliveryFee} onChange={setDeliveryFee} type="number" disabled={locked} /><Field label="소요일" value={leadTimeDays} onChange={setLeadTimeDays} type="number" disabled={locked} /></div><Field label="재고 확인 문구" value={stockStatus} onChange={setStockStatus} disabled={locked} /><Field label="제안 메모" value={note} onChange={setNote} disabled={locked} />{request.paymentStatus === 'PENDING' && offer?.status === 'SELECTED' ? <StateMessage type="info" title="사용자 결제 대기" body="결제가 완료되면 연락정보가 표시됩니다." /> : null}{saveMutation.isError || withdrawMutation.isError ? <StateMessage type="warn" title="제안 처리 실패" body={(saveMutation.error ?? withdrawMutation.error) instanceof Error ? (saveMutation.error ?? withdrawMutation.error as Error).message : '제안을 처리하지 못했습니다.'} /> : null}{!locked ? <div className="flex gap-2"><button type="button" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-md bg-brand-blue px-4 text-sm font-black text-white"><Save size={16} /> {offer ? '제안 수정' : '제안 제출'}</button>{offer ? <button type="button" onClick={() => window.confirm('이 제안을 철회할까요?') && withdrawMutation.mutate()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-red-200 px-4 text-sm font-black text-red-700"><XCircle size={16} /> 철회</button> : null}</div> : null}</div>;
 }
 
+const PREFERRED_DATE_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
+  day: '2-digit',
+  month: '2-digit',
+  timeZone: 'Asia/Seoul',
+  year: 'numeric'
+});
+
+function formatPreferredDate(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '-';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    const parts = PREFERRED_DATE_FORMATTER.formatToParts(parsed).reduce<Record<string, string>>((accumulator, part) => {
+      if (part.type !== 'literal') accumulator[part.type] = part.value;
+      return accumulator;
+    }, {});
+
+    if (parts.year && parts.month && parts.day) {
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    }
+  }
+
+  const leadingDate = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return leadingDate ? `${leadingDate[1]}-${leadingDate[2]}-${leadingDate[3]}` : trimmed;
+}
+
 function TechnicianRequestCard({ request }: { request: TechnicianRequestSummary }) {
-  return <Link to={`/technician/requests/${request.id}`} className="grid gap-3 rounded-md border border-commerce-line bg-white p-4 transition hover:border-brand-blue sm:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><span className="font-black text-commerce-ink">{request.requestNo}</span><StatusBadge status={request.ownOfferStatus ?? request.status} /></div><div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><MapPin size={13} />{request.region}</span><span className="inline-flex items-center gap-1"><Clock3 size={13} />{request.preferredDate}</span><span>부품 {request.itemCount}개</span></div></div><div className="sm:text-right"><div className="text-xs font-bold text-slate-500">예상 부품가</div><div className="mt-1 font-black text-commerce-sale">{request.estimatedPartsPrice.toLocaleString()}원</div></div></Link>;
+  return <Link to={`/technician/requests/${request.id}`} className="grid gap-3 rounded-md border border-commerce-line bg-white p-4 transition hover:border-brand-blue sm:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><span className="font-black text-commerce-ink">{request.requestNo}</span><StatusBadge status={request.ownOfferStatus ?? request.status} /></div><div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><MapPin size={13} />{request.region}</span><span className="inline-flex items-center gap-1"><Clock3 size={13} />{formatPreferredDate(request.preferredDate)}</span><span>부품 {request.itemCount}개</span></div></div><div className="sm:text-right"><div className="text-xs font-bold text-slate-500">예상 부품가</div><div className="mt-1 font-black text-commerce-sale">{request.estimatedPartsPrice.toLocaleString()}원</div></div></Link>;
 }
 
 function TechnicianStatusPage({ profile }: { profile: Technician }) {
