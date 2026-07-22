@@ -2849,13 +2849,14 @@ class AgentGoal1112Test(unittest.TestCase):
             self.assertEqual(startup_path.name, f"{agent.APP_NAME}.cmd")
             self.assertIn(f'"{installed}" run-background', startup_path.read_text(encoding="utf-8"))
 
-    def test_register_url_protocol_launches_without_uri_identity_arguments(self) -> None:
+    def test_register_url_protocol_uses_canonical_executable_with_opaque_uri_argument(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "PCAgent.exe"
             with patch("buildgraph_agent.os.name", "nt"), \
                     patch.object(agent.sys, "frozen", True, create=True), \
                     patch("buildgraph_agent.ensure_installed_executable", return_value=executable), \
                     patch("winreg.CreateKey") as create_key, \
+                    patch("winreg.QueryValueEx", side_effect=FileNotFoundError), \
                     patch("winreg.SetValueEx") as set_value:
                 registered = agent.register_url_protocol()
 
@@ -2863,12 +2864,12 @@ class AgentGoal1112Test(unittest.TestCase):
             created_paths = [call.args[1] for call in create_key.call_args_list]
             self.assertEqual(created_paths, [
                 rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}",
+                rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}",
                 rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}\DefaultIcon",
                 rf"Software\Classes\{agent.PC_AGENT_URL_PROTOCOL}\shell\open\command",
             ])
             command = set_value.call_args_list[-1].args[-1]
-            self.assertEqual(command, f'"{executable}"')
-            self.assertNotIn("%1", command)
+            self.assertEqual(command, f'"{executable}" "%1"')
 
     def test_ensure_installed_executable_skips_copy_when_content_matches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2911,6 +2912,190 @@ class AgentGoal1112Test(unittest.TestCase):
 
             self.assertIn("PCAgent.exe", str(context.exception))
             self.assertIn("Permission denied", str(context.exception))
+
+    def test_external_packaged_runtime_installs_and_launches_appdata_copy_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Downloads" / "PCAgent.exe"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"pca-agent-exe")
+            target = root / "LocalAppData" / agent.DATA_APP_NAME / f"{agent.APP_NAME}.exe"
+
+            with patch.dict("os.environ", {
+                "LOCALAPPDATA": str(root / "LocalAppData"),
+                "APPDATA": str(root / "AppData" / "Roaming"),
+            }), patch.object(agent.sys, "frozen", True, create=True), \
+                    patch.object(agent.sys, "executable", str(source)), \
+                    patch("buildgraph_agent.register_startup") as register_startup, \
+                    patch("buildgraph_agent.register_url_protocol") as register_protocol, \
+                    patch("buildgraph_agent.launch_installed_runtime") as launch_runtime:
+                handed_off = agent.prepare_packaged_runtime([])
+
+            self.assertTrue(handed_off)
+            self.assertEqual(target.read_bytes(), b"pca-agent-exe")
+            register_startup.assert_called_once_with(target)
+            register_protocol.assert_called_once_with(target)
+            launch_runtime.assert_called_once_with(target, [], source.parent)
+
+    def test_external_packaged_runtime_preserves_config_and_credential_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Downloads" / "PCAgent.exe"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"new-agent")
+            app_dir = root / "LocalAppData" / agent.DATA_APP_NAME
+            app_dir.mkdir(parents=True)
+            config = app_dir / "agent-config.json"
+            credential = app_dir / "agent-credential.json"
+            config.write_bytes(b'{"agentToken":"preserve"}')
+            credential.write_bytes(b'{"credential":"preserve"}')
+
+            with patch.dict("os.environ", {
+                "LOCALAPPDATA": str(root / "LocalAppData"),
+                "APPDATA": str(root / "AppData" / "Roaming"),
+            }), patch.object(agent.sys, "frozen", True, create=True), \
+                    patch.object(agent.sys, "executable", str(source)), \
+                    patch("buildgraph_agent.register_startup"), \
+                    patch("buildgraph_agent.register_url_protocol"), \
+                    patch("buildgraph_agent.launch_installed_runtime"):
+                self.assertTrue(agent.prepare_packaged_runtime([]))
+
+            self.assertEqual(config.read_bytes(), b'{"agentToken":"preserve"}')
+            self.assertEqual(credential.read_bytes(), b'{"credential":"preserve"}')
+
+    def test_external_packaged_runtime_replaces_existing_installed_copy_when_not_running(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Downloads" / "PCAgent.exe"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"new-agent")
+            target = root / "LocalAppData" / agent.DATA_APP_NAME / f"{agent.APP_NAME}.exe"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"old-agent")
+
+            with patch.dict("os.environ", {
+                "LOCALAPPDATA": str(root / "LocalAppData"),
+                "APPDATA": str(root / "AppData" / "Roaming"),
+            }), patch.object(agent.sys, "frozen", True, create=True), \
+                    patch.object(agent.sys, "executable", str(source)), \
+                    patch("buildgraph_agent.register_startup"), \
+                    patch("buildgraph_agent.register_url_protocol"), \
+                    patch("buildgraph_agent.launch_installed_runtime"):
+                self.assertTrue(agent.prepare_packaged_runtime([]))
+
+            self.assertEqual(target.read_bytes(), b"new-agent")
+            self.assertFalse(any(target.parent.glob(f".{target.name}.*.tmp")))
+
+    def test_installed_packaged_runtime_repairs_registration_without_relaunch_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "LocalAppData" / agent.DATA_APP_NAME / f"{agent.APP_NAME}.exe"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"pca-agent-exe")
+
+            with patch.dict("os.environ", {
+                "LOCALAPPDATA": str(root / "LocalAppData"),
+                "APPDATA": str(root / "AppData" / "Roaming"),
+            }), patch.object(agent.sys, "frozen", True, create=True), \
+                    patch.object(agent.sys, "executable", str(target)), \
+                    patch("buildgraph_agent.register_startup") as register_startup, \
+                    patch("buildgraph_agent.register_url_protocol") as register_protocol, \
+                    patch("buildgraph_agent.launch_installed_runtime") as launch_runtime:
+                handed_off = agent.prepare_packaged_runtime(["run-background"])
+
+            self.assertFalse(handed_off)
+            register_startup.assert_called_once_with(target)
+            register_protocol.assert_called_once_with(target)
+            launch_runtime.assert_not_called()
+
+    def test_launch_installed_runtime_preserves_protocol_open_argument_and_source_cwd(self) -> None:
+        target = Path(r"C:\Users\me\AppData\Local\BuildGraphAgent\PCAgent.exe")
+        source_dir = Path(r"C:\Users\me\Downloads\PCAgent")
+        protocol_uri = f"{agent.PC_AGENT_URL_PROTOCOL}://open"
+        process = SimpleNamespace(pid=1234)
+
+        with patch("buildgraph_agent.subprocess.Popen", return_value=process) as popen:
+            launched = agent.launch_installed_runtime(target, [protocol_uri], source_dir)
+
+        self.assertEqual(launched, process)
+        self.assertEqual(popen.call_args.args[0], [str(target), protocol_uri])
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(source_dir))
+
+    def test_launch_installed_runtime_preserves_run_background_arguments(self) -> None:
+        target = Path(r"C:\Users\me\AppData\Local\BuildGraphAgent\PCAgent.exe")
+        args = ["run-background", "--interval-seconds", "7", "--no-tray"]
+
+        with patch("buildgraph_agent.subprocess.Popen", return_value=SimpleNamespace(pid=1234)) as popen:
+            agent.launch_installed_runtime(target, args, target.parent)
+
+        self.assertEqual(popen.call_args.args[0], [str(target), *args])
+
+    def test_external_packaged_main_handoff_does_not_start_runtime_or_mutex(self) -> None:
+        with patch("buildgraph_agent.prepare_packaged_runtime", return_value=True) as prepare, \
+                patch("buildgraph_agent.run_background") as run_background, \
+                patch("buildgraph_agent.acquire_named_instance_lock") as acquire_lock:
+            exit_code = agent.main([])
+
+        self.assertEqual(exit_code, 0)
+        prepare.assert_called_once_with([])
+        run_background.assert_not_called()
+        acquire_lock.assert_not_called()
+
+    def test_protocol_open_argument_restores_viewer_through_installed_runtime(self) -> None:
+        protocol_uri = f"{agent.PC_AGENT_URL_PROTOCOL}://open"
+        with patch("buildgraph_agent.prepare_packaged_runtime", return_value=False), \
+                patch("buildgraph_agent.run_background", return_value=0) as run_background:
+            exit_code = agent.main([protocol_uri])
+
+        self.assertEqual(exit_code, 0)
+        run_background.assert_called_once_with(open_viewer_when_running=True)
+
+    def test_protocol_command_uses_canonical_appdata_executable_and_uri_argument(self) -> None:
+        target = Path(r"C:\Users\me\AppData\Local\BuildGraphAgent\PCAgent.exe")
+
+        with patch.object(agent.sys, "frozen", True, create=True):
+            command = agent.protocol_launch_command(target)
+
+        self.assertEqual(command, f'"{target}" "%1"')
+
+    def test_development_source_execution_does_not_write_operating_protocol(self) -> None:
+        with patch("buildgraph_agent.os.name", "nt"), \
+                patch.object(agent.sys, "frozen", False, create=True), \
+                patch("winreg.CreateKey") as create_key:
+            registered = agent.register_url_protocol()
+
+        self.assertFalse(registered)
+        create_key.assert_not_called()
+
+    def test_wrong_python_protocol_is_repaired_to_canonical_appdata_executable(self) -> None:
+        target = Path(r"C:\Users\me\AppData\Local\BuildGraphAgent\PCAgent.exe")
+
+        with patch("buildgraph_agent.os.name", "nt"), \
+                patch.object(agent.sys, "frozen", True, create=True), \
+                patch("buildgraph_agent.set_registry_string_if_changed") as set_value:
+            registered = agent.register_url_protocol(target)
+
+        self.assertTrue(registered)
+        values = [call.args[-1] for call in set_value.call_args_list]
+        self.assertIn(str(target), values)
+        self.assertIn(f'"{target}" "%1"', values)
+        self.assertFalse(any("python.exe" in value.casefold() for value in values))
+
+    def test_normal_protocol_registration_does_not_rewrite_matching_values(self) -> None:
+        fake_winreg = SimpleNamespace(
+            HKEY_CURRENT_USER=object(),
+            REG_SZ=1,
+            CreateKey=MagicMock(),
+            QueryValueEx=MagicMock(return_value=("expected", 1)),
+            SetValueEx=MagicMock(),
+        )
+        fake_key = MagicMock()
+        fake_winreg.CreateKey.return_value.__enter__.return_value = fake_key
+
+        changed = agent.set_registry_string_if_changed(fake_winreg, "Software\\Classes\\test", None, "expected")
+
+        self.assertFalse(changed)
+        fake_winreg.SetValueEx.assert_not_called()
 
     def test_register_startup_removes_legacy_startup_commands(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

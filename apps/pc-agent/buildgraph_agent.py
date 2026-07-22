@@ -3968,6 +3968,23 @@ def executable_install_required(source: Path, target: Path) -> bool:
     return not files_have_same_content(source, target)
 
 
+def install_executable_atomically(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, temporary)
+        if not files_have_same_content(source, temporary):
+            raise AgentError("Installed PCAgent executable verification failed before activation.")
+        temporary.replace(target)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if not files_have_same_content(source, target):
+        raise AgentError("Installed PCAgent executable verification failed after activation.")
+
+
 def install_permission_error_message(target: Path, exception: OSError) -> str:
     return (
         f"PCAgent 시작프로그램 실행 파일을 교체할 수 없습니다: {target}\n"
@@ -3989,7 +4006,7 @@ def ensure_installed_executable() -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         if executable_install_required(source, target):
-            shutil.copy2(source, target)
+            install_executable_atomically(source, target)
     except PermissionError as exception:
         raise AgentError(install_permission_error_message(target, exception)) from exception
     except OSError as exception:
@@ -3997,9 +4014,10 @@ def ensure_installed_executable() -> Path:
     return target
 
 
-def executable_command() -> str:
+def executable_command(executable: Path | None = None) -> str:
     if getattr(sys, "frozen", False):
-        return f'"{ensure_installed_executable()}" run-background'
+        target = executable or ensure_installed_executable()
+        return f'"{target}" run-background'
     script = Path(__file__).resolve()
     return f'"{sys.executable}" "{script}" run-background'
 
@@ -4022,35 +4040,98 @@ def cleanup_legacy_startup_commands(directory: Path) -> list[Path]:
     return removed
 
 
-def register_startup() -> Path:
+def register_startup(executable: Path | None = None) -> Path:
     directory = startup_dir()
     directory.mkdir(parents=True, exist_ok=True)
     cleanup_legacy_startup_commands(directory)
     path = directory / f"{APP_NAME}.cmd"
-    path.write_text(f"@echo off\nstart \"\" {executable_command()}\n", encoding="utf-8")
+    path.write_text(f"@echo off\nstart \"\" {executable_command(executable)}\n", encoding="utf-8")
     return path
 
 
-def protocol_launch_command() -> str:
+def protocol_launch_command(executable: Path | None = None) -> str:
     if getattr(sys, "frozen", False):
-        return f'"{ensure_installed_executable()}"'
+        target = executable or ensure_installed_executable()
+        return f'"{target}" "%1"'
     return f'"{sys.executable}" "{Path(__file__).resolve()}"'
 
 
-def register_url_protocol() -> bool:
-    if os.name != "nt":
+def set_registry_string_if_changed(
+    winreg_module: Any,
+    key_path: str,
+    name: str | None,
+    value: str,
+) -> bool:
+    with winreg_module.CreateKey(winreg_module.HKEY_CURRENT_USER, key_path) as key:
+        try:
+            current, _ = winreg_module.QueryValueEx(key, name)
+        except OSError:
+            current = None
+        if current == value:
+            return False
+        winreg_module.SetValueEx(key, name, 0, winreg_module.REG_SZ, value)
+        return True
+
+
+def register_url_protocol(executable: Path | None = None) -> bool:
+    if os.name != "nt" or not getattr(sys, "frozen", False):
         return False
     import winreg
 
+    target = executable or ensure_installed_executable()
     protocol_key = rf"Software\Classes\{PC_AGENT_URL_PROTOCOL}"
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key) as key:
-        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, "URL:PCAgent Protocol")
-        winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\DefaultIcon") as key:
-        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, str(ensure_installed_executable()))
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\shell\open\command") as key:
-        # URI의 userId/diagnosisId는 받지 않는다. 무인자 실행은 서버 인증 WebSocket 요청만 처리한다.
-        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, protocol_launch_command())
+    set_registry_string_if_changed(winreg, protocol_key, None, "URL:PCAgent Protocol")
+    set_registry_string_if_changed(winreg, protocol_key, "URL Protocol", "")
+    set_registry_string_if_changed(winreg, protocol_key + r"\DefaultIcon", None, str(target))
+    # URI는 viewer 복원 신호로만 사용하며 userId/diagnosisId 같은 신원 정보는 읽지 않는다.
+    set_registry_string_if_changed(
+        winreg,
+        protocol_key + r"\shell\open\command",
+        None,
+        protocol_launch_command(target),
+    )
+    return True
+
+
+def is_protocol_open_argument(value: str) -> bool:
+    return value.casefold().startswith(f"{PC_AGENT_URL_PROTOCOL}://".casefold())
+
+
+def is_runtime_launch(argv: Sequence[str]) -> bool:
+    return not argv or argv[0] == "run-background" or (
+        len(argv) == 1 and is_protocol_open_argument(argv[0])
+    )
+
+
+def launch_installed_runtime(
+    executable: Path,
+    argv: Sequence[str],
+    source_directory: Path,
+) -> subprocess.Popen[Any]:
+    return subprocess.Popen(
+        [str(executable), *argv],
+        cwd=str(source_directory),
+        close_fds=True,
+    )
+
+
+def prepare_packaged_runtime(argv: Sequence[str]) -> bool:
+    if not getattr(sys, "frozen", False) or not is_runtime_launch(argv):
+        return False
+
+    source = Path(sys.executable).resolve()
+    target = installed_executable_path().resolve()
+    if source == target:
+        register_startup(target)
+        register_url_protocol(target)
+        return False
+
+    installed = ensure_installed_executable().resolve()
+    if not files_have_same_content(source, installed):
+        raise AgentError("Installed PCAgent executable does not match the downloaded package.")
+    register_url_protocol(installed)
+    register_startup(installed)
+    launch_installed_runtime(installed, list(argv), source.parent)
     return True
 
 
@@ -8935,7 +9016,22 @@ def submit_issue_ticket(
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if is_runtime_launch(argv):
+        try:
+            if prepare_packaged_runtime(argv):
+                return 0
+        except AgentError as exception:
+            show_agent_error_dialog("PCAgent 실행 실패", str(exception))
+            return 4
+
     if not argv:
+        try:
+            return run_background(open_viewer_when_running=True)
+        except AgentError as exception:
+            show_agent_error_dialog("PCAgent 실행 실패", str(exception))
+            return 4
+
+    if len(argv) == 1 and is_protocol_open_argument(argv[0]):
         try:
             return run_background(open_viewer_when_running=True)
         except AgentError as exception:
