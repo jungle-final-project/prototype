@@ -44,14 +44,15 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class BuildChatService {
     private static final Logger log = LoggerFactory.getLogger(BuildChatService.class);
-    private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(?:만원|만)");
+    private static final Pattern BUDGET_MANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(만원|만)");
     private static final Pattern BUDGET_BAEKMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*백\\s*만\\s*원?");
     private static final Pattern BUDGET_CHEONMANWON = Pattern.compile("(\\d+(?:\\.\\d+)?)?\\s*천\\s*(?:(\\d+(?:\\.\\d+)?)\\s*백)?\\s*만\\s*(원)?");
     // 선행 숫자 필수 — "억 소리 나네" 같은 관용구의 숫자 없는 "억"은 예산으로 보지 않는다
     private static final Pattern BUDGET_EOK = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*억\\s*(?:(\\d+(?:\\.\\d+)?)\\s*천)?\\s*만?\\s*원?");
     private static final Pattern BUDGET_WON = Pattern.compile("(\\d{6,})\\s*원?");
     // 숫자 없는 "만원" 단독(=1만원). 앞에 숫자가 붙은 "300만원"류는 위 패턴들이 선점한다.
-    private static final Pattern BUDGET_MANWON_BARE = Pattern.compile("(?<![\\d.])만\\s*원");
+    // 십/백/천/수/몇이 앞에 오면(수십만원·몇백만원 — 불확정 수사) 1만원으로 오독하지 않는다.
+    private static final Pattern BUDGET_MANWON_BARE = Pattern.compile("(?<![\\d.십백천수몇])만\\s*원");
     private static final Pattern EXPLICIT_GPU_MODEL = Pattern.compile("(?i)(?:rtx|geforce|지포스)?\\s*(40[6-9]0|50[6-9]0)(?:\\s*(ti|super))?");
     private static final Pattern EXPLICIT_CPU_MODEL = Pattern.compile("(?i)\\b\\d{4,5}x3d\\b|\\b\\d{4,5}x\\b|\\bi[3579]-?\\d{4,5}\\b");
     private static final Pattern CAPACITY_GB_PATTERN = Pattern.compile("(\\d+)\\s*(?:gb|기가|기가바이트)", Pattern.CASE_INSENSITIVE);
@@ -1294,7 +1295,19 @@ public class BuildChatService {
             return clampWon(Double.parseDouble(baekManWonMatcher.group(1)) * 1_000_000);
         }
         Matcher manWonMatcher = BUDGET_MANWON.matcher(normalized);
-        if (manWonMatcher.find()) {
+        while (manWonMatcher.find()) {
+            // '원' 없는 "N만"은 조사 '만'(only)일 수 있다 — "프레임 144만 나오면 돼"는 예산이 아니라
+            // 144FPS 희망이다. 앞에 프레임/fps가 붙거나 뒤에 산출 동사(나오/찍/뽑)가 오면 건너뛴다.
+            if ("만".equals(manWonMatcher.group(2))) {
+                String before = normalized.substring(Math.max(0, manWonMatcher.start() - 10), manWonMatcher.start());
+                String after = normalized.substring(manWonMatcher.end()).stripLeading();
+                // 주의: 이 시점의 문자열은 한글 수사가 치환된 상태다 — "나오게"는 '오'→'5'로 "나5게"가 된다.
+                if (before.contains("프레임") || before.contains("fps") || before.contains("헤르츠") || before.contains("hz")
+                        || after.startsWith("나오") || after.startsWith("나5") || after.startsWith("나왔") || after.startsWith("찍")
+                        || after.startsWith("뽑") || after.startsWith("유지") || after.startsWith("hz")) {
+                    continue;
+                }
+            }
             return clampWon(Double.parseDouble(manWonMatcher.group(1)) * 10_000);
         }
         Matcher wonMatcher = BUDGET_WON.matcher(normalized);
@@ -1334,9 +1347,13 @@ public class BuildChatService {
         StringBuilder collapsed = new StringBuilder();
         while (matcher.find()) {
             boolean afterCheon = matcher.start() > 0 && result.charAt(matcher.start() - 1) == '천';
+            // '수십만원/몇백만원'의 수사 접두는 값이 불확정이다 — 10만원/100만원으로 확정 파싱하면
+            // "수십만원대 사무용 PC"가 10만원 예산 거절로 흐른다. 접두가 있으면 접지 않는다(예산 미인식 → 되묻기).
+            boolean indefinitePrefix = matcher.start() > 0
+                    && (result.charAt(matcher.start() - 1) == '수' || result.charAt(matcher.start() - 1) == '몇');
             String run = matcher.group(1);
             matcher.appendReplacement(collapsed,
-                    Matcher.quoteReplacement(afterCheon ? run : String.valueOf(collapseHundredTenRun(run))));
+                    Matcher.quoteReplacement(afterCheon || indefinitePrefix ? run : String.valueOf(collapseHundredTenRun(run))));
         }
         matcher.appendTail(collapsed);
         return collapsed.toString();
@@ -1370,9 +1387,16 @@ public class BuildChatService {
         }
         String normalized = normalizeCommand(message);
         String mode;
-        if (containsAnyNormalized(normalized, "이하", "안으로", "안에서", "안에", "안쪽", "넘지않", "넘지말", "내로", "예산내", "범위내", "아래", "까지")) {
+        // "150만원으로 최소 구성 짜줘"의 '최소'는 구성을 수식하지 예산 하한이 아니다 — 뒤집으면
+        // 150만원 '이상' 견적만 나오는 정반대 응답이 된다. 구성 수식이면 예산은 상한으로 읽는다.
+        boolean minimumComposition = containsAnyNormalized(normalized,
+                "최소구성", "최소견적", "최소사양", "최소스펙", "최소로", "최소한으로");
+        if (minimumComposition
+                || containsAnyNormalized(normalized, "이하", "안으로", "안에서", "안에", "안쪽", "넘지않", "넘지말", "내로", "예산내", "범위내", "아래", "까지")) {
             mode = "MAX";
-        } else if (containsAnyNormalized(normalized, "이상", "최소", "부터", "넘게")) {
+        } else if (containsAnyNormalized(normalized, "이상", "부터", "넘게")
+                // '최소'는 금액 바로 앞에 붙었을 때만 하한이다("최소 150만원").
+                || normalized.matches(".*최소\\d.*")) {
             mode = "MIN";
         } else {
             mode = "TARGET";
@@ -1497,7 +1521,8 @@ public class BuildChatService {
     );
 
     /** "CPU와 GPU", "램이랑 SSD"처럼 두 부품을 나란히 묶는 접속. */
-    private static final Pattern PART_CONJUNCTION = Pattern.compile("\\s*(와|과|랑|이랑|및|그리고|,|\\+|&)\\s*");
+    // '하고/에다/도/나'도 실사용 접속이다("케이스하고 파워", "케이스도 파워도") — 빠지면 한쪽이 소리없이 버려진다.
+    private static final Pattern PART_CONJUNCTION = Pattern.compile("\\s*(와|과|랑|이랑|하고|에다가|에다|도|나|및|그리고|,|\\+|&)\\s*");
 
     /**
      * 관계형 추천 문장에서는 앞의 기준 부품이 아니라 추천 동사에 가장 가까운 카테고리가 대상이다.
@@ -4285,17 +4310,29 @@ public class BuildChatService {
             new CategoryKeywords("소음", List.of("조용", "정숙", "무소음", "소음")),
             new CategoryKeywords("발열", List.of("발열", "저발열", "온도", "시원", "쿨링좋")),
             new CategoryKeywords("크기", List.of("작은", "슬림", "미니", "컴팩트")),
-            new CategoryKeywords("디자인", List.of("이쁜", "예쁜", "예쁘", "이쁘", "led", "rgb", "화이트감성")),
+            // 평범한 색상 어휘도 디자인 조건이다 — '화이트감성'만 알면 "흰색 케이스"의 색이 소리없이 증발한다.
+            new CategoryKeywords("디자인", List.of(
+                    "이쁜", "예쁜", "예쁘", "이쁘", "led", "rgb", "화이트감성",
+                    "화이트", "흰색", "블랙", "검은색", "검정색", "색상", "컬러")),
             new CategoryKeywords("게임 성능", List.of(
                     "롤", "리그오브레전드", "배그", "배틀그라운드", "발로란트", "오버워치",
                     "로스트아크", "사이버펑크", "게임용", "게이밍용", "4k", "qhd", "fhd", "프레임", "fps"))
     );
 
+    // 해상도 단독으로는 게임 성능 조건이 아니다 — "4K 영상 편집용 GPU"에 "게임 성능 기준으로는
+    // 못 골라요"라고 답하면 사용자가 말한 적 없는 기준을 사용자의 것으로 단정하는 오라벨이 된다.
+    private static final Set<String> RESOLUTION_ONLY_QUALIFIER_KEYWORDS = Set.of("4k", "qhd", "fhd");
+
     /** 문장에 들어 있는, 아직 반영하지 못하는 조건 이름. 없으면 null. */
     static String unsupportedRecommendationQualifier(String message) {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        boolean gameContext = containsAnyText(normalized.replaceAll("\\s+", ""),
+                "게임", "게이밍", "롤", "배그", "배틀그라운드", "발로란트", "오버워치", "로스트아크", "사이버펑크", "프레임", "fps");
         for (CategoryKeywords qualifier : UNSUPPORTED_RECOMMENDATION_QUALIFIERS) {
             for (String keyword : qualifier.keywords()) {
+                if (RESOLUTION_ONLY_QUALIFIER_KEYWORDS.contains(keyword) && !gameContext) {
+                    continue;
+                }
                 if (normalized.contains(keyword)) {
                     return qualifier.category();
                 }
@@ -4317,6 +4354,11 @@ public class BuildChatService {
         String remainder = normalized;
         for (CategoryKeywords category : RECOMMENDATION_TARGET_CATEGORIES) {
             for (String keyword : category.keywords()) {
+                // 수랭/공랭은 카테고리 별칭이자 냉각 방식 '기준'이다 — 지우면 "수랭 쿨러 추천해줘"가
+                // 기준 없는 요청으로 오판돼 이미 준 기준을 되묻는다.
+                if ("수랭".equals(keyword) || "공랭".equals(keyword)) {
+                    continue;
+                }
                 remainder = remainder.replace(keyword, " ");
             }
         }
@@ -4334,7 +4376,9 @@ public class BuildChatService {
      * "150만원이상"은 사이에 '만원'이 끼어 이 패턴에 걸리지 않는다.
      */
     private static final Pattern MODEL_UPGRADE_REFERENCE =
-            Pattern.compile("(?i)(보다(좋|나은|나아|높|센|빠|위|상위|성능|더))|(\\d{3,5}[a-z0-9]*이상)");
+            // '보다' 뒤 부사 삽입("보다 훨씬 좋은", "보다 한 단계 높은")과 '쎈' 표기를 허용한다 —
+            // 놓치면 "5080보다 훨씬 좋은"이 5080 상품 지정으로 읽혀 게이트가 막으려던 오답이 재현된다.
+            Pattern.compile("(?i)(보다(훨씬|한단계|한체급|한급|조금|약간|살짝|더)*(좋|나은|나아|높|센|쎈|빠|위|상위|성능|더))|(\\d{3,5}[a-z0-9]*이상)");
 
     static boolean comparativeUpgradeReference(String message) {
         return MODEL_UPGRADE_REFERENCE.matcher(normalizeCommand(message)).find();
@@ -4580,11 +4624,32 @@ public class BuildChatService {
         Integer llmBudget = numberValue(llmConstraint.get("maxBudgetWon"));
         merged.put("maxBudgetWon", firstNumber(llmConstraint.get("maxBudgetWon"), parseBudgetWon(message)));
         merged.put("budgetMode", llmBudget != null ? null : budgetIntent(message).mode());
-        // 닫힌 속성은 LLM만 구조화한다(서버 키워드 해석 금지) — 값이 있으면 그대로 이어받는다.
-        merged.put("coolingType", text(llmConstraint.get("coolingType")));
+        // 닫힌 속성은 원칙적으로 LLM만 구조화한다(서버 키워드 해석 금지) — 값이 있으면 그대로 이어받는다.
+        // 예외: 수랭/공랭은 모호성이 없는 이진 표기라, LLM이 비워 보낸 턴에도 조건이 증발하지 않게
+        // 쿨러 카테고리에 한해 서버가 읽는다("수랭 쿨러 추천해줘"가 기준 되묻기로 빠지던 문제).
+        merged.put("coolingType", firstText(
+                text(llmConstraint.get("coolingType")),
+                "COOLER".equals(category) ? deterministicCoolingType(message) : null));
         merged.put("pcieGeneration", numberValue(llmConstraint.get("pcieGeneration")));
         merged.put("airflowFocused", llmConstraint.get("airflowFocused") instanceof Boolean flag && flag ? Boolean.TRUE : null);
         return BuildChatFeasibilityService.SpecConstraint.fromMap(merged);
+    }
+
+    /** 문장의 수랭/공랭 표기를 냉각 방식으로 읽는다. 부정("수랭 말고")은 반대로, 둘 다 있거나 없으면 null. */
+    static String deterministicCoolingType(String message) {
+        String normalized = normalizeCommand(message);
+        if (containsAnyNormalized(normalized, "수랭말고", "수랭빼고", "수랭제외", "수냉말고")) {
+            return "AIR";
+        }
+        if (containsAnyNormalized(normalized, "공랭말고", "공랭빼고", "공랭제외", "공냉말고")) {
+            return "LIQUID";
+        }
+        boolean liquid = containsAnyNormalized(normalized, "수랭", "수냉", "일체형");
+        boolean air = containsAnyNormalized(normalized, "공랭", "공냉");
+        if (liquid == air) {
+            return null;
+        }
+        return liquid ? "LIQUID" : "AIR";
     }
 
     private void appendBudgetAlternative(
@@ -4776,6 +4841,14 @@ public class BuildChatService {
             return false;
         }
         if (!containsAnyNormalized(normalized, SMOOTHNESS_INTENT_TERMS.toArray(String[]::new))) {
+            return false;
+        }
+        // 추천 문형("더 부드러운거 견적 추천해줘")도 이 fast path가 받는다 — 검증된 미리보기가 후보
+        // 나열보다 낫다는 제품 결정(smootherPerformanceRecommendationWordingStillReturnsVerifiedPreview).
+        // 내부의 directReplacementPreview는 serverVerifiedSelection=true로 추천 문형 가드를 면제받는다.
+        // GPU 교체로 해결할 수 없는 카테고리 지목("케이스를 더 쾌적하게 바꿔줘")은 그 카테고리 경로가 답한다.
+        String category = detectPartCategory(normalized);
+        if (category != null && !"GPU".equals(category)) {
             return false;
         }
         // 견적을 바꿔 달라는 요청일 때만 미리보기를 만든다 — 설명·추천 요청은 기존 경로가 답한다.
