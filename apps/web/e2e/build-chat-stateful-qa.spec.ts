@@ -90,7 +90,9 @@ test('상태형 고위험 체인을 실제 웹에서 재현한다', async ({ pag
   const failures = results.flatMap((row) => row.turns.flatMap((turn) => turn.failures.map((failure) => `${row.caseId}#${turn.turn}: ${failure}`)));
   expect(p0, `P0가 발생했습니다. 보고서: ${paths.md}`).toBe(false);
   expect(results, `${expectedCaseCount}개 결과 row가 모두 필요합니다. 보고서: ${paths.md}`).toHaveLength(expectedCaseCount);
-  if (process.env.STATEFUL_QA_STRICT === 'true') {
+  // 기본이 엄격 모드다 — 체인 응답이 전부 기대와 달라도 초록으로 끝나면 검사가 무의미하다.
+  // 탐사 스윕은 STATEFUL_QA_ADVISORY=true로 명시적으로 낮춘다.
+  if (process.env.STATEFUL_QA_ADVISORY !== 'true') {
     expect(failures, `상태형 웹 감사 실패. 보고서: ${paths.md}`).toEqual([]);
   }
 });

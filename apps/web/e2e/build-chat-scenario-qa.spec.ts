@@ -8,7 +8,7 @@ const password = process.env.BUILD_CHAT_QA_USER_PASSWORD ?? 'passw0rd!';
 const profile = 'BUILD_CHAT_54_MINI_FAST';
 
 type Group = 'BUILD' | 'PART' | 'DRAFT_PREVIEW' | 'SIMULATION' | 'CLARIFICATION' | 'ROBUSTNESS';
-type Scenario = { id: string; group: Group; prompt: string; draft?: boolean; replayQuickReply?: boolean };
+type Scenario = { id: string; group: Group; prompt: string; draft?: boolean; replayQuickReply?: boolean; allowChoice?: boolean };
 type BuildChatResponse = {
   answerType: 'BUDGET' | 'PART' | 'GENERAL';
   message: string;
@@ -43,7 +43,8 @@ const scenarios: Scenario[] = [
   { id: 'draft-03', group: 'DRAFT_PREVIEW', prompt: '현재 견적 램을 64GB로 바꿔줘', draft: true },
   { id: 'draft-04', group: 'DRAFT_PREVIEW', prompt: '현재 견적 SSD를 2TB로 바꿔줘', draft: true },
   { id: 'draft-05', group: 'DRAFT_PREVIEW', prompt: '현재 견적 파워를 1000W로 바꿔줘', draft: true },
-  { id: 'draft-06', group: 'DRAFT_PREVIEW', prompt: '현재 견적 메인보드를 MSI 제품으로 바꿔줘', draft: true },
+  // 제조사만 지정한 요청은 단일 확정 대신 후보 칩 선택으로 끝나도 정당하다.
+  { id: 'draft-06', group: 'DRAFT_PREVIEW', prompt: '현재 견적 메인보드를 MSI 제품으로 바꿔줘', draft: true, allowChoice: true },
   { id: 'simulation-01', group: 'SIMULATION', prompt: '현재 견적 그래픽카드를 RTX 5090으로 바꾸면 배그 프레임이 어떻게 돼?', draft: true },
   { id: 'simulation-02', group: 'SIMULATION', prompt: '현재 견적 CPU를 9950X3D로 바꾸면 성능이 어떻게 돼?', draft: true },
   { id: 'simulation-03', group: 'SIMULATION', prompt: '현재 견적 램을 64GB로 바꾸면 개발할 때 차이가 있어?', draft: true },
@@ -137,10 +138,13 @@ async function runScenario(page: Page, scenario: Scenario): Promise<Result> {
   if (scenario.group === 'BUILD' && !response.builds.length && !hasNext) errors.push('견적 또는 역제안이 없습니다.');
   if (scenario.group === 'DRAFT_PREVIEW') {
     const preview = response.builds.some((build) => build.tier === 'draft-edit' || build.badges?.includes('DRAFT_EDIT_PREVIEW'));
-    if (!preview && !response.quickReplies?.length && !response.clarification) errors.push('변경 미리보기 또는 선택지가 없습니다.');
+    // 칩·되묻기를 성공으로 인정하면 게이트 회귀로 미리보기가 전부 되묻기 루프로 강등돼도
+    // 전건 PASS로 남는다 — 명시적 변경 요청은 미리보기 자체를 요구한다(allowChoice 케이스만 칩 허용).
+    const choiceAllowed = Boolean(scenario.allowChoice) && Boolean(response.quickReplies?.length);
+    if (!preview && !choiceAllowed) errors.push('변경 미리보기가 없습니다.');
   }
-  if (scenario.group === 'SIMULATION' && !response.simulation && !response.quickReplies?.length && !response.clarification) {
-    errors.push('시뮬레이션 또는 대상 확인 응답이 없습니다.');
+  if (scenario.group === 'SIMULATION' && !response.simulation) {
+    errors.push('시뮬레이션 응답이 없습니다.');
   }
   return {
     id: scenario.id, group: scenario.group, prompt: scenario.prompt, ok: errors.length === 0,
