@@ -3415,8 +3415,10 @@ test('composite ghost for an AI linked GPU+PSU preview swaps both parts instead 
   await expect(spotlight.getByTestId('spotlight-price-comparison')).toContainText('2,500,000원');
   await expect(spotlight.getByTestId('spotlight-fps-comparison')).toContainText('74 FPS');
   await expect(spotlight.getByTestId('spotlight-fps-comparison')).toContainText('127 FPS');
-  // 중앙 카드는 비교를 강조할 뿐이다. 카드 자체를 눌러 닫아도 상단 비교와 적용 버튼은 유지된다.
+  // 중앙 카드는 X 버튼으로만 닫힌다(시연 중 오클릭 방지) — 카드·배경 클릭은 무시된다.
   await spotlight.click({ position: { x: 24, y: 24 } });
+  await expect(spotlight).toBeVisible();
+  await spotlight.getByRole('button', { name: '성능 비교 닫기' }).click();
   await expect(spotlight).toHaveCount(0);
   await expect(panel.getByTestId('perf-apply-replace')).toBeVisible();
   expect(ghostResolveRequests.length).toBeGreaterThanOrEqual(1);
@@ -3443,7 +3445,10 @@ test('composite ghost for an AI linked GPU+PSU preview swaps both parts instead 
   await expect(panel.getByTestId('quote-composite-compare-score')).toHaveText('745');
   // 같은 build.id여도 새 AI 응답은 새 requestKey라 중앙 비교를 다시 보여준다.
   await expect(spotlight).toBeVisible();
+  // Esc로도 닫히지 않는다 — 발표 중 키 실수 방지. X 버튼만 닫는다.
   await page.keyboard.press('Escape');
+  await expect(spotlight).toBeVisible();
+  await spotlight.getByRole('button', { name: '성능 비교 닫기' }).click();
   await expect(spotlight).toHaveCount(0);
 
   // 회귀: '이 제품으로 교체해 담기'는 고스트 점수를 만든 조합 그대로, 한 번의 원자 적용으로 담는다 —
@@ -3534,14 +3539,16 @@ test('shows an AI performance spotlight once per request and preserves the top c
   await expect(spotlight).toHaveCount(0);
   await expect(panel.getByTestId('perf-apply-replace')).toBeVisible();
 
+  // 닫힘은 X 버튼 하나뿐이다(시연 중 오클릭·키 실수 방지) — 배경 클릭·Esc·카드 클릭은 전부 무시된다.
   await dispatchComparison('spotlight-backdrop');
   await expect(spotlight).toBeVisible();
   await page.getByTestId('performance-comparison-spotlight-backdrop').click({ position: { x: 4, y: 4 } });
-  await expect(spotlight).toHaveCount(0);
-
-  await dispatchComparison('spotlight-escape');
   await expect(spotlight).toBeVisible();
   await page.keyboard.press('Escape');
+  await expect(spotlight).toBeVisible();
+  await spotlight.click({ position: { x: 20, y: 20 } });
+  await expect(spotlight).toBeVisible();
+  await spotlight.getByRole('button', { name: '성능 비교 닫기' }).click();
   await expect(spotlight).toHaveCount(0);
 
   await page.setViewportSize({ width: 320, height: 720 });
@@ -3551,7 +3558,7 @@ test('shows an AI performance spotlight once per request and preserves the top c
     const box = await spotlight.boundingBox();
     return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
   }).toBeLessThanOrEqual(320);
-  await spotlight.click({ position: { x: 20, y: 20 } });
+  await spotlight.getByRole('button', { name: '성능 비교 닫기' }).click();
   await expect(spotlight).toHaveCount(0);
 
   // 이미 소비한 requestKey는 다른 요청을 거친 뒤 다시 와도 열리지 않는다.
