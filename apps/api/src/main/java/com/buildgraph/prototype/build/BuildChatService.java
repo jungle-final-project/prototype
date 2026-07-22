@@ -4764,6 +4764,8 @@ public class BuildChatService {
      */
     private static final List<String> SMOOTHNESS_INTENT_EXCLUSIONS = List.of(
             "멈춰", "멈춤", "검은화면", "튕김", "튕겨", "먹통", "블루스크린", "고장",
+            // "자꾸 끊겨요/끊깁니다"는 진행형 증상 신고다 — 희망형 "끊김 없이"("끊김없")와 표기가 갈린다.
+            "끊겨", "끊깁",
             "모니터", "주사율", "화면교체", "디스플레이",
             "바꾸면", "교체하면", "올리면", "얼마나올라");
 

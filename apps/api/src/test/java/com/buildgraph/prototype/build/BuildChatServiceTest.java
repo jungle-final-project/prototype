@@ -4126,6 +4126,10 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.requestsSmootherPerformance("FPS 높여줘")).isTrue();
         assertThat(BuildChatService.requestsSmootherPerformance("더 쾌적하게 해줘")).isTrue();
 
+        // 희망형 "끊김 없이"는 향상 요청, 진행형 "끊겨요"는 증상 신고 — 표기로 가른다.
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 화면 끊김 없이 부드럽게 해줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("화면이 자꾸 끊겨요 부드럽게 해줘")).isFalse();
+
         // 가로채면 안 되는 것 — 이 fast path는 LLM 이전에 잡으므로 한 번 삼키면 되돌릴 수 없다.
         assertThat(BuildChatService.requestsSmootherPerformance("배그 화면이 멈춰요")).isFalse();
         assertThat(BuildChatService.requestsSmootherPerformance("게임하다 자꾸 튕겨요")).isFalse();
