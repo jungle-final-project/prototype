@@ -211,18 +211,32 @@ function SelfQuoteSlotBoardPage() {
 
   /**
    * 교체해 담기 — 비교가 보여준 조합 그대로 담는다.
-   * AI 연계 변경안(예: 새 GPU에 필요한 파워)은 고스트 종합점수에 이미 포함돼 있으므로,
-   * 주 부품만 담으면 실제 견적이 "새 GPU + 옛 파워"가 되어 방금 보여준 점수와 반대로 전력 FAIL이 된다.
-   * 연계 부품을 먼저 담아 중간 상태에서도 전력이 모자라지 않게 한다.
+   * AI 연계 변경안(예: 새 GPU에 필요한 파워)까지 한 번의 apply-ai-build(서버 트랜잭션)로 반영한다.
+   * 종전에는 파워 PUT → 주 부품 PUT을 순차 호출해, 뒤 요청이 실패하면 사용자가 요청한 적 없는
+   * "새 파워 + 옛 GPU" 반쪽 상태가 남고 오류 문구는 아무것도 안 바뀐 것처럼 안내했다.
+   * 원자 적용이면 실패 시 드래프트가 그대로라 그 문구가 참이 된다.
    */
   const applyComparisonTarget = useCallback(async (target: PerfCompareTarget) => {
     const changeGroup = crypto.randomUUID();
+    const replacements = new Map<string, string>();
+    replacements.set(target.category, target.partId);
     for (const linked of target.linkedChanges ?? []) {
       if (!linked.partId || linked.category === target.category) continue;
-      await addMutation.mutateAsync({ partId: linked.partId, quantity: 1, changeGroup });
+      replacements.set(linked.category, linked.partId);
     }
-    return addMutation.mutateAsync({ partId: target.partId, quantity: 1, changeGroup });
-  }, [addMutation]);
+    const items: Array<{ partId: string; category: PartCategory; quantity: number }> = [];
+    for (const item of draftItems) {
+      if (replacements.has(item.category)) continue;
+      items.push({ partId: item.partId, category: item.category as PartCategory, quantity: item.quantity ?? 1 });
+    }
+    for (const [category, partId] of replacements) {
+      const existing = draftItems.find((item) => item.category === category);
+      items.push({ partId, category: category as PartCategory, quantity: existing?.quantity ?? 1 });
+    }
+    const draft = await applyAiBuildToQuoteDraft({ items, conflictPolicy: 'REPLACE' }, changeGroup);
+    invalidateQuoteDraft();
+    return draft;
+  }, [draftItems, invalidateQuoteDraft]);
 
   // 성능 비교 시작: 비교 대상을 저장하고 성능 패널로 부드럽게 이동한다(패널은 그리드 아래에 있어 안 보일 수 있다).
   const startPerfComparison = useCallback((target: PerfCompareTarget) => {
