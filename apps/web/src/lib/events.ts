@@ -64,10 +64,39 @@ export function closeAiAssistant() {
   window.dispatchEvent(new Event(AI_BUILD_ASSISTANT_CLOSE_EVENT));
 }
 
-/** 성능 패널 교체 비교를 요청한다 — SelfQuotePage가 수신해 비교 모드를 켠다. */
+const PERF_COMPARE_PENDING_KEY = 'buildgraph.perfComparePending';
+const PERF_COMPARE_PENDING_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 성능 패널 교체 비교를 요청한다 — SelfQuotePage가 수신해 비교 모드를 켠다.
+ * 수신자가 없는 화면(홈·내 견적함 등)에서 발행되거나, 셀프견적 첫 마운트에서 자식 카드
+ * 이펙트가 부모 리스너보다 먼저 돌면 이벤트는 사라진다 — 세션에도 남겨 나중에 소비하게 한다.
+ */
 export function requestPerfCompare(detail: PerfCompareTarget) {
   if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(PERF_COMPARE_PENDING_KEY, JSON.stringify({ detail, at: Date.now() }));
+  } catch {
+    // 저장 불가 환경이면 이벤트만으로 동작한다(종전 동작).
+  }
   window.dispatchEvent(new CustomEvent<PerfCompareTarget>(PERF_COMPARE_REQUEST_EVENT, { detail }));
+}
+
+/** 리스너 부재로 유실된 비교 요청을 셀프견적 마운트 시 1회 소비한다. 오래된 요청은 버린다. */
+export function consumePendingPerfCompare(): PerfCompareTarget | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(PERF_COMPARE_PENDING_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(PERF_COMPARE_PENDING_KEY);
+    const parsed = JSON.parse(raw) as { detail?: PerfCompareTarget; at?: number };
+    if (!parsed.detail || typeof parsed.at !== 'number' || Date.now() - parsed.at > PERF_COMPARE_PENDING_TTL_MS) {
+      return null;
+    }
+    return parsed.detail;
+  } catch {
+    return null;
+  }
 }
 
 export function openSupportChat() {

@@ -110,7 +110,11 @@ export function SlotCandidatePanel({
     setPanelView('CATALOG');
     clearAiPartPicks();
   };
-  const activeFilterCount = [manufacturer, minPriceInput, maxPriceInput].filter(Boolean).length
+  // 가격은 파싱 확정값 기준으로 센다 — "abc" 같은 비숫자 입력은 서버 필터가 안 걸리므로
+  // 배지에 활성 1을 표시하면 표시와 동작이 어긋난다.
+  const activeFilterCount = (manufacturer ? 1 : 0)
+    + (minPrice !== undefined ? 1 : 0)
+    + (maxPrice !== undefined ? 1 : 0)
     + (onlyWishlist ? 1 : 0)
     + (hideFail ? 1 : 0);
   const [wishlist, setWishlist] = useState<Set<string>>(() => readWishlist());
@@ -280,19 +284,25 @@ export function SlotCandidatePanel({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // 빠른보기 모달이 떠 있으면 Esc는 모달만 닫는다(PartQuickView 자체 핸들러) —
+        // 패널까지 닫히면 검색어·필터·스크롤 위치가 통째로 사라진다.
+        if (quickViewPart) return;
         closeCandidatePanel();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isAiRecommendationView, onClose]);
+  }, [isAiRecommendationView, onClose, quickViewPart]);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
     // 추천만 보여주는 동안은 목록이 짧아 센티넬이 늘 보인다 — 그대로 두면 화면에 뜨지도 않을
     // 전체 카탈로그를 뒤에서 계속 당겨 온다. 추천을 찾는 데 필요한 만큼은 위 이펙트가 당긴다.
-    if (!sentinel || !hasNextPage || isAiRecommendationView || isFetchNextPageError) {
+    // '찜만'/'장착 불가 숨기기'가 렌더 목록을 비웠을 때도 같다 — 센티넬이 늘 보여
+    // 카테고리 전 페이지를 연쇄 요청하므로 자동 당김을 멈춘다(수동 '더 보기'는 유지).
+    if (!sentinel || !hasNextPage || isAiRecommendationView || isFetchNextPageError
+        || ((hideFail || onlyWishlist) && renderedParts.length === 0)) {
       return;
     }
     const observer = new IntersectionObserver((entries) => {
@@ -302,7 +312,7 @@ export function SlotCandidatePanel({
     });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, isAiRecommendationView]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, isAiRecommendationView, hideFail, onlyWishlist, renderedParts.length]);
 
   const commitPart = async (part: PartRow) => {
     setCommitError(null);
@@ -691,14 +701,19 @@ export function SlotCandidatePanel({
           })}
         </div>
 
-        {!isLoading && renderedParts.length === 0 && !hasNextPage ? (
+        {!isLoading && renderedParts.length === 0
+          && (!hasNextPage || ((hideFail || onlyWishlist) && visibleParts.length > 0)) ? (
           <div className="mt-2 rounded-md border border-dashed border-slate-300 p-4 text-center text-xs font-bold text-slate-500">
-            {q
-              ? `'${q}' 검색 결과가 없습니다.`
-              : onlyWishlist
-                ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
-                : hideFail && visibleParts.length > 0
-                  ? '장착 가능한 후보가 없습니다. 필터를 조정해 보세요.'
+            {/* 원인 지목 순서: 서버 결과는 있는데 표시 필터가 다 걸렀으면 필터를, 그다음 검색어를 탓한다 —
+                검색 결과가 실제로 있는데 "'q' 검색 결과가 없습니다"라고 말하지 않는다. */}
+            {visibleParts.length > 0 && (hideFail || onlyWishlist)
+              ? onlyWishlist
+                ? '조건에 맞는 찜한 부품이 없습니다. 찜만 보기를 끄거나 하트를 눌러 찜해 보세요.'
+                : '장착 가능한 후보가 없습니다. 장착 불가 숨기기를 꺼 보세요.'
+              : q
+                ? `'${q}' 검색 결과가 없습니다.`
+                : onlyWishlist
+                  ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
                   : '표시할 후보가 없습니다.'}
           </div>
         ) : null}

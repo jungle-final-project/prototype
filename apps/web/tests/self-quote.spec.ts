@@ -3011,10 +3011,10 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   };
   let currentDraft = baseDraft;
   const replaceRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
-  // 같은 prefix가 PUT /items/{partId}에도 매칭되므로 메서드·경로로 분기한다 — 교체(PUT)는 카테고리 upsert.
+  // 같은 prefix가 PUT에도 매칭되므로 메서드·경로로 분기한다 — 교체는 apply-ai-build 원자 적용이다.
   await page.route('**/api/quote-drafts/current**', async (route) => {
     const request = route.request();
-    if (request.method() === 'PUT' && request.url().includes('/items/')) {
+    if (request.method() === 'PUT' && request.url().includes('/apply-ai-build')) {
       replaceRequests.push({ url: request.url(), body: JSON.parse(request.postData() ?? '{}') });
       currentDraft = replacedDraft;
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(replacedDraft) });
@@ -3131,14 +3131,17 @@ test('picks a replacement candidate in the performance panel, compares, and appl
   await expect(panel.getByTestId('cost-effect-extra')).toContainText('추가 비용 +50,000원');
   await expect(panel.getByTestId('cost-effect-fps')).toContainText('예상 FPS 200~243 → 220~281');
 
-  // 보면서 담기: 압축 성능 영역의 '교체해 담기' → 실제 교체(PUT) + 비교 해제 + 점수가 새 조합으로 갱신.
+  // 보면서 담기: 압축 성능 영역의 '교체해 담기' → 원자 적용(apply-ai-build) 1회 + 비교 해제 + 점수 갱신.
   await expect(panel.getByTestId('perf-apply-replace')).toBeVisible();
   await panel.getByTestId('perf-apply-replace').click();
   await expect(workspace.getByTestId('fps-compare-delta')).toHaveCount(0);
   await expect(panel.getByTestId('compare-clear')).toHaveCount(0);
   expect(replaceRequests).toHaveLength(1);
-  expect(replaceRequests[0].url).toContain('/api/quote-drafts/current/items/cand-cpu-1');
-  expect(replaceRequests[0].body).toMatchObject({ quantity: 1 });
+  expect(replaceRequests[0].url).toContain('/api/quote-drafts/current/apply-ai-build');
+  const replacedItems = (replaceRequests[0].body.items ?? []) as Array<{ partId: string; quantity: number }>;
+  expect(replacedItems.map((item) => item.partId)).toEqual(expect.arrayContaining(['cand-cpu-1', 'part-perf-gpu']));
+  expect(replacedItems.map((item) => item.partId)).not.toContain('part-perf-cpu');
+  expect(replacedItems.find((item) => item.partId === 'cand-cpu-1')).toMatchObject({ quantity: 1 });
   await expect(page.getByTestId('checklist-CPU')).toContainText('인텔 245K');
   await expect(panel.getByTestId('fps-avg')).toHaveText('281 FPS');
   await expect(panel.getByTestId('quote-composite-score')).toContainText('782');
@@ -3300,10 +3303,15 @@ test('composite ghost for an AI linked GPU+PSU preview swaps both parts instead 
     itemCount: 3
   };
   const putRequests: string[] = [];
+  const applyRequests: Array<{ items?: Array<{ partId: string; category: string; quantity: number }> }> = [];
   await page.route('**/api/quote-drafts/current**', async (route) => {
     const request = route.request();
     if (request.method() === 'PUT') {
-      const match = new URL(request.url()).pathname.match(/\/items\/([^/]+)$/);
+      const pathname = new URL(request.url()).pathname;
+      if (pathname.endsWith('/apply-ai-build')) {
+        applyRequests.push(JSON.parse(request.postData() ?? '{}'));
+      }
+      const match = pathname.match(/\/items\/([^/]+)$/);
       if (match) putRequests.push(match[1]);
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(draft) });
@@ -3438,14 +3446,19 @@ test('composite ghost for an AI linked GPU+PSU preview swaps both parts instead 
   await page.keyboard.press('Escape');
   await expect(spotlight).toHaveCount(0);
 
-  // 회귀: '이 제품으로 교체해 담기'는 고스트 점수를 만든 조합 그대로 담아야 한다 —
-  // GPU만 담으면 실제 견적은 "새 GPU + 옛 파워"가 되어 방금 보여준 745점과 정반대로 전력 FAIL이 된다.
+  // 회귀: '이 제품으로 교체해 담기'는 고스트 점수를 만든 조합 그대로, 한 번의 원자 적용으로 담는다 —
+  // 순차 PUT이면 뒤 요청이 실패할 때 "새 파워+옛 GPU" 반쪽 상태가 남는다(서버 트랜잭션 1회로 통일).
   putRequests.length = 0;
+  applyRequests.length = 0;
   await panel.getByTestId('perf-apply-replace').click();
-  await expect.poll(() => putRequests.length, { timeout: 10000 }).toBe(2);
-  expect(putRequests).toEqual(expect.arrayContaining(['cand-gpu-5080', 'cand-psu-850']));
-  // 연계 파워를 GPU보다 먼저 담아 중간 상태에서도 전력이 모자라지 않게 한다.
-  expect(putRequests[0]).toBe('cand-psu-850');
+  await expect.poll(() => applyRequests.length, { timeout: 10000 }).toBe(1);
+  const appliedPartIds = (applyRequests[0].items ?? []).map((item) => item.partId);
+  expect(appliedPartIds).toEqual(expect.arrayContaining(['cand-gpu-5080', 'cand-psu-850', 'part-perf-cpu']));
+  // 교체 대상이던 기존 GPU·파워는 새 조합에 실리지 않는다.
+  expect(appliedPartIds).not.toContain('part-perf-gpu');
+  expect(appliedPartIds).not.toContain('part-psu-600');
+  // 반쪽 상태를 만들 수 있는 개별 PUT은 더 이상 나가지 않는다.
+  expect(putRequests).toHaveLength(0);
   await expect(panel.getByTestId('perf-apply-error')).toHaveCount(0);
 });
 

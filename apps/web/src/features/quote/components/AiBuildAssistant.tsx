@@ -20,6 +20,7 @@ import {
   createAiMessageId,
   getAiStorageOwnerKey,
   mergeAiBuildHistory,
+  clearAiPartPicks,
   navigationRouteFrom,
   partRecommendationFrom,
   readPerformanceView,
@@ -138,7 +139,10 @@ const FAST_CATEGORY_ROUTE_TERMS: Array<[PartCategory, string[]]> = [
 function fastCategoryRouteIntent(message: string): PartCategory | null {
   const normalized = message.toLowerCase().replace(/\s+/g, ' ').trim();
   if (!/(보여\s*줘|열어\s*줘|화면|목록|카테고리|이동)/.test(normalized)) return null;
-  if (/(추천|후보|바꿔|교체|담아|넣어|빼|삭제|추가|성능|프레임|fps|비교|위치|어디|상세|상품\s*페이지|제품\s*페이지)/.test(normalized)) return null;
+  // 변경 의도 어휘(올려/높여/업그레이드)와 상대 향상 표현(부드럽/쾌적/끊김없)도 제외한다 —
+  // "배그 화면 부드럽게 GPU 업그레이드 해줘"가 '화면'+카테고리어만으로 이동 요청으로 오삼킴되면
+  // 서버의 검증된 GPU 변경 미리보기 대신 목록 이동으로 끝난다.
+  if (/(추천|후보|바꿔|교체|담아|넣어|빼|삭제|추가|성능|프레임|fps|비교|위치|어디|상세|상품\s*페이지|제품\s*페이지|올려|높여|업그레이드|부드럽|쾌적|끊김\s*없)/.test(normalized)) return null;
   if (/(rtx|지포스|라이젠|ryzen|core|m\.2|nvme|\d{3,})/i.test(normalized)) return null;
 
   const matches = FAST_CATEGORY_ROUTE_TERMS
@@ -665,11 +669,16 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       // 홈에서 물었어도 같은 경로로 셀프견적에 보낸다 — 채팅 기록은 세션에 남아 그쪽에서 이어진다.
       // 이동과 같은 가드를 태운다: 늦게 온 답이 사용자가 이미 떠난 화면을 끌고 가면 안 된다.
       const partRecommendation = partRecommendationFrom(response);
+      if (partRecommendation) {
+        // 저장은 이동 가드 밖에서 한다 — 늦게 온 응답이라 이동은 포기해도, 대화 기록의
+        // "부품 목록에 띄웠어요"가 거짓이 되지 않게 픽은 남긴다. 사용자가 나중에 그 카테고리
+        // 패널을 열면 추천 화면이 뜬다.
+        rememberAiPartPicks(partRecommendation);
+      }
       if (partRecommendation && canFollowNavigation(requestId, sentFromPathname)) {
         // 추천 순서는 화면 이동을 건너뛰지 못한다 — 옮겨 가며 이 컴포넌트가 언마운트되기 때문이다.
-        // 이동을 안 하더라도(이미 그 패널이 열려 있는 경우) 저장은 한다. 저장이 신호를 쏘고
-        // 열려 있는 패널이 그 신호로 새 순서를 읽는다.
-        rememberAiPartPicks(partRecommendation);
+        // 이동을 안 하더라도(이미 그 패널이 열려 있는 경우) 저장은 위에서 이미 했다. 저장이
+        // 신호를 쏘고 열려 있는 패널이 그 신호로 새 순서를 읽는다.
         if (!isEmbedded) {
           setOpen(false);
         }
@@ -777,6 +786,9 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         }))
       }, crypto.randomUUID());
       saveSelectedAiBuild(build);
+      // 드래프트가 통째로 바뀌었다 — 이전 드래프트 기준의 부품 픽을 남겨 두면 수동으로 연
+      // 패널이 옛 추천만 보여준다.
+      clearAiPartPicks();
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
       void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       void queryClient.invalidateQueries({ queryKey: ['parts', 'slot-candidates'] });
@@ -896,6 +908,8 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       }, crypto.randomUUID());
       // 적용이 성공한 뒤에만 선택 빌드를 저장한다. 실패 시 /self-quote 패널이 미적용 빌드를 보여주는 불일치를 막는다.
       saveSelectedAiBuild(normalizedBuild);
+      // 드래프트 전체 교체 — 이전 드래프트 기준 부품 픽은 소비한다.
+      clearAiPartPicks();
       queryClient.setQueryData(['quote-draft', 'current'], appliedDraft);
       void queryClient.invalidateQueries({ queryKey: ['quote-draft', 'current'] });
       startAiDraftApplicationFeedback({

@@ -5,7 +5,7 @@ import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react
 import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
-import { PERF_COMPARE_REQUEST_EVENT, openAiAssistant, type PerfCompareTarget } from '../../../lib/events';
+import { PERF_COMPARE_REQUEST_EVENT, consumePendingPerfCompare, openAiAssistant, type PerfCompareTarget } from '../../../lib/events';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   AI_SELECTED_BUILD_CHANGED_EVENT,
@@ -234,6 +234,8 @@ function SelfQuoteSlotBoardPage() {
       items.push({ partId, category: category as PartCategory, quantity: existing?.quantity ?? 1 });
     }
     const draft = await applyAiBuildToQuoteDraft({ items, conflictPolicy: 'REPLACE' }, changeGroup);
+    // 드래프트 전체 교체 — 이전 드래프트 기준 부품 픽은 소비한다.
+    clearAiPartPicks();
     invalidateQuoteDraft();
     return draft;
   }, [draftItems, invalidateQuoteDraft]);
@@ -258,12 +260,17 @@ function SelfQuoteSlotBoardPage() {
 
   // AI 변경 미리보기(draft-edit) 연동 — 챗봇이 CPU/GPU 변경 미리보기를 그리면 같은 비교를 패널에도 켠다.
   useEffect(() => {
-    const onPerfCompareRequest = (event: Event) => {
-      const detail = (event as CustomEvent<PerfCompareTarget>).detail;
+    const acceptPerfCompare = (detail: PerfCompareTarget | null) => {
       if (!detail || (detail.category !== 'CPU' && detail.category !== 'GPU') || !detail.partId) return;
       startPerfComparison(detail);
     };
+    const onPerfCompareRequest = (event: Event) => {
+      acceptPerfCompare((event as CustomEvent<PerfCompareTarget>).detail);
+    };
     window.addEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
+    // 리스너가 없던 화면(홈 등)이나 자식 카드 이펙트가 먼저 돈 첫 마운트에서 유실된 요청을
+    // 세션 저장분으로 1회 소비한다 — 없으면 이벤트가 영영 다시 오지 않는다.
+    acceptPerfCompare(consumePendingPerfCompare());
     return () => window.removeEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
   }, [startPerfComparison]);
 
