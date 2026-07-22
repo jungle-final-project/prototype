@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, Fragment, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowDown, ArrowRight, BarChart3, Bot, CheckCircle2, Download, LifeBuoy, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -12,6 +12,7 @@ import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
 import { ensurePcAgentConnected, type PcAgentConnectionPhase } from '../../support/pcAgentLauncher';
 import { requestPcAgentDiagnosis } from '../../support/supportApi';
 import { AiChatPendingBubble } from './AiChatPendingBubble';
+import { emphasizeChatText, isConclusionSentence } from './chatEmphasis';
 import { applicationKindForBuild, startAiDraftApplicationFeedback } from './AiDraftApplicationFeedbackCoordinator';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -1344,7 +1345,7 @@ function assistantMessageParagraphs(text: string): string[][] {
 }
 
 // 새로 추가된 문장 하나를 자연스럽게 페이드 인한다. 커스텀 keyframe 없이 opacity 트랜지션만 쓴다(index.css 무수정).
-function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: boolean }) {
+function FadeInSentence({ text, leadingSpace, emphasize }: { text: string; leadingSpace: boolean; emphasize: boolean }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
     const id = window.requestAnimationFrame(() => setShown(true));
@@ -1355,7 +1356,7 @@ function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: bo
       data-testid="ai-message-sentence"
       className={`transition-opacity duration-300 ${shown ? 'opacity-100' : 'opacity-0'}`}
     >
-      {leadingSpace ? ' ' : ''}{text}
+      {leadingSpace ? ' ' : ''}{emphasize ? emphasizeChatText(text) : text}
     </span>
   );
 }
@@ -1517,6 +1518,17 @@ const ChatMessage = memo(function ChatMessage({
       + (message.buildAssessment ? 1 : 0)
       + (message.builds?.length ?? 0);
   const animate = reveal && !isUser && !prefersReducedMotion() && sentences.length + extraCount > 1;
+  // 인트로는 따옴표로 감싼 예시 발화 모음이라 강조하지 않는다 — 실제 답변의 사실(가격·부품명·수치)만 볼드.
+  const emphasizeMessage = message.kind !== 'intro';
+  // 최종 결론 한 줄(판정문)이 자체 문단으로 떨어져 있으면 콜아웃으로 분리 표시한다.
+  // 문장 순서·텍스트는 그대로 두고 마지막 해당 문단의 스타일만 바꾼다(원문 계약 불변).
+  const conclusionParagraphIndex = useMemo(() => {
+    if (isUser || message.kind === 'intro') return -1;
+    for (let index = textParagraphs.length - 1; index >= 0; index -= 1) {
+      if (textParagraphs[index].length === 1 && isConclusionSentence(textParagraphs[index][0])) return index;
+    }
+    return -1;
+  }, [isUser, message.kind, textParagraphs]);
   const revealedCount = useSequentialReveal(sentences, extraCount, animate);
   const sentencesShown = animate ? Math.min(revealedCount, sentences.length) : sentences.length;
   const extrasShown = animate ? Math.max(0, revealedCount - sentences.length) : extraCount;
@@ -1561,13 +1573,24 @@ const ChatMessage = memo(function ChatMessage({
                   ? Math.max(0, Math.min(paragraph.length, sentencesShown - paragraphStart))
                   : paragraph.length;
                 if (visibleSentenceCount === 0) return null;
+                const isConclusion = paragraphIndex === conclusionParagraphIndex;
                 return (
-                  <p key={`${paragraphIndex}:${paragraph[0]}`} data-testid="ai-message-paragraph">
+                  <p
+                    key={`${paragraphIndex}:${paragraph[0]}`}
+                    data-testid="ai-message-paragraph"
+                    data-conclusion={isConclusion ? 'true' : undefined}
+                    className={isConclusion
+                      ? `rounded-md border-l-[3px] border-[#de6c2d] font-semibold ${isLarge ? 'bg-white/10 px-3 py-2' : 'bg-[#de6c2d]/10 px-2.5 py-1.5 text-slate-900'}`
+                      : undefined}
+                  >
                     {animate
                       ? paragraph.slice(0, visibleSentenceCount).map((sentence, index) => (
-                        <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} />
+                        <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} emphasize={emphasizeMessage} />
                       ))
-                      : paragraph.join(' ')}
+                      : paragraph.map((sentence, index) => (
+                        // join(' ')과 문자 단위로 동일한 출력 — 문장 앞머리 강조 규칙(교체:/번호 목록)이 걸리게 문장별로 처리한다.
+                        <Fragment key={index}>{index > 0 ? ' ' : ''}{emphasizeMessage ? emphasizeChatText(sentence) : sentence}</Fragment>
+                      ))}
                   </p>
                 );
               })}
