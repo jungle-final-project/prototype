@@ -58,14 +58,32 @@ class ToolCheckServiceAttributeParsingTest {
     @Test
     void blankSocketIsTreatedAsMissing() {
         // 빈 문자열 소켓은 비교 대상이 아니다 — "CPU 소켓()과 …" 빈 괄호 FAIL 금지.
+        // 다만 조용한 PASS로 둔갑해서도 안 된다: 결측은 '검사를 못 했다'로 명시한다(메모리 규격 관례).
         Map<String, Object> result = toolResult(List.of(
                 new ToolBuildPart(1L, "cpu-id", "CPU", "테스트 CPU", "AMD", 450_000, Map.of("socket", "  ")),
                 new ToolBuildPart(20L, "board-id", "MOTHERBOARD", "테스트 보드", "ASUS", 250_000,
                         Map.of("socket", "AM5", "memoryType", "DDR5"))
         ), "compatibility");
 
-        assertThat(result.get("status")).isEqualTo("PASS");
+        assertThat(result.get("status")).isEqualTo("WARN");
         assertThat(String.valueOf(result.get("summary"))).doesNotContain("()");
+        assertThat(String.valueOf(result.get("summary"))).contains("소켓 정보가 없어 검사를 못 했습니다");
+        assertThat(details(result).get("socketMatched")).isNull();
+        assertThat(details(result).get("socketChecked")).isEqualTo(false);
+    }
+
+    @Test
+    void missingCoolerSocketSupportIsReportedAsUncheckedNotCompatible() {
+        // socketSupport 목록이 없는 쿨러는 '쿨러 호환' 보증 대상이 아니다 — 미검증을 명시한다.
+        Map<String, Object> result = toolResult(List.of(
+                new ToolBuildPart(1L, "cpu-id", "CPU", "테스트 CPU", "AMD", 450_000, Map.of("socket", "AM5")),
+                new ToolBuildPart(30L, "cooler-id", "COOLER", "테스트 쿨러", "딥쿨", 80_000, Map.of("heightMm", 155))
+        ), "compatibility");
+
+        assertThat(result.get("status")).isEqualTo("WARN");
+        assertThat(String.valueOf(result.get("summary"))).contains("쿨러의 소켓 지원 정보가 없어 검사를 못 했습니다");
+        assertThat(details(result).get("coolerSocketMatched")).isNull();
+        assertThat(details(result).get("coolerSocketChecked")).isEqualTo(false);
     }
 
     @Test

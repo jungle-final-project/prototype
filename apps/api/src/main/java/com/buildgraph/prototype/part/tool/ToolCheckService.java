@@ -141,7 +141,14 @@ public class ToolCheckService {
         ToolBuildPart cpu = byCategory.get("CPU");
         ToolBuildPart motherboard = byCategory.get("MOTHERBOARD");
         ToolBuildPart cooler = byCategory.get("COOLER");
-        boolean socketMatched = same(stringAttr(cpu, "socket"), stringAttr(motherboard, "socket"));
+        // CPU 소켓 — 결측이면 검사 없이 '통과'로 둔갑시키지 않는다(메모리 규격의 결측 관례).
+        // same()의 null=true 관용은 '검사 생략'이지 '검사 통과'가 아니다 — checked 플래그로 구분한다.
+        String cpuSocket = stringAttr(cpu, "socket");
+        String boardSocket = stringAttr(motherboard, "socket");
+        boolean socketChecked = cpuSocket != null && boardSocket != null;
+        boolean socketMatched = same(cpuSocket, boardSocket);
+        // CPU·보드가 둘 다 담겼는데 어느 쪽이든 소켓 정보가 없으면 '검사 못 함'을 명시한다.
+        boolean socketMissing = cpu != null && motherboard != null && !socketChecked;
         // 메모리 규격 — RAM 전 행을 순회한다(스틱 수 검사와 같은 원칙: byCategory는 카테고리당 1개로 접힌다).
         // 결측이면 'DDR5' 같은 임의 기본값으로 비교하지 않는다 — 없는 데이터로 FAIL도, 근거 없는 PASS도 내지 않는다.
         String boardMemoryType = stringAttr(motherboard, "memoryType");
@@ -171,7 +178,14 @@ public class ToolCheckService {
                 || (ramPresent && !ramTypeMissing && motherboard != null && boardMemoryType != null);
         // RAM·보드가 둘 다 담겼는데 어느 쪽이든 규격 정보가 없으면 '검사 못 함'을 명시한다(size의 결측 관례).
         boolean memoryTypeMissing = ramPresent && motherboard != null && (ramTypeMissing || boardMemoryType == null);
-        boolean coolerMatched = socketSupported(cooler, stringAttr(cpu, "socket"));
+        // 쿨러 소켓 지원 — socketSupport 목록이 있을 때만 검사한 것으로 본다. 결측·빈 목록으로
+        // FAIL도, 근거 없는 '쿨러 호환' 보증도 내지 않는다.
+        Object coolerSocketSupport = cooler == null ? null : cooler.attributes().get("socketSupport");
+        boolean coolerSocketChecked = cpuSocket != null
+                && coolerSocketSupport instanceof List<?> supportList
+                && !supportList.isEmpty();
+        boolean coolerMatched = !coolerSocketChecked || socketSupported(cooler, cpuSocket);
+        boolean coolerSocketMissing = cooler != null && cpu != null && !coolerSocketChecked;
         // 쿨러 냉각 용량(TDP 대응) — 소켓이 맞아도 65W급 쿨러에 170W CPU면 조립은 돼도 냉각이 안 된다.
         // 양쪽 tdpW가 모두 있을 때만 검사한다(ramSlotsChecked 관례) — 없는 데이터로 FAIL을 내지 않는다.
         int cpuTdpW = intAttr(cpu, "tdpW", 0);
@@ -222,7 +236,7 @@ public class ToolCheckService {
                 && ramFormFactorMatched && ramSlotsMatched && m2SlotsMatched;
         // 실제 걸린 부품쌍 — 인사이트/보드가 문제와 무관한 부품(예: 소켓 문제인데 RAM)까지 칠하지 않게 details로 내린다.
         LinkedHashSet<String> issueCategories = new LinkedHashSet<>();
-        if (!socketMatched) {
+        if (!socketMatched || socketMissing) {
             issueCategories.add("CPU");
             issueCategories.add("MOTHERBOARD");
         }
@@ -230,7 +244,7 @@ public class ToolCheckService {
             issueCategories.add("RAM");
             issueCategories.add("MOTHERBOARD");
         }
-        if (!coolerMatched || !coolerTdpMatched) {
+        if (!coolerMatched || !coolerTdpMatched || coolerSocketMissing) {
             issueCategories.add("COOLER");
             issueCategories.add("CPU");
         }
@@ -287,10 +301,20 @@ public class ToolCheckService {
             issues.add(issue("FAIL", message, "RAM"));
         }
         List<String> warnReasons = new ArrayList<>();
+        if (socketMissing) {
+            String message = "CPU·메인보드 소켓 정보가 없어 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "CPU", "MOTHERBOARD"));
+        }
         if (memoryTypeMissing) {
             String message = "메모리 규격 정보가 없어 검사를 못 했습니다";
             warnReasons.add(message);
             issues.add(issue("WARN", message, "RAM", "MOTHERBOARD"));
+        }
+        if (coolerSocketMissing) {
+            String message = "쿨러의 소켓 지원 정보가 없어 검사를 못 했습니다";
+            warnReasons.add(message);
+            issues.add(issue("WARN", message, "COOLER", "CPU"));
         }
         String summary = !pass
                 ? failReasons.get(0)
@@ -305,14 +329,17 @@ public class ToolCheckService {
         // 예외: 결측으로 검사를 생략한 경우만 WARN이다(size의 결측 관례와 동일) — 근거 없는 초록을 막는다.
         return tool("compatibility",
                 !pass ? "FAIL" : !warnReasons.isEmpty() ? "WARN" : "PASS",
-                socketMatched && memoryMatched ? "HIGH" : "MEDIUM",
+                socketChecked && socketMatched && memoryMatched ? "HIGH" : "MEDIUM",
                 summary,
                 MockData.map(
-                        "socketMatched", socketMatched,
+                        // 미검증이면 null — 그래프 socketStatus가 초록 대신 fallback(미검증)으로 그리게 한다.
+                        "socketMatched", socketChecked ? socketMatched : null,
+                        "socketChecked", socketChecked,
                         "memoryTypeMatched", memoryMatched,
                         "memoryTypeChecked", memoryTypeChecked,
                         "ramMemoryTypes", ramMemoryTypes.isEmpty() ? null : List.copyOf(ramMemoryTypes),
-                        "coolerSocketMatched", coolerMatched,
+                        "coolerSocketMatched", coolerSocketChecked ? coolerMatched : null,
+                        "coolerSocketChecked", coolerSocketChecked,
                         "cpuTdpW", cpuTdpW > 0 ? cpuTdpW : null,
                         "coolerTdpW", coolerTdpW > 0 ? coolerTdpW : null,
                         "coolerTdpChecked", coolerTdpChecked,
