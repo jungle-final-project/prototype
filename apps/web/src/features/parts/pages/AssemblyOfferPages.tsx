@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  ArrowUpDown,
   BadgeCheck,
   CalendarDays,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   CreditCard,
   MapPin,
@@ -99,7 +102,7 @@ export function CheckoutOffersPage() {
 
   return (
     <Screen>
-      <header className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <header className="mb-5">
         <div>
           <Link to="/my/assembly-requests" className="inline-flex items-center gap-2 text-sm font-black text-brand-blue hover:underline">
             <ArrowLeft size={16} /> 내 조립 요청
@@ -111,25 +114,15 @@ export function CheckoutOffersPage() {
           <p className="mt-2 max-w-2xl break-keep text-sm leading-6 text-slate-600">기사별 부품 확인가, 조립비와 완료 일정을 비교한 뒤 한 건을 선택하세요.</p>
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-black"><span className="rounded bg-slate-100 px-2 py-1 text-commerce-ink">Dazzajo 기사 {internalOfferCount}/2</span><span className="rounded bg-blue-50 px-2 py-1 text-blue-800">외부 파트너 {externalOfferCount}/3</span></div>
         </div>
-        {request.offers.length > 1 ? (
-          <label className="flex min-h-10 w-full items-center justify-between gap-3 rounded-md border border-commerce-line bg-white px-3 text-sm font-black text-commerce-ink shadow-sm sm:w-auto sm:min-w-48">
-            <span className="shrink-0 text-xs text-slate-500">정렬</span>
-            <select
-              value={offerSort}
-              onChange={(event) => setOfferSort(event.target.value as OfferSortKey)}
-              className="min-w-0 flex-1 cursor-pointer bg-transparent text-right text-sm font-black outline-none"
-              aria-label="기사 제안 정렬"
-            >
-              {OFFER_SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
       </header>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="min-w-0 space-y-3" aria-label="기사 제안 목록">
+          {request.offers.length > 1 ? (
+            <div className="flex justify-end">
+              <OfferSortDropdown value={offerSort} onChange={setOfferSort} />
+            </div>
+          ) : null}
           {newOfferNotice ? <StateMessage type="success" title="새 제안 도착" body={newOfferNotice} /> : null}
           {request.offers.length === 0 ? (
             <StateMessage type="info" title="기사 제안을 준비하고 있습니다" body="지역과 서비스 조건에 맞는 기사 제안이 등록되면 이 화면에서 바로 비교할 수 있습니다." />
@@ -191,6 +184,80 @@ export function CheckoutOffersPage() {
         </aside>
       </div>
     </Screen>
+  );
+}
+
+function OfferSortDropdown({ value, onChange }: { value: OfferSortKey; onChange: (value: OfferSortKey) => void }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const selectedOption = OFFER_SORT_OPTIONS.find((option) => option.value === value) ?? OFFER_SORT_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative z-20 w-full sm:w-auto">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className="flex min-h-11 w-full items-center justify-between gap-4 rounded-md border border-commerce-line bg-white px-3.5 text-sm font-black text-commerce-ink shadow-sm transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#de6c2d]/25 sm:w-52"
+      >
+        <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+          <ArrowUpDown size={14} />
+          정렬
+        </span>
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <span className="truncate">{selectedOption.label}</span>
+          <ChevronDown size={16} className={`shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          aria-label="기사 제안 정렬"
+          className="absolute right-0 top-[calc(100%+8px)] w-full overflow-hidden rounded-md border border-commerce-line bg-white p-1 shadow-product sm:w-52"
+        >
+          {OFFER_SORT_OPTIONS.map((option) => {
+            const selected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={`flex min-h-10 w-full items-center justify-between gap-3 rounded px-3 text-left text-sm font-black transition ${
+                  selected ? 'bg-[#fff4ed] text-[#de6c2d]' : 'text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <span>{option.label}</span>
+                {selected ? <Check size={15} /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
