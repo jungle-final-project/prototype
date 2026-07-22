@@ -275,9 +275,13 @@ function PerfPanelBody({
   const game = FPS_GAMES.find((g) => g.key === gameKey) ?? DEFAULT_FPS_GAME;
   const resolution = FPS_RESOLUTIONS.find((r) => r.key === resKey) ?? DEFAULT_FPS_RESOLUTION;
   // 챗봇의 "더 부드럽게"는 지금 이 화면의 게임·해상도를 기준으로 해석된다 — 선택을 남겨 둔다.
+  // 단, 현재 드래프트 패널(셀프견적)일 때만이다 — 저장 견적 화면(onStartComparison 부재)에서
+  // 구경하며 고른 게임·해상도가 셀프견적 문맥을 덮어쓰면 챗봇이 화면에 없는 기준으로 답한다.
+  const isDraftSurface = Boolean(onStartComparison);
   useEffect(() => {
+    if (!isDraftSurface) return;
     rememberPerformanceView({ gameQuery: game.query, resolution: resolution.key });
-  }, [game.query, resolution.key]);
+  }, [isDraftSurface, game.query, resolution.key]);
 
   // 비교 헤더에서 토글(구분선 왼쪽)과 후보 선택(오른쪽)을 떨어뜨려 놓기 위해 카테고리를 여기서 소유한다.
   const [compareCategory, setCompareCategory] = useState<PerfCompareTarget['category']>(comparison?.category ?? 'GPU');

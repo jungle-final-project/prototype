@@ -5917,6 +5917,21 @@ public class BuildChatService {
         if (draftItems.isEmpty() && List.of("REMOVE", "UPDATE_QUANTITY").contains(operation)) {
             return;
         }
+        // RAM/저장장치는 복수 행이 공존할 수 있는데 채팅 draftEdit 계약은 행(partId)을 지목할 수 없다 —
+        // 그대로 진행하면 REPLACE/REMOVE가 전 행을 제거하고(두 번째 SSD 영구 삭제) UPDATE_QUANTITY가
+        // 전 행 수량을 일괄 변경한다. 어느 행인지 알 수 없으니 파괴적 미리보기 대신 정직하게 안내한다.
+        long categoryRowCount = draftItems.stream()
+                .map(this::draftPartCandidate)
+                .filter(item -> category.equals(item.category()))
+                .count();
+        if (categoryRowCount >= 2 && List.of("REPLACE", "REMOVE", "UPDATE_QUANTITY").contains(operation)) {
+            response.put("answerType", "PART");
+            response.put("message", categoryLabel(category) + " 상품이 " + categoryRowCount
+                    + "개 담겨 있어 어느 것을 바꿀지 정할 수 없습니다. 견적 체크리스트에서 바꿀 상품을 직접 선택해 주세요.");
+            response.put("builds", List.of());
+            response.put("quickReplies", List.of(categoryLabel(category) + " 추천해줘"));
+            return;
+        }
         // "RAM 하나 넣어줘"처럼 상품·스펙·가격·방향이 전혀 없는 변경 요청에서 LLM이
         // 첫 후보를 임의 확정하지 않게 한다. 미리보기를 만들지 않으면 바로 뒤의 부품 추천
         // 후처리가 검증된 TOP 후보와 선택 칩을 제공한다. 정확 상품 칩과 방향성 교체는 앞선
@@ -5976,9 +5991,11 @@ public class BuildChatService {
             items.add(partItem(candidate, null, quantity));
         }
         if ("REPLACE".equals(operation) || "ADD".equals(operation)) {
+            // REPLACE는 기존 수량을 승계한다 — RAM만 defaultQuantity(2모듈 기준)로 리셋해 4스틱 구성이
+            // 소리 없이 반토막 나던 예외를 제거한다(validateDraftReplacements·coordinatedReplacementPreview와 통일).
             int quantity = targetQuantity != null && targetQuantity > 0
                     ? Math.max(1, Math.min(9, targetQuantity))
-                    : existingCategoryQuantity != null && "REPLACE".equals(operation) && !"RAM".equals(category)
+                    : existingCategoryQuantity != null && "REPLACE".equals(operation)
                             ? existingCategoryQuantity
                             : defaultQuantity(replacement);
             parts.add(replacement);

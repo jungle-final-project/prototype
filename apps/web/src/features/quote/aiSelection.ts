@@ -442,7 +442,11 @@ export type PerformanceViewSelection = { gameQuery: string; resolution: string }
  */
 export function rememberPerformanceView(selection: PerformanceViewSelection) {
   try {
-    sessionStorage.setItem(AI_PERFORMANCE_VIEW_KEY, JSON.stringify(selection));
+    // 소유자 스코프 — 같은 탭에서 계정을 바꿔도 이전 계정이 남긴 게임·해상도로 답하지 않는다.
+    sessionStorage.setItem(
+      getScopedAiStorageKey(AI_PERFORMANCE_VIEW_KEY) ?? AI_PERFORMANCE_VIEW_KEY,
+      JSON.stringify(selection)
+    );
   } catch {
     // 저장소를 못 쓰면 기본값(배그/4K)으로 읽힌다 — 화면과 어긋나도 답이 사라지진 않는다.
   }
@@ -455,7 +459,7 @@ export function readPerformanceView(): PerformanceViewSelection {
     resolution: DEFAULT_AI_DRAFT_PERFORMANCE_SELECTION.resolutionLabel
   };
   try {
-    const raw = sessionStorage.getItem(AI_PERFORMANCE_VIEW_KEY);
+    const raw = sessionStorage.getItem(getScopedAiStorageKey(AI_PERFORMANCE_VIEW_KEY) ?? AI_PERFORMANCE_VIEW_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<PerformanceViewSelection>;
     return {
@@ -699,6 +703,9 @@ export function resetAssistantConversation(ownerKey: string | null = getAiStorag
     updatedAt: new Date().toISOString()
   };
   saveAssistantSession(nextSession, ownerKey);
+  // 대화를 지우면 그 대화가 남긴 부품 픽도 함께 지운다 — 남겨 두면 수동으로 연 패널이
+  // 몇 시간 전 대화 기준의 추천만 "챗봇이 고른 추천"으로 계속 보여준다.
+  clearAiPartPicks();
   return nextSession;
 }
 

@@ -163,6 +163,69 @@ class QuoteDraftQueryServiceTest {
         );
     }
 
+    @Test
+    void applyAiBuildAllowsMultipleStorageRowsLikeDraftAndSavedBuilds() {
+        // 드래프트·저장 견적은 RAM/STORAGE 복수 행을 허용한다(MULTI_ITEM_CATEGORIES) —
+        // 시스템이 스스로 만들어 준 SSD 2종 구성을 apply-ai-build만 400으로 거부하면 안 된다.
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
+        when(jdbcTemplate.queryForList(anyString(), eq("part-ssd-a"))).thenReturn(List.of(part("part-ssd-a", 301L, "STORAGE", "NVMe 1TB", 150000)));
+        when(jdbcTemplate.queryForList(anyString(), eq("part-ssd-b"))).thenReturn(List.of(part("part-ssd-b", 302L, "STORAGE", "NVMe 2TB", 230000)));
+        when(jdbcTemplate.queryForList(anyString(), eq(1004L))).thenReturn(List.of(activeDraft()), List.of(activeDraft()));
+        when(jdbcTemplate.queryForList(anyString(), eq(700L))).thenReturn(List.of(
+                draftItem("draft-item-ssd-a", "part-ssd-a", "STORAGE", "NVMe 1TB", 150000),
+                draftItem("draft-item-ssd-b", "part-ssd-b", "STORAGE", "NVMe 2TB", 230000)
+        ));
+        when(jdbcTemplate.queryForList(argThat((String sql) -> sql != null && sql.contains("RETURNING")), eq(700L)))
+                .thenReturn(List.of(activeDraft()));
+
+        Map<String, Object> draft = quoteDraftQueryService.applyAiBuild(USER_TOKEN, Map.of(
+                "conflictPolicy", "REPLACE",
+                "items", List.of(
+                        Map.of("partId", "part-ssd-a", "category", "STORAGE", "quantity", 1),
+                        Map.of("partId", "part-ssd-b", "category", "STORAGE", "quantity", 1)
+                )
+        ));
+
+        assertThat(draft.get("status")).isEqualTo("ACTIVE");
+        assertThat(draft.get("totalPrice")).isEqualTo(380_000);
+    }
+
+    @Test
+    void applyAiBuildStillRejectsDuplicateSingleItemCategory() {
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
+        when(jdbcTemplate.queryForList(anyString(), eq("part-gpu-a"))).thenReturn(List.of(part("part-gpu-a", 201L, "GPU", "RTX A", 890000)));
+        when(jdbcTemplate.queryForList(anyString(), eq("part-gpu-b"))).thenReturn(List.of(part("part-gpu-b", 202L, "GPU", "RTX B", 990000)));
+
+        assertThatThrownBy(() -> quoteDraftQueryService.applyAiBuild(USER_TOKEN, Map.of(
+                "conflictPolicy", "REPLACE",
+                "items", List.of(
+                        Map.of("partId", "part-gpu-a", "category", "GPU", "quantity", 1),
+                        Map.of("partId", "part-gpu-b", "category", "GPU", "quantity", 1)
+                )
+        )))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting("statusCode")
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void applyAiBuildRejectsSamePartListedTwice() {
+        // 같은 상품 2행은 배치 INSERT가 같은 행을 두 번 만들게 하므로 카테고리와 무관하게 거부한다.
+        when(currentUserService.requireUser(USER_TOKEN)).thenReturn(currentUser());
+        when(jdbcTemplate.queryForList(anyString(), eq("part-ssd-a"))).thenReturn(List.of(part("part-ssd-a", 301L, "STORAGE", "NVMe 1TB", 150000)));
+
+        assertThatThrownBy(() -> quoteDraftQueryService.applyAiBuild(USER_TOKEN, Map.of(
+                "conflictPolicy", "REPLACE",
+                "items", List.of(
+                        Map.of("partId", "part-ssd-a", "category", "STORAGE", "quantity", 1),
+                        Map.of("partId", "part-ssd-a", "category", "STORAGE", "quantity", 2)
+                )
+        )))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting("statusCode")
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
     private static Map<String, Object> activeDraft() {
         return Map.of(
                 "internal_id", 700L,

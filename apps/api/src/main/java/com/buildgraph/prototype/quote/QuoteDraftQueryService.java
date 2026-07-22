@@ -427,6 +427,7 @@ public class QuoteDraftQueryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "items는 1개 이상이어야 합니다.");
         }
         Set<String> categories = new LinkedHashSet<>();
+        Set<String> partKeys = new LinkedHashSet<>();
         List<ResolvedAiItem> items = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             String partId = text(row.get("partId"));
@@ -440,8 +441,14 @@ public class QuoteDraftQueryService {
             if (!Objects.equals(category, partCategory)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "items[].category가 부품 카테고리와 일치하지 않습니다.");
             }
-            if (!categories.add(category)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "AI 조합 적용은 카테고리당 1개 부품만 허용합니다.");
+            // 같은 상품 중복은 카테고리와 무관하게 거부한다 — 배치 INSERT가 같은 행을 두 번 만들면 안 된다.
+            if (!partKeys.add(partId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "items[]에 같은 부품이 중복됩니다. (partId=" + partId + ")");
+            }
+            // RAM·저장장치는 드래프트·저장 견적이 복수 행을 허용하는 카테고리다(MULTI_ITEM_CATEGORIES).
+            // 여기서만 무조건 400을 내면 시스템이 스스로 만들어 준 SSD 2종 구성을 재적용할 수 없게 된다.
+            if (!MULTI_ITEM_CATEGORIES.contains(category) && !categories.add(category)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "AI 조합 적용은 RAM·저장장치를 제외하면 카테고리당 1개 부품만 허용합니다.");
             }
             items.add(new ResolvedAiItem(part, quantity(row.get("quantity"), category), category));
         }
