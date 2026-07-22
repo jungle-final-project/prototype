@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, BadgeCheck, BriefcaseBusiness, CheckCircle2, Clock3, ImagePlus, MapPin, Save, ShieldCheck, Store, Wrench, XCircle } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, BriefcaseBusiness, CalendarDays, CheckCircle2, Clock3, ImagePlus, MapPin, Save, ShieldCheck, Store, Wrench, XCircle } from 'lucide-react';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Panel, Screen, StateMessage, StatusBadge } from '../../components/ui';
@@ -110,7 +110,7 @@ export function TechnicianRequestDetailPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-5">
           <Panel title={request.requestNo} subtitle="사용자 개인정보 없이 조립 조건과 부품 snapshot만 표시합니다.">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="지역" value={request.region} /><Metric label="희망 일정" value={formatPreferredDate(request.preferredDate)} /><Metric label="서비스" value={request.serviceType === 'FULL_SERVICE' ? '구매+조립' : '조립만'} /><Metric label="예상 부품가" value={`${request.estimatedPartsPrice.toLocaleString()}원`} /></div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="지역" value={request.region} /><Metric label="접수일" value={formatDateOnly(request.createdAt)} /><Metric label="희망 일정" value={formatDateOnly(request.preferredDate)} /><Metric label="서비스" value={request.serviceType === 'FULL_SERVICE' ? '구매+조립' : '조립만'} /><Metric label="예상 부품가" value={`${request.estimatedPartsPrice.toLocaleString()}원`} /></div>
           </Panel>
           <Panel title={`부품 ${request.itemCount}개`} subtitle="이 구성을 기준으로 재고와 가격을 확인하세요.">
             <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3">분류</th><th className="p-3">부품</th><th className="p-3">수량</th><th className="p-3 text-right">snapshot 가격</th></tr></thead><tbody>{request.items.map((item) => <tr key={item.partId} className="border-t border-slate-100"><td className="p-3 font-black">{item.category}</td><td className="p-3"><div className="font-bold text-commerce-ink">{item.name}</div><div className="text-xs text-slate-500">{item.manufacturer}</div></td><td className="p-3">{item.quantity}</td><td className="p-3 text-right font-black">{item.lineTotal.toLocaleString()}원</td></tr>)}</tbody></table></div>
@@ -271,8 +271,8 @@ const PREFERRED_DATE_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
   year: 'numeric'
 });
 
-function formatPreferredDate(value: string) {
-  const trimmed = value.trim();
+function formatDateOnly(value?: string | null) {
+  const trimmed = value?.trim() ?? '';
   if (!trimmed) return '-';
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
 
@@ -293,7 +293,7 @@ function formatPreferredDate(value: string) {
 }
 
 function TechnicianRequestCard({ request }: { request: TechnicianRequestSummary }) {
-  return <Link to={`/technician/requests/${request.id}`} className="grid gap-3 rounded-md border border-commerce-line bg-white p-4 transition hover:border-brand-blue sm:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><span className="font-black text-commerce-ink">{request.requestNo}</span><StatusBadge status={request.ownOfferStatus ?? request.status} /></div><div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><MapPin size={13} />{request.region}</span><span className="inline-flex items-center gap-1"><Clock3 size={13} />{formatPreferredDate(request.preferredDate)}</span><span>부품 {request.itemCount}개</span></div></div><div className="sm:text-right"><div className="text-xs font-bold text-slate-500">예상 부품가</div><div className="mt-1 font-black text-commerce-sale">{request.estimatedPartsPrice.toLocaleString()}원</div></div></Link>;
+  return <Link to={`/technician/requests/${request.id}`} className="grid gap-3 rounded-md border border-commerce-line bg-white p-4 transition hover:border-brand-blue sm:grid-cols-[minmax(0,1fr)_auto]"><div><div className="flex flex-wrap items-center gap-2"><span className="font-black text-commerce-ink">{request.requestNo}</span><StatusBadge status={request.ownOfferStatus ?? request.status} /></div><div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><MapPin size={13} />{request.region}</span><span className="inline-flex items-center gap-1"><Clock3 size={13} />접수 {formatDateOnly(request.createdAt)}</span><span className="inline-flex items-center gap-1"><CalendarDays size={13} />희망 {formatDateOnly(request.preferredDate)}</span><span>부품 {request.itemCount}개</span></div></div><div className="sm:text-right"><div className="text-xs font-bold text-slate-500">예상 부품가</div><div className="mt-1 font-black text-commerce-sale">{request.estimatedPartsPrice.toLocaleString()}원</div></div></Link>;
 }
 
 function TechnicianStatusPage({ profile }: { profile: Technician }) {
