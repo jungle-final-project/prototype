@@ -671,7 +671,8 @@ public class PartAdminService {
         }
 
         int offset() {
-            return page * size;
+            // page*size int 오버플로 → 음수 OFFSET → 500 방지(공개 목록과 동일 처리).
+            return (int) Math.min((long) page * size, Integer.MAX_VALUE);
         }
     }
 }

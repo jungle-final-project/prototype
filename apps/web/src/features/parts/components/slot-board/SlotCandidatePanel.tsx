@@ -706,15 +706,21 @@ export function SlotCandidatePanel({
           <div className="mt-2 rounded-md border border-dashed border-slate-300 p-4 text-center text-xs font-bold text-slate-500">
             {/* 원인 지목 순서: 서버 결과는 있는데 표시 필터가 다 걸렀으면 필터를, 그다음 검색어를 탓한다 —
                 검색 결과가 실제로 있는데 "'q' 검색 결과가 없습니다"라고 말하지 않는다. */}
-            {visibleParts.length > 0 && (hideFail || onlyWishlist)
+            {(hideFail || onlyWishlist) && hasNextPage
+              // 아직 안 불러온 페이지가 남았으면 "없습니다"로 단정하지 않는다 — 카탈로그 깊은 곳의
+              // 찜/장착가능 후보를 "없다"고 오안내하던 문제. 더 보기로 이어 찾도록 안내한다.
               ? onlyWishlist
-                ? '조건에 맞는 찜한 부품이 없습니다. 찜만 보기를 끄거나 하트를 눌러 찜해 보세요.'
-                : '장착 가능한 후보가 없습니다. 장착 불가 숨기기를 꺼 보세요.'
-              : q
-                ? `'${q}' 검색 결과가 없습니다.`
-                : onlyWishlist
-                  ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
-                  : '표시할 후보가 없습니다.'}
+                ? '현재 불러온 목록에는 찜한 부품이 없습니다. 아래 “후보 더 보기”로 더 찾아보세요.'
+                : '현재 불러온 목록에는 장착 가능한 후보가 없습니다. 아래 “후보 더 보기”로 더 찾아보세요.'
+              : visibleParts.length > 0 && (hideFail || onlyWishlist)
+                ? onlyWishlist
+                  ? '조건에 맞는 찜한 부품이 없습니다. 찜만 보기를 끄거나 하트를 눌러 찜해 보세요.'
+                  : '장착 가능한 후보가 없습니다. 장착 불가 숨기기를 꺼 보세요.'
+                : q
+                  ? `'${q}' 검색 결과가 없습니다.`
+                  : onlyWishlist
+                    ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
+                    : '표시할 후보가 없습니다.'}
           </div>
         ) : null}
 
