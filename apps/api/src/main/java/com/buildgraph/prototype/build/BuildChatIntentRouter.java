@@ -222,6 +222,12 @@ public class BuildChatIntentRouter {
         if (normalized.isBlank()) {
             return false;
         }
+        // "끊김 없이 부드럽게 해줘"는 증상 신고가 아니라 상대 성능 향상 요청이다.
+        // 증상 어휘('화면끊'·'끊김')가 향상 의도('끊김없')를 삼키면 발표 문장 변형이 AS 안내로 빠진다.
+        // 진짜 증상("멈춰요"·"자꾸 끊겨요")은 requestsSmootherPerformance의 배제 목록이 걸러 여기로 온다.
+        if (BuildChatService.requestsSmootherPerformance(normalized)) {
+            return false;
+        }
         // 예방 목적의 상품 추천은 장애 신고가 아니다.
         if (isRecommendationVerb(normalized)
                 && containsAny(normalized, "안멈추는", "멈추지않는", "안꺼지는", "문제없는", "고장안나는")) {

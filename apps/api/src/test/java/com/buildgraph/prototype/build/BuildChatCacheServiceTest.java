@@ -232,6 +232,27 @@ class BuildChatCacheServiceTest {
     }
 
     @Test
+    void ownDraftReferencingPartRecommendationBypassesCacheDespiteBuildWord() {
+        // "내 견적이랑 호환되는 SSD"는 '견적' 때문에 본체 추천으로 오판되기 쉽지만
+        // 서버 활성 draft 기준 응답이다 — 지문 없는 요청은 저장·조회 모두 우회해야
+        // 사용자 간 재생(A의 draft 기준 응답이 B에게)과 같은 사용자의 stale 재생을 막는다.
+        Map<String, String> redisStore = new LinkedHashMap<>();
+        TestCache cache = cache(redisStore);
+        Map<String, Object> request = Map.of("message", "내 견적이랑 호환되는 SSD 추천해줘");
+        Map<String, Object> response = Map.of(
+                "answerType", "PART",
+                "message", "현재 견적과 호환되는 저장장치 추천입니다.",
+                "partRecommendation", Map.of("category", "STORAGE")
+        );
+
+        cache.service.store(request, "BUILD_CHAT_54_MINI_FAST", 42L, response);
+
+        assertThat(redisStore).isEmpty();
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 42L)).isEmpty();
+        assertThat(cache.service.lookup(request, "BUILD_CHAT_54_MINI_FAST", 7L)).isEmpty();
+    }
+
+    @Test
     void standalonePartRecommendationWithExplicitDraftFingerprintCanCachePerUser() {
         Map<String, String> redisStore = new LinkedHashMap<>();
         TestCache cache = cache(redisStore);

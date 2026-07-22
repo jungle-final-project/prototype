@@ -4126,6 +4126,10 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.requestsSmootherPerformance("FPS 높여줘")).isTrue();
         assertThat(BuildChatService.requestsSmootherPerformance("더 쾌적하게 해줘")).isTrue();
 
+        // 희망형 "끊김 없이"는 향상 요청, 진행형 "끊겨요"는 증상 신고 — 표기로 가른다.
+        assertThat(BuildChatService.requestsSmootherPerformance("배그 화면 끊김 없이 부드럽게 해줘")).isTrue();
+        assertThat(BuildChatService.requestsSmootherPerformance("화면이 자꾸 끊겨요 부드럽게 해줘")).isFalse();
+
         // 가로채면 안 되는 것 — 이 fast path는 LLM 이전에 잡으므로 한 번 삼키면 되돌릴 수 없다.
         assertThat(BuildChatService.requestsSmootherPerformance("배그 화면이 멈춰요")).isFalse();
         assertThat(BuildChatService.requestsSmootherPerformance("게임하다 자꾸 튕겨요")).isFalse();
@@ -4179,6 +4183,98 @@ class BuildChatServiceTest {
         assertThat(BuildChatService.unsupportedRecommendationQualifier("100만원 이하 gpu 추천해줘")).isNull();
         assertThat(BuildChatService.unsupportedRecommendationQualifier("8기가 gpu 추천해줘")).isNull();
         assertThat(BuildChatService.unsupportedRecommendationQualifier("램 수량 두 개로 바꿔줘")).isNull();
+
+        // 색상도 디자인 조건이다 — 무시한 목록을 '추천'으로 내놓지 않는다.
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("흰색 케이스 추천해줘")).isEqualTo("디자인");
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("블랙 케이스 추천해줘")).isEqualTo("디자인");
+        // 해상도 단독은 게임 성능 조건이 아니다 — 영상 편집 요청에 '게임 성능' 오라벨 금지.
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("4K 영상 편집용 GPU 추천해줘")).isNull();
+        assertThat(BuildChatService.unsupportedRecommendationQualifier("배그 4K 잘 돌아가는 GPU 추천해줘")).isEqualTo("게임 성능");
+    }
+
+    @Test
+    void partConjunctionRecognizesCommonKoreanConnectives() {
+        // '하고/도/나'를 몰라 한쪽 카테고리가 소리없이 버려지던 문제 — 과거 버그가 조사만 바뀌면 재발했다.
+        assertThat(BuildChatService.requestsMultiplePartCategories("가성비 케이스하고 파워 추천해줘")).isTrue();
+        assertThat(BuildChatService.requestsMultiplePartCategories("케이스도 파워도 추천해줘")).isTrue();
+        assertThat(BuildChatService.requestsMultiplePartCategories("케이스나 파워 추천해줘")).isTrue();
+        assertThat(BuildChatService.requestsMultiplePartCategories("케이스랑 파워 추천해줘")).isTrue();
+        assertThat(BuildChatService.requestsMultiplePartCategories("케이스 추천해줘")).isFalse();
+    }
+
+    @Test
+    void conjoinedCategoriesListOnlyTheCategoriesJoinedByConjunction() {
+        // 접속으로 이어진 양쪽만 담는다 — 관계형 기준 부품(메인보드)은 답변 대상이 아니다.
+        assertThat(BuildChatService.conjoinedRecommendationCategories("가성비 케이스하고 파워 추천해줘"))
+                .containsExactly("CASE", "PSU");
+        assertThat(BuildChatService.conjoinedRecommendationCategories("메인보드에 맞는 케이스랑 파워 추천해줘"))
+                .containsExactly("CASE", "PSU");
+        assertThat(BuildChatService.conjoinedRecommendationCategories("메인보드에 맞는 CPU 추천해줘")).isEmpty();
+        assertThat(BuildChatService.conjoinedRecommendationCategories("케이스 추천해줘")).isEmpty();
+    }
+
+    @Test
+    void minimumCompositionBudgetIsACeilingNotAFloor() {
+        // "150만원으로 최소 구성"의 '최소'는 구성 수식이다 — MIN으로 읽으면 150만원 이상만 나오는 정반대.
+        assertThat(BuildChatService.budgetIntent("예산 150만원인데 최소 구성으로 짜줘").mode()).isEqualTo("MAX");
+        assertThat(BuildChatService.budgetIntent("150만원으로 최소 견적 맞춰줘").mode()).isEqualTo("MAX");
+        // '최소'가 금액 바로 앞이면 종전대로 하한이다.
+        assertThat(BuildChatService.budgetIntent("최소 150만원 이상으로").mode()).isEqualTo("MIN");
+        assertThat(BuildChatService.budgetIntent("최소 150만원은 써야지").mode()).isEqualTo("MIN");
+        assertThat(BuildChatService.budgetIntent("150만원 정도로").mode()).isEqualTo("TARGET");
+    }
+
+    @Test
+    void particleManIsNotReadAsBudgetUnit() {
+        // "프레임 144만 나오면"의 '만'은 조사(only)다 — 예산 144만원으로 오독 금지.
+        assertThat(BuildChatService.parseBudgetWon("배그에서 프레임 144만 나오면 돼")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("발로란트 300만 나오게 해줘")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("fps 60만 유지되면 돼")).isNull();
+        // 통화 표기는 종전대로.
+        assertThat(BuildChatService.parseBudgetWon("144만으로 맞춰줘")).isEqualTo(1_440_000);
+        assertThat(BuildChatService.parseBudgetWon("300만원으로")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("만원으로 맞춰줘")).isEqualTo(10_000);
+    }
+
+    @Test
+    void indefiniteNumeralPrefixIsNotCollapsedToAFixedBudget() {
+        // '수십만원/몇백만원'은 값이 불확정이다 — 10만원/100만원 확정 파싱 금지(되묻기로 흐른다).
+        assertThat(BuildChatService.parseBudgetWon("수십만원대로 사무용 컴퓨터 추천해줘")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("수백만원대 게이밍 PC 추천해줘")).isNull();
+        assertThat(BuildChatService.parseBudgetWon("몇십만원이면 될까")).isNull();
+        // 확정 수사는 종전대로.
+        assertThat(BuildChatService.parseBudgetWon("삼백만원으로")).isEqualTo(3_000_000);
+        assertThat(BuildChatService.parseBudgetWon("2백5십만원")).isEqualTo(2_500_000);
+    }
+
+    @Test
+    void upgradeReferenceSurvivesAdverbInsertionAndSpellingVariants() {
+        assertThat(BuildChatService.comparativeUpgradeReference("5080보다 훨씬 좋은 그래픽카드 추천해줘")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("5080보다 한 단계 높은 걸로")).isTrue();
+        assertThat(BuildChatService.comparativeUpgradeReference("5080보다 쎈 걸로 추천해줘")).isTrue();
+    }
+
+    @Test
+    void coolingTypeQualifierIsAcriterionNotACategoryAlias() {
+        // "수랭 쿨러 추천해줘"는 기준 있는 요청이다 — 이미 준 기준을 되묻지 않는다.
+        assertThat(BuildChatService.isBarePartRecommendationRequest("수랭 쿨러 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("공랭 쿨러 추천해줘")).isFalse();
+        assertThat(BuildChatService.isBarePartRecommendationRequest("쿨러 추천해줘")).isTrue();
+
+        // LLM이 비워 보낸 턴에도 수랭/공랭 조건이 증발하지 않게 서버가 읽는다.
+        assertThat(BuildChatService.deterministicCoolingType("수랭 쿨러 추천해줘")).isEqualTo("LIQUID");
+        assertThat(BuildChatService.deterministicCoolingType("공랭 쿨러 추천해줘")).isEqualTo("AIR");
+        assertThat(BuildChatService.deterministicCoolingType("수랭 말고 공랭으로 추천해줘")).isEqualTo("AIR");
+        assertThat(BuildChatService.deterministicCoolingType("쿨러 추천해줘")).isNull();
+    }
+
+    @Test
+    void smoothnessFastPathYieldsToOtherCategoryRequests() {
+        // GPU 교체로 해결할 수 없는 카테고리 지목은 그 카테고리 경로가 답한다.
+        assertThat(BuildChatService.requestsSmootherPerformance("케이스를 더 쾌적하게 바꿔줘")).isFalse();
+        assertThat(BuildChatService.requestsSmootherPerformance("쿨러를 더 부드럽게 바꿔줘")).isFalse();
+        // GPU 지목·무지목 변경 요청은 종전대로 fast path.
+        assertThat(BuildChatService.requestsSmootherPerformance("GPU를 더 부드럽게 바꿔줘")).isTrue();
     }
 
     @Test
@@ -4275,6 +4371,10 @@ class BuildChatServiceTest {
         assertThat(response.get("partRecommendation")).isNull();
         // 말풍선도 줄이지 않는다 — 나열이 유일한 답이므로 그대로 있어야 한다.
         assertThat(response.get("message")).asString().doesNotContain("부품 목록에 띄웠어요");
+        // 두 카테고리가 모두 나열된다 — 종전에는 LLM이 한쪽만 구조화해 케이스가 소리없이 사라졌다.
+        assertThat(response.get("message")).asString().contains("케이스").contains("파워");
+        // 결정적 경로가 답한다 — LLM이 개입해 한쪽을 버릴 기회 자체가 없다.
+        verify(aiChatEngine, never()).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
     }
 
     @Test

@@ -105,6 +105,11 @@ class BuildChatIntentRouterTest {
                 c("SSD 디스크가 계속 100퍼센트야", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("인터넷이 자꾸 끊겨", BuildChatIntent.SUPPORT_GUIDANCE),
                 c("컴퓨터에서 소리가 안 나", BuildChatIntent.SUPPORT_GUIDANCE),
+                // "끊김 없이 부드럽게"는 증상 신고가 아니라 상대 향상 요청 — AS로 삼키면
+                // 서비스의 스무스니스 fast path(UNSUPPORTED 이후 인터셉트)에 영영 못 간다.
+                c("배그 화면 끊김 없이 부드럽게 해줘", BuildChatIntent.UNSUPPORTED),
+                // 반대로 진행형 증상("끊겨서")은 향상 어휘가 섞여도 AS 안내를 유지한다.
+                c("화면이 자꾸 끊겨서 부드럽게 해줘", BuildChatIntent.SUPPORT_GUIDANCE),
                 // 증상 단어와 비슷해도 쇼핑·시뮬레이션 요청이면 장애 안내로 가로채지 않는다
                 c("게임용 PC 추천해줘", BuildChatIntent.ASK_CLARIFICATION),
                 c("검은색 케이스 추천해줘", BuildChatIntent.UNSUPPORTED),

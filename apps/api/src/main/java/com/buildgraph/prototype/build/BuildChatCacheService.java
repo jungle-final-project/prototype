@@ -215,7 +215,12 @@ public class BuildChatCacheService {
         // v78: "더 부드럽게"처럼 목표 수치 없는 향상 요청이 화면 문맥(게임·해상도)으로 다음 체감
         //      구간을 계산해 GPU 변경 미리보기를 만든다. uiContext.performance가 응답을 가르므로
         //      capabilities와 함께 키에 들어간다(uiContextFingerprint).
-        return "buildgraph:build-chat:v78:" + sha256(json);
+        // v79: "끊김 없이 부드럽게 해줘"가 AS 안내 대신 상대 향상 미리보기로 가고(라우터 오삼킴 수선),
+        //      v78 주석이 약속만 했던 uiContext.performance가 실제로 키에 들어간다 — 종전에는
+        //      게임·해상도가 달라도 같은 키라서 문맥 의존 응답이 캐시되는 순간 오염 재생이 가능했다.
+        // v80: "케이스랑 파워 추천해줘" 같은 다중 카테고리 요청이 LLM 한쪽 나열 대신 카테고리별
+        //      결정적 나열을 한 말풍선에 담아 반환한다 — 같은 문장의 응답 내용이 바뀐다.
+        return "buildgraph:build-chat:v80:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {
@@ -228,6 +233,14 @@ public class BuildChatCacheService {
         Map<String, Object> normalized = new LinkedHashMap<>();
         normalized.put("surface", normalizeText(uiContext.get("surface")));
         normalized.put("capabilities", capabilities);
+        // 상대 향상 fast path가 게임·해상도로 목표를 계산하므로 이 두 값이 다르면 응답도 다르다.
+        Map<String, Object> performance = objectMap(uiContext.get("performance"));
+        if (!performance.isEmpty()) {
+            Map<String, Object> performanceNormalized = new LinkedHashMap<>();
+            performanceNormalized.put("gameQuery", normalizeText(performance.get("gameQuery")));
+            performanceNormalized.put("resolution", normalizeText(performance.get("resolution")));
+            normalized.put("performance", performanceNormalized);
+        }
         return normalized;
     }
 
@@ -277,6 +290,9 @@ public class BuildChatCacheService {
         }
         if (containsAnyNormalized(
                 normalized,
+                // "내 견적이랑 호환되는 SSD"도 서버 draft 기준 응답이다 — '현재견적'만 알고 '내견적'을
+                // 모르면 사용자 A의 draft 기준 응답이 shared로 뭉개져 B에게 재생된다.
+                "내견적", "제견적", "우리견적",
                 "이견적", "그견적", "저견적", "현재견적", "기존견적", "방금", "최근", "아까", "위조합", "이조합", "그조합", "저조합",
                 "장바구니", "담긴", "선택한", "바꿔", "교체", "빼", "삭제", "제거", "담아", "넣어", "추가", "적용", "수량", "변경",
                 "더싼", "저렴", "낮춰", "더좋", "업그레이드", "비슷한가격"
@@ -292,10 +308,15 @@ public class BuildChatCacheService {
             return false;
         }
         String message = normalizeText(body.get("message"));
+        // "내 견적이랑 호환되는 SSD 추천해줘"는 '견적' 때문에 hasBuildSignal이 본체 추천으로
+        // 오판하지만, 실제로는 서버 활성 draft로 후보를 거르는 draft 의존 응답이다.
+        boolean referencesOwnDraft = containsAnyNormalized(
+                normalizeCommand(body.get("message")),
+                "내견적", "제견적", "우리견적", "이견적", "그견적", "저견적", "현재견적", "기존견적");
         return BuildChatService.detectPartCategory(message) != null
                 && hasRecommendationSignal(message)
-                && !hasBuildSignal(message)
-                && !hasModifySignal(message);
+                && !hasModifySignal(message)
+                && (referencesOwnDraft || !hasBuildSignal(message));
     }
 
     private String effectiveProfile(String requestedAiProfile) {
