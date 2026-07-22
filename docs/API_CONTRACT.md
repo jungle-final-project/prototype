@@ -905,7 +905,6 @@ PC Agent 등록/인증 규칙:
 | `ChangePartResponse` | `agentSummary` | `string` | yes | `변경 비교 요약` |
 | `AiBuildChatRequest` | `message` | `string` | no | `200만원 PC 추천` |
 | `AiBuildChatRequest` | `currentBuilds` | `AiBuildRecommendationDto[]` | yes | `[]` |
-| `AiBuildChatRequest` | `appliedPartPreferences` | `AiAppliedPartPreferenceDto[]` | yes | `[]` |
 | `AiBuildChatRequest` | `currentQuoteDraft` | `QuoteDraftDto` | yes | `{ "items": [] }` |
 | `AiBuildChatRequest` | `assessmentContext` | `object` | yes | `{ "source": "QUOTE_DRAFT_CURRENT", "focusType": "SCORE" }` |
 | `AiBuildChatResponse` | `answerType` | `string` | no | `BUDGET` |

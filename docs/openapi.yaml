@@ -5970,6 +5970,11 @@ components:
         capabilities:
           type: array
           uniqueItems: true
+          description: >
+            클라이언트가 소화할 수 있는 응답 기능 선언. BOARD_PART_FOCUS·PART_CANDIDATE_PANEL·
+            QUOTE_DRAFT_HISTORY는 서버 분기가 실제로 읽는다. GAME_PERFORMANCE_COMPARE는 프론트의
+            성능 비교 UI 지원 선언으로, 상대 향상 fast path는 이 값과 무관하게 uiContext.performance
+            존재만으로 동작한다(서버 미사용 — 예약값).
           items:
             type: string
             enum: [BOARD_PART_FOCUS, PART_CANDIDATE_PANEL, GAME_PERFORMANCE_COMPARE, QUOTE_DRAFT_HISTORY]

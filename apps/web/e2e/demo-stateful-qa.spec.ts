@@ -46,7 +46,12 @@ test('4분 데모 대표 20개를 실제 웹 상태 전이로 재현한다', asy
           const body = await submitAssistant(page, scenario.steps.find((step) => step.kind === 'BUILD_CHAT')?.message ?? '200만원으로 QHD 게임용 PC 추천해줘');
           if (!body.builds?.length) failures.push('RECOMMENDATION_NOT_RENDERED');
           if (body.builds?.some((build) => build.toolResults?.some((tool) => tool.status === 'FAIL'))) failures.push('TOOL_FAIL_RECOMMENDED');
-          if (!await page.getByText(body.message ?? '', { exact: false }).last().isVisible().catch(() => false)) failures.push('RESPONSE_NOT_RENDERED');
+          // 빈 문자열 getByText('')는 아무 텍스트에나 매칭돼 검사가 무력화된다 — 메시지 부재도 실패다.
+          const responseMessage = (body.message ?? '').trim();
+          if (!responseMessage
+              || !await page.getByText(responseMessage, { exact: false }).last().isVisible().catch(() => false)) {
+            failures.push('RESPONSE_NOT_RENDERED');
+          }
           evidence.push(`builds=${body.builds?.length ?? 0}`);
         } else if (scenario.group === 'DEMO_GPU_DOWNGRADE_RESTORE') {
           await replaceDraft(request, user.accessToken, scenario.setupItems);
@@ -55,14 +60,39 @@ test('4분 데모 대표 20개를 실제 웹 상태 전이로 재현한다', asy
           const body = await submitAssistant(page, scenario.steps.find((step) => step.kind === 'BUILD_CHAT')?.message ?? 'GPU를 더 저렴한 제품으로 바꿔줘');
           const previews = body.builds?.filter((build) => build.tier === 'draft-edit' || build.badges?.includes('DRAFT_EDIT_PREVIEW')) ?? [];
           if (!previews.length) failures.push('GPU_PREVIEW_MISSING');
+          // 미리보기 턴 자체는 draft를 바꾸면 안 된다(챗 응답만으로 몰래 변경 = P0).
+          if (JSON.stringify(before) !== JSON.stringify(fingerprint(await currentDraft(request, user.accessToken)))) {
+            failures.push('DRAFT_MUTATED_BY_CHAT');
+            p0 = true;
+          }
+          // 데모 ⑤ 적용 경로 — 전 스위트가 'draft 불변'만 보던 사각. "이 변경안 적용해줘"가
+          // 실서버 draft를 미리보기 조합으로 실제로 바꾸는지(프론트 PUT 계약 포함) 확인한다.
+          if (!p0 && previews.length === 1) {
+            const previewIds = (previews[0].items ?? [])
+              .map((item) => item.partId)
+              .filter((partId): partId is string => Boolean(partId));
+            if (!previewIds.length) {
+              failures.push('PREVIEW_ITEMS_MISSING');
+            } else {
+              await submitAssistant(page, '이 변경안 적용해줘');
+              try {
+                await expect.poll(async () => {
+                  const appliedDraft = await currentDraft(request, user.accessToken);
+                  const appliedIds = new Set((appliedDraft.items ?? []).map((item) => item.partId));
+                  return previewIds.every((partId) => appliedIds.has(partId));
+                }, { timeout: 20_000 }).toBe(true);
+                evidence.push(`applied=${previewIds.length}`);
+              } catch {
+                failures.push('PREVIEW_APPLY_NOT_REFLECTED');
+              }
+              // 적용은 의도된 변경 — 복구 후 다음 검증을 잇는다.
+              await replaceDraft(request, user.accessToken, scenario.setupItems);
+            }
+          }
           const simulationMessage = scenario.steps.find((step) => step.kind === 'SIMULATE')?.message;
           if (simulationMessage) {
             const simulationBody = await submitAssistant(page, simulationMessage);
             if (!simulationBody.simulation) failures.push('SIMULATION_MISSING');
-          }
-          if (JSON.stringify(before) !== JSON.stringify(fingerprint(await currentDraft(request, user.accessToken)))) {
-            failures.push('DRAFT_MUTATED_BY_CHAT');
-            p0 = true;
           }
           evidence.push(`previews=${previews.length}`);
         } else if (scenario.group === 'DEMO_ASSEMBLY_MATCH') {
@@ -134,14 +164,21 @@ test('4분 데모 대표 20개를 실제 웹 상태 전이로 재현한다', asy
   const paths = writeReport(results);
   expect(p0, `P0 상태 변경 오류가 발생했습니다. ${paths.md}`).toBe(false);
   expect(results, `20개 결과 row가 필요합니다. ${paths.md}`).toHaveLength(20);
-  if (process.env.STATEFUL_QA_STRICT === 'true') {
+  // 기본이 엄격 모드다 — 실패를 리포트에만 남기고 초록으로 끝나면 "검사했다"는 착시가 된다.
+  // 전 케이스 결과만 모으는 탐사 스윕은 STATEFUL_QA_ADVISORY=true로 명시적으로 낮춘다.
+  if (process.env.STATEFUL_QA_ADVISORY !== 'true') {
     expect(results.filter((row) => row.verdict !== 'PASS'), `상태형 데모 웹 감사 실패. ${paths.md}`).toEqual([]);
   }
 });
 
 type ChatBody = {
   message?: string;
-  builds?: Array<{ tier?: string; badges?: string[]; toolResults?: Array<{ status?: string }> }>;
+  builds?: Array<{
+    tier?: string;
+    badges?: string[];
+    toolResults?: Array<{ status?: string }>;
+    items?: Array<{ partId?: string; category?: string }>;
+  }>;
   simulation?: object | null;
   supportGuidance?: { symptomCategory?: string } | null;
 };

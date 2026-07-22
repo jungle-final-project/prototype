@@ -21,7 +21,19 @@ test('MVP E2E: login, recommendation, alert, AS, admin worker views', async ({ p
     data: { message: '200만원 QHD 게임용 PC 추천해줘. NVIDIA 선호.' }
   });
   expect(buildChatResponse.status(), 'OPENAI_API_KEY가 없으면 build chat은 428이어야 하며 MVP E2E는 실패합니다.').not.toBe(428);
-  expect(buildChatResponse.ok(), await buildChatResponse.text()).toBeTruthy();
+  const buildChatText = await buildChatResponse.text();
+  expect(buildChatResponse.ok(), buildChatText).toBeTruthy();
+  // HTTP 200만 보면 서버가 빈 응답으로 퇴화해도 초록이다 — 예산+용도 요청은 검증된 카드가 있어야 한다.
+  const buildChatBody = JSON.parse(buildChatText) as {
+    message?: string;
+    builds?: Array<{ toolResults?: Array<{ status?: string }> }>;
+  };
+  expect((buildChatBody.message ?? '').trim(), buildChatText).not.toBe('');
+  expect(buildChatBody.builds?.length ?? 0, `예산+용도 추천에 카드가 없습니다: ${buildChatText}`).toBeGreaterThanOrEqual(1);
+  expect(
+    buildChatBody.builds?.some((build) => build.toolResults?.some((tool) => tool.status === 'FAIL')),
+    `Tool FAIL 조합이 추천에 포함됐습니다: ${buildChatText}`
+  ).not.toBe(true);
 
   console.log('[MVP] requirement recommendation');
   const recommendation = await createRecommendation(page);
