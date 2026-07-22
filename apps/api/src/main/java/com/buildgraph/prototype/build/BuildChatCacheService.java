@@ -218,7 +218,9 @@ public class BuildChatCacheService {
         // v79: "끊김 없이 부드럽게 해줘"가 AS 안내 대신 상대 향상 미리보기로 가고(라우터 오삼킴 수선),
         //      v78 주석이 약속만 했던 uiContext.performance가 실제로 키에 들어간다 — 종전에는
         //      게임·해상도가 달라도 같은 키라서 문맥 의존 응답이 캐시되는 순간 오염 재생이 가능했다.
-        return "buildgraph:build-chat:v79:" + sha256(json);
+        // v80: "케이스랑 파워 추천해줘" 같은 다중 카테고리 요청이 LLM 한쪽 나열 대신 카테고리별
+        //      결정적 나열을 한 말풍선에 담아 반환한다 — 같은 문장의 응답 내용이 바뀐다.
+        return "buildgraph:build-chat:v80:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

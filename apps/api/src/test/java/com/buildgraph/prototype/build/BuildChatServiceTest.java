@@ -4203,6 +4203,17 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void conjoinedCategoriesListOnlyTheCategoriesJoinedByConjunction() {
+        // 접속으로 이어진 양쪽만 담는다 — 관계형 기준 부품(메인보드)은 답변 대상이 아니다.
+        assertThat(BuildChatService.conjoinedRecommendationCategories("가성비 케이스하고 파워 추천해줘"))
+                .containsExactly("CASE", "PSU");
+        assertThat(BuildChatService.conjoinedRecommendationCategories("메인보드에 맞는 케이스랑 파워 추천해줘"))
+                .containsExactly("CASE", "PSU");
+        assertThat(BuildChatService.conjoinedRecommendationCategories("메인보드에 맞는 CPU 추천해줘")).isEmpty();
+        assertThat(BuildChatService.conjoinedRecommendationCategories("케이스 추천해줘")).isEmpty();
+    }
+
+    @Test
     void minimumCompositionBudgetIsACeilingNotAFloor() {
         // "150만원으로 최소 구성"의 '최소'는 구성 수식이다 — MIN으로 읽으면 150만원 이상만 나오는 정반대.
         assertThat(BuildChatService.budgetIntent("예산 150만원인데 최소 구성으로 짜줘").mode()).isEqualTo("MAX");
@@ -4360,6 +4371,10 @@ class BuildChatServiceTest {
         assertThat(response.get("partRecommendation")).isNull();
         // 말풍선도 줄이지 않는다 — 나열이 유일한 답이므로 그대로 있어야 한다.
         assertThat(response.get("message")).asString().doesNotContain("부품 목록에 띄웠어요");
+        // 두 카테고리가 모두 나열된다 — 종전에는 LLM이 한쪽만 구조화해 케이스가 소리없이 사라졌다.
+        assertThat(response.get("message")).asString().contains("케이스").contains("파워");
+        // 결정적 경로가 답한다 — LLM이 개입해 한쪽을 버릴 기회 자체가 없다.
+        verify(aiChatEngine, never()).respondLlmRequired(any(AiChatEngineRequest.class), nullable(String.class));
     }
 
     @Test

@@ -1564,6 +1564,15 @@ public class BuildChatService {
      * 접속(와/과/랑/및/,)으로 실제로 이어져 있을 때만 참이다. 관계형 문장은 접속이 없어 걸리지 않는다.
      */
     static boolean requestsMultiplePartCategories(String message) {
+        return conjoinedRecommendationCategories(message).size() >= 2;
+    }
+
+    /**
+     * 접속으로 나란히 요구된 부품 카테고리 목록(등장 순서, 중복 제거). 접속으로 실제로 이어진
+     * 쌍의 양쪽만 담는다 — "메인보드에 맞는 케이스랑 파워 추천"에서 메인보드는 기준 부품이라 빠진다.
+     * 접속 조건을 만족하는 쌍이 없으면 빈 목록.
+     */
+    static List<String> conjoinedRecommendationCategories(String message) {
         String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
         int recommendationBoundary = firstKeywordIndex(
                 normalized,
@@ -1582,8 +1591,9 @@ public class BuildChatService {
             }
         }
         if (hitsByIndex.size() < 2) {
-            return false;
+            return List.of();
         }
+        java.util.LinkedHashSet<String> linkedCategories = new java.util.LinkedHashSet<>();
         List<Map.Entry<Integer, String>> hits = new ArrayList<>(hitsByIndex.entrySet());
         for (int i = 0; i < hits.size() - 1; i += 1) {
             Map.Entry<Integer, String> left = hits.get(i);
@@ -1597,10 +1607,11 @@ public class BuildChatService {
                 continue;
             }
             if (PART_CONJUNCTION.matcher(scope.substring(gapStart, right.getKey())).matches()) {
-                return true;
+                linkedCategories.add(left.getValue());
+                linkedCategories.add(right.getValue());
             }
         }
-        return false;
+        return List.copyOf(linkedCategories);
     }
 
     private static int longestKeywordAt(String scope, int index, String category) {
@@ -4018,13 +4029,16 @@ public class BuildChatService {
             String message,
             CurrentUserService.CurrentUser user
     ) {
+        // 부품 두 개를 함께 요구한 턴은 단일 부품 후보로 답하면 한쪽 조건이 사라진다 —
+        // 카테고리별로 같은 결정적 엔진을 돌려 한 말풍선에 나란히 나열한다(v73 약속의 구현).
+        if (requestsMultiplePartCategories(message)) {
+            return deterministicMultiCategoryRecommendationResponse(body, message, user);
+        }
         String category = firstText(detectRecommendationTargetCategory(message), detectPartCategory(message));
         String compact = normalizeCommand(message);
         if (category == null
                 || !isExplicitRecommendationRequest(message)
-                || isWholeBuildRecommendationContext(compact)
-                // 부품 두 개를 함께 요구한 턴은 단일 부품 후보로 답하면 한쪽 조건이 사라진다.
-                || requestsMultiplePartCategories(message)) {
+                || isWholeBuildRecommendationContext(compact)) {
             return Optional.empty();
         }
         BuildChatFeasibilityService.SpecConstraint constraint = mergedPartConstraint(Map.of(), message);
@@ -4063,6 +4077,67 @@ public class BuildChatService {
         if (firstText(text(response.get("message")), "").isBlank()) {
             return Optional.empty();
         }
+        return Optional.of(response);
+    }
+
+    /**
+     * "케이스랑 파워 추천해줘"처럼 접속으로 묶인 2~3개 카테고리를 카테고리별 결정적 엔진으로
+     * 각각 뽑아 한 말풍선에 나란히 나열한다. 종전에는 LLM이 한쪽 카테고리만 구조화해 나머지가
+     * 소리없이 사라졌다. 패널은 한 번에 한 카테고리만 열 수 있으므로 partRecommendation은 싣지
+     * 않는다(v73 규칙). 한 카테고리라도 나열이 안 되면(되묻기·빈 응답) 반쪽 응답 대신 기존
+     * 경로(LLM)에 통째로 넘긴다.
+     */
+    private Optional<Map<String, Object>> deterministicMultiCategoryRecommendationResponse(
+            Map<String, Object> body,
+            String message,
+            CurrentUserService.CurrentUser user
+    ) {
+        List<String> categories = conjoinedRecommendationCategories(message);
+        String compact = normalizeCommand(message);
+        if (categories.size() < 2 || categories.size() > 3
+                || !isExplicitRecommendationRequest(message)
+                || isWholeBuildRecommendationContext(compact)) {
+            return Optional.empty();
+        }
+        List<Map<String, Object>> sections = new ArrayList<>();
+        for (String category : categories) {
+            AiChatEngineResponse deterministic = new AiChatEngineResponse(
+                    "",
+                    AiChatIntent.PART_RECOMMEND,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    Map.of("partConstraint", Map.of("category", category)),
+                    List.of(),
+                    List.of(),
+                    null
+            );
+            Map<String, Object> section = fastResponse("PART", "", List.of());
+            applyPartConstraintCounterProposal(section, deterministic, message, body, user);
+            String sectionMessage = firstText(text(section.get("message")), "");
+            if (sectionMessage.isBlank() || section.get("clarification") != null) {
+                return Optional.empty();
+            }
+            sections.add(section);
+        }
+        Map<String, Object> response = fastResponse("PART", "", List.of());
+        response.put("message", sections.stream()
+                .map(section -> text(section.get("message")))
+                .collect(java.util.stream.Collectors.joining("\n\n")));
+        List<String> quickReplies = new ArrayList<>();
+        List<Map<String, Object>> quickReplyCommands = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        for (Map<String, Object> section : sections) {
+            stringList(section.get("quickReplies")).stream().limit(3).forEach(quickReplies::add);
+            quickReplyCommands.addAll(objectMaps(section.get("quickReplyCommands")));
+            warnings.addAll(stringList(section.get("warnings")));
+        }
+        response.put("quickReplies", quickReplies.stream().distinct().limit(6).toList());
+        if (!quickReplyCommands.isEmpty()) {
+            response.put("quickReplyCommands", quickReplyCommands);
+        }
+        response.put("warnings", distinct(warnings));
+        response.remove("partRecommendation");
         return Optional.of(response);
     }
 
