@@ -288,6 +288,9 @@ public class BuildChatCacheService {
         }
         if (containsAnyNormalized(
                 normalized,
+                // "내 견적이랑 호환되는 SSD"도 서버 draft 기준 응답이다 — '현재견적'만 알고 '내견적'을
+                // 모르면 사용자 A의 draft 기준 응답이 shared로 뭉개져 B에게 재생된다.
+                "내견적", "제견적", "우리견적",
                 "이견적", "그견적", "저견적", "현재견적", "기존견적", "방금", "최근", "아까", "위조합", "이조합", "그조합", "저조합",
                 "장바구니", "담긴", "선택한", "바꿔", "교체", "빼", "삭제", "제거", "담아", "넣어", "추가", "적용", "수량", "변경",
                 "더싼", "저렴", "낮춰", "더좋", "업그레이드", "비슷한가격"
@@ -303,10 +306,15 @@ public class BuildChatCacheService {
             return false;
         }
         String message = normalizeText(body.get("message"));
+        // "내 견적이랑 호환되는 SSD 추천해줘"는 '견적' 때문에 hasBuildSignal이 본체 추천으로
+        // 오판하지만, 실제로는 서버 활성 draft로 후보를 거르는 draft 의존 응답이다.
+        boolean referencesOwnDraft = containsAnyNormalized(
+                normalizeCommand(body.get("message")),
+                "내견적", "제견적", "우리견적", "이견적", "그견적", "저견적", "현재견적", "기존견적");
         return BuildChatService.detectPartCategory(message) != null
                 && hasRecommendationSignal(message)
-                && !hasBuildSignal(message)
-                && !hasModifySignal(message);
+                && !hasModifySignal(message)
+                && (referencesOwnDraft || !hasBuildSignal(message));
     }
 
     private String effectiveProfile(String requestedAiProfile) {
