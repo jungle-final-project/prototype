@@ -231,6 +231,12 @@ public class AssemblyBrokerageService {
         if (!USER_CANCEL_STATUSES.contains(status)) {
             throw conflict("조립이 시작된 요청은 사용자가 취소할 수 없습니다.");
         }
+        // 서버 허용 범위를 UI의 canCancel 산식과 일치시킨다 — 결제(PAID) 이후에는 사용자
+        // 자기취소를 막는다(취소 버튼이 없는데 API 직접 호출로 전액 포인트 환불이 되던 구멍).
+        Map<String, Object> payment = paymentRow(requestId);
+        if (payment != null && "PAID".equals(DbValueMapper.string(payment, "status"))) {
+            throw conflict("결제가 완료된 요청은 직접 취소할 수 없습니다. 고객센터(관리자)를 통해 취소해 주세요.");
+        }
         String reason = requiredLimitedText(body.get("reason"), 1000, "취소 사유가 필요합니다.");
         cancelRequest(requestId, user.internalId(), status, reason);
         return detailByInternalId(requestId);

@@ -7,7 +7,7 @@ import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay'
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
-import { AI_PART_PICKS_CHANGED_EVENT, clearAiPartPicks, readAiPartPicks } from '../../../quote/aiSelection';
+import { AI_PART_PICKS_CHANGED_EVENT, clearAiPartPicks, getScopedAiStorageKey, readAiPartPicks } from '../../../quote/aiSelection';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 import { FloatingQuotePanel } from './FloatingQuotePanel';
@@ -706,15 +706,21 @@ export function SlotCandidatePanel({
           <div className="mt-2 rounded-md border border-dashed border-slate-300 p-4 text-center text-xs font-bold text-slate-500">
             {/* 원인 지목 순서: 서버 결과는 있는데 표시 필터가 다 걸렀으면 필터를, 그다음 검색어를 탓한다 —
                 검색 결과가 실제로 있는데 "'q' 검색 결과가 없습니다"라고 말하지 않는다. */}
-            {visibleParts.length > 0 && (hideFail || onlyWishlist)
+            {(hideFail || onlyWishlist) && hasNextPage
+              // 아직 안 불러온 페이지가 남았으면 "없습니다"로 단정하지 않는다 — 카탈로그 깊은 곳의
+              // 찜/장착가능 후보를 "없다"고 오안내하던 문제. 더 보기로 이어 찾도록 안내한다.
               ? onlyWishlist
-                ? '조건에 맞는 찜한 부품이 없습니다. 찜만 보기를 끄거나 하트를 눌러 찜해 보세요.'
-                : '장착 가능한 후보가 없습니다. 장착 불가 숨기기를 꺼 보세요.'
-              : q
-                ? `'${q}' 검색 결과가 없습니다.`
-                : onlyWishlist
-                  ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
-                  : '표시할 후보가 없습니다.'}
+                ? '현재 불러온 목록에는 찜한 부품이 없습니다. 아래 “후보 더 보기”로 더 찾아보세요.'
+                : '현재 불러온 목록에는 장착 가능한 후보가 없습니다. 아래 “후보 더 보기”로 더 찾아보세요.'
+              : visibleParts.length > 0 && (hideFail || onlyWishlist)
+                ? onlyWishlist
+                  ? '조건에 맞는 찜한 부품이 없습니다. 찜만 보기를 끄거나 하트를 눌러 찜해 보세요.'
+                  : '장착 가능한 후보가 없습니다. 장착 불가 숨기기를 꺼 보세요.'
+                : q
+                  ? `'${q}' 검색 결과가 없습니다.`
+                  : onlyWishlist
+                    ? '찜한 부품이 없습니다. 하트를 눌러 찜해 보세요.'
+                    : '표시할 후보가 없습니다.'}
           </div>
         ) : null}
 
@@ -747,9 +753,25 @@ export function SlotCandidatePanel({
 
 const WISHLIST_KEY = 'buildgraph.wishlist';
 
+// 찜을 계정별로 스코프한다(AI 저장 키와 같은 관례) — 전역 단일 키는 같은 브라우저에서
+// 로그아웃·계정 전환 후에도 이전 사용자의 찜이 다음 사용자에게 그대로 보였다.
+// 비로그인은 종전 전역 키를 쓰고, 로그인 계정은 최초 1회 전역 키 내용을 이관해 이어받는다.
+function wishlistStorageKey(): string {
+  return getScopedAiStorageKey(WISHLIST_KEY) ?? WISHLIST_KEY;
+}
+
 function readWishlist(): Set<string> {
   try {
-    const raw = localStorage.getItem(WISHLIST_KEY);
+    const scopedKey = wishlistStorageKey();
+    let raw = localStorage.getItem(scopedKey);
+    if (raw === null && scopedKey !== WISHLIST_KEY) {
+      // 스코프 도입 전 전역 키에 남은 찜을 로그인 계정으로 1회 이관한다.
+      raw = localStorage.getItem(WISHLIST_KEY);
+      if (raw !== null) {
+        localStorage.setItem(scopedKey, raw);
+        localStorage.removeItem(WISHLIST_KEY);
+      }
+    }
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
   } catch {
@@ -759,7 +781,7 @@ function readWishlist(): Set<string> {
 
 function writeWishlist(set: Set<string>) {
   try {
-    localStorage.setItem(WISHLIST_KEY, JSON.stringify([...set]));
+    localStorage.setItem(wishlistStorageKey(), JSON.stringify([...set]));
   } catch {
     // localStorage 접근 불가(프라이빗 모드 등)면 무시한다.
   }

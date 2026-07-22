@@ -82,6 +82,19 @@ export function requestPerfCompare(detail: PerfCompareTarget) {
   window.dispatchEvent(new CustomEvent<PerfCompareTarget>(PERF_COMPARE_REQUEST_EVENT, { detail }));
 }
 
+/**
+ * 대기 중인 비교 요청을 지운다. 라이브 리스너가 이벤트를 즉시 소비했거나 사용자가 비교를
+ * 명시적으로 해제했을 때 호출한다 — 남겨 두면 10분 안에 재방문 시 해제한 비교가 되살아난다.
+ */
+export function clearPendingPerfCompare() {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(PERF_COMPARE_PENDING_KEY);
+  } catch {
+    // 저장 불가 환경이면 애초에 남은 것도 없다.
+  }
+}
+
 /** 리스너 부재로 유실된 비교 요청을 셀프견적 마운트 시 1회 소비한다. 오래된 요청은 버린다. */
 export function consumePendingPerfCompare(): PerfCompareTarget | null {
   if (typeof window === 'undefined') return null;

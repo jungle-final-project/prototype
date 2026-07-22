@@ -220,7 +220,11 @@ public class BuildChatCacheService {
         //      게임·해상도가 달라도 같은 키라서 문맥 의존 응답이 캐시되는 순간 오염 재생이 가능했다.
         // v80: "케이스랑 파워 추천해줘" 같은 다중 카테고리 요청이 LLM 한쪽 나열 대신 카테고리별
         //      결정적 나열을 한 말풍선에 담아 반환한다 — 같은 문장의 응답 내용이 바뀐다.
-        return "buildgraph:build-chat:v80:" + sha256(json);
+        // v81: 조립 상한을 넘는 TARGET 예산("3천만원 게이밍 추천")이 빈 화면 대신 예산 이하 최고가
+        //      조합으로 강등되고(예산 미달 안내와 대칭), 수량·규모의 'N만'(조회수/판/이만하면)과
+        //      음수 예산이 예산으로 오파싱되지 않으며, 억 단위 예산 라벨에 콤마가 들어간다 —
+        //      같은 문장의 응답 내용·수치가 바뀐다.
+        return "buildgraph:build-chat:v81:" + sha256(json);
     }
 
     private static Map<String, Object> uiContextFingerprint(Object value) {

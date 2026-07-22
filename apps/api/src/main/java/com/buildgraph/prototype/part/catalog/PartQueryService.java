@@ -851,7 +851,9 @@ public class PartQueryService {
         }
 
         int offset() {
-            return page * size;
+            // page 상한이 없어 page*size가 int 오버플로 → 음수 OFFSET → 500이 나던 것을 막는다.
+            // long으로 곱해 Integer.MAX_VALUE로 포화(큰 offset은 빈 결과를 반환할 뿐이다).
+            return (int) Math.min((long) page * size, Integer.MAX_VALUE);
         }
     }
 

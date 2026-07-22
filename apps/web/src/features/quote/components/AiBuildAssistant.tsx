@@ -280,16 +280,22 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       if (detail?.prefill) {
         if (detail.autoSubmit) {
           setPendingSubmit({ text: detail.prefill, assessmentContext: detail.assessmentContext });
-          window.requestAnimationFrame(() => {
-            document.querySelector('[data-testid="ai-chatbot-panel"]')?.scrollIntoView({
-              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-              block: 'nearest'
-            });
-          });
         } else {
           setPrompt(detail.prefill);
         }
       }
+      // prefill 유무와 무관하게 항상 패널을 화면으로 데려오고 입력창에 포커스를 준다 —
+      // 빈 견적 CTA("AI로 시작하기")처럼 무인자 호출은 임베디드(세로 스택 하단, 모바일은 화면 밖)에서
+      // 아무 반응이 없는 것처럼 보였다.
+      window.requestAnimationFrame(() => {
+        document.querySelector('[data-testid="ai-chatbot-panel"]')?.scrollIntoView({
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+          block: 'nearest'
+        });
+        if (!detail?.autoSubmit) {
+          document.getElementById('ai-build-chat-input')?.focus({ preventScroll: true });
+        }
+      });
     };
     const toggleAssistant = () => setOpen((current) => {
       const nextOpen = !current;
@@ -618,7 +624,10 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           ? withAutoApplyChangeReceipt(build, currentQuoteDraft)
           : build
       ));
-      const latestBuilds = responseBuilds ? mergeAiBuildHistory(responseBuilds, baseSession.latestBuilds) : baseSession.latestBuilds;
+      // 저장 직전 최신 세션을 다시 읽어 병합한다 — await 사이에 draftApplicationFeedback가 쓴
+      // '분석 중' 피드백 메시지나 칩으로 담은 결과가 낡은 optimistic 스냅샷에 덮여 사라지던 레이스를 막는다.
+      const persistedSession = readAssistantSession(ownerKey) ?? baseSession;
+      const latestBuilds = responseBuilds ? mergeAiBuildHistory(responseBuilds, persistedSession.latestBuilds) : persistedSession.latestBuilds;
       const latestGraphFocus = graphFocusFromResponse(response, nextPrompt);
       const assistantMessage: AiChatMessage = {
         id: createAiMessageId(response.answerType.toLowerCase()),
@@ -635,14 +644,18 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         quickReplyKind: response.quickReplyKind ?? undefined,
         quickReplyCommands: response.quickReplyCommands ?? undefined
       };
+      // 사용자 질문이 이미 최신 세션에 있으면 그 위에(피드백 메시지 포함) 답변만 얹고,
+      // 혹시 세션이 통째로 갈렸으면 optimistic 스냅샷으로 폴백한다.
+      const persistedHasUserMessage = persistedSession.messages.some((message) => message.id === userMessage.id);
+      const mergedMessages = persistedHasUserMessage ? persistedSession.messages : optimisticSession.messages;
       const nextSession = {
-        messages: [...optimisticSession.messages, assistantMessage],
+        messages: [...mergedMessages, assistantMessage],
         latestBuilds,
-        savedBuildIds: baseSession.savedBuildIds,
+        savedBuildIds: persistedSession.savedBuildIds,
         latestGraphFocus,
         latestActiveBuildId: responseBuilds?.find((build) => build.tier === 'balanced')?.id
           ?? responseBuilds?.[0]?.id
-          ?? baseSession.latestActiveBuildId
+          ?? persistedSession.latestActiveBuildId
           ?? latestBuilds[1]?.id
           ?? latestBuilds[0]?.id,
         updatedAt: responseTime
