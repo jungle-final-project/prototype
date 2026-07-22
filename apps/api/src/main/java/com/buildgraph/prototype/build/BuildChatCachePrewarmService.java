@@ -23,7 +23,13 @@ public class BuildChatCachePrewarmService {
 
     // 데모/시연에서 자주 나오는 예산·용도 프롬프트. 예산 견적은 티어/그리디로, 용도-only 게임 추천은
     // deterministic 경로로 응답되며, 여기서 미리 호출해 exact/semantic 캐시까지 채운다.
+    // 앞 4개는 홈 퀵스타트 칩(HomeQuickStartPanel)이 자동 제출하는 문장 원문이다 — 캐시 키는
+    // message 원문 기준이라, 사용자가 실제로 누르는 문장과 한 글자라도 다르면 프리웜이 무의미하다.
     private static final List<String> PREWARM_PROMPTS = List.of(
+            "QHD 해상도에서 144fps로 게임할 수 있는 PC 추천해줘",
+            "영상 편집과 렌더링 작업에 맞는 PC 추천해줘, 저장공간도 넉넉하게",
+            "개발과 AI 작업에 맞는 PC 추천해줘, 멀티코어와 메모리 여유를 우선해줘",
+            "사무·일반 용도로 쓸 가성비 좋은 저전력 PC 추천해줘",
             "200만원 게이밍 PC 추천해줘",
             "300만원대 게임용 PC 추천해줘",
             "500만원 AI CUDA 학습용 워크스테이션 추천해줘",
@@ -37,6 +43,12 @@ public class BuildChatCachePrewarmService {
             "저소음 사무용 PC 추천해줘",
             "AI 학습용 800만원 이하인데 소음 낮은 PC 추천해줘"
     );
+
+    // 웹의 홈 요청이 항상 싣는 uiContext(AiBuildAssistant) — v72부터 캐시 키 서명에 들어가므로
+    // 이것 없이 저장한 프리웜 항목은 실제 브라우저 트래픽에서 한 번도 조회되지 않는다.
+    private static final Map<String, Object> HOME_UI_CONTEXT = Map.of(
+            "surface", "HOME",
+            "capabilities", List.of("PART_CANDIDATE_PANEL"));
 
     private final BuildChatService buildChatService;
     private final BuildChatCacheService buildChatCacheService;
@@ -81,7 +93,7 @@ public class BuildChatCachePrewarmService {
     private void prewarm() {
         int warmed = 0;
         for (String prompt : PREWARM_PROMPTS) {
-            Map<String, Object> request = Map.of("message", prompt);
+            Map<String, Object> request = Map.of("message", prompt, "uiContext", HOME_UI_CONTEXT);
             try {
                 Map<String, Object> response = buildChatService.chat(request, null, null);
                 buildChatCacheService.store(request, null, null, response, ttl);
