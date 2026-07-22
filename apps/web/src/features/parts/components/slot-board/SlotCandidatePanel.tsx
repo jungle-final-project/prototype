@@ -7,7 +7,7 @@ import { handlePartImageError, partImageUrl, specRows } from '../../partDisplay'
 import { listParts } from '../../partsApi';
 import type { PartRow, PartSearchParams, QuoteDraftItem } from '../../types';
 import { openAiAssistant } from '../../../../lib/events';
-import { AI_PART_PICKS_CHANGED_EVENT, clearAiPartPicks, readAiPartPicks } from '../../../quote/aiSelection';
+import { AI_PART_PICKS_CHANGED_EVENT, clearAiPartPicks, getScopedAiStorageKey, readAiPartPicks } from '../../../quote/aiSelection';
 import { DraftQuantityStepper } from './DraftQuantityStepper';
 import { isMultiItemCategory, type SlotConfig } from './slotBoardConfig';
 import { FloatingQuotePanel } from './FloatingQuotePanel';
@@ -753,9 +753,25 @@ export function SlotCandidatePanel({
 
 const WISHLIST_KEY = 'buildgraph.wishlist';
 
+// 찜을 계정별로 스코프한다(AI 저장 키와 같은 관례) — 전역 단일 키는 같은 브라우저에서
+// 로그아웃·계정 전환 후에도 이전 사용자의 찜이 다음 사용자에게 그대로 보였다.
+// 비로그인은 종전 전역 키를 쓰고, 로그인 계정은 최초 1회 전역 키 내용을 이관해 이어받는다.
+function wishlistStorageKey(): string {
+  return getScopedAiStorageKey(WISHLIST_KEY) ?? WISHLIST_KEY;
+}
+
 function readWishlist(): Set<string> {
   try {
-    const raw = localStorage.getItem(WISHLIST_KEY);
+    const scopedKey = wishlistStorageKey();
+    let raw = localStorage.getItem(scopedKey);
+    if (raw === null && scopedKey !== WISHLIST_KEY) {
+      // 스코프 도입 전 전역 키에 남은 찜을 로그인 계정으로 1회 이관한다.
+      raw = localStorage.getItem(WISHLIST_KEY);
+      if (raw !== null) {
+        localStorage.setItem(scopedKey, raw);
+        localStorage.removeItem(WISHLIST_KEY);
+      }
+    }
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
   } catch {
@@ -765,7 +781,7 @@ function readWishlist(): Set<string> {
 
 function writeWishlist(set: Set<string>) {
   try {
-    localStorage.setItem(WISHLIST_KEY, JSON.stringify([...set]));
+    localStorage.setItem(wishlistStorageKey(), JSON.stringify([...set]));
   } catch {
     // localStorage 접근 불가(프라이빗 모드 등)면 무시한다.
   }

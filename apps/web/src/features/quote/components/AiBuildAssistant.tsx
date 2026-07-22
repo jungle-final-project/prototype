@@ -282,16 +282,22 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       if (detail?.prefill) {
         if (detail.autoSubmit) {
           setPendingSubmits((queue) => [...queue, { text: detail.prefill!, assessmentContext: detail.assessmentContext }]);
-          window.requestAnimationFrame(() => {
-            document.querySelector('[data-testid="ai-chatbot-panel"]')?.scrollIntoView({
-              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-              block: 'nearest'
-            });
-          });
         } else {
           setPrompt(detail.prefill);
         }
       }
+      // prefill 유무와 무관하게 항상 패널을 화면으로 데려오고 입력창에 포커스를 준다 —
+      // 빈 견적 CTA("AI로 시작하기")처럼 무인자 호출은 임베디드(세로 스택 하단, 모바일은 화면 밖)에서
+      // 아무 반응이 없는 것처럼 보였다.
+      window.requestAnimationFrame(() => {
+        document.querySelector('[data-testid="ai-chatbot-panel"]')?.scrollIntoView({
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+          block: 'nearest'
+        });
+        if (!detail?.autoSubmit) {
+          document.getElementById('ai-build-chat-input')?.focus({ preventScroll: true });
+        }
+      });
     };
     const toggleAssistant = () => setOpen((current) => {
       const nextOpen = !current;

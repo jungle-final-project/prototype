@@ -623,6 +623,10 @@ public class QuoteDraftQueryService {
     private static int quantity(Object value, String category) {
         Integer parsed = null;
         if (value instanceof Number number) {
+            // JSON 숫자 2.5가 조용히 2로 floor돼 저장되던 것을 막는다 — 문자열 "2.5"와 동일하게 400.
+            if (number.doubleValue() != Math.floor(number.doubleValue())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "quantity 형식이 올바르지 않습니다.");
+            }
             parsed = number.intValue();
         } else if (value != null && !String.valueOf(value).isBlank()) {
             // 비숫자/소수/전각 문자열은 NumberFormatException으로 500이 났다. 사용자 입력 오류이므로 400으로 돌린다.
