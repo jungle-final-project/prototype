@@ -331,6 +331,17 @@ export function SupportNewPage() {
   const [agentDiagnosisMessage, setAgentDiagnosisMessage] = useState(() => diagnosisIdParam ? '저장된 PC Agent 진단 상태를 불러옵니다.' : '');
   const [agentDiagnosisId, setAgentDiagnosisId] = useState(diagnosisIdParam);
   const agentDiagnosisPolling = usePcAgentDiagnosisPolling(agentDiagnosisId);
+  // URL로 복원한 diagnosisId가 실제로 존재하지 않으면(임의/남의 id) 초록 '수신됨' 배너와
+  // 0% 가짜 진행 카드를 계속 보여주지 않는다 — 조회 불가로 폴링이 멈춘 시점에 상태를 정리한다.
+  useEffect(() => {
+    if (!agentDiagnosisId || agentDiagnosisPolling.polling || !agentDiagnosisPolling.error) return;
+    if (agentDiagnosisPolling.snapshot) return;
+    setAgentDiagnosisState('error');
+    setAgentDiagnosisMessage(agentDiagnosisPolling.error);
+    setAgentDiagnosisId('');
+    updateDiagnosisSearchParam('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentDiagnosisId, agentDiagnosisPolling.polling, agentDiagnosisPolling.error, agentDiagnosisPolling.snapshot]);
   const [error, setError] = useState('');
   const authScope = authScopeKey(getCachedAuthUser());
   const currentChatQuery = useQuery({
@@ -471,8 +482,8 @@ export function SupportNewPage() {
     }
     setAgentDiagnosisState('requesting');
     setAgentDiagnosisMessage('');
-    setAgentDiagnosisId('');
-    updateDiagnosisSearchParam('');
+    // 진행 중 진단 id·URL은 새 요청이 ACCEPTED로 확정될 때만 교체한다 — 여기서 미리 지우면
+    // 조바심에 '다시 진단'을 눌러 서버가 BUSY(거절)를 줄 때 진행 중 진단이 UI·URL에서 사라진다.
     try {
       const response = await requestPcAgentDiagnosis({
         symptom,
@@ -485,8 +496,12 @@ export function SupportNewPage() {
         setAgentDiagnosisId(response.diagnosisId);
         updateDiagnosisSearchParam(response.diagnosisId);
       } else {
+        // 거절(BUSY 등)에서는 직전 진단을 보존한다 — 진행 중이던 진단 카드가 그대로 남는다.
         setAgentDiagnosisState('rejected');
-        setAgentDiagnosisMessage(response.message || `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`);
+        setAgentDiagnosisMessage(response.message
+          || (response.status === 'BUSY'
+            ? '이미 진행 중인 진단이 있어 새 요청이 접수되지 않았습니다. 완료를 기다려 주세요.'
+            : `PC Agent가 요청을 처리하지 않았습니다. (${response.status})`));
       }
     } catch (cause) {
       setAgentDiagnosisState('error');

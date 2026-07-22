@@ -35,6 +35,12 @@ export function usePcAgentDiagnosisPolling(diagnosisId: string): PcAgentDiagnosi
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
+    let pollCount = 0;
+    let completedGrace = 0;
+    // 무진행 방어: 이벤트가 끊긴 채(에이전트 종료 등) 무한 2초 폴링하지 않게 총 상한을 둔다(~5분).
+    const MAX_POLLS = 150;
+    // 서버가 완료(completed)를 알렸는데 결과 프레임이 아직 안 온 창을 위한 유예(~10초). 넘으면 결과 미수신 종료.
+    const COMPLETED_GRACE_POLLS = 5;
 
     setState({
       diagnosisId,
@@ -80,14 +86,31 @@ export function usePcAgentDiagnosisPolling(diagnosisId: string): PcAgentDiagnosi
       try {
         const response = await request;
         if (!active) return;
+        pollCount += 1;
         const events = uniqueEventsInServerOrder(response.events);
-        const terminal = isTerminalDiagnosis(response);
+        let terminal = isTerminalDiagnosis(response);
+        let terminationNote = '';
+        if (!terminal && response.completed && !response.result) {
+          // 서버는 완료를 알렸는데 결과가 유예 시간 내 도착하지 않으면 '결과 미수신'으로 종료한다.
+          completedGrace += 1;
+          if (completedGrace > COMPLETED_GRACE_POLLS) {
+            terminal = true;
+            terminationNote = '진단은 완료됐지만 결과를 받지 못했습니다. 잠시 후 다시 시도해 주세요.';
+          }
+        } else {
+          completedGrace = 0;
+        }
+        if (!terminal && pollCount >= MAX_POLLS) {
+          // 이벤트가 끊긴 채 상한을 넘으면(에이전트 종료 등) 무한 폴링 대신 멈춘다.
+          terminal = true;
+          terminationNote = 'PC Agent 응답이 없어 진단 조회를 멈췄습니다. 연결을 확인하고 다시 시도해 주세요.';
+        }
         repeat = !terminal;
         setState({
           diagnosisId,
           snapshot: response,
           events,
-          error: '',
+          error: terminationNote,
           polling: repeat
         });
       } catch (cause) {
