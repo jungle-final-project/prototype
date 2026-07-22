@@ -23,6 +23,36 @@ class ReadThroughTtlCacheTest {
     }
 
     @Test
+    void invalidateDuringInFlightLoadIsNotOverwrittenByStaleSnapshot() {
+        // [미스 → 로더가 커밋 전 스냅샷 read] → [쓰기 커밋 + invalidate] → [로더가 옛 스냅샷 put]
+        // 순서에서 방금 쓴 값이 빠진 옛 스냅샷이 TTL 동안 서빙되면 안 된다(read-your-writes).
+        ReadThroughTtlCache<String, String> cache = new ReadThroughTtlCache<>(Duration.ofSeconds(30), 16);
+        AtomicInteger loads = new AtomicInteger();
+
+        // 로더가 도는 도중 invalidate가 끼어드는 상황을 로더 안에서 재현한다.
+        String first = cache.get("k", () -> {
+            cache.remove("k");
+            return "stale-snapshot";
+        });
+        assertThat(first).isEqualTo("stale-snapshot");
+
+        // 오염이 남았다면 다음 get이 "stale-snapshot"을 돌려준다 — 되채움이 막혔으니 재적재된다.
+        assertThat(cache.get("k", () -> "fresh-" + loads.incrementAndGet())).isEqualTo("fresh-1");
+    }
+
+    @Test
+    void clearDuringInFlightLoadIsNotOverwrittenByStaleSnapshot() {
+        ReadThroughTtlCache<String, String> cache = new ReadThroughTtlCache<>(Duration.ofSeconds(30), 16);
+
+        String first = cache.get("k", () -> {
+            cache.clear();
+            return "stale-snapshot";
+        });
+        assertThat(first).isEqualTo("stale-snapshot");
+        assertThat(cache.get("k", () -> "fresh")).isEqualTo("fresh");
+    }
+
+    @Test
     void jitterExtendsEntryExpiry() throws Exception {
         ReadThroughTtlCache<String, String> cache = new ReadThroughTtlCache<>(
                 Duration.ofMillis(1),
