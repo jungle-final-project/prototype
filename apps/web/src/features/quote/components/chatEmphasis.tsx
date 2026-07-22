@@ -108,3 +108,11 @@ export function emphasizeChatText(text: string): ReactNode {
   }
   return emphasizeTokens(text, 't');
 }
+
+// 판정(결론) 문장 — "쾌적/못 미침/부족/초과/장착 불가/권합니다"처럼 사용자가 마지막에
+// 꼭 읽어야 할 한 줄. 자체 문단으로 떨어져 있으면 렌더러가 결론 콜아웃으로 분리 표시한다.
+const CONCLUSION_PATTERN = /쾌적|못\s?미[치칩쳐침]|부족합니다|빠듯합니다|초과합니다|장착할 수 없습니다|권합니다/;
+
+export function isConclusionSentence(text: string): boolean {
+  return CONCLUSION_PATTERN.test(text);
+}

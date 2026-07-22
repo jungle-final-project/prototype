@@ -262,7 +262,8 @@ function feedbackText(
   const fpsText = analysis.resolutionFps
     .map((entry) => `${entry.resolution} ${entry.avgFps.toLocaleString('ko-KR')}`)
     .join(' · ');
-  return `${prefix} ${scoreText} ${analysis.gameLabel} 예상 성능은 ${fpsText}FPS입니다. ${refreshRateNote(analysis.resolutionFps)}${closing}`;
+  // 판정 한 줄은 자체 줄로 분리한다 — 렌더러(ChatMessage)가 단독 판정 문단을 결론 콜아웃으로 그린다.
+  return `${prefix} ${scoreText} ${analysis.gameLabel} 예상 성능은 ${fpsText}FPS입니다.\n${refreshRateNote(analysis.resolutionFps)}${closing}`;
 }
 
 /**
