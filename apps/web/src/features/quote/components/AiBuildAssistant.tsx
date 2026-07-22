@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, Fragment, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowDown, ArrowRight, BarChart3, Bot, CheckCircle2, Download, LifeBuoy, Send, ShoppingCart, Sparkles, X } from 'lucide-react';
@@ -12,6 +12,7 @@ import { downloadPcAgentForCurrentUser } from '../../support/agentDownload';
 import { ensurePcAgentConnected, type PcAgentConnectionPhase } from '../../support/pcAgentLauncher';
 import { requestPcAgentDiagnosis } from '../../support/supportApi';
 import { AiChatPendingBubble } from './AiChatPendingBubble';
+import { emphasizeChatText } from './chatEmphasis';
 import { applicationKindForBuild, startAiDraftApplicationFeedback } from './AiDraftApplicationFeedbackCoordinator';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
@@ -1344,7 +1345,7 @@ function assistantMessageParagraphs(text: string): string[][] {
 }
 
 // 새로 추가된 문장 하나를 자연스럽게 페이드 인한다. 커스텀 keyframe 없이 opacity 트랜지션만 쓴다(index.css 무수정).
-function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: boolean }) {
+function FadeInSentence({ text, leadingSpace, emphasize }: { text: string; leadingSpace: boolean; emphasize: boolean }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
     const id = window.requestAnimationFrame(() => setShown(true));
@@ -1355,7 +1356,7 @@ function FadeInSentence({ text, leadingSpace }: { text: string; leadingSpace: bo
       data-testid="ai-message-sentence"
       className={`transition-opacity duration-300 ${shown ? 'opacity-100' : 'opacity-0'}`}
     >
-      {leadingSpace ? ' ' : ''}{text}
+      {leadingSpace ? ' ' : ''}{emphasize ? emphasizeChatText(text) : text}
     </span>
   );
 }
@@ -1517,6 +1518,8 @@ const ChatMessage = memo(function ChatMessage({
       + (message.buildAssessment ? 1 : 0)
       + (message.builds?.length ?? 0);
   const animate = reveal && !isUser && !prefersReducedMotion() && sentences.length + extraCount > 1;
+  // 인트로는 따옴표로 감싼 예시 발화 모음이라 강조하지 않는다 — 실제 답변의 사실(가격·부품명·수치)만 볼드.
+  const emphasizeMessage = message.kind !== 'intro';
   const revealedCount = useSequentialReveal(sentences, extraCount, animate);
   const sentencesShown = animate ? Math.min(revealedCount, sentences.length) : sentences.length;
   const extrasShown = animate ? Math.max(0, revealedCount - sentences.length) : extraCount;
@@ -1565,9 +1568,12 @@ const ChatMessage = memo(function ChatMessage({
                   <p key={`${paragraphIndex}:${paragraph[0]}`} data-testid="ai-message-paragraph">
                     {animate
                       ? paragraph.slice(0, visibleSentenceCount).map((sentence, index) => (
-                        <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} />
+                        <FadeInSentence key={index} text={sentence} leadingSpace={index > 0} emphasize={emphasizeMessage} />
                       ))
-                      : paragraph.join(' ')}
+                      : paragraph.map((sentence, index) => (
+                        // join(' ')과 문자 단위로 동일한 출력 — 문장 앞머리 강조 규칙(교체:/번호 목록)이 걸리게 문장별로 처리한다.
+                        <Fragment key={index}>{index > 0 ? ' ' : ''}{emphasizeMessage ? emphasizeChatText(sentence) : sentence}</Fragment>
+                      ))}
                   </p>
                 );
               })}
