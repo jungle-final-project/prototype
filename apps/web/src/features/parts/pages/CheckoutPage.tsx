@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, CalendarDays, ChevronDown, ClipboardCheck, ExternalLink, MapPin, ShoppingBag, Truck } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel, Screen, StateMessage } from '../../../components/ui';
@@ -67,11 +67,28 @@ export function CheckoutPage() {
   const [isRequestInfoOpen, setIsRequestInfoOpen] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
   const [addressSearchError, setAddressSearchError] = useState('');
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const { data: quoteDraft, isLoading, isError } = useQuery({
     queryKey: ['quote-draft', 'current'],
     queryFn: getCurrentQuoteDraft
   });
+  // 멱등키를 장바구니 내용에 묶어 세션에 고정한다 — 마운트마다 새 UUID를 만들면
+  // 뒤로가기 후 재제출이 같은 장바구니로 조립 요청을 중복 생성한다. 내용이 바뀌면 새 키.
+  const draftSignature = quoteDraft
+    ? `${quoteDraft.id}|${quoteDraft.items.map((item) => `${item.partId}:${item.quantity}`).join(',')}`
+    : '';
+  const idempotencyKey = useMemo(() => {
+    if (!draftSignature) return crypto.randomUUID();
+    const storageKey = 'buildgraph.checkoutIdempotency';
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as { signature: string; key: string } | null;
+      if (stored && stored.signature === draftSignature) return stored.key;
+      const key = crypto.randomUUID();
+      sessionStorage.setItem(storageKey, JSON.stringify({ signature: draftSignature, key }));
+      return key;
+    } catch {
+      return crypto.randomUUID();
+    }
+  }, [draftSignature]);
   const graphQuery = useQuery({
     queryKey: ['checkout', 'build-graph', quoteDraft?.id, quoteDraft?.items.map((item) => `${item.partId}:${item.quantity}`).join('|')],
     queryFn: () => resolveBuildGraph({ source: 'QUOTE_DRAFT_CURRENT', view: 'FULL' }),

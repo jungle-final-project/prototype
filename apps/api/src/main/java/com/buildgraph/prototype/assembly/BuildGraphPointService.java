@@ -198,18 +198,33 @@ public class BuildGraphPointService {
         return resultMap(attempt, account);
     }
 
+    // 첫 계좌 생성 시 시드 계정(V120)과 같은 데모 포인트를 지급한다 — 포인트가 유일한 결제
+    // 수단인데 충전 화면이 없어, 새로 가입한 계정은 조립 결제를 영영 완료할 수 없었다.
+    private static final long DEMO_INITIAL_BALANCE = 50_000_000L;
+
     private Map<String, Object> requireAccountForUpdate(Long userId) {
-        jdbcTemplate.update("""
+        int inserted = jdbcTemplate.update("""
                 INSERT INTO user_point_accounts (user_id, balance)
-                VALUES (?, 0)
+                VALUES (?, ?)
                 ON CONFLICT (user_id) DO NOTHING
-                """, userId);
-        return jdbcTemplate.queryForList("""
+                """, userId, DEMO_INITIAL_BALANCE);
+        Map<String, Object> account = jdbcTemplate.queryForList("""
                 SELECT id, public_id::text AS public_id, balance, updated_at
                 FROM user_point_accounts
                 WHERE user_id = ?
                 FOR UPDATE
                 """, userId).stream().findFirst().orElseThrow();
+        if (inserted == 1) {
+            // 지급 근거를 거래 이력에도 남긴다(시드 계정의 'seed-demo' 관례와 동일한 모양).
+            jdbcTemplate.update("""
+                    INSERT INTO point_transactions (
+                        point_account_id, user_id, idempotency_key, transaction_type, amount, balance_after, description
+                    ) VALUES (?, ?, ?, 'GRANT', ?, ?, ?)
+                    ON CONFLICT (point_account_id, idempotency_key) DO NOTHING
+                    """, longValue(account, "id"), userId, "signup-demo-" + userId,
+                    DEMO_INITIAL_BALANCE, DEMO_INITIAL_BALANCE, "데모 포인트 50,000,000P 지급");
+        }
+        return account;
     }
 
     private Map<String, Object> reloadAttempt(Long attemptId) {
