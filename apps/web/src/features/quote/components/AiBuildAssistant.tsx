@@ -218,11 +218,13 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   const [pendingAutoApplyBuild, setPendingAutoApplyBuild] = useState<AiRecommendedBuild | null>(null);
   const autoApplyBuildRef = useRef<string | null>(null);
   const [runningQuickReplyCommandId, setRunningQuickReplyCommandId] = useState<string | null>(null);
-  const [pendingSubmit, setPendingSubmit] = useState<{
+  // 전송 대기를 큐로 둔다 — in-flight 중 두 번째 큐잉(빠른 칩 클릭·autoSubmit 겹침)이 첫 요청을
+  // 조용히 덮어써 유실되던 문제를 막고, 들어온 순서대로 한 건씩 보낸다.
+  const [pendingSubmits, setPendingSubmits] = useState<Array<{
     text: string;
     assessmentContext?: AiAssessmentContext;
     quickReplySource?: AiQuickReplyKind;
-  } | null>(null);
+  }>>([]);
   const [centerScrollbar, setCenterScrollbar] = useState<CenterScrollbarState>({
     canScroll: false,
     visible: false,
@@ -279,7 +281,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
       setOpen(true);
       if (detail?.prefill) {
         if (detail.autoSubmit) {
-          setPendingSubmit({ text: detail.prefill, assessmentContext: detail.assessmentContext });
+          setPendingSubmits((queue) => [...queue, { text: detail.prefill!, assessmentContext: detail.assessmentContext }]);
           window.requestAnimationFrame(() => {
             document.querySelector('[data-testid="ai-chatbot-panel"]')?.scrollIntoView({
               behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
@@ -456,12 +458,12 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
   }, [open, placement, session.messages.length, updateCenterScrollbar]);
 
   useEffect(() => {
-    if (!pendingSubmit || isSending) return;
-    const submission = pendingSubmit;
-    setPendingSubmit(null);
+    if (pendingSubmits.length === 0 || isSending) return;
+    const [submission, ...rest] = pendingSubmits;
+    setPendingSubmits(rest);
     void sendMessage(submission.text, submission.assessmentContext, submission.quickReplySource);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingSubmit, isSending]);
+  }, [pendingSubmits, isSending]);
 
   useEffect(() => () => {
     if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
@@ -618,7 +620,10 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
           ? withAutoApplyChangeReceipt(build, currentQuoteDraft)
           : build
       ));
-      const latestBuilds = responseBuilds ? mergeAiBuildHistory(responseBuilds, baseSession.latestBuilds) : baseSession.latestBuilds;
+      // 저장 직전 최신 세션을 다시 읽어 병합한다 — await 사이에 draftApplicationFeedback가 쓴
+      // '분석 중' 피드백 메시지나 칩으로 담은 결과가 낡은 optimistic 스냅샷에 덮여 사라지던 레이스를 막는다.
+      const persistedSession = readAssistantSession(ownerKey) ?? baseSession;
+      const latestBuilds = responseBuilds ? mergeAiBuildHistory(responseBuilds, persistedSession.latestBuilds) : persistedSession.latestBuilds;
       const latestGraphFocus = graphFocusFromResponse(response, nextPrompt);
       const assistantMessage: AiChatMessage = {
         id: createAiMessageId(response.answerType.toLowerCase()),
@@ -635,14 +640,18 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
         quickReplyKind: response.quickReplyKind ?? undefined,
         quickReplyCommands: response.quickReplyCommands ?? undefined
       };
+      // 사용자 질문이 이미 최신 세션에 있으면 그 위에(피드백 메시지 포함) 답변만 얹고,
+      // 혹시 세션이 통째로 갈렸으면 optimistic 스냅샷으로 폴백한다.
+      const persistedHasUserMessage = persistedSession.messages.some((message) => message.id === userMessage.id);
+      const mergedMessages = persistedHasUserMessage ? persistedSession.messages : optimisticSession.messages;
       const nextSession = {
-        messages: [...optimisticSession.messages, assistantMessage],
+        messages: [...mergedMessages, assistantMessage],
         latestBuilds,
-        savedBuildIds: baseSession.savedBuildIds,
+        savedBuildIds: persistedSession.savedBuildIds,
         latestGraphFocus,
         latestActiveBuildId: responseBuilds?.find((build) => build.tier === 'balanced')?.id
           ?? responseBuilds?.[0]?.id
-          ?? baseSession.latestActiveBuildId
+          ?? persistedSession.latestActiveBuildId
           ?? latestBuilds[1]?.id
           ?? latestBuilds[0]?.id,
         updatedAt: responseTime
@@ -842,7 +851,7 @@ export function AiBuildAssistant({ surface = 'home', variant = 'floating', onBoa
     quickReplyKind?: AiQuickReplyKind
   ) => {
     if (!command) {
-      setPendingSubmit({ text: reply, quickReplySource: quickReplyKind });
+      setPendingSubmits((queue) => [...queue, { text: reply, quickReplySource: quickReplyKind }]);
       return;
     }
     const commandId = `${messageId ?? 'quick-reply'}:${command.partId}`;

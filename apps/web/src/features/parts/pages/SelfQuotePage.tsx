@@ -5,7 +5,7 @@ import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react
 import { useHiddenPageScrollbar } from '../../../hooks/useHiddenPageScrollbar';
 import { Screen } from '../../../components/ui';
 import { AUTH_CHANGED_EVENT, getToken } from '../../../lib/api';
-import { PERF_COMPARE_REQUEST_EVENT, consumePendingPerfCompare, openAiAssistant, type PerfCompareTarget } from '../../../lib/events';
+import { PERF_COMPARE_REQUEST_EVENT, clearPendingPerfCompare, consumePendingPerfCompare, openAiAssistant, type PerfCompareTarget } from '../../../lib/events';
 import {
   AI_ASSISTANT_SESSION_CHANGED_EVENT,
   AI_SELECTED_BUILD_CHANGED_EVENT,
@@ -265,6 +265,9 @@ function SelfQuoteSlotBoardPage() {
       startPerfComparison(detail);
     };
     const onPerfCompareRequest = (event: Event) => {
+      // 라이브 리스너가 이벤트를 받으면 세션 저장분은 이미 소비된 것이다 — 지우지 않으면
+      // 나중에 재방문 시 consumePendingPerfCompare가 해제한 비교를 되살린다.
+      clearPendingPerfCompare();
       acceptPerfCompare((event as CustomEvent<PerfCompareTarget>).detail);
     };
     window.addEventListener(PERF_COMPARE_REQUEST_EVENT, onPerfCompareRequest);
@@ -507,7 +510,7 @@ function SelfQuoteSlotBoardPage() {
                 graph={graphQuery.data}
                 items={draftItems}
                 comparison={perfComparison}
-                onClearComparison={() => setPerfComparison(null)}
+                onClearComparison={() => { clearPendingPerfCompare(); setPerfComparison(null); }}
                 onStartComparison={startPerfComparison}
                 onApplyComparison={applyComparisonTarget}
                 isLoading={graphQuery.isLoading || graphQuery.isFetching}
