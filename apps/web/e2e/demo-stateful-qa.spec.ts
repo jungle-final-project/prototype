@@ -46,7 +46,12 @@ test('4분 데모 대표 20개를 실제 웹 상태 전이로 재현한다', asy
           const body = await submitAssistant(page, scenario.steps.find((step) => step.kind === 'BUILD_CHAT')?.message ?? '200만원으로 QHD 게임용 PC 추천해줘');
           if (!body.builds?.length) failures.push('RECOMMENDATION_NOT_RENDERED');
           if (body.builds?.some((build) => build.toolResults?.some((tool) => tool.status === 'FAIL'))) failures.push('TOOL_FAIL_RECOMMENDED');
-          if (!await page.getByText(body.message ?? '', { exact: false }).last().isVisible().catch(() => false)) failures.push('RESPONSE_NOT_RENDERED');
+          // 빈 문자열 getByText('')는 아무 텍스트에나 매칭돼 검사가 무력화된다 — 메시지 부재도 실패다.
+          const responseMessage = (body.message ?? '').trim();
+          if (!responseMessage
+              || !await page.getByText(responseMessage, { exact: false }).last().isVisible().catch(() => false)) {
+            failures.push('RESPONSE_NOT_RENDERED');
+          }
           evidence.push(`builds=${body.builds?.length ?? 0}`);
         } else if (scenario.group === 'DEMO_GPU_DOWNGRADE_RESTORE') {
           await replaceDraft(request, user.accessToken, scenario.setupItems);

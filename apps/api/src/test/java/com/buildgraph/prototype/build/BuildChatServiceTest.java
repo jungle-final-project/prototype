@@ -1753,6 +1753,70 @@ class BuildChatServiceTest {
     }
 
     @Test
+    void presentationSmoothnessSentenceReturnsVerifiedPreviewThroughChat() {
+        // 발표 4번 문장 원문을 chat() 레벨로 고정한다 — uiContext.performance 키 계층이
+        // 한 글자라도 어긋나면(objectMap 경로 변경 등) fast path가 조용히 LLM으로 새고
+        // 정적 헬퍼 테스트만 초록인 채 발표 시나리오가 죽는다.
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        doAnswer(invocation -> {
+            String sql = invocation.getArgument(0, String.class);
+            if (sql.contains("FROM parts") && sql.contains("category = ?")) {
+                return List.of(partRow(
+                        "gpu-target", "GPU", "RTX 5080 Demo", 2_000_000,
+                        Map.of("gpuClass", "RTX_5080", "hardwareClass", "RTX_5080"), 95));
+            }
+            if (sql.contains("FROM game_fps_benchmarks")) {
+                boolean targetGpu = "RTX_5080".equals(invocation.getArgument(2, String.class));
+                return List.of(Map.of(
+                        "game_title", "PlayerUnknown's Battlegrounds",
+                        "game_key", "pubg",
+                        "resolution", "4K",
+                        "graphics_preset", "MEDIUM",
+                        "avg_fps", targetGpu ? 127 : 74,
+                        "source_name", "PC-Builds FPS calculator",
+                        "confidence", "MEDIUM",
+                        "metadata", Map.of("gpuClass", targetGpu ? "RTX_5080" : "RTX_5060")
+                ));
+            }
+            return List.of();
+        }).when(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        ToolCheckService toolCheckService = mock(ToolCheckService.class);
+        when(toolCheckService.checkBuild(anyList(), anyInt())).thenReturn(passingWholePlanToolResults());
+        AiChatEngine aiChatEngine = mock(AiChatEngine.class);
+        BuildChatCacheService cacheService = mock(BuildChatCacheService.class);
+        BuildChatService service = new BuildChatService(jdbcTemplate, toolCheckService, aiChatEngine, cacheService);
+
+        Map<String, Object> response = service.chat(Map.of(
+                "message", "가격이 조금 올라가도 괜찮으니, 배그 화면이 더 부드럽게 보이도록 바꿔줘",
+                "uiContext", Map.of(
+                        "surface", "SELF_QUOTE",
+                        "capabilities", List.of("GAME_PERFORMANCE_COMPARE"),
+                        "performance", Map.of("gameQuery", "pubg", "resolution", "4K")
+                ),
+                "currentQuoteDraft", draftWithItems(List.of(
+                        draftItem("cpu-current", "CPU", "Core Ultra 5", 1,
+                                Map.of("cpuClass", "INTEL_CORE_ULTRA_5_245K")),
+                        draftItem("gpu-current", "GPU", "RTX 5060", 1,
+                                Map.of("gpuClass", "RTX_5060")),
+                        draftItem("case-current", "CASE", "Demo Case", 1,
+                                Map.of("maxGpuLengthMm", 415)),
+                        draftItem("psu-current", "PSU", "Demo PSU", 1,
+                                Map.of("capacityW", 1000))
+                ))
+        ));
+
+        assertThat(response).containsEntry("answerType", "PART");
+        // 현재 74FPS → 다음 체감 구간 120 → 4K 127FPS 후보(RTX 5080)가 검증된 미리보기로 나온다.
+        assertThat(response.get("builds")).as("response: %s", response).asList().singleElement().satisfies(value -> {
+            Map<?, ?> build = (Map<?, ?>) value;
+            assertThat(build.get("badges")).asList().contains("DRAFT_EDIT_PREVIEW");
+            assertThat(build.get("items")).asList().anySatisfy(item ->
+                    assertThat((Map<String, Object>) item).containsEntry("partId", "gpu-target"));
+        });
+        verifyNoInteractions(aiChatEngine);
+    }
+
+    @Test
     void mixedTargetFpsRequestRespectsNamedGpuModelInsteadOfCheapestQualifier() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         doAnswer(invocation -> {
