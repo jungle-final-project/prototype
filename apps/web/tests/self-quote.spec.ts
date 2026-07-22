@@ -712,7 +712,11 @@ test('AI chat bolds key facts without altering the raw message text', async ({ p
   const chatMessage = '요청하신 예산에 맞춰 그래픽카드 추천 TOP2를 정리했습니다. '
     + '1) RTX 5070 벤투스 2X — 1,234,000원 2) RTX 5060 Ti 8GB — 850,000원 '
     + '발로란트 QHD 기준 약 240FPS로 확인됩니다. 교체: 기존 GPU → RTX 5070 벤투스 2X. '
-    + '총액은 1,900,000원 → 2,284,000원 (+384,000원)입니다.';
+    + '총액은 1,900,000원 → 2,284,000원 (+384,000원)입니다.\n'
+    // 견적 반영 피드백 문구(AiDraftApplicationFeedbackCoordinator 표기) — 점수·해상도별 성능·판정 어휘 강조 검증용
+    + '완성 견적이 담겼습니다. 현재 종합 점수는 806점입니다. '
+    + '배그 예상 성능은 FHD 209 · QHD 140 · 4K 80FPS입니다. '
+    + 'FHD·QHD는 120Hz 이상으로 쾌적하고, 4K는 120Hz에 못 미치니 참고하세요.';
   await page.route('**/api/quote-drafts/current**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyDraft) });
   });
@@ -738,20 +742,31 @@ test('AI chat bolds key facts without altering the raw message text', async ({ p
     await expect(text).toContainText('총액은 1,900,000원 → 2,284,000원 (+384,000원)입니다.');
     // 렌더 경로 고정: 리빌 경로는 문장 span, 세션 복원 경로는 Fragment(스팬 0개)로 그린다.
     await expect(text.getByTestId('ai-message-sentence')).toHaveCount(expectedSentenceSpans);
-    // 정규화 없는 raw 비교 — 구조 규칙(번호 목록·교체 요약)이 공백 하나도 더하거나 빼지 않는다.
+    // 정규화 없는 raw 비교 — 구조·토큰 규칙이 공백 하나도 더하거나 빼지 않는다.
     expect(await text.getByTestId('ai-message-paragraph').nth(1).textContent()).toBe('1) RTX 5070 벤투스 2X — 1,234,000원');
     expect(await text.textContent()).toContain('교체: 기존 GPU → RTX 5070 벤투스 2X. 총액은');
+    expect(await text.textContent()).toContain('FHD·QHD는 120Hz 이상으로 쾌적하고, 4K는 120Hz에 못 미치니 참고하세요.');
     // 강조: 번호 목록·교체 요약의 부품명, 가격, FPS, 해상도, 게임명이 <strong>으로 감싸진다.
     const strongs = text.locator('strong');
     await expect(strongs.filter({ hasText: 'RTX 5070 벤투스 2X' }).first()).toBeVisible();
     await expect(strongs.filter({ hasText: '기존 GPU → RTX 5070 벤투스 2X' })).toHaveCount(1);
     await expect(strongs.filter({ hasText: '1,234,000원' })).toHaveCount(1);
     await expect(strongs.filter({ hasText: '240FPS' })).toHaveCount(1);
-    await expect(strongs.filter({ hasText: 'QHD' })).toHaveCount(1);
+    // 'QHD' 부분일치 3곳: '발로란트 QHD' 문장의 단독 토큰, 'QHD 140' 성능 쌍, 'FHD·QHD는'의 단독 토큰
+    await expect(strongs.filter({ hasText: 'QHD' })).toHaveCount(3);
     await expect(strongs.filter({ hasText: '발로란트' })).toHaveCount(1);
     await expect(strongs.filter({ hasText: 'TOP2' })).toHaveCount(1);
+    // 견적 반영 피드백: 점수·해상도별 성능·주사율·판정 어휘(쾌적/못 미치니)·게임명이 굵어진다.
+    await expect(strongs.filter({ hasText: '806점' })).toHaveCount(1);
+    await expect(strongs.filter({ hasText: '배그' })).toHaveCount(1);
+    await expect(strongs.filter({ hasText: 'FHD 209' })).toHaveCount(1);
+    await expect(strongs.filter({ hasText: 'QHD 140' })).toHaveCount(1);
+    await expect(strongs.filter({ hasText: '4K 80FPS' })).toHaveCount(1);
+    await expect(strongs.filter({ hasText: '120Hz' })).toHaveCount(2);
+    await expect(strongs.filter({ hasText: '쾌적하고' })).toHaveCount(1);
+    await expect(strongs.filter({ hasText: '못 미치니' })).toHaveCount(1);
   };
-  await assertEmphasis(5);
+  await assertEmphasis(9);
   // 사용자 말풍선은 강조 대상이 아니다.
   await expect(page.getByTestId('ai-chat-message-user').last().locator('strong')).toHaveCount(0);
 
@@ -759,6 +774,7 @@ test('AI chat bolds key facts without altering the raw message text', async ({ p
   await page.reload();
   await assertEmphasis(0);
 });
+
 
 test('AI location focus marks an empty mounting position and clears on a board part click', async ({ page }) => {
   await loginAsUser(page);
