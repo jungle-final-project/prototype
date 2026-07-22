@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import buildgraph_agent as agent
 from diagnosis_request_agent import DiagnosisRequest, DiagnosisSession
+from diagnosis_orchestrator import DiagnosisEvent
 from initial_metrics import ProviderSample
 
 
@@ -1228,6 +1230,140 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertEqual("STANDALONE", standalone_started.request.source)
         self.assertEqual("", standalone_started.request.symptom)
         standalone_coordinator.start.assert_called_once()
+
+    def test_automatic_initial_metrics_preserves_pending_web_request(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-web-pending",
+            device_id="device-1",
+            symptom="화면이 멈춥니다.",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="DEMO",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            diagnosis_store = agent.DiagnosisSessionStore(Path(directory) / "session.json")
+            diagnosis_store.accept(DiagnosisSession(request))
+            coordinator = SimpleNamespace(start=MagicMock(return_value=True))
+            orchestrator = SimpleNamespace(prepare=MagicMock())
+
+            started = agent.start_initial_metrics_session(
+                None,
+                "LIVE",
+                "device-1",
+                diagnosis_store,
+                agent.MetricsStore(),
+                agent.DiagnosisResultStore(),
+                orchestrator,
+                coordinator,
+            )
+
+        self.assertEqual(request.diagnosis_id, started.request.diagnosis_id)
+        self.assertEqual("WEB_REQUEST", started.request.source)
+        self.assertEqual("DEMO", started.request.mode)
+        self.assertEqual(request.diagnosis_id, diagnosis_store.session.request.diagnosis_id)
+        coordinator.start.assert_called_once_with(request.diagnosis_id, "DEMO")
+
+    def test_start_ack_failure_does_not_replace_concurrent_failed_state(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-start-ack-failed",
+            device_id="device-1",
+            symptom="화면이 멈춥니다.",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            diagnosis_store = agent.DiagnosisSessionStore(Path(directory) / "session.json")
+            session = DiagnosisSession(request)
+            diagnosis_store.accept(session)
+            metrics_store = agent.MetricsStore()
+            metrics_store.begin(request.diagnosis_id, request.mode)
+            metrics_store.complete(request.diagnosis_id)
+
+            def reject_start(*_args):
+                diagnosis_store.update_state("FAILED")
+                return False
+
+            orchestrator = SimpleNamespace(prepare=MagicMock(), start=reject_start)
+            started = agent.start_diagnosis_once(session, diagnosis_store, metrics_store, orchestrator)
+
+        self.assertIsNone(started)
+        self.assertEqual("FAILED", diagnosis_store.session.agent_state)
+
+    def test_web_worker_start_requires_matching_server_ack(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-server-sync",
+            device_id="device-1",
+            symptom="화면이 멈춥니다.",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request, "RUNNING")
+        event = DiagnosisEvent(
+            diagnosis_id=request.diagnosis_id,
+            event_id="event-start",
+            event_type="DIAGNOSIS_STARTED",
+            task_id=None,
+            component=None,
+            timestamp="2026-07-13T00:00:01Z",
+            message="하드웨어 진단을 시작했습니다.",
+        )
+        snapshot = agent.DiagnosisRunSnapshot(
+            diagnosis_id=request.diagnosis_id,
+            mode="LIVE",
+            state="DIAGNOSING",
+            events=(event,),
+        )
+        forwarded = set()
+        client = SimpleNamespace(
+            is_connected=MagicMock(return_value=True),
+            send_diagnosis_status_and_wait_for_ack=MagicMock(return_value=True),
+        )
+
+        self.assertTrue(agent.confirm_diagnosis_start_sync(session, snapshot, client, forwarded))
+        self.assertEqual({"event-start"}, forwarded)
+        detail = client.send_diagnosis_status_and_wait_for_ack.call_args.args[0]
+        self.assertEqual(request.diagnosis_id, detail["diagnosisId"])
+        self.assertEqual("DIAGNOSIS_STARTED", detail["eventType"])
+
+        stale_snapshot = replace(snapshot, diagnosis_id="older-diagnosis")
+        self.assertFalse(agent.confirm_diagnosis_start_sync(session, stale_snapshot, client, set()))
+        client.send_diagnosis_status_and_wait_for_ack.assert_called_once()
+
+    def test_web_result_requires_terminal_event_server_ack(self) -> None:
+        request = DiagnosisRequest(
+            diagnosis_id="diagnosis-terminal-sync",
+            device_id="device-1",
+            symptom="화면이 멈춥니다.",
+            requested_checks=("gpu",),
+            requested_at="2026-07-13T00:00:00Z",
+            expires_at="2026-07-13T00:02:00Z",
+            mode="LIVE",
+        )
+        session = DiagnosisSession(request, "RUNNING")
+        event = DiagnosisEvent(
+            diagnosis_id=request.diagnosis_id,
+            event_id="event-complete",
+            event_type="DIAGNOSIS_COMPLETED",
+            task_id=None,
+            component=None,
+            timestamp="2026-07-13T00:00:30Z",
+            message="진단을 완료했습니다.",
+        )
+        snapshot = agent.DiagnosisRunSnapshot(
+            diagnosis_id=request.diagnosis_id,
+            mode="LIVE",
+            state="COMPLETED",
+            progress=100,
+            events=(event,),
+        )
+
+        self.assertFalse(agent.diagnosis_terminal_sync_confirmed(session, snapshot, set()))
+        self.assertTrue(agent.diagnosis_terminal_sync_confirmed(session, snapshot, {"event-complete"}))
 
     def test_result_action_is_unavailable_for_failed_cancelled_and_timed_out(self) -> None:
         request = DiagnosisRequest(

@@ -290,6 +290,26 @@ class DiagnosisSessionStore:
             self._session = DiagnosisSession(self._session.request, state)
             self._save_locked()
 
+    def transition_state(
+        self,
+        diagnosis_id: str,
+        expected_states: set[str],
+        state: str,
+    ) -> bool:
+        if state not in AGENT_STATES:
+            raise ValueError(f"unsupported Agent state: {state}")
+        with self._lock:
+            current = self._session
+            if (
+                current is None
+                or current.request.diagnosis_id != diagnosis_id
+                or current.agent_state not in expected_states
+            ):
+                return False
+            self._session = DiagnosisSession(current.request, state)
+            self._save_locked()
+            return True
+
     def clear_current(self) -> None:
         with self._lock:
             self._session = None
@@ -424,6 +444,7 @@ class AgentDiagnosisWebSocketClient:
         self._result_frames: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._pending_result_ids: set[str] = set()
         self._frame_send_failures: dict[str, int] = {}
+        self._status_ack_waiters: dict[str, threading.Event] = {}
 
     def start(self) -> None:
         if self.websocket_factory is None:
@@ -481,6 +502,40 @@ class AgentDiagnosisWebSocketClient:
                 self._pending_status_event_ids.discard(removed_event_id)
         self._flush_status_frames()
         return True
+
+    def send_diagnosis_status_and_wait_for_ack(
+        self,
+        detail: dict[str, Any],
+        timeout_seconds: float = 5.0,
+        retain_unacknowledged: bool = False,
+    ) -> bool:
+        event_id = detail.get("eventId")
+        if not isinstance(event_id, str) or not event_id.strip() or not self.is_connected():
+            return False
+        acknowledged = threading.Event()
+        with self._status_lock:
+            self._status_ack_waiters[event_id] = acknowledged
+        if not self.send_diagnosis_status(detail):
+            with self._status_lock:
+                self._status_ack_waiters.pop(event_id, None)
+            return False
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while not acknowledged.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not self.is_connected():
+                break
+            acknowledged.wait(min(0.05, remaining))
+        confirmed = acknowledged.is_set()
+        with self._status_lock:
+            self._status_ack_waiters.pop(event_id, None)
+            if not confirmed:
+                if retain_unacknowledged:
+                    self._pending_status_event_ids.add(event_id)
+                else:
+                    self._status_frames.pop(event_id, None)
+                    self._pending_status_event_ids.discard(event_id)
+                    self._frame_send_failures.pop(f"status:{event_id}", None)
+        return confirmed
 
     def send_diagnosis_result(self, detail: dict[str, Any]) -> bool:
         result_id = detail.get("resultId")
@@ -668,18 +723,23 @@ class AgentDiagnosisWebSocketClient:
         """서버가 ACK한 프레임은 보관 목록에서 지워 재전송 대상에서 뺀다."""
         if not isinstance(frame_id, str) or not frame_id.strip():
             return
+        acknowledged = None
         with self._status_lock:
             self._frame_send_failures.pop(f"{kind}:{frame_id}", None)
             if kind == "status":
                 self._status_frames.pop(frame_id, None)
                 self._pending_status_event_ids.discard(frame_id)
+                acknowledged = self._status_ack_waiters.get(frame_id)
             else:
                 self._result_frames.pop(frame_id, None)
                 self._pending_result_ids.discard(frame_id)
+        if acknowledged is not None:
+            acknowledged.set()
 
     def reset_sync_state(self) -> None:
         """진단 세션을 끝낼 때 전송 버퍼를 비운다."""
         with self._status_lock:
+            self._status_ack_waiters.clear()
             self._status_frames.clear()
             self._pending_status_event_ids.clear()
             self._result_frames.clear()
