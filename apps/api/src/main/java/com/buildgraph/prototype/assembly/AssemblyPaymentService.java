@@ -333,7 +333,7 @@ public class AssemblyPaymentService {
 
     private AttemptContext attemptContext(Map<String, Object> row, String requestNo) {
         return new AttemptContext(
-                text(row, "public_id"), text(row, "merchant_payment_id"), "BuildGraph 조립 " + requestNo,
+                text(row, "public_id"), text(row, "merchant_payment_id"), "Dazzajo 조립 " + requestNo,
                 longValue(row, "requested_amount"), text(row, "currency"), text(row, "pay_method"),
                 text(row, "easy_pay_provider"), offsetDateTime(row.get("expires_at"))
         );

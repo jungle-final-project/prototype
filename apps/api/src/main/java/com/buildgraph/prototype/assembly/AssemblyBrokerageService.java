@@ -87,7 +87,7 @@ public class AssemblyBrokerageService {
         String addressLine1 = optionalText(request.get("addressLine1"), 255, "주소는 255자 이하여야 합니다.");
         String addressLine2 = optionalText(request.get("addressLine2"), 255, "상세 주소는 255자 이하여야 합니다.");
         if (!Boolean.TRUE.equals(request.get("asPolicyAccepted"))) {
-            throw validation("BuildGraph 표준 AS 정책 동의가 필요합니다.");
+            throw validation("Dazzajo 표준 AS 정책 동의가 필요합니다.");
         }
 
         Map<String, Object> quote = quoteDraftQueryService.current(authorization);

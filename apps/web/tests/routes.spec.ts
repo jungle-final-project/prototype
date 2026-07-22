@@ -45,7 +45,7 @@ const routes = [
 for (const route of routes) {
   test(`renders ${route}`, async ({ page }) => {
     await page.goto(route);
-    await expect(page.getByRole('link', { name: '다짜줘 홈' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Dazzajo 홈' })).toBeVisible();
     await expect(page.getByRole('main')).toBeVisible();
   });
 }

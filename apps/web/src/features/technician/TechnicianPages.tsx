@@ -35,7 +35,7 @@ export function TechnicianApplyPage() {
     <Screen>
       <TechnicianHeader />
       <div className="mx-auto max-w-3xl">
-        <Panel title={profileQuery.data ? '외부 기사 재신청' : '외부 기사로 참여'} subtitle="기본 활동 정보와 BuildGraph 표준 AS 동의를 확인합니다.">
+        <Panel title={profileQuery.data ? '외부 기사 재신청' : '외부 기사로 참여'} subtitle="기본 활동 정보와 Dazzajo 표준 AS 동의를 확인합니다.">
           {profileQuery.data?.rejectionReason ? <StateMessage type="warn" title="이전 신청 보완 필요" body={profileQuery.data.rejectionReason} /> : null}
           <TechnicianProfileForm profile={profileQuery.data ?? null} mode="apply" />
         </Panel>
@@ -180,7 +180,7 @@ function TechnicianProfileForm({ profile, mode }: { profile: Technician | null; 
       <Field label="전문 분야" value={specialties} onChange={setSpecialties} placeholder="게이밍 PC, 저소음 조립" />
       <label className="flex items-start gap-3 rounded-md border border-commerce-line bg-slate-50 p-3 text-sm font-bold">
         <input type="checkbox" checked={asAccepted} onChange={(event) => setAsAccepted(event.target.checked)} className="mt-1 accent-[#de6c2d]" />
-        <span>BuildGraph 표준 AS 정책에 동의합니다.</span>
+        <span>Dazzajo 표준 AS 정책에 동의합니다.</span>
       </label>
       {mutation.isError ? <StateMessage type="warn" title="저장 실패" body={mutation.error instanceof Error ? mutation.error.message : '기사 정보를 저장하지 못했습니다.'} /> : null}
       <button disabled={mutation.isPending || profileImageUploading || !asAccepted} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[#de6c2d] px-5 text-sm font-black text-white hover:bg-[#c45c22] disabled:bg-slate-300 disabled:hover:bg-slate-300">

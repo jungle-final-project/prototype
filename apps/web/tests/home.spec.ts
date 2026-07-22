@@ -2075,7 +2075,7 @@ test('renders the Etsy-style header and PC category navigation', async ({ page }
   const header = page.locator('header');
   const nav = page.getByRole('navigation', { name: '견적 및 PC 부품 카테고리' });
 
-  await expect(header.getByRole('link', { name: '다짜줘 홈' })).toHaveAttribute('href', '/');
+  await expect(header.getByRole('link', { name: 'Dazzajo 홈' })).toHaveAttribute('href', '/');
   await expect(header.getByTestId('header-logo-placeholder')).toHaveCount(0);
   const dazzajoBrand = header.getByText('Dazzajo', { exact: true });
   await expect(dazzajoBrand).toBeVisible();

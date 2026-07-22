@@ -11,7 +11,7 @@ class MockPaymentGatewayTest {
     @Test
     void checkoutIsIdempotentAndPaymentMustBeVerifiedAfterProviderResult() {
         PaymentGateway.CheckoutRequest request = new PaymentGateway.CheckoutRequest(
-                "BG-test-payment", "BuildGraph 조립 ASM-TEST", 125_000L, "KRW", "EASY_PAY", "KAKAOPAY",
+                "BG-test-payment", "Dazzajo 조립 ASM-TEST", 125_000L, "KRW", "EASY_PAY", "KAKAOPAY",
                 OffsetDateTime.now().plusMinutes(30)
         );
 

@@ -98,7 +98,7 @@ export function AppHeader() {
     : '어떤 PC를 맞춰드릴까요? 예: QHD 게임용 200만원 PC';
   const accountDisplayName = user?.role === 'ADMIN' && user.name === 'BuildGraph Admin'
     ? 'admin'
-    : user?.name || '다짜줘 사용자';
+    : user?.name || 'Dazzajo 사용자';
 
   return (
     <div className={isSelfQuoteRoute ? 'relative z-50 h-0' : ''}>
@@ -119,7 +119,7 @@ export function AppHeader() {
       <header className="bg-[#f7f7f8]">
         <div className="mx-auto grid min-h-[68px] w-full max-w-[1320px] grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-3 px-4 pb-[7px] pt-3 sm:px-6 lg:grid-cols-[minmax(180px,1fr)_minmax(360px,760px)_minmax(180px,1fr)] lg:gap-x-6 lg:px-8 xl:px-0">
           <div className="flex min-w-0 items-center gap-5">
-            <Link to="/" aria-label="다짜줘 홈" className="flex h-10 min-w-0 items-center rounded-md focus:outline-none focus:ring-4 focus:ring-blue-100">
+            <Link to="/" aria-label="Dazzajo 홈" className="flex h-10 min-w-0 items-center rounded-md focus:outline-none focus:ring-4 focus:ring-blue-100">
               <span className="relative -top-[2px] text-[28px] leading-none tracking-[-0.025em] text-[#de6c2d] sm:text-[33.6px]" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 500 }}>Dazzajo</span>
             </Link>
             <div role="group" aria-label="검색 방식" className="hidden shrink-0 items-center gap-3 lg:flex">

@@ -5812,7 +5812,7 @@ test('persists an assembly request, selects an offer, and pays points after Toss
   await page.getByLabel('연락처').fill('010-1234-5678');
   await selectCheckoutAddress(page);
   await page.getByLabel('상세 주소').fill('101동 1004호');
-  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await page.getByRole('checkbox', { name: /Dazzajo 표준 AS 정책 적용에 동의합니다/ }).check();
   await page.getByRole('button', { name: '기사 제안 요청하기' }).click();
 
   await expect(page).toHaveURL(`/checkout/offers/${requestId}`);
@@ -5840,7 +5840,7 @@ test('persists an assembly request, selects an offer, and pays points after Toss
   await expect(page.getByRole('heading', { name: '조립 요청 진행 상태' })).toBeVisible();
   await expect(page.getByText('ASM-20990720-TEST0001')).toBeVisible();
   await expect(page.getByText('1,470,000원')).toBeVisible();
-  await expect(page.getByText('BuildGraph 표준 AS 적용')).toBeVisible();
+  await expect(page.getByText('Dazzajo 표준 AS 적용')).toBeVisible();
   expect(quoteDraftMethods.every((method) => method === 'GET')).toBe(true);
 });
 
@@ -5894,7 +5894,7 @@ test('requires contact and delivery address fields before creating an assembly r
   await expect(page.getByLabel('우편번호')).toHaveAttribute('required', '');
   await expect(page.locator('input[autocomplete="address-line1"]')).toHaveAttribute('required', '');
   await expect(page.getByLabel('상세 주소')).toHaveAttribute('required', '');
-  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await page.getByRole('checkbox', { name: /Dazzajo 표준 AS 정책 적용에 동의합니다/ }).check();
   await expect(submitButton).toBeDisabled();
   await submitButton.hover({ force: true });
   await expect(page.getByRole('tooltip', { name: '정보를 모두 입력해주세요' })).toBeVisible();
@@ -6042,7 +6042,7 @@ test('blocks an incompatible assembly request and does not expose a demo bypass'
   await page.getByLabel('연락처').fill('010-1234-5678');
   await selectCheckoutAddress(page, '경기도 성남시 분당구 1 (분당동)', '13500');
   await page.getByLabel('상세 주소').fill('101동 1004호');
-  await page.getByRole('checkbox', { name: /BuildGraph 표준 AS 정책 적용에 동의합니다/ }).check();
+  await page.getByRole('checkbox', { name: /Dazzajo 표준 AS 정책 적용에 동의합니다/ }).check();
   await expect(page.getByRole('button', { name: '기사 제안 요청하기' })).toBeDisabled();
   await expect(page.getByRole('button', { name: '데모 제안 보기' })).toHaveCount(0);
   await expect(page).toHaveURL('/checkout');

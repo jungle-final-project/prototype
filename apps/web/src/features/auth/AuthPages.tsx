@@ -365,7 +365,7 @@ export function AuthCallbackPage() {
     <AuthShell
       icon={<LogIn size={20} />}
       title={status === 'checking' ? 'Google 로그인 확인 중' : 'Google 로그인 실패'}
-      subtitle={status === 'checking' ? 'Google 인증 결과를 BuildGraph 계정과 연결하고 있습니다.' : '다시 로그인해 주세요.'}
+      subtitle={status === 'checking' ? 'Google 인증 결과를 Dazzajo 계정과 연결하고 있습니다.' : '다시 로그인해 주세요.'}
     >
       {status === 'checking' ? <StateMessage type="info" title="로그인 처리 중" body="잠시만 기다려 주세요." /> : null}
       {status === 'error' ? <StateMessage type="warn" title="로그인 실패" body={error || 'Google 로그인에 실패했습니다.'} /> : null}
