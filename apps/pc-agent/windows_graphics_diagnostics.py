@@ -33,7 +33,7 @@ SIGNATURE_PROBLEM_CODES = {52}
 
 DISPLAY_DEVICE_SOURCE = "Get-PnpDevice/Get-PnpDeviceProperty"
 DISPLAY_DEVICE_CIM_SOURCE = "Win32_PnPEntity"
-DISPLAY_DRIVER_SOURCE = "Win32_PnPSignedDriver"
+DISPLAY_DRIVER_SOURCE = "Win32_VideoController"
 WINDOWS_EVENT_SOURCE = "Get-WinEvent:System"
 
 
@@ -274,7 +274,7 @@ class WindowsGraphicsDiagnosticsSnapshot:
                     category="DRIVER",
                     code="DRIVER_SIGNATURE" if device.driver_signed is False else "DRIVER_METADATA",
                     occurred_at=device.queried_at,
-                    description="Windows signed display driver metadata",
+                    description="Windows display driver metadata",
                 ))
 
         evidence.extend(_query_state_evidence(
@@ -743,7 +743,7 @@ def _display_device_cim_script() -> str:
 
 def _display_driver_script() -> str:
     return _wrap_query(r"""
-    Get-CimInstance -ClassName Win32_PnPSignedDriver -Filter "DeviceClass='DISPLAY'" -ErrorAction Stop | ForEach-Object {
+    Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | ForEach-Object {
       $driver = $_
       $driverDate = $null
       if ($driver.DriverDate -is [datetime]) {
@@ -752,16 +752,16 @@ def _display_driver_script() -> str:
         $driverDate = [string]$driver.DriverDate
       }
       [pscustomobject]@{
-        deviceName = [string]$driver.DeviceName
-        instanceId = [string]$driver.DeviceID
-        deviceClass = [string]$driver.DeviceClass
-        manufacturer = [string]$driver.Manufacturer
-        provider = [string]$driver.DriverProviderName
+        deviceName = [string]$driver.Name
+        instanceId = [string]$driver.PNPDeviceID
+        deviceClass = 'DISPLAY'
+        manufacturer = [string]$driver.AdapterCompatibility
+        provider = [string]$driver.AdapterCompatibility
         version = [string]$driver.DriverVersion
         date = $driverDate
-        signed = if ($null -eq $driver.IsSigned) { $null } else { [bool]$driver.IsSigned }
-        signer = if ($null -eq $driver.Signer) { $null } else { [string]$driver.Signer }
-        infName = if ($null -eq $driver.InfName) { $null } else { [string]$driver.InfName }
+        signed = $null
+        signer = $null
+        infName = if ($null -eq $driver.InfFilename) { $null } else { [string]$driver.InfFilename }
       }
     }
 """)

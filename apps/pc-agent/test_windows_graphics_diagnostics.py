@@ -13,6 +13,7 @@ from windows_graphics_diagnostics import (
     QUERY_FAILED,
     PowerShellQueryResult,
     WindowsGraphicsDiagnosticsProvider,
+    _display_driver_script,
 )
 from pc_agent_demo_scenarios import GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID
 
@@ -44,6 +45,15 @@ def event_responses(status: str = NO_RESULTS) -> dict[str, PowerShellQueryResult
 
 
 class WindowsGraphicsDiagnosticsProviderTest(unittest.TestCase):
+    def test_display_driver_query_uses_scoped_video_controller_metadata(self) -> None:
+        script = _display_driver_script()
+
+        self.assertIn("Win32_VideoController", script)
+        self.assertIn("$driver.PNPDeviceID", script)
+        self.assertIn("$driver.DriverVersion", script)
+        self.assertIn("$driver.InfFilename", script)
+        self.assertNotIn("Win32_PnPSignedDriver", script)
+
     def test_code43_demo_fixture_contains_normal_iris_and_arc_problem_without_fake_events(self) -> None:
         snapshot = Code43RemoteSupportDemoGraphicsProvider(now=lambda: QUERIED_AT).collect()
 
@@ -174,11 +184,42 @@ class WindowsGraphicsDiagnosticsProviderTest(unittest.TestCase):
         self.assertEqual(PERMISSION_REQUIRED, snapshot.kernel_power_event_query.status)
         self.assertEqual(1, len(snapshot.devices))
         self.assertEqual(QUERY_FAILED, snapshot.devices[0].status)
-        self.assertEqual("Win32_PnPSignedDriver", snapshot.devices[0].device_source)
+        self.assertEqual("Win32_VideoController", snapshot.devices[0].device_source)
         self.assertEqual(AVAILABLE, evidence["windows_graphics_events"].availability)
         self.assertEqual(0, evidence["windows_graphics_events"].value)
         self.assertEqual(FAILED, evidence["windows_whea_events"].availability)
         self.assertEqual(PERMISSION_REQUIRED, evidence["windows_kernel_power_events"].availability)
+
+    def test_display_driver_query_failure_remains_distinct_from_no_results(self) -> None:
+        responses = {
+            "display_devices": PowerShellQueryResult(OK, ({
+                "deviceName": "Test Display Adapter",
+                "instanceId": "PCI\\VEN_1234&DEV_5678",
+                "pnpStatus": "OK",
+                "problemCode": 0,
+                "problemCodeQueryStatus": "OK",
+                "deviceClass": "Display",
+                "manufacturer": "Test Manufacturer",
+                "source": "Win32_PnPEntity",
+            },)),
+            "display_drivers": PowerShellQueryResult(
+                QUERY_FAILED,
+                error="display_drivers query timed out",
+            ),
+            **event_responses(),
+        }
+        snapshot = WindowsGraphicsDiagnosticsProvider(
+            FakePowerShell(responses),
+            now=lambda: QUERIED_AT,
+        ).collect()
+
+        driver_state = next(
+            item for item in snapshot.to_evidence()
+            if item.task_id == "windows_display_drivers" and item.metric_type == "query_status"
+        )
+        self.assertEqual(QUERY_FAILED, snapshot.driver_query.status)
+        self.assertEqual(FAILED, driver_state.availability)
+        self.assertEqual("display_drivers query timed out", driver_state.description)
 
 
 if __name__ == "__main__":

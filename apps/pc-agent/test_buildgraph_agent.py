@@ -1046,12 +1046,19 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertNotIn("create_arc", diagnosing_source)
         self.assertIn('canvas.itemconfigure(items["ring"]', tick_source)
         self.assertIn('canvas.itemconfigure(items["percent"]', tick_source)
+        self.assertIn('items.get("checklistRows")', tick_source)
+        self.assertIn('row_items["subtitle"]', tick_source)
+        self.assertIn("text=rendered_subtitle", tick_source)
+        self.assertIn('configure_status_icon(row_items["icon"]', tick_source)
+        self.assertNotIn("canvas.create_image", tick_source)
+        self.assertNotIn("canvas.create_text", tick_source)
         self.assertNotIn("render()", tick_source)
         self.assertTrue(tick_source.rstrip().endswith("schedule_diagnosis_progress_tick()"))
         self.assertIn('callback_state["diagnosisProgressAfterId"]', source)
         self.assertIn('round_rect(70, 180, 930, 296', diagnosing_source)
         self.assertIn('text(148, 270, fitted_text(scope_text', diagnosing_source)
-        self.assertIn('cy = 550 + idx * 38', diagnosing_source)
+        self.assertIn("diagnosis_checklist_render_state(snapshot)", diagnosing_source)
+        self.assertNotIn("cy = 550 + idx * 38", diagnosing_source)
 
     def test_page_text_is_measured_and_action_columns_are_even(self) -> None:
         measure = lambda value: len(value) * 10
@@ -1065,6 +1072,111 @@ class AgentGoal1112Test(unittest.TestCase):
         result_source = inspect.getsource(agent.show_log_viewer)
         self.assertIn('render_number_badge(26, "#fff0ef")', result_source)
         self.assertNotIn('canvas.create_oval(badge_x - 13', result_source)
+
+    def test_page_two_checklist_uses_measured_rows_and_bottom_padding(self) -> None:
+        rows, card_bottom = agent.diagnosis_checklist_vertical_layout(
+            (
+                ("짧은 작업", "GPU · 완료"),
+                ("두 줄로 표시되는\n긴 검사 작업", "GPU · 진행 중"),
+                ("드라이버 정보 확인", "두 줄 이상의 긴 보조\n상태 문구"),
+                ("네 번째 검사 작업", "GPU · 대기"),
+            ),
+            title_line_height=16,
+            subtitle_line_height=15,
+        )
+
+        for current, following in zip(rows, rows[1:]):
+            current_subtitle_y = current[1]
+            following_title_y = following[0]
+            self.assertGreater(following_title_y, current_subtitle_y)
+        last_subtitle_bottom = rows[-1][1] + 15
+        self.assertGreaterEqual(card_bottom - last_subtitle_bottom, 4)
+
+        short_rows, short_card_bottom = agent.diagnosis_checklist_vertical_layout(
+            tuple((f"작업 {index}", "GPU · 대기") for index in range(4)),
+            title_line_height=16,
+            subtitle_line_height=15,
+        )
+        self.assertEqual(4, len(short_rows))
+        self.assertEqual(684, short_card_bottom)
+
+        source = inspect.getsource(agent.show_log_viewer)
+        diagnosing_source = source[source.index("def draw_diagnosing"):source.index("def draw_result_icon")]
+        checklist_source = source[
+            source.index("def diagnosis_checklist_render_state"):source.index("def diagnosis_progress_tick")
+        ]
+        self.assertIn("diagnosis_checklist_vertical_layout(", checklist_source)
+        self.assertIn("if bottom > 684:", checklist_source)
+        self.assertIn('measurement_font(13, "semibold")', checklist_source)
+        self.assertIn('measurement_font(12, "regular")', checklist_source)
+        self.assertNotIn("measurement_fonts.get(", checklist_source)
+        self.assertIn("action_top = checklist_bottom + 12", diagnosing_source)
+
+    def test_page_two_checklist_presentations_follow_latest_task_snapshot(self) -> None:
+        definitions = agent.DiagnosisOrchestrator.TASK_DEFINITIONS
+
+        def snapshot(statuses: tuple[str, ...], current_task_id: str | None, progress: int = 0):
+            return agent.DiagnosisRunSnapshot(
+                diagnosis_id="diagnosis-ui-status",
+                state="COMPLETED" if progress == 100 else "DIAGNOSING",
+                progress=progress,
+                current_task_id=current_task_id,
+                tasks=tuple(
+                    agent.DiagnosisTask(task_id, component, weight, required, status)
+                    for (task_id, component, required), weight, status in zip(
+                        definitions,
+                        (15, 20, 10, 10, 10, 10, 10, 15),
+                        statuses,
+                        strict=True,
+                    )
+                ),
+            )
+
+        task_ids = tuple(task_id for task_id, _, _ in definitions)
+        initial = agent.diagnosis_checklist_presentations(
+            snapshot(("RUNNING",) + ("PENDING",) * 7, task_ids[0]),
+        )
+        self.assertEqual(("SYSTEM · 진행 중", "CPU · 대기", "GPU · 대기", "GPU · 대기"), tuple(
+            subtitle for _, _, subtitle, _ in initial
+        ))
+
+        middle = agent.diagnosis_checklist_presentations(
+            snapshot(("COMPLETED", "COMPLETED", "RUNNING") + ("PENDING",) * 5, task_ids[2]),
+        )
+        self.assertEqual(
+            ("CPU · 정상 완료", "GPU · 진행 중", "GPU · 대기", "RAM · 대기"),
+            tuple(subtitle for _, _, subtitle, _ in middle),
+        )
+
+        fast_completion = agent.diagnosis_checklist_presentations(
+            snapshot(("COMPLETED",) * 6 + ("RUNNING", "PENDING"), task_ids[6], 75),
+        )
+        self.assertEqual(
+            ("RAM · 정상 완료", "DISK · 정상 완료", "THERMAL · 진행 중", "SYSTEM · 대기"),
+            tuple(subtitle for _, _, subtitle, _ in fast_completion),
+        )
+
+        terminal_statuses = (
+            "COMPLETED",
+            "COMPLETED",
+            "COMPLETED",
+            "COMPLETED",
+            "UNSUPPORTED",
+            "FAILED",
+            "COMPLETED",
+            "COMPLETED",
+        )
+        terminal = agent.diagnosis_checklist_presentations(
+            snapshot(terminal_statuses, None, 100),
+        )
+        self.assertEqual(
+            ("RAM · 건너뜀", "DISK · 오류", "THERMAL · 정상 완료", "SYSTEM · 정상 완료"),
+            tuple(subtitle for _, _, subtitle, _ in terminal),
+        )
+        self.assertFalse(any(
+            subtitle.endswith(("진행 중", "대기"))
+            for _, _, subtitle, _ in terminal
+        ))
 
     def test_diagnosis_presentations_use_actual_task_and_evidence_status(self) -> None:
         running = agent.DiagnosisTask("display_devices", "gpu", 20, status="RUNNING")
