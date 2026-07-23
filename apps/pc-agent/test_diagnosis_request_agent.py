@@ -355,6 +355,81 @@ class FailingSocket(FakeSocket):
 
 
 class AgentDiagnosisWebSocketClientTest(unittest.TestCase):
+    def test_account_rebind_replaces_token_and_clears_previous_device_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            processor = DiagnosisRequestProcessor(
+                DiagnosisSessionStore(Path(directory) / "state.json"),
+                device_id="admin-device",
+                now=lambda: NOW,
+            )
+            client = AgentDiagnosisWebSocketClient(
+                "https://old.example",
+                "admin-token",
+                processor,
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            socket = FakeSocket()
+            client._socket = socket
+            client.authenticated = True
+
+            with patch.object(client, "start") as start:
+                self.assertTrue(client.replace_credentials("https://new.example", "user-token"))
+
+            self.assertTrue(socket.closed)
+            self.assertEqual(client.agent_token, "user-token")
+            self.assertEqual(client.url, "wss://new.example/ws/pc-agent/diagnosis")
+            self.assertIsNone(processor.device_id)
+            self.assertFalse(client.authenticated)
+            self.assertTrue(client.reconnect_event.is_set())
+            start.assert_called_once_with()
+
+    def test_account_rebind_does_not_interrupt_active_diagnosis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = DiagnosisSessionStore(Path(directory) / "state.json")
+            store.accept(DiagnosisSession(DiagnosisRequest.from_payload(request_payload())))
+            processor = DiagnosisRequestProcessor(store, device_id="admin-device", now=lambda: NOW)
+            client = AgentDiagnosisWebSocketClient(
+                "https://old.example",
+                "admin-token",
+                processor,
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            socket = FakeSocket()
+            client._socket = socket
+            client.authenticated = True
+
+            self.assertFalse(client.replace_credentials("https://new.example", "user-token"))
+
+            self.assertFalse(socket.closed)
+            self.assertEqual(client.agent_token, "admin-token")
+            self.assertEqual(processor.device_id, "admin-device")
+
+    def test_late_ready_from_retired_account_socket_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            processor = DiagnosisRequestProcessor(
+                DiagnosisSessionStore(Path(directory) / "state.json"),
+                device_id="admin-device",
+                now=lambda: NOW,
+            )
+            client = AgentDiagnosisWebSocketClient(
+                "https://old.example",
+                "admin-token",
+                processor,
+                websocket_factory=lambda *args, **kwargs: None,
+            )
+            old_socket = FakeSocket()
+            client._socket = old_socket
+            client.authenticated = True
+            self.assertTrue(client.replace_credentials("https://new.example", "user-token"))
+
+            client._on_message(
+                old_socket,
+                json.dumps({"type": "READY", "detail": {"deviceId": "admin-device"}}),
+            )
+
+            self.assertIsNone(processor.device_id)
+            self.assertFalse(client.authenticated)
+
     def test_protocol_reconnect_is_a_noop_while_authenticated(self):
         with tempfile.TemporaryDirectory() as directory:
             client = AgentDiagnosisWebSocketClient(
