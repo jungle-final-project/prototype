@@ -1630,8 +1630,30 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
         target.__pcAgentProtocolLaunches = [...(target.__pcAgentProtocolLaunches ?? []), this.href];
         return;
       }
+      if (this.download === 'pcagent-activation.json') {
+        const target = window as Window & { __pcAgentActivationDownloads?: string[] };
+        void fetch(this.href)
+          .then((response) => response.text())
+          .then((body) => {
+            target.__pcAgentActivationDownloads = [...(target.__pcAgentActivationDownloads ?? []), body];
+          });
+        return;
+      }
       originalClick.call(this);
     };
+  });
+  let activationRequests = 0;
+  await page.route('**/api/users/me/agent-activation-token', (route) => {
+    activationRequests += 1;
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        activationToken: 'current-web-account-activation-token',
+        tokenType: 'Activation',
+        expiresAt: '2026-07-24T00:00:00Z'
+      })
+    });
   });
   const diagnosisBodies: Array<{ symptom?: string; mode?: string; requestedChecks?: string[] }> = [];
   let connectionChecks = 0;
@@ -1710,6 +1732,16 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches)).toEqual([
     'buildgraph-pc-agent://open'
   ]);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __pcAgentActivationDownloads?: string[] }
+  ).__pcAgentActivationDownloads?.length ?? 0)).toBe(1);
+  const activationDownload = await page.evaluate(() => (
+    window as Window & { __pcAgentActivationDownloads?: string[] }
+  ).__pcAgentActivationDownloads?.[0] ?? '{}');
+  expect(JSON.parse(activationDownload)).toMatchObject({
+    activationToken: 'current-web-account-activation-token'
+  });
+  expect(activationRequests).toBe(1);
   expect(diagnosisBodies).toHaveLength(1);
   expect(diagnosisBodies[0].symptom).toBe(symptomText);
   expect(diagnosisBodies[0].mode).toBe('DEMO');
