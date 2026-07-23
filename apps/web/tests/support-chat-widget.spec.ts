@@ -6,8 +6,8 @@ test('global support chat guides logged-in users without a ticket to support int
 
   await page.goto('/');
 
-  await expect(page.getByRole('button', { name: '상담방 열기' })).toBeVisible();
-  await page.getByRole('button', { name: '상담방 열기' }).click();
+  await expect(page.getByLabel('상담방 열기')).toBeVisible();
+  await page.getByLabel('상담방 열기').click();
   await expect(page.getByText('AS 티켓이 필요합니다.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'AS 접수로 이동' })).toHaveAttribute('href', '/support/new');
 });
@@ -21,7 +21,7 @@ test('global support chat can send a message when a ticket chat session exists',
   });
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   await expect(page.getByText('상담방이 생성되었습니다. 문의 내용을 남기면 담당자가 확인합니다.')).toBeVisible();
   await page.getByPlaceholder('메시지를 입력하세요').fill('지금 상담 가능할까요?');
@@ -59,7 +59,7 @@ test('global support chat lets users request a visit reservation', async ({ page
   });
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
   await expect(page.getByText('방문 예약', { exact: true })).toBeVisible();
   await page.getByLabel('방문 예약 시각').fill('2099-07-10T14:30');
   await page.getByLabel('방문 주소').fill('서울시 강남구');
@@ -83,7 +83,7 @@ test('global support chat shows confirmed visit reservation without user cancel 
   });
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   await expect(page.getByText('예약 확정')).toBeVisible();
   await expect(page.getByText('2099-07-10 14:30')).toBeVisible();
@@ -96,7 +96,7 @@ test('global support chat updates visit reservation from websocket detail push',
   await mockActiveChat(page, () => null, () => {});
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
   await pushUserReservationUpdate(page, {
     id: '00000000-0000-4000-8000-000000008001',
     status: 'SCHEDULED',
@@ -113,7 +113,7 @@ test('global support chat keeps input and shows an error when REST send fails', 
   await mockActiveChatWithFailedPost(page);
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
   await page.getByPlaceholder('메시지를 입력하세요').fill('닫힌 티켓에 보내는 메시지');
   await page.getByRole('button', { name: '전송' }).click();
 
@@ -126,7 +126,7 @@ test('global support chat limits message input to 2000 characters', async ({ pag
   await mockActiveChat(page, () => null, () => {});
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   await expect(page.getByPlaceholder('메시지를 입력하세요')).toHaveAttribute('maxLength', '2000');
 });
@@ -142,7 +142,7 @@ test('global support chat separates API failure from missing ticket empty state'
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   await expect(page.getByText('상담방 조회 실패')).toBeVisible();
   await expect(page.getByText('AS 티켓이 필요합니다.')).toHaveCount(0);
@@ -153,7 +153,7 @@ test('global support chat scrolls to the newest message when opened', async ({ p
   await mockLongActiveChat(page);
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   const scroller = page.getByTestId('support-chat-messages');
   await expect.poll(async () => scroller.evaluate((element) => {
@@ -176,7 +176,7 @@ test('global support chat shows a new message marker when the user is reading ol
   await mockLongActiveChat(page);
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   const scroller = page.getByTestId('support-chat-messages');
   await expect.poll(async () => scroller.evaluate((element) => element.scrollTop > 0)).toBe(true);
@@ -201,7 +201,7 @@ test('global support chat stays pinned to bottom when a new message arrives at t
   await mockLongActiveChat(page);
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   const scroller = page.getByTestId('support-chat-messages');
   await expect.poll(async () => scroller.evaluate((element) => {
@@ -249,7 +249,7 @@ test('global support chat closes and clears chat cache on auth change', async ({
   await mockActiveChat(page, () => null, () => {});
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
   await expect(page.getByText('PC Agent 상담방')).toBeVisible();
 
   await page.evaluate(async () => {
@@ -259,7 +259,7 @@ test('global support chat closes and clears chat cache on auth change', async ({
   });
 
   await expect(page.getByText('PC Agent 상담방')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '상담방 열기' })).toHaveCount(0);
+  await expect(page.getByLabel('상담방 열기')).toHaveCount(0);
 });
 
 test('global support chat uses socket tickets without leaking access tokens in the websocket url', async ({ page }) => {
@@ -272,7 +272,7 @@ test('global support chat uses socket tickets without leaking access tokens in t
   });
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   await expect.poll(() => ticketCalls).toBe(1);
   await expect.poll(() => page.evaluate(() => {
@@ -327,7 +327,7 @@ test('global support chat refreshes auth through REST when websocket ticket requ
   });
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
 
   await expect.poll(() => refreshCalls).toBe(1);
   await expect.poll(() => ticketCalls).toBe(2);
@@ -348,7 +348,7 @@ test('global support chat reconnects by issuing a fresh websocket ticket', async
   });
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
   await expect.poll(() => page.evaluate(() => {
     const sends = (window as unknown as { __supportChatSocketSends?: string[] }).__supportChatSocketSends ?? [];
     return sends.length;
@@ -375,7 +375,7 @@ test('global support chat stays hidden on support intake', async ({ page }) => {
 
   await page.goto('/support/new');
 
-  await expect(page.getByRole('button', { name: '상담방 열기' })).toHaveCount(0);
+  await expect(page.getByLabel('상담방 열기')).toHaveCount(0);
 });
 
 test('support intake allows a separate ticket when an active support chat exists', async ({ page }) => {
@@ -680,7 +680,7 @@ test('mobile support chat and AI assistant are mutually exclusive', async ({ pag
   await mockActiveChat(page, () => null, () => {});
 
   await page.goto('/support/00000000-0000-4000-8000-000000006001');
-  await page.getByRole('main').getByRole('button', { name: '상담방 열기' }).click();
+  await page.getByLabel('상담방 열기').click();
   await expect(page.getByText('PC Agent 상담방')).toBeVisible();
 
   await page.evaluate(() => {
@@ -735,7 +735,7 @@ test('global support chat stays hidden for admin users on the shopping home', as
 
   await page.goto('/');
 
-  await expect(page.getByRole('button', { name: '상담방 열기' })).toHaveCount(0);
+  await expect(page.getByLabel('상담방 열기')).toHaveCount(0);
   expect(supportChatCalls).toBe(0);
 });
 
