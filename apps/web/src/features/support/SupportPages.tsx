@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DataTable, Panel, Screen, StateMessage, StatusBadge, statusLabel } from '../../components/ui';
 import { ApiError, getCachedAuthUser } from '../../lib/api';
+import { openSupportChat } from '../../lib/events';
 import { formatSeoulTime } from '../../lib/dateTime';
 import { getAsChat, sendAsChat, streamAsChat } from './asChatApi';
 import type { AsChatEvidence, AsChatResponse, AsChatToolResult } from './asChatApi';
 import { downloadAgentPackage } from './agentDownload';
 import { prepareSupportLogFile } from './logFileProcessing';
-import { createSupportTicket, getRemoteSupportState, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, registerRemoteSupportAccessCode, requestPcAgentDiagnosis, submitSupportFeedback, uploadAgentLog } from './supportApi';
+import { createSupportTicket, getRemoteSupportState, getSupportDraft, getSupportTicket, issueAgentActivationToken, previewAgentLogRag, registerRemoteSupportAccessCode, requestPcAgentDiagnosis, uploadAgentLog } from './supportApi';
 import type { PcAgentDiagnosisResultDto } from './supportApi';
 import { getCurrentSupportChat } from './supportChatApi';
 import { SupportChatMessageContent } from './SupportChatMessageContent';
@@ -1031,9 +1032,6 @@ export function SupportTicketPage() {
   const queryClient = useQueryClient();
   const [remoteAccessCode, setRemoteAccessCode] = useState('');
   const [remoteAccessCodeError, setRemoteAccessCodeError] = useState('');
-  const [feedbackRating, setFeedbackRating] = useState('5');
-  const [feedbackComment, setFeedbackComment] = useState('');
-  const [feedbackError, setFeedbackError] = useState('');
   const { data: ticket, isError, isLoading } = useQuery({
     queryKey: ['support-ticket', ticketId],
     queryFn: () => getSupportTicket(ticketId),
@@ -1064,19 +1062,6 @@ export function SupportTicketPage() {
         return;
       }
       setRemoteAccessCodeError('지원 코드를 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    }
-  });
-  const feedbackMutation = useMutation({
-    mutationFn: async () => submitSupportFeedback(ticketId, {
-      rating: Number(feedbackRating),
-      comment: feedbackComment.trim() || undefined
-    }),
-    onSuccess: (updatedTicket) => {
-      setFeedbackError('');
-      queryClient.setQueryData(['support-ticket', ticketId], updatedTicket);
-    },
-    onError: () => {
-      setFeedbackError('피드백을 저장하지 못했습니다. 평점 값을 확인한 뒤 다시 시도해 주세요.');
     }
   });
 
@@ -1128,50 +1113,15 @@ export function SupportTicketPage() {
               <p className="mt-2 text-sm font-semibold leading-6 text-blue-900">
                 원격 지원이나 방문 점검이 필요하면 담당자가 상담방으로 안내합니다.
               </p>
-              <Link
-                to={`/support/${ticketId}?chat=1`}
+              <button
+                type="button"
+                onClick={openSupportChat}
                 className="mt-4 inline-flex rounded bg-brand-blue px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700"
               >
                 상담방 열기
-              </Link>
+              </button>
             </div>
           )}
-          <form
-            className="mt-5 rounded border border-slate-200 bg-white p-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              feedbackMutation.mutate();
-            }}
-          >
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <label className="text-sm font-bold text-slate-800">처리 피드백</label>
-              {ticket.feedbackRating ? <span className="text-xs font-semibold text-slate-500">저장된 평점 {ticket.feedbackRating}/5</span> : null}
-            </div>
-            <div className="grid gap-3 md:grid-cols-[120px_minmax(0,1fr)]">
-              <select
-                className="h-10 rounded border border-slate-300 bg-white px-3 text-sm"
-                value={feedbackRating}
-                onChange={(event) => setFeedbackRating(event.target.value)}
-              >
-                {[5, 4, 3, 2, 1].map((rating) => (
-                  <option key={rating} value={rating}>{rating}점</option>
-                ))}
-              </select>
-              <input
-                className="h-10 rounded border border-slate-300 px-3 text-sm"
-                value={feedbackComment}
-                onChange={(event) => setFeedbackComment(event.target.value)}
-                placeholder={ticket.feedbackComment || '처리 결과에 대한 의견을 남겨 주세요.'}
-              />
-            </div>
-            {feedbackError ? <p className="mt-2 text-xs font-semibold text-red-600">{feedbackError}</p> : null}
-            <button
-              className="mt-3 rounded border border-slate-300 px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:bg-slate-100"
-              disabled={feedbackMutation.isPending}
-            >
-              {feedbackMutation.isPending ? '피드백 저장 중...' : '피드백 저장'}
-            </button>
-          </form>
           <p className="mt-5 text-sm leading-6 text-slate-700">
             담당자가 증상과 로그를 확인한 뒤 필요한 경우 추가 정보를 요청할 수 있습니다.
           </p>

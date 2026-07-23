@@ -224,8 +224,8 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     [noSampleTicket.id, noSampleTicket],
     [diagnosisOnlyTicket.id, diagnosisOnlyTicket]
   ]);
+  let currentTestRole: 'USER' | 'ADMIN' = 'USER';
   let reviewActionPayload: Record<string, unknown> | undefined;
-  let feedbackPayload: Record<string, unknown> | undefined;
   let deletedTicketId: string | undefined;
 
   page.on('console', (message) => {
@@ -244,11 +244,9 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        id: 'admin-001',
-        email: 'admin@example.com',
-        role: 'ADMIN'
-      })
+      body: JSON.stringify(currentTestRole === 'ADMIN'
+        ? { id: 'admin-001', email: 'admin@example.com', role: 'ADMIN' }
+        : { id: 'user-001', email: 'user@example.com', role: 'USER' })
     });
   });
   await page.route('**/api/support/chat-sessions/current**', async (route) => {
@@ -256,27 +254,13 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ contact: null, messages: [], supportNewPath: '/support/new' })
+      body: JSON.stringify({ contact: chatRoom, messages: [], supportNewPath: '/support/new' })
     });
   });
   await page.route(/\/api\/as-tickets\/[^/]+$/, async (route) => {
     recordApiCall(apiCalls, route.request());
     const ticketId = lastPathSegment(route.request().url());
     await fulfillTicket(route, tickets.get(ticketId));
-  });
-  await page.route(/\/api\/as-tickets\/[^/]+\/feedback$/, async (route) => {
-    recordApiCall(apiCalls, route.request());
-    const match = new URL(route.request().url()).pathname.match(/\/api\/as-tickets\/([^/]+)\/feedback$/);
-    const ticketId = match?.[1] ?? beforeDecisionTicket.id;
-    feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
-    const current = tickets.get(ticketId) ?? beforeDecisionTicket;
-    const updated = {
-      ...current,
-      feedbackRating: feedbackPayload.rating,
-      feedbackComment: feedbackPayload.comment
-    };
-    tickets.set(ticketId, updated);
-    await fulfillTicket(route, updated);
   });
   await page.route('**/api/admin/as-tickets', async (route) => {
     recordApiCall(apiCalls, route.request());
@@ -365,6 +349,19 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
     { id: 'chat-msg-2', role: 'USER', content: '게임 중 GPU 온도가 계속 올라갑니다.', senderName: 'QA User', createdAt: '2026-07-02T07:00:00Z' }
   ];
   let chatMessagePayload: Record<string, unknown> | undefined;
+  await page.route('**/api/support/chat-sessions/qa-chat-room-1**', async (route) => {
+    recordApiCall(apiCalls, route.request());
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/ws-ticket')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ contact: chatRoom, messages: chatMessages, pollingIntervalMs: 5000 })
+    });
+  });
   await page.route('**/api/admin/support/chat-sessions', async (route) => {
     recordApiCall(apiCalls, route.request());
     await route.fulfill({
@@ -417,18 +414,19 @@ test('captures Agent AS demo UI evidence and verifies admin decision reflection'
   await expect(page.getByRole('main')).not.toContainText('[object Object]');
   await expect(page.getByRole('main')).toContainText('지원 진행');
   await expect(page.getByRole('main')).toContainText('담당자 확인 중');
-  await expect(page.getByRole('link', { name: '상담방 열기' })).toHaveAttribute('href', '/support/qa-ticket-before?chat=1');
-  await page.getByRole('button', { name: '피드백 저장' }).click();
-  await expect(page.getByRole('main')).toContainText('저장된 평점 5/5');
-  expect(feedbackPayload).toMatchObject({
-    rating: 5
-  });
+  const openTicketChatButton = page.getByRole('main').getByRole('button', { name: '상담방 열기' });
+  await expect(openTicketChatButton).toBeVisible();
+  await openTicketChatButton.click();
+  await expect(page.getByText('PC Agent 상담방')).toBeVisible();
   await expect(page.getByRole('main')).not.toContainText('undefined');
   await page.screenshot({ path: `${screenshotDir}/02-support-ticket-before-decision.png`, fullPage: true });
 
   await page.evaluate(() => {
     localStorage.setItem('buildgraph.token', 'jwt-admin-token');
   });
+  currentTestRole = 'ADMIN';
+  // auth/me 응답 캐시는 앱 런타임 단위이므로 관리자 세션 전환은 새 런타임에서 검증한다.
+  await page.reload();
   await page.goto('/admin/as-tickets');
   await expect(page.getByRole('main')).toContainText('추천 서비스');
   await expect(page.getByRole('main')).toContainText('방문지원 신청');
