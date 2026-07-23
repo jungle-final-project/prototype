@@ -372,6 +372,12 @@ class DiagnosisRequestProcessor:
         self.device_id = value
         return True
 
+    def clear_authenticated_device(self) -> bool:
+        if self.is_busy():
+            return False
+        self.device_id = None
+        return True
+
     def process(self, payload: dict[str, Any], authenticated: bool) -> DiagnosisDecision:
         diagnosis_id = payload.get("diagnosisId") if isinstance(payload.get("diagnosisId"), str) else None
         if not authenticated:
@@ -437,6 +443,7 @@ class AgentDiagnosisWebSocketClient:
         self.state = "DISCONNECTED"
         self._thread: threading.Thread | None = None
         self._socket: Any = None
+        self._retired_socket_ids: set[int] = set()
         self._send_lock = threading.Lock()
         self._status_lock = threading.Lock()
         self._status_frames: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -473,6 +480,34 @@ class AgentDiagnosisWebSocketClient:
             return False
         self.reconnect_event.set()
         socket_app = self._socket
+        if socket_app is not None:
+            try:
+                socket_app.close()
+            except Exception:
+                pass
+        if self._thread is None or not self._thread.is_alive():
+            self.start()
+        return True
+
+    def replace_credentials(self, api_base_url: str, agent_token: str) -> bool:
+        token = agent_token.strip()
+        if not token:
+            return False
+        next_url = diagnosis_websocket_url(api_base_url)
+        if self.agent_token == token and self.url == next_url:
+            return self.request_reconnect()
+        if not self.processor.clear_authenticated_device():
+            return False
+
+        socket_app = self._socket
+        self._socket = None
+        if socket_app is not None:
+            self._retired_socket_ids.add(id(socket_app))
+        self.agent_token = token
+        self.url = next_url
+        self.authenticated = False
+        self.ready_once = False
+        self.reconnect_event.set()
         if socket_app is not None:
             try:
                 socket_app.close()
@@ -569,6 +604,7 @@ class AgentDiagnosisWebSocketClient:
                 on_close=self._on_close,
             )
             self._socket = socket_app
+            self._retired_socket_ids.discard(id(socket_app))
             started_at = time.monotonic()
             try:
                 socket_app.run_forever(ping_interval=30, ping_timeout=10, suppress_origin=True)
@@ -590,6 +626,8 @@ class AgentDiagnosisWebSocketClient:
                 attempt = 0
 
     def _on_open(self, socket_app: Any) -> None:
+        if id(socket_app) in self._retired_socket_ids:
+            return
         socket_app.send(json.dumps({"type": "AUTH", "agentToken": self.agent_token}))
 
     def mark_idle(self) -> bool:
@@ -599,6 +637,8 @@ class AgentDiagnosisWebSocketClient:
         return True
 
     def _on_message(self, socket_app: Any, raw_message: str) -> None:
+        if id(socket_app) in self._retired_socket_ids:
+            return
         try:
             frame = json.loads(raw_message)
         except (TypeError, json.JSONDecodeError):
@@ -648,10 +688,14 @@ class AgentDiagnosisWebSocketClient:
             socket_app.close()
 
     def _on_error(self, socket_app: Any, error: Any) -> None:
+        if id(socket_app) in self._retired_socket_ids:
+            return
         if self.state != "FAILED":
             self._set_state("DISCONNECTED")
 
     def _on_close(self, socket_app: Any, status_code: Any, message: Any) -> None:
+        if id(socket_app) in self._retired_socket_ids:
+            return
         self.authenticated = False
         with self._status_lock:
             self._pending_status_event_ids.update(self._status_frames)

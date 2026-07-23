@@ -1402,7 +1402,11 @@ test('chatbot gives symptom-based possibilities and connects to the separate Age
 });
 
 // AI 대화창에서 말한 증상을 [PC Agent로 바로 접수]가 설치된 에이전트로 그대로 전달한다 (팀장 데모 시나리오 3번).
-async function openPcAgentGuidanceForConnectionTest(page: Page, symptomText = 'pc가 버벅여') {
+async function openPcAgentGuidanceForConnectionTest(
+  page: Page,
+  symptomText = 'pc가 버벅여',
+  onActivationIssued: () => void = () => undefined
+) {
   await page.route('**/api/ai/build-chat', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -1436,8 +1440,29 @@ async function openPcAgentGuidanceForConnectionTest(page: Page, symptomText = 'p
         target.__pcAgentProtocolLaunches = [...(target.__pcAgentProtocolLaunches ?? []), this.href];
         return;
       }
+      if (this.download === 'pcagent-activation.json') {
+        const target = window as Window & { __pcAgentActivationDownloads?: string[] };
+        void fetch(this.href)
+          .then((response) => response.text())
+          .then((body) => {
+            target.__pcAgentActivationDownloads = [...(target.__pcAgentActivationDownloads ?? []), body];
+          });
+        return;
+      }
       originalClick.call(this);
     };
+  });
+  await page.route('**/api/users/me/agent-activation-token', (route) => {
+    onActivationIssued();
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        activationToken: 'current-web-account-activation-token',
+        tokenType: 'Activation',
+        expiresAt: '2026-07-24T00:00:00Z'
+      })
+    });
   });
   await openHomeAsUser(page);
   await openDesktopAiAssistant(page);
@@ -1456,6 +1481,7 @@ async function advancePcAgentConnectionClock(page: Page, milliseconds: number) {
 }
 
 test('connected PC Agent skips protocol launch and submits once', async ({ page }) => {
+  let activationRequests = 0;
   let diagnosisPosts = 0;
   await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => route.fulfill({
     status: 200,
@@ -1470,18 +1496,22 @@ test('connected PC Agent skips protocol launch and submits once', async ({ page 
       body: JSON.stringify({ diagnosisId: 'connected-diag', deviceId: 'device-1', status: 'ACCEPTED' })
     });
   });
-  const guidance = await openPcAgentGuidanceForConnectionTest(page);
+  const guidance = await openPcAgentGuidanceForConnectionTest(page, 'pc가 버벅여', () => {
+    activationRequests += 1;
+  });
 
   await guidance.getByTestId('ai-agent-diagnosis-request').click();
   await expect(page).toHaveURL(/diagnosisId=connected-diag/);
 
   expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches ?? [])).toEqual([]);
+  expect(activationRequests).toBe(0);
   expect(diagnosisPosts).toBe(1);
 });
 
 for (const connectionDelayMs of [15_000, 30_000]) {
   test(`waits for a PC Agent connected after ${connectionDelayMs / 1000} seconds without duplicate launch or diagnosis`, async ({ page }) => {
     let connected = false;
+    let activationRequests = 0;
     let diagnosisPosts = 0;
     await page.route('**/api/users/me/agent-diagnosis-requests/connection', (route) => route.fulfill({
       status: 200,
@@ -1496,7 +1526,9 @@ for (const connectionDelayMs of [15_000, 30_000]) {
         body: JSON.stringify({ diagnosisId: `delayed-${connectionDelayMs}`, deviceId: 'device-1', status: 'ACCEPTED' })
       });
     });
-    const guidance = await openPcAgentGuidanceForConnectionTest(page);
+    const guidance = await openPcAgentGuidanceForConnectionTest(page, 'pc가 버벅여', () => {
+      activationRequests += 1;
+    });
     await page.clock.install();
     const submit = guidance.getByTestId('ai-agent-diagnosis-request');
 
@@ -1514,6 +1546,16 @@ for (const connectionDelayMs of [15_000, 30_000]) {
     expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches)).toEqual([
       'buildgraph-pc-agent://open'
     ]);
+    await expect.poll(() => page.evaluate(() => (
+      window as Window & { __pcAgentActivationDownloads?: string[] }
+    ).__pcAgentActivationDownloads?.length ?? 0)).toBe(1);
+    const activationDownload = await page.evaluate(() => (
+      window as Window & { __pcAgentActivationDownloads?: string[] }
+    ).__pcAgentActivationDownloads?.[0] ?? '{}');
+    expect(JSON.parse(activationDownload)).toMatchObject({
+      activationToken: 'current-web-account-activation-token'
+    });
+    expect(activationRequests).toBe(1);
     expect(diagnosisPosts).toBe(1);
   });
 }
@@ -1588,8 +1630,30 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
         target.__pcAgentProtocolLaunches = [...(target.__pcAgentProtocolLaunches ?? []), this.href];
         return;
       }
+      if (this.download === 'pcagent-activation.json') {
+        const target = window as Window & { __pcAgentActivationDownloads?: string[] };
+        void fetch(this.href)
+          .then((response) => response.text())
+          .then((body) => {
+            target.__pcAgentActivationDownloads = [...(target.__pcAgentActivationDownloads ?? []), body];
+          });
+        return;
+      }
       originalClick.call(this);
     };
+  });
+  let activationRequests = 0;
+  await page.route('**/api/users/me/agent-activation-token', (route) => {
+    activationRequests += 1;
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        activationToken: 'current-web-account-activation-token',
+        tokenType: 'Activation',
+        expiresAt: '2026-07-24T00:00:00Z'
+      })
+    });
   });
   const diagnosisBodies: Array<{ symptom?: string; mode?: string; requestedChecks?: string[] }> = [];
   let connectionChecks = 0;
@@ -1668,6 +1732,16 @@ test('chatbot support guidance submits the spoken symptom to the installed PC Ag
   expect(await page.evaluate(() => (window as Window & { __pcAgentProtocolLaunches?: string[] }).__pcAgentProtocolLaunches)).toEqual([
     'buildgraph-pc-agent://open'
   ]);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __pcAgentActivationDownloads?: string[] }
+  ).__pcAgentActivationDownloads?.length ?? 0)).toBe(1);
+  const activationDownload = await page.evaluate(() => (
+    window as Window & { __pcAgentActivationDownloads?: string[] }
+  ).__pcAgentActivationDownloads?.[0] ?? '{}');
+  expect(JSON.parse(activationDownload)).toMatchObject({
+    activationToken: 'current-web-account-activation-token'
+  });
+  expect(activationRequests).toBe(1);
   expect(diagnosisBodies).toHaveLength(1);
   expect(diagnosisBodies[0].symptom).toBe(symptomText);
   expect(diagnosisBodies[0].mode).toBe('DEMO');

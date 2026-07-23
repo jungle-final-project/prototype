@@ -203,7 +203,7 @@ SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
 SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.22"
+DEFAULT_AGENT_VERSION = "0.1.23"
 DEFAULT_POLICY_VERSION = "policy-v1"
 
 
@@ -2270,6 +2270,31 @@ def auto_register_agent(config_path: Path) -> bool:
     save_agent_token(config_path, agent_token)
     call_server_upload_consent(load_config(config_path))
     return True
+
+
+AUTO_REGISTER_RETRY_SECONDS = (0.0, 1.0, 2.0, 5.0)
+
+
+def prepare_agent_registration(
+    config_path: Path,
+    retry_seconds: Sequence[float] = AUTO_REGISTER_RETRY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[AgentConfig, bool]:
+    imported_activation = import_activation_config(config_path)
+    last_error: Exception | None = None
+    for delay_seconds in retry_seconds:
+        if delay_seconds > 0:
+            sleep(delay_seconds)
+        try:
+            auto_register_agent(config_path)
+            if imported_activation:
+                cleanup_activation_config_files()
+            return load_config(config_path), imported_activation
+        except Exception as exception:
+            last_error = exception
+    if last_error is not None:
+        raise last_error
+    return load_config(config_path), imported_activation
 
 
 DISK_DELTA_FIELDS = (
@@ -8500,16 +8525,18 @@ def run_background(
         return 0
     try:
         path = ensure_default_config(config_path or default_background_config_path())
+        current_config: AgentConfig | None = None
         try:
-            imported_activation = import_activation_config(path)
-            auto_register_agent(path)
-            if imported_activation:
-                cleanup_activation_config_files()
+            current_config, _ = prepare_agent_registration(path)
         except Exception as exception:
             error_log = app_data_dir() / "agent-error.log"
             error_log.parent.mkdir(parents=True, exist_ok=True)
             with error_log.open("a", encoding="utf-8") as file:
                 file.write(f"{datetime.now(KST).isoformat()} auto-register failed: {exception}\n")
+            try:
+                current_config = load_config(path)
+            except ConfigError:
+                current_config = None
         register_startup()
         register_url_protocol()
         hide_console_window()
@@ -8529,6 +8556,7 @@ def run_background(
         diagnosis_rule_engine = DiagnosisRuleEngine()
         diagnosis_orchestrator_holder: dict[str, DiagnosisOrchestrator] = {}
         diagnosis_client_holder: dict[str, AgentDiagnosisWebSocketClient] = {}
+        reconnect_handler_holder: dict[str, Callable[[], bool]] = {}
         forwarded_event_ids: set[str] = set()
         viewer_controller = BackgroundViewerController(
             path,
@@ -8545,8 +8573,8 @@ def run_background(
             retry_diagnosis=lambda: diagnosis_orchestrator_holder["value"].retry()
             if "value" in diagnosis_orchestrator_holder else False,
             finish_diagnosis_session=lambda: finish_current_diagnosis_session(),
-            request_reconnect=lambda: diagnosis_client_holder["value"].request_reconnect()
-            if "value" in diagnosis_client_holder else False,
+            request_reconnect=lambda: reconnect_handler_holder["value"]()
+            if "value" in reconnect_handler_holder else False,
         )
 
         def queue_diagnosis_status(detail: dict[str, Any]) -> None:
@@ -8759,10 +8787,6 @@ def run_background(
             detail = diagnosis_session_replacement_sync_detail(replacement)
             queue_diagnosis_status(detail)
 
-        try:
-            current_config = load_config(path)
-        except ConfigError:
-            current_config = None
         diagnosis_processor = DiagnosisRequestProcessor(
             diagnosis_store,
             device_id=current_config.device_id if current_config else None,
@@ -8797,29 +8821,62 @@ def run_background(
             )
         ):
             begin_initial_metrics(existing_session, existing_session.request.mode)
-        diagnosis_client = None
-        if current_config and current_config.agent_token:
-            def sync_diagnosis_state() -> None:
-                client = diagnosis_client_holder.get("value")
-                if client is not None:
-                    for detail in tuple(pending_replacement_statuses):
-                        if client.send_diagnosis_status(detail):
-                            pending_replacement_statuses.remove(detail)
-                sync_diagnosis_events(
-                    diagnosis_log_store.snapshot,
-                    wait_for_terminal_ack=False,
-                )
-                sync_diagnosis_result()
+        def sync_diagnosis_state() -> None:
+            client = diagnosis_client_holder.get("value")
+            if client is not None:
+                for detail in tuple(pending_replacement_statuses):
+                    if client.send_diagnosis_status(detail):
+                        pending_replacement_statuses.remove(detail)
+            sync_diagnosis_events(
+                diagnosis_log_store.snapshot,
+                wait_for_terminal_ack=False,
+            )
+            sync_diagnosis_result()
 
-            diagnosis_client = AgentDiagnosisWebSocketClient(
-                current_config.api_base_url,
-                current_config.agent_token,
+        def create_diagnosis_client(config: AgentConfig) -> AgentDiagnosisWebSocketClient:
+            client = AgentDiagnosisWebSocketClient(
+                config.api_base_url,
+                config.agent_token or "",
                 diagnosis_processor,
                 on_state_changed=on_connection_state_changed,
                 on_ready=sync_diagnosis_state,
             )
-            diagnosis_client_holder["value"] = diagnosis_client
-            diagnosis_client.start()
+            diagnosis_client_holder["value"] = client
+            client.start()
+            return client
+
+        def reconnect_or_rebind_agent() -> bool:
+            nonlocal current_config
+            client = diagnosis_client_holder.get("value")
+            if diagnosis_processor.is_busy():
+                return client.request_reconnect() if client is not None else False
+            if latest_activation_config() is None:
+                return client.request_reconnect() if client is not None else False
+            try:
+                refreshed_config, imported_activation = prepare_agent_registration(path)
+            except Exception as exception:
+                error_log = app_data_dir() / "agent-error.log"
+                error_log.parent.mkdir(parents=True, exist_ok=True)
+                with error_log.open("a", encoding="utf-8") as file:
+                    file.write(f"{datetime.now(KST).isoformat()} account rebind failed: {exception}\n")
+                return False
+            current_config = refreshed_config
+            if not refreshed_config.agent_token:
+                return False
+            if client is None:
+                create_diagnosis_client(refreshed_config)
+                return True
+            if imported_activation:
+                return client.replace_credentials(
+                    refreshed_config.api_base_url,
+                    refreshed_config.agent_token,
+                )
+            return client.request_reconnect()
+
+        reconnect_handler_holder["value"] = reconnect_or_rebind_agent
+
+        if current_config and current_config.agent_token:
+            create_diagnosis_client(current_config)
         else:
             on_connection_state_changed("FAILED")
 
@@ -8845,8 +8902,9 @@ def run_background(
             def stop(icon: object, item: object = None) -> None:
                 runtime.stop()
                 initial_metrics_coordinator.stop()
-                if diagnosis_client is not None:
-                    diagnosis_client.stop()
+                active_client = diagnosis_client_holder.get("value")
+                if active_client is not None:
+                    active_client.stop()
                 viewer_controller.shutdown()
                 remove_pid()
                 icon.stop()
@@ -8872,8 +8930,9 @@ def run_background(
 
         runtime.stop()
         initial_metrics_coordinator.stop()
-        if diagnosis_client is not None:
-            diagnosis_client.stop()
+        active_client = diagnosis_client_holder.get("value")
+        if active_client is not None:
+            active_client.stop()
         viewer_controller.shutdown()
         remove_pid()
         return 0

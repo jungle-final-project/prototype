@@ -1,4 +1,5 @@
 import { getPcAgentConnectionStatus } from './supportApi';
+import { downloadAgentActivationForCurrentUser } from './agentDownload';
 
 export const PC_AGENT_PROTOCOL_URL = 'buildgraph-pc-agent://open';
 export const PC_AGENT_CONNECTION_TIMEOUT_MS = 45_000;
@@ -18,6 +19,7 @@ export async function ensurePcAgentConnected(
   }
 
   onPhaseChanged('approval-required');
+  await downloadAgentActivationForCurrentUser();
   launchInstalledPcAgent();
   let elapsedMs = 0;
   while (elapsedMs < PC_AGENT_CONNECTION_TIMEOUT_MS) {

@@ -3630,8 +3630,7 @@ class AgentGoal1112Test(unittest.TestCase):
 
         with patch("buildgraph_agent.acquire_named_instance_lock", return_value=fake_lock), \
             patch("buildgraph_agent.ensure_default_config", return_value=Path("agent-config.json")), \
-            patch("buildgraph_agent.import_activation_config"), \
-            patch("buildgraph_agent.auto_register_agent"), \
+            patch("buildgraph_agent.prepare_agent_registration", return_value=(None, False)), \
             patch("buildgraph_agent.register_startup"), \
             patch("buildgraph_agent.hide_console_window"), \
             patch("buildgraph_agent.write_pid"), \

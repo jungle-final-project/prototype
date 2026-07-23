@@ -19,18 +19,20 @@ export async function downloadPcAgentForCurrentUser() {
   await downloadAgentPackage(activation.activationToken);
 }
 
+export async function downloadAgentActivationForCurrentUser() {
+  const activation = await issueAgentActivationToken();
+  const config = createAgentActivationConfig(activation.activationToken);
+  const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  downloadUrl(url, 'pcagent-activation.json');
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // AS 접수 흐름에서는 입력한 증상을 zip의 activation 설정에 동봉해 exe가 첫 실행 시 이어받는다.
 export async function downloadAgentPackage(activationToken: string, symptom?: string, symptomType?: string) {
   const manifest = await fetchAgentDownloadManifest();
   const exe = await fetchAgentExecutable(manifest);
-  const config = {
-    apiBaseUrl: resolveAgentApiBaseUrl(),
-    webBaseUrl: window.location.origin,
-    activationToken,
-    ...(symptom ? { symptom } : {}),
-    ...(symptomType ? { symptomType } : {}),
-    environment: import.meta.env.MODE ?? 'local'
-  };
+  const config = createAgentActivationConfig(activationToken, symptom, symptomType);
   const encoder = new TextEncoder();
   const zip = createZipBlob([
     { name: 'PCAgent.exe', data: exe },
@@ -40,6 +42,17 @@ export async function downloadAgentPackage(activationToken: string, symptom?: st
   const url = URL.createObjectURL(zip);
   downloadUrl(url, 'PCAgent.zip');
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function createAgentActivationConfig(activationToken: string, symptom?: string, symptomType?: string) {
+  return {
+    apiBaseUrl: resolveAgentApiBaseUrl(),
+    webBaseUrl: window.location.origin,
+    activationToken,
+    ...(symptom ? { symptom } : {}),
+    ...(symptomType ? { symptomType } : {}),
+    environment: import.meta.env.MODE ?? 'local'
+  };
 }
 
 async function fetchAgentDownloadManifest(): Promise<AgentDownloadManifest> {

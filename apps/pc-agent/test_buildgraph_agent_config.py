@@ -226,6 +226,42 @@ class AgentConfigTest(unittest.TestCase):
         self.assertEqual(saved["activationToken"], "download-token-1234567890")
         self.assertIsNone(saved["agentToken"])
 
+    def test_prepare_agent_registration_retries_transient_first_launch_failure(self) -> None:
+        path = self.write_config(self.valid_config(agentToken=None))
+        loaded = load_config(path)
+        sleeps: list[float] = []
+
+        with patch("buildgraph_agent.import_activation_config", return_value=True), \
+                patch("buildgraph_agent.auto_register_agent", side_effect=[RuntimeError("temporary"), True]) as register, \
+                patch("buildgraph_agent.cleanup_activation_config_files") as cleanup, \
+                patch("buildgraph_agent.load_config", return_value=loaded):
+            config, imported = agent.prepare_agent_registration(
+                path,
+                retry_seconds=(0.0, 1.0),
+                sleep=sleeps.append,
+            )
+
+        self.assertIs(config, loaded)
+        self.assertTrue(imported)
+        self.assertEqual(register.call_count, 2)
+        self.assertEqual(sleeps, [1.0])
+        cleanup.assert_called_once_with()
+
+    def test_prepare_agent_registration_reuses_matching_existing_credential(self) -> None:
+        path = self.write_config(self.valid_config(agentToken="current-agent-token"))
+        loaded = load_config(path)
+
+        with patch("buildgraph_agent.import_activation_config", return_value=False), \
+                patch("buildgraph_agent.auto_register_agent", return_value=False) as register, \
+                patch("buildgraph_agent.cleanup_activation_config_files") as cleanup, \
+                patch("buildgraph_agent.load_config", return_value=loaded):
+            config, imported = agent.prepare_agent_registration(path)
+
+        self.assertIs(config, loaded)
+        self.assertFalse(imported)
+        register.assert_called_once_with(path)
+        cleanup.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
