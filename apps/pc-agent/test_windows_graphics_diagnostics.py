@@ -45,6 +45,51 @@ def event_responses(status: str = NO_RESULTS) -> dict[str, PowerShellQueryResult
 
 
 class WindowsGraphicsDiagnosticsProviderTest(unittest.TestCase):
+    def test_collect_task_runs_only_queries_owned_by_each_diagnosis_task(self) -> None:
+        responses = {
+            "display_devices": PowerShellQueryResult(OK, ({
+                "deviceName": "Test Display Adapter",
+                "instanceId": "PCI\\VEN_1234&DEV_5678",
+                "pnpStatus": "OK",
+                "problemCode": 0,
+                "problemCodeQueryStatus": "OK",
+                "deviceClass": "Display",
+                "manufacturer": "Test Manufacturer",
+                "source": "Win32_PnPEntity",
+            },)),
+            "display_drivers": PowerShellQueryResult(OK, ({
+                "deviceName": "Test Display Adapter",
+                "instanceId": "PCI\\VEN_1234&DEV_5678",
+                "provider": "Test Driver Provider",
+                "version": "31.0.0.1",
+            },)),
+            **event_responses(),
+        }
+        powershell = FakePowerShell(responses)
+        provider = WindowsGraphicsDiagnosticsProvider(powershell, now=lambda: QUERIED_AT)
+
+        device_snapshot = provider.collect_task("windows_display_devices")
+        self.assertEqual(["display_devices"], powershell.calls)
+        self.assertEqual(OK, device_snapshot.device_query.status)
+        self.assertEqual(NO_RESULTS, device_snapshot.driver_query.status)
+
+        powershell.calls.clear()
+        driver_snapshot = provider.collect_task("windows_display_drivers")
+        self.assertEqual(["display_drivers"], powershell.calls)
+        self.assertEqual(OK, driver_snapshot.driver_query.status)
+        self.assertEqual(NO_RESULTS, driver_snapshot.device_query.status)
+
+        powershell.calls.clear()
+        graphics_snapshot = provider.collect_task("windows_graphics_events")
+        self.assertEqual(["graphics_events", "kernel_power_events"], powershell.calls)
+        self.assertEqual(NO_RESULTS, graphics_snapshot.graphics_event_query.status)
+        self.assertEqual(NO_RESULTS, graphics_snapshot.kernel_power_event_query.status)
+
+        powershell.calls.clear()
+        whea_snapshot = provider.collect_task("windows_whea_events")
+        self.assertEqual(["whea_events"], powershell.calls)
+        self.assertEqual(NO_RESULTS, whea_snapshot.whea_event_query.status)
+
     def test_display_driver_query_uses_scoped_video_controller_metadata(self) -> None:
         script = _display_driver_script()
 

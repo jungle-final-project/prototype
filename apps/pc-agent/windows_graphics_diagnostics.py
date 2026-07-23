@@ -334,8 +334,7 @@ class WindowsGraphicsDiagnosticsProvider:
         self.recent_days = max(1, recent_days)
         self.max_events = max(1, max_events)
 
-    def collect(self) -> WindowsGraphicsDiagnosticsSnapshot:
-        queried_at = _utc_iso(self.now())
+    def _collect_device_query(self) -> PowerShellQueryResult:
         device_query = self.powershell.query(
             "display_devices",
             _display_device_cim_script(),
@@ -346,12 +345,19 @@ class WindowsGraphicsDiagnosticsProvider:
                 _display_device_script(),
                 timeout_seconds=30.0,
             )
-        driver_query = self.powershell.query("display_drivers", _display_driver_script())
-        graphics_event_query = self.powershell.query(
+        return device_query
+
+    def _collect_driver_query(self) -> PowerShellQueryResult:
+        return self.powershell.query("display_drivers", _display_driver_script())
+
+    def _collect_graphics_event_query(self) -> PowerShellQueryResult:
+        return self.powershell.query(
             "graphics_events",
             _event_script(_graphics_event_filter(), self.recent_days, self.max_events),
         )
-        whea_event_query = self.powershell.query(
+
+    def _collect_whea_event_query(self) -> PowerShellQueryResult:
+        return self.powershell.query(
             "whea_events",
             _event_script(
                 "Provider[@Name='Microsoft-Windows-WHEA-Logger'] and (Level=1 or Level=2 or Level=3)",
@@ -359,7 +365,9 @@ class WindowsGraphicsDiagnosticsProvider:
                 self.max_events,
             ),
         )
-        kernel_power_event_query = self.powershell.query(
+
+    def _collect_kernel_power_event_query(self) -> PowerShellQueryResult:
+        return self.powershell.query(
             "kernel_power_events",
             _event_script(
                 "Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=41",
@@ -367,6 +375,16 @@ class WindowsGraphicsDiagnosticsProvider:
                 self.max_events,
             ),
         )
+
+    def _snapshot(
+        self,
+        device_query: PowerShellQueryResult,
+        driver_query: PowerShellQueryResult,
+        graphics_event_query: PowerShellQueryResult,
+        whea_event_query: PowerShellQueryResult,
+        kernel_power_event_query: PowerShellQueryResult,
+    ) -> WindowsGraphicsDiagnosticsSnapshot:
+        queried_at = _utc_iso(self.now())
         devices = normalize_display_devices(
             device_query.items,
             driver_query.items,
@@ -385,6 +403,35 @@ class WindowsGraphicsDiagnosticsProvider:
             whea_event_query=whea_event_query,
             kernel_power_event_query=kernel_power_event_query,
         )
+
+    def collect(self) -> WindowsGraphicsDiagnosticsSnapshot:
+        return self._snapshot(
+            self._collect_device_query(),
+            self._collect_driver_query(),
+            self._collect_graphics_event_query(),
+            self._collect_whea_event_query(),
+            self._collect_kernel_power_event_query(),
+        )
+
+    def collect_task(self, task_id: str) -> WindowsGraphicsDiagnosticsSnapshot:
+        """Collect only the Windows query owned by the active diagnosis task."""
+
+        empty = PowerShellQueryResult(NO_RESULTS)
+        if task_id == "windows_display_devices":
+            return self._snapshot(self._collect_device_query(), empty, empty, empty, empty)
+        if task_id == "windows_display_drivers":
+            return self._snapshot(empty, self._collect_driver_query(), empty, empty, empty)
+        if task_id == "windows_graphics_events":
+            return self._snapshot(
+                empty,
+                empty,
+                self._collect_graphics_event_query(),
+                empty,
+                self._collect_kernel_power_event_query(),
+            )
+        if task_id == "windows_whea_events":
+            return self._snapshot(empty, empty, empty, self._collect_whea_event_query(), empty)
+        raise ValueError(f"unsupported Windows graphics diagnosis task: {task_id}")
 
 
 class Code43RemoteSupportDemoGraphicsProvider:

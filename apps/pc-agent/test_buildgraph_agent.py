@@ -1110,6 +1110,10 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertIn('measurement_font(13, "semibold")', checklist_source)
         self.assertIn('measurement_font(12, "regular")', checklist_source)
         self.assertNotIn("measurement_fonts.get(", checklist_source)
+        tick_source = source[source.index("def diagnosis_progress_tick"):source.index("def draw_diagnosing")]
+        self.assertIn("title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", tick_source)
+        self.assertIn("subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", tick_source)
+        self.assertIn("icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", tick_source)
         self.assertIn("action_top = checklist_bottom + 12", diagnosing_source)
 
     def test_page_two_checklist_presentations_follow_latest_task_snapshot(self) -> None:

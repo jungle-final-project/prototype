@@ -1,7 +1,7 @@
 {
-    "version":  "0.1.24",
+    "version":  "0.1.25",
     "fileName":  "PCAgent.exe",
     "downloadUrl":  "agent.exe",
-    "sha256":  "480f61c15b9afd37f2b1f6470855ce04bdd8aafc8cb79d9898cefff5cb4d5997",
+    "sha256":  "1998be94e29d0fa4bf792f55480a6da080e3feda9075389daa3aedfe6810657e",
     "notes":  "Local demo PCAgent build"
 }

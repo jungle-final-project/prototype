@@ -203,7 +203,7 @@ SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
 SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.24"
+DEFAULT_AGENT_VERSION = "0.1.25"
 DEFAULT_POLICY_VERSION = "policy-v1"
 
 
@@ -860,7 +860,7 @@ def graphics_diagnosis_task_handlers(
     session_provider: Callable[[], DiagnosisSession | None],
     metrics_snapshot_provider: Callable[[], MetricsSnapshot],
     diagnosis_snapshot_provider: Callable[[], DiagnosisRunSnapshot],
-    windows_snapshot_provider: Callable[[], WindowsGraphicsDiagnosticsSnapshot],
+    windows_snapshot_provider: Callable[[str], WindowsGraphicsDiagnosticsSnapshot],
     observation_timeout_seconds: float = 8.0,
     monotonic: Callable[[], float] | None = None,
     sleeper: Callable[[float], None] | None = None,
@@ -869,29 +869,42 @@ def graphics_diagnosis_task_handlers(
     sleep = sleeper or time.sleep
     windows_cache: dict[str, Any] = {
         "key": None,
-        "attempted": False,
-        "snapshot": None,
-        "error": None,
+        "attempted": set(),
+        "snapshots": {},
+        "errors": {},
+        "demoSnapshot": None,
     }
 
     def current_run_key() -> tuple[str | None, int]:
         snapshot = diagnosis_snapshot_provider()
         return snapshot.diagnosis_id, snapshot.retry_count
 
-    def windows_snapshot() -> WindowsGraphicsDiagnosticsSnapshot:
+    def windows_snapshot(task_id: str) -> WindowsGraphicsDiagnosticsSnapshot:
         key = current_run_key()
         if windows_cache["key"] != key:
-            windows_cache.update({"key": key, "attempted": False, "snapshot": None, "error": None})
-        if not windows_cache["attempted"]:
-            windows_cache["attempted"] = True
+            windows_cache.update({
+                "key": key,
+                "attempted": set(),
+                "snapshots": {},
+                "errors": {},
+                "demoSnapshot": None,
+            })
+        shared_demo = windows_cache["demoSnapshot"]
+        if isinstance(shared_demo, WindowsGraphicsDiagnosticsSnapshot):
+            return shared_demo
+        if task_id not in windows_cache["attempted"]:
+            windows_cache["attempted"].add(task_id)
             try:
-                windows_cache["snapshot"] = windows_snapshot_provider()
+                snapshot = windows_snapshot_provider(task_id)
+                windows_cache["snapshots"][task_id] = snapshot
+                if snapshot.data_mode == DEMO_DATA_MODE:
+                    windows_cache["demoSnapshot"] = snapshot
             except Exception as exception:
-                windows_cache["error"] = exception
-        error = windows_cache["error"]
+                windows_cache["errors"][task_id] = exception
+        error = windows_cache["errors"].get(task_id)
         if isinstance(error, Exception):
             raise error
-        snapshot = windows_cache["snapshot"]
+        snapshot = windows_cache["snapshots"].get(task_id)
         if not isinstance(snapshot, WindowsGraphicsDiagnosticsSnapshot):
             raise RuntimeError("Windows graphics diagnostics returned no snapshot")
         return snapshot
@@ -1008,7 +1021,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         return query_outcome(
             snapshot.device_query,
             evidence_for(snapshot, "windows_display_devices"),
@@ -1020,7 +1033,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         return query_outcome(
             snapshot.driver_query,
             evidence_for(snapshot, "windows_display_drivers"),
@@ -1032,7 +1045,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         evidence = evidence_for(snapshot, "windows_graphics_events", "windows_kernel_power_events")
         return query_outcome(snapshot.graphics_event_query, evidence, no_results_completed=True)
 
@@ -1041,7 +1054,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         return query_outcome(
             snapshot.whea_event_query,
             evidence_for(snapshot, "windows_whea_events"),
@@ -1057,29 +1070,60 @@ def graphics_diagnosis_task_handlers(
         run = diagnosis_snapshot_provider()
         if not isinstance(session, DiagnosisSession) or session.request.diagnosis_id != run.diagnosis_id:
             return TaskOutcome("FAILED", error_code="SESSION_MISMATCH", failure_reason="현재 웹 진단 요청을 확인할 수 없습니다.")
-        snapshot = windows_snapshot()
         scenario_symptom = (
             GRAPHICS_CODE43_REMOTE_SUPPORT_SYMPTOM
-            if snapshot.data_mode == DEMO_DATA_MODE
-            and snapshot.scenario_id == GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID
+            if diagnosis_demo_scenario_id(session) == GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID
             else None
         )
         supported = is_supported_graphics_symptom(scenario_symptom or session.request.symptom)
         occurred_at = session.request.requested_at
+        evidence = tuple(
+            item
+            for diagnosis_task in tasks
+            for item in diagnosis_task.evidence
+            if isinstance(item, dict)
+        )
+        devices = tuple(
+            item["value"]
+            for item in evidence
+            if item.get("metricType") == "display_device_status"
+            and isinstance(item.get("value"), dict)
+        )
+        graphics_events = tuple(
+            item
+            for item in evidence
+            if item.get("taskId") == "windows_graphics_events"
+            and item.get("metricType") == "windows_event"
+        )
         value = {
             "symptom": session.request.symptom,
             "requestedAt": session.request.requested_at,
             "supported": supported,
-            "deviceInstanceIds": [device.instance_id for device in snapshot.devices],
-            "graphicsEventOccurredAt": [event.occurred_at for event in snapshot.graphics_events],
-            "components": sorted({event.component for event in snapshot.graphics_events} | ({"gpu"} if snapshot.devices else set())),
+            "deviceInstanceIds": [
+                str(device.get("instanceId"))
+                for device in devices
+                if device.get("instanceId")
+            ],
+            "graphicsEventOccurredAt": [
+                str(item.get("occurredAt"))
+                for item in graphics_events
+                if item.get("occurredAt")
+            ],
+            "components": sorted(
+                {
+                    str(item.get("component"))
+                    for item in graphics_events
+                    if item.get("component")
+                }
+                | ({"gpu"} if devices else set())
+            ),
         }
         if scenario_symptom:
             value.update({
-                "scenarioId": snapshot.scenario_id,
+                "scenarioId": GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID,
                 "scenarioSymptom": scenario_symptom,
             })
-        evidence = ({
+        correlation_evidence = ({
             "component": "system",
             "metricType": "symptom_correlation",
             "value": value,
@@ -1093,7 +1137,7 @@ def graphics_diagnosis_task_handlers(
             "occurredAt": occurred_at,
             "description": "Web symptom and Windows graphics evidence context",
         },)
-        return TaskOutcome("COMPLETED" if supported else "UNSUPPORTED", evidence)
+        return TaskOutcome("COMPLETED" if supported else "UNSUPPORTED", correlation_evidence)
 
     def evidence_finalize(
         task: DiagnosisTask,
@@ -6831,6 +6875,9 @@ def show_log_viewer(
                         task_id, _, _, tone = presentations[index]
                         rendered_label, rendered_subtitle = rendered[index]
                         title_y, subtitle_y, icon_y = rows[index]
+                        title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                        subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                        icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
                         row_items["taskId"] = task_id
                         configure_status_icon(row_items["icon"], tone, 14)
                         canvas.coords(row_items["icon"], 96, icon_y)
@@ -8842,9 +8889,9 @@ def run_background(
                 lambda: diagnosis_store.session,
                 lambda: metrics_store.snapshot,
                 lambda: diagnosis_log_store.snapshot,
-                lambda: collect_session_windows_graphics_snapshot(
+                lambda task_id: collect_session_windows_graphics_snapshot(
                     diagnosis_store.session,
-                    windows_graphics_provider.collect,
+                    lambda: windows_graphics_provider.collect_task(task_id),
                     code43_demo_graphics_provider.collect,
                 ),
             ),

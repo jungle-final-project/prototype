@@ -163,8 +163,8 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
         provider_calls: list[str] = []
         actual_windows_snapshot = snapshot_override or windows_snapshot(problem_code)
 
-        def collect_windows() -> WindowsGraphicsDiagnosticsSnapshot:
-            provider_calls.append(diagnosis_id)
+        def collect_windows(task_id: str) -> WindowsGraphicsDiagnosticsSnapshot:
+            provider_calls.append(task_id)
             return actual_windows_snapshot
 
         updates: list[agent.DiagnosisRunSnapshot] = []
@@ -222,7 +222,7 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
             snapshot_override=demo_snapshot,
         )
 
-        self.assertEqual(1, len(provider_calls))
+        self.assertEqual(["windows_display_devices"], provider_calls)
         self.assertEqual("COMPLETED", snapshot.state)
         self.assertEqual("WARNING", result.severity)
         self.assertEqual("DEVICE_DRIVER_CONFIGURATION_ISSUE", result.diagnosis_type)
@@ -363,7 +363,15 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
             if item.get("metricType") == "observation_window"
         )
         self.assertEqual(3, observation["value"]["sampleCount"])
-        self.assertEqual(1, len(provider_calls))
+        self.assertEqual(
+            [
+                "windows_display_devices",
+                "windows_display_drivers",
+                "windows_graphics_events",
+                "windows_whea_events",
+            ],
+            provider_calls,
+        )
         self.assertEqual("DEVICE_DRIVER_CONFIGURATION_ISSUE", result.diagnosis_type)
         self.assertFalse(result.can_auto_recover)
         self.assertTrue(result.remote_as_recommended)
@@ -390,7 +398,15 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
         self.assertEqual("UNKNOWN", result.resolution_type)
         self.assertFalse(agent.can_offer_as(result, snapshot))
         self.assertNotIn("원격 AS 기사 점검 권장", result.recommended_actions)
-        self.assertEqual(1, len(provider_calls))
+        self.assertEqual(
+            [
+                "windows_display_devices",
+                "windows_display_drivers",
+                "windows_graphics_events",
+                "windows_whea_events",
+            ],
+            provider_calls,
+        )
 
     def test_problem_code_wording_uses_actual_device_and_exact_windows_state(self) -> None:
         expected = {
@@ -507,7 +523,7 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
             lambda: session_store.session,
             lambda: metrics_store.snapshot,
             lambda: log_store.snapshot,
-            lambda: second_windows_snapshot,
+            lambda _task_id: second_windows_snapshot,
             observation_timeout_seconds=0.1,
         )
         updates: list[agent.DiagnosisRunSnapshot] = []
@@ -657,7 +673,7 @@ class GraphicsDiagnosisFlowTest(unittest.TestCase):
                 lambda: session_store.session,
                 lambda: metrics_store.snapshot,
                 lambda: log_store.snapshot,
-                lambda: code43_snapshot,
+                lambda _task_id: code43_snapshot,
                 observation_timeout_seconds=0.1,
             ),
             task_definitions=agent.GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
