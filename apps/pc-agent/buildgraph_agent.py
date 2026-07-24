@@ -203,7 +203,7 @@ SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
 SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.23"
+DEFAULT_AGENT_VERSION = "0.1.25"
 DEFAULT_POLICY_VERSION = "policy-v1"
 
 
@@ -451,6 +451,25 @@ def diagnosis_task_presentation(status: str) -> tuple[str, str]:
         "TIMED_OUT": ("시간 초과", "error"),
         "CANCELLED": ("취소", "neutral"),
     }.get(status, (status, "neutral"))
+
+
+def diagnosis_checklist_presentations(
+    snapshot: DiagnosisRunSnapshot,
+    visible_count: int = 4,
+) -> tuple[tuple[str, str, str, str], ...]:
+    if not snapshot.tasks or visible_count <= 0:
+        return ()
+    current_index = next(
+        (index for index, task in enumerate(snapshot.tasks) if task.task_id == snapshot.current_task_id),
+        max(0, len([task for task in snapshot.tasks if task.status not in {"PENDING", "RUNNING"}]) - 1),
+    )
+    start_index = max(0, min(current_index - 1, max(0, len(snapshot.tasks) - visible_count)))
+    presentations: list[tuple[str, str, str, str]] = []
+    for task in snapshot.tasks[start_index:start_index + visible_count]:
+        status_label, tone = diagnosis_task_presentation(task.status)
+        label = DiagnosisOrchestrator.TASK_LABELS.get(task.task_id, task.task_id)
+        presentations.append((task.task_id, label, f"{task.component.upper()} · {status_label}", tone))
+    return tuple(presentations)
 
 
 def diagnosis_event_presentation(event_type: str) -> tuple[str, str]:
@@ -841,7 +860,7 @@ def graphics_diagnosis_task_handlers(
     session_provider: Callable[[], DiagnosisSession | None],
     metrics_snapshot_provider: Callable[[], MetricsSnapshot],
     diagnosis_snapshot_provider: Callable[[], DiagnosisRunSnapshot],
-    windows_snapshot_provider: Callable[[], WindowsGraphicsDiagnosticsSnapshot],
+    windows_snapshot_provider: Callable[[str], WindowsGraphicsDiagnosticsSnapshot],
     observation_timeout_seconds: float = 8.0,
     monotonic: Callable[[], float] | None = None,
     sleeper: Callable[[float], None] | None = None,
@@ -850,29 +869,42 @@ def graphics_diagnosis_task_handlers(
     sleep = sleeper or time.sleep
     windows_cache: dict[str, Any] = {
         "key": None,
-        "attempted": False,
-        "snapshot": None,
-        "error": None,
+        "attempted": set(),
+        "snapshots": {},
+        "errors": {},
+        "demoSnapshot": None,
     }
 
     def current_run_key() -> tuple[str | None, int]:
         snapshot = diagnosis_snapshot_provider()
         return snapshot.diagnosis_id, snapshot.retry_count
 
-    def windows_snapshot() -> WindowsGraphicsDiagnosticsSnapshot:
+    def windows_snapshot(task_id: str) -> WindowsGraphicsDiagnosticsSnapshot:
         key = current_run_key()
         if windows_cache["key"] != key:
-            windows_cache.update({"key": key, "attempted": False, "snapshot": None, "error": None})
-        if not windows_cache["attempted"]:
-            windows_cache["attempted"] = True
+            windows_cache.update({
+                "key": key,
+                "attempted": set(),
+                "snapshots": {},
+                "errors": {},
+                "demoSnapshot": None,
+            })
+        shared_demo = windows_cache["demoSnapshot"]
+        if isinstance(shared_demo, WindowsGraphicsDiagnosticsSnapshot):
+            return shared_demo
+        if task_id not in windows_cache["attempted"]:
+            windows_cache["attempted"].add(task_id)
             try:
-                windows_cache["snapshot"] = windows_snapshot_provider()
+                snapshot = windows_snapshot_provider(task_id)
+                windows_cache["snapshots"][task_id] = snapshot
+                if snapshot.data_mode == DEMO_DATA_MODE:
+                    windows_cache["demoSnapshot"] = snapshot
             except Exception as exception:
-                windows_cache["error"] = exception
-        error = windows_cache["error"]
+                windows_cache["errors"][task_id] = exception
+        error = windows_cache["errors"].get(task_id)
         if isinstance(error, Exception):
             raise error
-        snapshot = windows_cache["snapshot"]
+        snapshot = windows_cache["snapshots"].get(task_id)
         if not isinstance(snapshot, WindowsGraphicsDiagnosticsSnapshot):
             raise RuntimeError("Windows graphics diagnostics returned no snapshot")
         return snapshot
@@ -989,7 +1021,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         return query_outcome(
             snapshot.device_query,
             evidence_for(snapshot, "windows_display_devices"),
@@ -1001,7 +1033,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         return query_outcome(
             snapshot.driver_query,
             evidence_for(snapshot, "windows_display_drivers"),
@@ -1013,7 +1045,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         evidence = evidence_for(snapshot, "windows_graphics_events", "windows_kernel_power_events")
         return query_outcome(snapshot.graphics_event_query, evidence, no_results_completed=True)
 
@@ -1022,7 +1054,7 @@ def graphics_diagnosis_task_handlers(
         metrics: MetricsSnapshot,
         tasks: tuple[DiagnosisTask, ...],
     ) -> TaskOutcome:
-        snapshot = windows_snapshot()
+        snapshot = windows_snapshot(task.task_id)
         return query_outcome(
             snapshot.whea_event_query,
             evidence_for(snapshot, "windows_whea_events"),
@@ -1038,29 +1070,60 @@ def graphics_diagnosis_task_handlers(
         run = diagnosis_snapshot_provider()
         if not isinstance(session, DiagnosisSession) or session.request.diagnosis_id != run.diagnosis_id:
             return TaskOutcome("FAILED", error_code="SESSION_MISMATCH", failure_reason="현재 웹 진단 요청을 확인할 수 없습니다.")
-        snapshot = windows_snapshot()
         scenario_symptom = (
             GRAPHICS_CODE43_REMOTE_SUPPORT_SYMPTOM
-            if snapshot.data_mode == DEMO_DATA_MODE
-            and snapshot.scenario_id == GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID
+            if diagnosis_demo_scenario_id(session) == GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID
             else None
         )
         supported = is_supported_graphics_symptom(scenario_symptom or session.request.symptom)
         occurred_at = session.request.requested_at
+        evidence = tuple(
+            item
+            for diagnosis_task in tasks
+            for item in diagnosis_task.evidence
+            if isinstance(item, dict)
+        )
+        devices = tuple(
+            item["value"]
+            for item in evidence
+            if item.get("metricType") == "display_device_status"
+            and isinstance(item.get("value"), dict)
+        )
+        graphics_events = tuple(
+            item
+            for item in evidence
+            if item.get("taskId") == "windows_graphics_events"
+            and item.get("metricType") == "windows_event"
+        )
         value = {
             "symptom": session.request.symptom,
             "requestedAt": session.request.requested_at,
             "supported": supported,
-            "deviceInstanceIds": [device.instance_id for device in snapshot.devices],
-            "graphicsEventOccurredAt": [event.occurred_at for event in snapshot.graphics_events],
-            "components": sorted({event.component for event in snapshot.graphics_events} | ({"gpu"} if snapshot.devices else set())),
+            "deviceInstanceIds": [
+                str(device.get("instanceId"))
+                for device in devices
+                if device.get("instanceId")
+            ],
+            "graphicsEventOccurredAt": [
+                str(item.get("occurredAt"))
+                for item in graphics_events
+                if item.get("occurredAt")
+            ],
+            "components": sorted(
+                {
+                    str(item.get("component"))
+                    for item in graphics_events
+                    if item.get("component")
+                }
+                | ({"gpu"} if devices else set())
+            ),
         }
         if scenario_symptom:
             value.update({
-                "scenarioId": snapshot.scenario_id,
+                "scenarioId": GRAPHICS_CODE43_REMOTE_SUPPORT_SCENARIO_ID,
                 "scenarioSymptom": scenario_symptom,
             })
-        evidence = ({
+        correlation_evidence = ({
             "component": "system",
             "metricType": "symptom_correlation",
             "value": value,
@@ -1074,7 +1137,7 @@ def graphics_diagnosis_task_handlers(
             "occurredAt": occurred_at,
             "description": "Web symptom and Windows graphics evidence context",
         },)
-        return TaskOutcome("COMPLETED" if supported else "UNSUPPORTED", evidence)
+        return TaskOutcome("COMPLETED" if supported else "UNSUPPORTED", correlation_evidence)
 
     def evidence_finalize(
         task: DiagnosisTask,
@@ -1271,6 +1334,35 @@ def result_action_vertical_layout(
     text_top = round(container_top + (container_height - text_height) / 2)
     badge_center = round(text_top + text_height / 2)
     return text_top, badge_center
+
+
+def diagnosis_checklist_vertical_layout(
+    rendered_items: Sequence[tuple[str, str]],
+    title_line_height: int,
+    subtitle_line_height: int,
+    content_top: int = 536,
+    row_gap: int = 3,
+    bottom_padding: int = 4,
+    minimum_card_bottom: int = 684,
+) -> tuple[tuple[tuple[int, int, int], ...], int]:
+    """Lay out variable-height checklist rows without crossing the card edge."""
+
+    title_height = max(1, int(title_line_height))
+    subtitle_height = max(1, int(subtitle_line_height))
+    cursor = int(content_top)
+    rows: list[tuple[int, int, int]] = []
+    last_bottom = cursor
+    for rendered_title, rendered_subtitle in rendered_items:
+        title_lines = max(1, len(str(rendered_title).splitlines()))
+        subtitle_lines = max(1, len(str(rendered_subtitle).splitlines()))
+        title_y = cursor
+        subtitle_y = title_y + title_height * title_lines + 2
+        row_bottom = subtitle_y + subtitle_height * subtitle_lines
+        icon_center_y = round((title_y + row_bottom) / 2)
+        rows.append((title_y, subtitle_y, icon_center_y))
+        last_bottom = row_bottom
+        cursor = row_bottom + max(0, int(row_gap))
+    return tuple(rows), max(int(minimum_card_bottom), last_bottom + max(0, int(bottom_padding)))
 
 
 EVENT_PANEL_SIGNAL_CODES = {
@@ -6138,15 +6230,19 @@ def show_log_viewer(
 
     measurement_fonts: dict[tuple[int, str], Any] = {}
 
-    def fitted_text(value: str, size: int, width: int, max_lines: int, weight: str = "regular") -> str:
+    def measurement_font(size: int, weight: str = "regular") -> Any | None:
         key = (size, weight)
-        measurement_font = measurement_fonts.get(key)
-        if measurement_font is None and tkfont is not None:
-            measurement_font = tkfont.Font(root=root, font=font(size, weight))
-            measurement_fonts[key] = measurement_font
-        if measurement_font is None:
+        measured = measurement_fonts.get(key)
+        if measured is None and tkfont is not None:
+            measured = tkfont.Font(root=root, font=font(size, weight))
+            measurement_fonts[key] = measured
+        return measured
+
+    def fitted_text(value: str, size: int, width: int, max_lines: int, weight: str = "regular") -> str:
+        measured = measurement_font(size, weight)
+        if measured is None:
             return fit_measured_text(value, width, max_lines, lambda text_value: len(text_value) * size)
-        return fit_measured_text(value, width, max_lines, measurement_font.measure)
+        return fit_measured_text(value, width, max_lines, measured.measure)
 
     canvas = tk.Canvas(
         root,
@@ -6391,18 +6487,28 @@ def show_log_viewer(
             "error": colors["red"],
         }.get(tone, "#92989d")
 
-    def draw_status_icon(x: int, y: int, tone: str, size: int = 14) -> None:
+    def configure_status_icon(item: int, tone: str, size: int = 14) -> None:
+        wave_animation["spinnerItems"] = [
+            (spinner_item, frames)
+            for spinner_item, frames in wave_animation["spinnerItems"]
+            if spinner_item != item
+        ]
         color = tone_color(tone)
         if tone == "running":
             frames = spinner_frames(size, color)
-            item = canvas.create_image(x, y, image=frames[wave_animation["frame"] % len(frames)])
+            canvas.itemconfigure(item, image=frames[wave_animation["frame"] % len(frames)])
             wave_animation["spinnerItems"].append((item, frames))
         else:
             photo = cached_photo(
                 ("status", tone, size, color),
                 lambda: render_pillow_status_icon(tone, size, color),
             )
-            canvas.create_image(x, y, image=photo)
+            canvas.itemconfigure(item, image=photo)
+
+    def draw_status_icon(x: int, y: int, tone: str, size: int = 14) -> int:
+        item = canvas.create_image(x, y)
+        configure_status_icon(item, tone, size)
+        return item
 
     def draw_hardware_icon(x: int, y: int, component: str, color: str = "#555555") -> None:
         photo = cached_photo(
@@ -6677,6 +6783,47 @@ def show_log_viewer(
             return
         callback_state["diagnosisProgressAfterId"] = root.after(120, diagnosis_progress_tick)
 
+    def diagnosis_checklist_render_state(
+        snapshot: DiagnosisRunSnapshot,
+    ) -> tuple[
+        tuple[tuple[str, str, str, str], ...],
+        list[tuple[str, str]],
+        tuple[tuple[int, int, int], ...],
+        int,
+    ]:
+        presentations = diagnosis_checklist_presentations(snapshot)
+        labels = [(label, subtitle) for _, label, subtitle, _ in presentations]
+        title_font = measurement_font(13, "semibold")
+        subtitle_font = measurement_font(12, "regular")
+        title_line_height = int(title_font.metrics("linespace")) if title_font is not None else 16
+        subtitle_line_height = int(subtitle_font.metrics("linespace")) if subtitle_font is not None else 15
+
+        def fitted_checklist(title_lines: int, subtitle_lines: int) -> tuple[
+            list[tuple[str, str]],
+            tuple[tuple[int, int, int], ...],
+            int,
+        ]:
+            rendered = [
+                (
+                    fitted_text(label, 13, 340, title_lines, "semibold"),
+                    fitted_text(subtitle, 12, 340, subtitle_lines),
+                )
+                for label, subtitle in labels
+            ]
+            rows, bottom = diagnosis_checklist_vertical_layout(
+                rendered,
+                title_line_height,
+                subtitle_line_height,
+            )
+            return rendered, rows, bottom
+
+        rendered, rows, bottom = fitted_checklist(2, 2)
+        if bottom > 684:
+            rendered, rows, bottom = fitted_checklist(2, 1)
+        if bottom > 684:
+            rendered, rows, bottom = fitted_checklist(1, 1)
+        return presentations, rendered, rows, bottom
+
     def diagnosis_progress_tick() -> None:
         callback_state["diagnosisProgressAfterId"] = None
         if callback_state["closed"] or not root_ui_active() or str(ui.get("state")) != "DIAGNOSING":
@@ -6715,6 +6862,39 @@ def show_log_viewer(
                     items["summary"],
                     text=f"전체 {len(snapshot.tasks)}개 · 완료 {completed_count}개",
                 )
+                checklist_rows = items.get("checklistRows")
+                if isinstance(checklist_rows, list):
+                    presentations, rendered, rows, _ = diagnosis_checklist_render_state(snapshot)
+                    for index, row_items in enumerate(checklist_rows):
+                        if index >= len(presentations):
+                            configure_status_icon(row_items["icon"], "neutral", 14)
+                            for item in row_items.values():
+                                if isinstance(item, int):
+                                    canvas.itemconfigure(item, state="hidden")
+                            continue
+                        task_id, _, _, tone = presentations[index]
+                        rendered_label, rendered_subtitle = rendered[index]
+                        title_y, subtitle_y, icon_y = rows[index]
+                        title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                        subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                        icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                        row_items["taskId"] = task_id
+                        configure_status_icon(row_items["icon"], tone, 14)
+                        canvas.coords(row_items["icon"], 96, icon_y)
+                        canvas.itemconfigure(row_items["icon"], state="normal")
+                        canvas.coords(row_items["title"], 114, title_y)
+                        canvas.itemconfigure(
+                            row_items["title"],
+                            text=rendered_label,
+                            state="normal",
+                        )
+                        canvas.coords(row_items["subtitle"], 114, subtitle_y)
+                        canvas.itemconfigure(
+                            row_items["subtitle"],
+                            text=rendered_subtitle,
+                            fill=tone_color(tone),
+                            state="normal",
+                        )
             except (KeyError, tk.TclError):
                 return
         schedule_diagnosis_progress_tick()
@@ -6785,23 +6965,29 @@ def show_log_viewer(
             draw_status_icon(x + 28, 462, tone, 14)
             text(x + 50, 462, status_label, 13, color, "semibold", "w", width=130)
 
-        round_rect(70, 498, 492, 684, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        checklist, checklist_text, checklist_rows, checklist_bottom = diagnosis_checklist_render_state(snapshot)
+        round_rect(70, 498, 492, checklist_bottom, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
         text(88, 514, "검사 작업", 15, colors["text"], "semibold")
-        current_index = next(
-            (index for index, task in enumerate(snapshot.tasks) if task.task_id == snapshot.current_task_id),
-            max(0, len([task for task in snapshot.tasks if task.status not in {"PENDING", "RUNNING"}]) - 1),
-        )
-        start_index = max(0, min(current_index - 1, max(0, len(snapshot.tasks) - 4)))
-        checklist = snapshot.tasks[start_index:start_index + 4]
-        for idx, task in enumerate(checklist):
-            cy = 550 + idx * 38
-            status_label, tone = diagnosis_task_presentation(task.status)
-            draw_status_icon(96, cy, tone, 14)
-            label = DiagnosisOrchestrator.TASK_LABELS.get(task.task_id, task.task_id)
-            text(114, cy - 8, label, 13, colors["text"], "semibold", "w", width=250)
-            text(114, cy + 10, f"{task.component.upper()} · {status_label}", 12, tone_color(tone), "regular", "w", width=250)
+        checklist_row_items: list[dict[str, Any]] = []
+        for (
+            (task_id, _, _, tone),
+            (rendered_label, rendered_subtitle),
+            (title_y, subtitle_y, icon_y),
+        ) in zip(
+            checklist,
+            checklist_text,
+            checklist_rows,
+            strict=False,
+        ):
+            checklist_row_items.append({
+                "taskId": task_id,
+                "icon": draw_status_icon(96, icon_y, tone, 14),
+                "title": text(114, title_y, rendered_label, 13, colors["text"], "semibold", "nw", width=340),
+                "subtitle": text(114, subtitle_y, rendered_subtitle, 12, tone_color(tone), "regular", "nw", width=340),
+            })
+        ui["diagnosisProgressItems"]["checklistRows"] = checklist_row_items
 
-        round_rect(508, 498, 930, 684, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        round_rect(508, 498, 930, checklist_bottom, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
         text(526, 514, "실시간 진단 로그", 15, colors["text"], "semibold")
         visible_events = snapshot.events[-4:]
         for idx, event in enumerate(visible_events):
@@ -6816,14 +7002,16 @@ def show_log_viewer(
             text(606, cy - 8, event_label, 11, tone_color(tone), "semibold", "w", width=70)
             source_label = event.component or event.task_id or "진단"
             text(548, cy + 10, fitted_text(f"{source_label} · {event.message}", 11, 350, 1), 11, colors["text"], "regular", "w", width=350)
+        action_top = checklist_bottom + 12
+        action_bottom = action_top + 52
         if result_available:
-            button(390, 696, 610, 748, "진단 결과 보기", show_diagnosis_result, True, size=15)
+            button(390, action_top, 610, action_bottom, "진단 결과 보기", show_diagnosis_result, True, size=15)
         elif snapshot.state in {"FAILED", "TIMED_OUT"}:
-            button(390, 696, 610, 748, "진단 재시도", request_diagnosis_retry, False, size=15)
+            button(390, action_top, 610, action_bottom, "진단 재시도", request_diagnosis_retry, False, size=15)
         elif snapshot.state == "CANCELLED":
-            text(500, 722, "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
+            text(500, round((action_top + action_bottom) / 2), "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
         else:
-            button(390, 696, 610, 748, "진단 취소", request_diagnosis_cancel, False, size=15)
+            button(390, action_top, 610, action_bottom, "진단 취소", request_diagnosis_cancel, False, size=15)
 
     def draw_result_icon(x: int, y: int) -> None:
         photo = cached_photo(
@@ -8701,9 +8889,9 @@ def run_background(
                 lambda: diagnosis_store.session,
                 lambda: metrics_store.snapshot,
                 lambda: diagnosis_log_store.snapshot,
-                lambda: collect_session_windows_graphics_snapshot(
+                lambda task_id: collect_session_windows_graphics_snapshot(
                     diagnosis_store.session,
-                    windows_graphics_provider.collect,
+                    lambda: windows_graphics_provider.collect_task(task_id),
                     code43_demo_graphics_provider.collect,
                 ),
             ),
