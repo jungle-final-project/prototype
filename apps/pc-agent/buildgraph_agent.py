@@ -204,7 +204,7 @@ SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
 SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.26"
+DEFAULT_AGENT_VERSION = "0.1.27"
 DEFAULT_POLICY_VERSION = "policy-v1"
 
 
@@ -514,6 +514,11 @@ def diagnosis_action_state(
     if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"} or snapshot.progress >= 100:
         return "RESULT_PENDING"
     return "CANCEL"
+
+
+def diagnosis_display_progress_target(actual_progress: int, result_available: bool) -> int:
+    progress = max(0, min(100, int(actual_progress)))
+    return 100 if result_available else min(progress, 99)
 
 
 ACTIVE_VIEWER_AGENT_STATES = {"REQUEST_RECEIVED", "RUNNING"}
@@ -6814,7 +6819,8 @@ def show_log_viewer(
             smoother = SmoothedProgress()
             ui["progressSmoother"] = smoother
             ui["progressSmootherId"] = snapshot.diagnosis_id
-        display_progress = smoother.update(100 if result_available else snapshot.progress, time.monotonic())
+        target_progress = diagnosis_display_progress_target(snapshot.progress, result_available)
+        display_progress = smoother.update(target_progress, time.monotonic())
         if result_available and display_progress >= 100 and not ui.get("autoAdvanceAt"):
             ui["autoAdvanceAt"] = time.monotonic() + 1.0
         return display_progress, result_available
@@ -8201,29 +8207,56 @@ class SmoothedProgress:
     """진단 진행률 링의 표시용 스무딩.
 
     실제 진행률은 태스크가 끝날 때만 계단식으로 뛰므로 그대로 그리면 링이
-    15%→100%처럼 점프한다. 표시값은 실제값을 초당 FAST_RATE로 부드럽게
-    뒤쫓되, 실제값이 정체되면 절대 증가하지 않는다. 실제 100% 도달 시에만
-    100까지 마무리 스윕한다.
+    15%→100%처럼 점프한다. 표시값은 현재 표시값과 새 목표값의 거리에 맞춘
+    240~480ms 시간 보간으로 실제값을 뒤쫓는다. 실제값보다 앞서지 않고,
+    실제값이 정체되면 목표값에서 멈춘다.
     """
 
-    FAST_RATE = 45.0
+    MIN_DURATION_SECONDS = 0.24
+    MAX_DURATION_SECONDS = 0.48
+    MAX_DURATION_GAP = 40.0
 
     def __init__(self) -> None:
         self._display = 0.0
-        self._last_seconds: float | None = None
+        self._start_display = 0.0
+        self._target = 0.0
+        self._started_at: float | None = None
+        self._duration_seconds = 0.0
 
     def update(self, actual: int, now_seconds: float) -> int:
         target = float(max(0, min(100, actual)))
-        if self._last_seconds is None:
-            # 진행 중 화면에 뒤늦게 합류한 경우 현재 값에서 시작한다(0부터 훑지 않음).
-            self._last_seconds = now_seconds
-            self._display = target
+        if self._started_at is None:
+            self._target = target
+            self._started_at = now_seconds
+            self._duration_seconds = self._duration_for_gap(target)
             return int(self._display)
-        elapsed = max(0.0, now_seconds - self._last_seconds)
-        self._last_seconds = now_seconds
-        if self._display < target:
-            self._display = min(target, self._display + self.FAST_RATE * elapsed)
+
+        self._advance(now_seconds)
+        if target != self._target:
+            self._start_display = self._display
+            self._target = max(self._display, target)
+            self._started_at = now_seconds
+            self._duration_seconds = self._duration_for_gap(self._target - self._display)
         return int(self._display)
+
+    @classmethod
+    def _duration_for_gap(cls, gap: float) -> float:
+        if gap <= 0:
+            return 0.0
+        distance_ratio = min(1.0, gap / cls.MAX_DURATION_GAP)
+        return cls.MIN_DURATION_SECONDS + (
+            cls.MAX_DURATION_SECONDS - cls.MIN_DURATION_SECONDS
+        ) * distance_ratio
+
+    def _advance(self, now_seconds: float) -> None:
+        if self._started_at is None or self._display >= self._target:
+            return
+        elapsed = max(0.0, now_seconds - self._started_at)
+        if self._duration_seconds <= 0 or elapsed >= self._duration_seconds:
+            self._display = self._target
+            return
+        fraction = elapsed / self._duration_seconds
+        self._display = self._start_display + (self._target - self._start_display) * fraction
 
 
 def status_pulse_frame(base_text: str, step: int) -> str:
