@@ -4133,36 +4133,71 @@ class StatusPulseTest(unittest.TestCase):
 
 
 class SmoothedProgressTest(unittest.TestCase):
-    def test_first_update_starts_at_actual_without_sweep(self) -> None:
+    def test_first_update_starts_at_zero_and_sweeps_to_actual(self) -> None:
         smoother = agent.SmoothedProgress()
-        self.assertEqual(smoother.update(60, 0.0), 60)
+        self.assertEqual(smoother.update(60, 0.0), 0)
+        self.assertGreater(smoother.update(60, 0.12), 0)
+        self.assertLess(smoother.update(60, 0.12), 60)
+        self.assertEqual(smoother.update(60, 0.48), 60)
 
-    def test_jump_becomes_smooth_sweep(self) -> None:
-        smoother = agent.SmoothedProgress()
-        smoother.update(10, 0.0)
-        # 실제값이 10→90으로 점프해도 표시값은 초당 45%로만 따라간다.
-        self.assertEqual(smoother.update(90, 1.0), 55)
-        self.assertEqual(smoother.update(90, 2.0), 90)
-
-    def test_stall_never_moves_without_new_actual_progress(self) -> None:
+    def test_large_jump_uses_intermediate_values_and_reaches_target(self) -> None:
         smoother = agent.SmoothedProgress()
         smoother.update(15, 0.0)
-        self.assertEqual(smoother.update(15, 60.0), 15)
-        self.assertEqual(smoother.update(15, 120.0), 15)
-        smoother2 = agent.SmoothedProgress()
-        smoother2.update(90, 0.0)
-        self.assertEqual(smoother2.update(90, 600.0), 90)
+        self.assertEqual(smoother.update(15, 0.36), 15)
+        self.assertEqual(smoother.update(35, 0.36), 15)
+        intermediate = [
+            smoother.update(35, 0.48),
+            smoother.update(35, 0.60),
+            smoother.update(35, 0.72),
+        ]
+        self.assertTrue(15 < intermediate[0] < intermediate[1] < 35)
+        self.assertEqual(intermediate[-1], 35)
 
-    def test_completion_sweeps_to_exactly_100(self) -> None:
+    def test_small_jump_converges_smoothly_within_500ms(self) -> None:
         smoother = agent.SmoothedProgress()
-        smoother.update(80, 0.0)
-        smoother.update(100, 0.2)  # 스윕 시작
-        self.assertEqual(smoother.update(100, 5.0), 100)
+        smoother.update(35, 0.0)
+        self.assertEqual(smoother.update(35, 0.48), 35)
+        self.assertEqual(smoother.update(40, 0.48), 35)
+        first_step = smoother.update(40, 0.60)
+        self.assertTrue(35 < first_step < 40)
+        self.assertEqual(smoother.update(40, 0.84), 40)
 
-    def test_display_is_monotonic(self) -> None:
+    def test_display_is_monotonic_and_never_exceeds_actual_target(self) -> None:
         smoother = agent.SmoothedProgress()
-        values = [smoother.update(actual, t * 0.2) for t, actual in enumerate([0, 10, 10, 10, 40, 40, 100, 100, 100])]
+        actual_values = [0, 15, 15, 35, 35, 55, 55, 75, 75]
+        values = [
+            smoother.update(actual, index * 0.12)
+            for index, actual in enumerate(actual_values)
+        ]
         self.assertEqual(values, sorted(values))
+        self.assertTrue(all(display <= actual for display, actual in zip(values, actual_values, strict=True)))
+
+    def test_stall_stops_at_actual_target(self) -> None:
+        smoother = agent.SmoothedProgress()
+        smoother.update(15, 0.0)
+        self.assertEqual(smoother.update(15, 0.36), 15)
+        self.assertEqual(smoother.update(15, 60.0), 15)
+
+    def test_result_ready_sweeps_to_100_within_500ms(self) -> None:
+        smoother = agent.SmoothedProgress()
+        smoother.update(75, 0.0)
+        self.assertEqual(smoother.update(75, 0.48), 75)
+        self.assertEqual(smoother.update(100, 0.48), 75)
+        self.assertLess(smoother.update(100, 0.72), 100)
+        self.assertEqual(smoother.update(100, 0.96), 100)
+
+    def test_page_two_caps_unavailable_result_at_99_and_resets_by_diagnosis_id(self) -> None:
+        self.assertEqual(agent.diagnosis_display_progress_target(100, False), 99)
+        self.assertEqual(agent.diagnosis_display_progress_target(100, True), 100)
+        self.assertEqual(agent.diagnosis_display_progress_target(-5, False), 0)
+        source = inspect.getsource(agent.show_log_viewer)
+        display_progress_source = source[
+            source.index("def diagnosis_display_progress"):source.index("def cancel_diagnosis_progress_tick")
+        ]
+        self.assertIn("diagnosis_display_progress_target(snapshot.progress, result_available)", display_progress_source)
+        self.assertIn('ui.get("progressSmootherId") != snapshot.diagnosis_id', display_progress_source)
+        self.assertIn("smoother = SmoothedProgress()", display_progress_source)
+        self.assertIn('ui["autoAdvanceAt"] = time.monotonic() + 1.0', display_progress_source)
 
 
 if __name__ == "__main__":
