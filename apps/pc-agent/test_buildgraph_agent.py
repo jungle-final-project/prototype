@@ -1108,6 +1108,17 @@ class AgentGoal1112Test(unittest.TestCase):
         )
         self.assertEqual(4, len(short_rows))
         self.assertEqual(684, short_card_bottom)
+        self.assertEqual(720, agent.DIAGNOSIS_CHECKLIST_MAX_BOTTOM)
+        visible_action_bottom = (
+            agent.DIAGNOSIS_CHECKLIST_MAX_BOTTOM
+            + agent.DIAGNOSIS_ACTION_GAP
+            + agent.DIAGNOSIS_ACTION_HEIGHT
+            - agent.PC_AGENT_REMOVED_HEADER_HEIGHT
+        )
+        self.assertLessEqual(
+            visible_action_bottom,
+            agent.PC_AGENT_WINDOW_HEIGHT - agent.DIAGNOSIS_PAGE_BOTTOM_PADDING,
+        )
 
         source = inspect.getsource(agent.show_log_viewer)
         diagnosing_source = source[source.index("def draw_diagnosing"):source.index("def draw_result_icon")]
@@ -1115,9 +1126,10 @@ class AgentGoal1112Test(unittest.TestCase):
             source.index("def diagnosis_checklist_render_state"):source.index("def diagnosis_progress_tick")
         ]
         self.assertIn("diagnosis_checklist_vertical_layout(", checklist_source)
-        self.assertIn("if bottom > 684:", checklist_source)
-        self.assertIn('measurement_font(13, "semibold")', checklist_source)
-        self.assertIn('measurement_font(12, "regular")', checklist_source)
+        self.assertIn("font_candidates = ((13, 12), (12, 11), (11, 10), (10, 9), (9, 8))", checklist_source)
+        self.assertIn("if bottom <= DIAGNOSIS_CHECKLIST_MAX_BOTTOM:", checklist_source)
+        self.assertIn('measurement_font(title_size, "semibold")', checklist_source)
+        self.assertIn('measurement_font(subtitle_size, "regular")', checklist_source)
         self.assertNotIn("measurement_fonts.get(", checklist_source)
         apply_source = source[
             source.index("def apply_diagnosis_snapshot_to_view"):source.index("def diagnosis_progress_tick")
@@ -1125,7 +1137,8 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertIn("title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", apply_source)
         self.assertIn("subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", apply_source)
         self.assertIn("icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", apply_source)
-        self.assertIn("action_top = checklist_bottom + 12", apply_source)
+        self.assertIn("action_top = checklist_bottom + DIAGNOSIS_ACTION_GAP", apply_source)
+        self.assertIn("action_top + DIAGNOSIS_ACTION_HEIGHT", apply_source)
 
     def test_page_two_checklist_presentations_follow_latest_task_snapshot(self) -> None:
         definitions = agent.DiagnosisOrchestrator.TASK_DEFINITIONS
