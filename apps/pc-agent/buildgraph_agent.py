@@ -51,6 +51,7 @@ from diagnosis_orchestrator import (
     GRAPHICS_DIAGNOSIS_TASK_DEFINITIONS,
     GRAPHICS_DIAGNOSIS_TASK_LABELS,
     GRAPHICS_DIAGNOSIS_TASK_WEIGHTS,
+    DiagnosisEvent,
     DiagnosisLogStore,
     DiagnosisOrchestrator,
     DiagnosisRunSnapshot,
@@ -203,7 +204,7 @@ SCREEN_LOGO_DISPLAY_SIZE = (46, 46)
 SCREEN_LOGO_POSITION = (76, 86)
 BACKGROUND_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentBackground"
 VIEWER_INSTANCE_MUTEX_NAME = r"Local\SpecUpPcAgentViewer"
-DEFAULT_AGENT_VERSION = "0.1.25"
+DEFAULT_AGENT_VERSION = "0.1.26"
 DEFAULT_POLICY_VERSION = "policy-v1"
 
 
@@ -486,6 +487,33 @@ def diagnosis_event_presentation(event_type: str) -> tuple[str, str]:
         "DIAGNOSIS_FAILED": ("오류", "error"),
         "DIAGNOSIS_CANCELLED": ("취소", "neutral"),
     }.get(event_type, ("정보", "neutral"))
+
+
+def diagnosis_event_presentations(
+    snapshot: DiagnosisRunSnapshot,
+    visible_count: int = 4,
+) -> tuple[tuple[DiagnosisEvent, str, str], ...]:
+    if visible_count <= 0:
+        return ()
+    return tuple(
+        (event, *diagnosis_event_presentation(event.event_type))
+        for event in snapshot.events[-visible_count:]
+    )
+
+
+def diagnosis_action_state(
+    snapshot: DiagnosisRunSnapshot,
+    result_available: bool,
+) -> str:
+    if result_available:
+        return "RESULT"
+    if snapshot.state in {"FAILED", "TIMED_OUT"}:
+        return "RETRY"
+    if snapshot.state == "CANCELLED":
+        return "CANCELLED"
+    if snapshot.state in {"COMPLETED", "PARTIALLY_COMPLETED"} or snapshot.progress >= 100:
+        return "RESULT_PENDING"
+    return "CANCEL"
 
 
 ACTIVE_VIEWER_AGENT_STATES = {"REQUEST_RECEIVED", "RUNNING"}
@@ -6410,6 +6438,25 @@ def show_log_viewer(
             tags=tags,
         )
 
+    def configure_round_rect(
+        item: int,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        radius: int,
+        fill: str,
+        outline: str = "",
+        width: int = 1,
+    ) -> None:
+        surface_width = max(1, int(round(x2 - x1)))
+        surface_height = max(1, int(round(y2 - y1)))
+        photo = cached_photo(
+            ("rounded", surface_width, surface_height, radius, fill, outline, width),
+            lambda: render_rounded_surface(surface_width, surface_height, radius, fill, outline, width),
+        )
+        canvas.itemconfigure(item, image=photo)
+
     def text(
         x: int,
         y: int,
@@ -6450,17 +6497,19 @@ def show_log_viewer(
         primary: bool = True,
         disabled: bool = False,
         size: int = 20,
+        group_tag: str | None = None,
     ) -> None:
         button_counter["value"] += 1
         tag = f"button-{button_counter['value']}"
+        tags = (tag, group_tag) if group_tag else tag
         if primary:
             fill, stroke, foreground = ("#111111", "#111111", "#ffffff")
         else:
             fill, stroke, foreground = ("#ffffff", "#111111", "#111111")
         if disabled:
             fill, stroke, foreground = ("#f2f2f2", "#dedede", "#999999")
-        round_rect(x1, y1, x2, y2, 10, fill, stroke, 1, tag)
-        text((x1 + x2) // 2, (y1 + y2) // 2, label, size, foreground, "semibold", "center", tags=tag)
+        round_rect(x1, y1, x2, y2, 10, fill, stroke, 1, tags)
+        text((x1 + x2) // 2, (y1 + y2) // 2, label, size, foreground, "semibold", "center", tags=tags)
         if not disabled:
             bind_click(tag, command)
 
@@ -6510,12 +6559,19 @@ def show_log_viewer(
         configure_status_icon(item, tone, size)
         return item
 
-    def draw_hardware_icon(x: int, y: int, component: str, color: str = "#555555") -> None:
+    def draw_hardware_icon(x: int, y: int, component: str, color: str = "#555555") -> int:
         photo = cached_photo(
             home_hardware_icon_cache_key(component, color, 30),
             lambda: render_pillow_home_hardware_icon(component, 30, color),
         )
-        canvas.create_image(x, y, image=photo)
+        return canvas.create_image(x, y, image=photo)
+
+    def configure_hardware_icon(item: int, component: str, color: str = "#555555") -> None:
+        photo = cached_photo(
+            home_hardware_icon_cache_key(component, color, 30),
+            lambda: render_pillow_home_hardware_icon(component, 30, color),
+        )
+        canvas.itemconfigure(item, image=photo)
 
     def draw_home_hardware_icon(x: int, y: int, component: str, color: str = "#555555") -> None:
         photo = cached_photo(
@@ -6824,6 +6880,237 @@ def show_log_viewer(
             rendered, rows, bottom = fitted_checklist(1, 1)
         return presentations, rendered, rows, bottom
 
+    def render_diagnosis_action(
+        snapshot: DiagnosisRunSnapshot,
+        result_available: bool,
+        action_top: int,
+        action_bottom: int,
+        canvas_shifted: bool,
+    ) -> None:
+        items = ui.get("diagnosisProgressItems")
+        if not isinstance(items, dict):
+            return
+        state = diagnosis_action_state(snapshot, result_available)
+        shifted_top = action_top - PC_AGENT_REMOVED_HEADER_HEIGHT if canvas_shifted else action_top
+        shifted_bottom = action_bottom - PC_AGENT_REMOVED_HEADER_HEIGHT if canvas_shifted else action_bottom
+        if (
+            items.get("actionState") == state
+            and items.get("actionTop") == shifted_top
+            and items.get("actionBottom") == shifted_bottom
+        ):
+            return
+        canvas.delete("diagnosis-action")
+        items["actionState"] = state
+        items["actionTop"] = shifted_top
+        items["actionBottom"] = shifted_bottom
+        if state == "RESULT":
+            button(
+                390,
+                shifted_top,
+                610,
+                shifted_bottom,
+                "진단 결과 보기",
+                show_diagnosis_result,
+                True,
+                size=15,
+                group_tag="diagnosis-action",
+            )
+        elif state == "RETRY":
+            button(
+                390,
+                shifted_top,
+                610,
+                shifted_bottom,
+                "진단 재시도",
+                request_diagnosis_retry,
+                False,
+                size=15,
+                group_tag="diagnosis-action",
+            )
+        elif state == "CANCELLED":
+            text(
+                500,
+                round((shifted_top + shifted_bottom) / 2),
+                "진단이 취소되었습니다.",
+                13,
+                colors["muted"],
+                "regular",
+                "center",
+                tags="diagnosis-action",
+            )
+        elif state == "CANCEL":
+            button(
+                390,
+                shifted_top,
+                610,
+                shifted_bottom,
+                "진단 취소",
+                request_diagnosis_cancel,
+                False,
+                size=15,
+                group_tag="diagnosis-action",
+            )
+
+    def apply_diagnosis_snapshot_to_view(
+        snapshot: DiagnosisRunSnapshot,
+        display_progress: int,
+        result_available: bool,
+        canvas_shifted: bool,
+    ) -> None:
+        items = ui.get("diagnosisProgressItems")
+        if not isinstance(items, dict):
+            return
+        canvas.itemconfigure(items["ring"], image=progress_ring_photo(display_progress))
+        canvas.itemconfigure(items["percent"], text=f"{display_progress}%")
+        canvas.itemconfigure(
+            items["title"],
+            text="진단 완료" if result_available else "하드웨어 진단 진행 중",
+        )
+        canvas.itemconfigure(
+            items["detail"],
+            text="진단 작업이 완료되었습니다."
+            if result_available
+            else str(ui["status"] or diagnosis_current_task_label(snapshot)),
+        )
+        terminal_statuses = {"COMPLETED", "UNSUPPORTED", "FAILED", "TIMED_OUT", "CANCELLED"}
+        completed_count = sum(task.status in terminal_statuses for task in snapshot.tasks)
+        canvas.itemconfigure(
+            items["summary"],
+            text=f"전체 {len(snapshot.tasks)}개 · 완료 {completed_count}개",
+        )
+
+        component_items = items.get("componentCards")
+        if isinstance(component_items, dict):
+            for component, card_items in component_items.items():
+                status_label, tone = diagnosis_component_presentation(snapshot, component)
+                color = tone_color(tone)
+                fill = {"running": "#f5f9ff", "warning": "#fff9ee", "error": "#fff5f5"}.get(
+                    tone,
+                    "#ffffff",
+                )
+                configure_round_rect(
+                    card_items["card"],
+                    card_items["x"],
+                    412,
+                    card_items["x"] + 206,
+                    486,
+                    UI_CARD_RADIUS,
+                    fill,
+                    "#d7dce0",
+                    UI_CARD_BORDER_WIDTH,
+                )
+                configure_hardware_icon(
+                    card_items["hardwareIcon"],
+                    component,
+                    color if tone != "neutral" else "#666666",
+                )
+                configure_status_icon(card_items["statusIcon"], tone, 14)
+                canvas.itemconfigure(
+                    card_items["statusText"],
+                    text=status_label,
+                    fill=color,
+                )
+
+        presentations, rendered, rows, checklist_bottom = diagnosis_checklist_render_state(snapshot)
+        checklist_rows = items.get("checklistRows")
+        if isinstance(checklist_rows, list):
+            for index, row_items in enumerate(checklist_rows):
+                if index >= len(presentations):
+                    configure_status_icon(row_items["icon"], "neutral", 14)
+                    for item in row_items.values():
+                        if isinstance(item, int):
+                            canvas.itemconfigure(item, state="hidden")
+                    continue
+                task_id, _, _, tone = presentations[index]
+                rendered_label, rendered_subtitle = rendered[index]
+                title_y, subtitle_y, icon_y = rows[index]
+                if canvas_shifted:
+                    title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                    subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                    icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
+                row_items["taskId"] = task_id
+                configure_status_icon(row_items["icon"], tone, 14)
+                canvas.coords(row_items["icon"], 96, icon_y)
+                canvas.itemconfigure(row_items["icon"], state="normal")
+                canvas.coords(row_items["title"], 114, title_y)
+                canvas.itemconfigure(
+                    row_items["title"],
+                    text=rendered_label,
+                    state="normal",
+                )
+                canvas.coords(row_items["subtitle"], 114, subtitle_y)
+                canvas.itemconfigure(
+                    row_items["subtitle"],
+                    text=rendered_subtitle,
+                    fill=tone_color(tone),
+                    state="normal",
+                )
+
+        configure_round_rect(
+            items["checklistCard"],
+            70,
+            498,
+            492,
+            checklist_bottom,
+            UI_CARD_RADIUS,
+            "#ffffff",
+            "#d7dce0",
+            UI_CARD_BORDER_WIDTH,
+        )
+        configure_round_rect(
+            items["eventCard"],
+            508,
+            498,
+            930,
+            checklist_bottom,
+            UI_CARD_RADIUS,
+            "#ffffff",
+            "#d7dce0",
+            UI_CARD_BORDER_WIDTH,
+        )
+
+        visible_events = diagnosis_event_presentations(snapshot)
+        event_rows = items.get("eventRows")
+        if isinstance(event_rows, list):
+            for index, row_items in enumerate(event_rows):
+                if index >= len(visible_events):
+                    configure_status_icon(row_items["icon"], "neutral", 12)
+                    for item in row_items.values():
+                        if isinstance(item, int):
+                            canvas.itemconfigure(item, state="hidden")
+                    continue
+                event, event_label, tone = visible_events[index]
+                try:
+                    stamp = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00")).astimezone(KST).strftime(
+                        "%H:%M:%S"
+                    )
+                except ValueError:
+                    stamp = "--:--:--"
+                source_label = event.component or event.task_id or "진단"
+                configure_status_icon(row_items["icon"], tone, 12)
+                canvas.itemconfigure(row_items["icon"], state="normal")
+                canvas.itemconfigure(row_items["timestamp"], text=stamp, state="normal")
+                canvas.itemconfigure(
+                    row_items["label"],
+                    text=event_label,
+                    fill=tone_color(tone),
+                    state="normal",
+                )
+                canvas.itemconfigure(
+                    row_items["message"],
+                    text=fitted_text(f"{source_label} · {event.message}", 11, 350, 1),
+                    state="normal",
+                )
+
+        action_top = checklist_bottom + 12
+        render_diagnosis_action(
+            snapshot,
+            result_available,
+            action_top,
+            action_top + 52,
+            canvas_shifted,
+        )
+
     def diagnosis_progress_tick() -> None:
         callback_state["diagnosisProgressAfterId"] = None
         if callback_state["closed"] or not root_ui_active() or str(ui.get("state")) != "DIAGNOSING":
@@ -6841,62 +7128,15 @@ def show_log_viewer(
             ui["autoAdvanceAt"] = None
             show_diagnosis_result()
             return
-        items = ui.get("diagnosisProgressItems")
-        if isinstance(items, dict):
-            try:
-                canvas.itemconfigure(items["ring"], image=progress_ring_photo(display_progress))
-                canvas.itemconfigure(items["percent"], text=f"{display_progress}%")
-                canvas.itemconfigure(
-                    items["title"],
-                    text="진단 완료" if result_available else "하드웨어 진단 진행 중",
-                )
-                canvas.itemconfigure(
-                    items["detail"],
-                    text="진단 작업이 완료되었습니다."
-                    if result_available
-                    else str(ui["status"] or diagnosis_current_task_label(snapshot)),
-                )
-                terminal_statuses = {"COMPLETED", "UNSUPPORTED", "FAILED", "TIMED_OUT", "CANCELLED"}
-                completed_count = sum(task.status in terminal_statuses for task in snapshot.tasks)
-                canvas.itemconfigure(
-                    items["summary"],
-                    text=f"전체 {len(snapshot.tasks)}개 · 완료 {completed_count}개",
-                )
-                checklist_rows = items.get("checklistRows")
-                if isinstance(checklist_rows, list):
-                    presentations, rendered, rows, _ = diagnosis_checklist_render_state(snapshot)
-                    for index, row_items in enumerate(checklist_rows):
-                        if index >= len(presentations):
-                            configure_status_icon(row_items["icon"], "neutral", 14)
-                            for item in row_items.values():
-                                if isinstance(item, int):
-                                    canvas.itemconfigure(item, state="hidden")
-                            continue
-                        task_id, _, _, tone = presentations[index]
-                        rendered_label, rendered_subtitle = rendered[index]
-                        title_y, subtitle_y, icon_y = rows[index]
-                        title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
-                        subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
-                        icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT
-                        row_items["taskId"] = task_id
-                        configure_status_icon(row_items["icon"], tone, 14)
-                        canvas.coords(row_items["icon"], 96, icon_y)
-                        canvas.itemconfigure(row_items["icon"], state="normal")
-                        canvas.coords(row_items["title"], 114, title_y)
-                        canvas.itemconfigure(
-                            row_items["title"],
-                            text=rendered_label,
-                            state="normal",
-                        )
-                        canvas.coords(row_items["subtitle"], 114, subtitle_y)
-                        canvas.itemconfigure(
-                            row_items["subtitle"],
-                            text=rendered_subtitle,
-                            fill=tone_color(tone),
-                            state="normal",
-                        )
-            except (KeyError, tk.TclError):
-                return
+        try:
+            apply_diagnosis_snapshot_to_view(
+                snapshot,
+                display_progress,
+                result_available,
+                canvas_shifted=True,
+            )
+        except (KeyError, tk.TclError):
+            return
         schedule_diagnosis_progress_tick()
 
     def draw_diagnosing() -> None:
@@ -6947,7 +7187,6 @@ def show_log_viewer(
             "detail": detail_item,
             "summary": summary_item,
         }
-        schedule_diagnosis_progress_tick()
 
         component_cards = (
             (70, "cpu", "CPU"),
@@ -6955,18 +7194,50 @@ def show_log_viewer(
             (506, "ram", "RAM"),
             (724, "disk", "디스크"),
         )
+        component_card_items: dict[str, dict[str, Any]] = {}
         for x, component, label in component_cards:
             status_label, tone = diagnosis_component_presentation(snapshot, component)
             color = tone_color(tone)
             fill = {"running": "#f5f9ff", "warning": "#fff9ee", "error": "#fff5f5"}.get(tone, "#ffffff")
-            round_rect(x, 412, x + 206, 486, UI_CARD_RADIUS, fill, "#d7dce0", UI_CARD_BORDER_WIDTH)
-            draw_hardware_icon(x + 27, 438, component, color if tone != "neutral" else "#666666")
+            card_item = round_rect(
+                x,
+                412,
+                x + 206,
+                486,
+                UI_CARD_RADIUS,
+                fill,
+                "#d7dce0",
+                UI_CARD_BORDER_WIDTH,
+            )
+            hardware_icon_item = draw_hardware_icon(
+                x + 27,
+                438,
+                component,
+                color if tone != "neutral" else "#666666",
+            )
             text(x + 50, 431, label, 15, colors["text"], "semibold", width=90)
-            draw_status_icon(x + 28, 462, tone, 14)
-            text(x + 50, 462, status_label, 13, color, "semibold", "w", width=130)
+            status_icon_item = draw_status_icon(x + 28, 462, tone, 14)
+            status_text_item = text(x + 50, 462, status_label, 13, color, "semibold", "w", width=130)
+            component_card_items[component] = {
+                "x": x,
+                "card": card_item,
+                "hardwareIcon": hardware_icon_item,
+                "statusIcon": status_icon_item,
+                "statusText": status_text_item,
+            }
+        ui["diagnosisProgressItems"]["componentCards"] = component_card_items
 
         checklist, checklist_text, checklist_rows, checklist_bottom = diagnosis_checklist_render_state(snapshot)
-        round_rect(70, 498, 492, checklist_bottom, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        checklist_card_item = round_rect(
+            70,
+            498,
+            492,
+            checklist_bottom,
+            UI_CARD_RADIUS,
+            "#ffffff",
+            "#d7dce0",
+            UI_CARD_BORDER_WIDTH,
+        )
         text(88, 514, "검사 작업", 15, colors["text"], "semibold")
         checklist_row_items: list[dict[str, Any]] = []
         for (
@@ -6986,32 +7257,37 @@ def show_log_viewer(
                 "subtitle": text(114, subtitle_y, rendered_subtitle, 12, tone_color(tone), "regular", "nw", width=340),
             })
         ui["diagnosisProgressItems"]["checklistRows"] = checklist_row_items
+        ui["diagnosisProgressItems"]["checklistCard"] = checklist_card_item
 
-        round_rect(508, 498, 930, checklist_bottom, UI_CARD_RADIUS, "#ffffff", "#d7dce0", UI_CARD_BORDER_WIDTH)
+        event_card_item = round_rect(
+            508,
+            498,
+            930,
+            checklist_bottom,
+            UI_CARD_RADIUS,
+            "#ffffff",
+            "#d7dce0",
+            UI_CARD_BORDER_WIDTH,
+        )
         text(526, 514, "실시간 진단 로그", 15, colors["text"], "semibold")
-        visible_events = snapshot.events[-4:]
-        for idx, event in enumerate(visible_events):
+        event_row_items: list[dict[str, int]] = []
+        for idx in range(4):
             cy = 550 + idx * 32
-            try:
-                stamp = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00")).astimezone(KST).strftime("%H:%M:%S")
-            except ValueError:
-                stamp = "--:--:--"
-            event_label, tone = diagnosis_event_presentation(event.event_type)
-            draw_status_icon(532, cy, tone, 12)
-            text(548, cy - 8, stamp, 11, "#888888", "regular", "w")
-            text(606, cy - 8, event_label, 11, tone_color(tone), "semibold", "w", width=70)
-            source_label = event.component or event.task_id or "진단"
-            text(548, cy + 10, fitted_text(f"{source_label} · {event.message}", 11, 350, 1), 11, colors["text"], "regular", "w", width=350)
-        action_top = checklist_bottom + 12
-        action_bottom = action_top + 52
-        if result_available:
-            button(390, action_top, 610, action_bottom, "진단 결과 보기", show_diagnosis_result, True, size=15)
-        elif snapshot.state in {"FAILED", "TIMED_OUT"}:
-            button(390, action_top, 610, action_bottom, "진단 재시도", request_diagnosis_retry, False, size=15)
-        elif snapshot.state == "CANCELLED":
-            text(500, round((action_top + action_bottom) / 2), "진단이 취소되었습니다.", 13, colors["muted"], "regular", "center")
-        else:
-            button(390, action_top, 610, action_bottom, "진단 취소", request_diagnosis_cancel, False, size=15)
+            event_row_items.append({
+                "icon": draw_status_icon(532, cy, "neutral", 12),
+                "timestamp": text(548, cy - 8, "", 11, "#888888", "regular", "w"),
+                "label": text(606, cy - 8, "", 11, colors["muted"], "semibold", "w", width=70),
+                "message": text(548, cy + 10, "", 11, colors["text"], "regular", "w", width=350),
+            })
+        ui["diagnosisProgressItems"]["eventCard"] = event_card_item
+        ui["diagnosisProgressItems"]["eventRows"] = event_row_items
+        apply_diagnosis_snapshot_to_view(
+            snapshot,
+            display_progress,
+            result_available,
+            canvas_shifted=False,
+        )
+        schedule_diagnosis_progress_tick()
 
     def draw_result_icon(x: int, y: int) -> None:
         photo = cached_photo(

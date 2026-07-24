@@ -1039,17 +1039,26 @@ class AgentGoal1112Test(unittest.TestCase):
 
     def test_page_two_uses_shared_icons_and_updates_progress_without_full_rerender(self) -> None:
         source = inspect.getsource(agent.show_log_viewer)
+        apply_source = source[
+            source.index("def apply_diagnosis_snapshot_to_view"):source.index("def diagnosis_progress_tick")
+        ]
         tick_source = source[source.index("def diagnosis_progress_tick"):source.index("def draw_diagnosing")]
         diagnosing_source = source[source.index("def draw_diagnosing"):source.index("def draw_result_icon")]
 
         self.assertIn("render_pillow_home_hardware_icon", source)
         self.assertNotIn("create_arc", diagnosing_source)
-        self.assertIn('canvas.itemconfigure(items["ring"]', tick_source)
-        self.assertIn('canvas.itemconfigure(items["percent"]', tick_source)
-        self.assertIn('items.get("checklistRows")', tick_source)
-        self.assertIn('row_items["subtitle"]', tick_source)
-        self.assertIn("text=rendered_subtitle", tick_source)
-        self.assertIn('configure_status_icon(row_items["icon"]', tick_source)
+        self.assertIn('canvas.itemconfigure(items["ring"]', apply_source)
+        self.assertIn('canvas.itemconfigure(items["percent"]', apply_source)
+        self.assertIn('items.get("componentCards")', apply_source)
+        self.assertIn('items.get("checklistRows")', apply_source)
+        self.assertIn('items.get("eventRows")', apply_source)
+        self.assertIn('row_items["subtitle"]', apply_source)
+        self.assertIn("text=rendered_subtitle", apply_source)
+        self.assertIn('configure_status_icon(row_items["icon"]', apply_source)
+        self.assertIn("render_diagnosis_action(", apply_source)
+        self.assertIn("apply_diagnosis_snapshot_to_view(", tick_source)
+        self.assertEqual(1, tick_source.count("diagnosis_snapshot_provider()"))
+        self.assertEqual(1, tick_source.count("diagnosis_result_provider()"))
         self.assertNotIn("canvas.create_image", tick_source)
         self.assertNotIn("canvas.create_text", tick_source)
         self.assertNotIn("render()", tick_source)
@@ -1110,11 +1119,13 @@ class AgentGoal1112Test(unittest.TestCase):
         self.assertIn('measurement_font(13, "semibold")', checklist_source)
         self.assertIn('measurement_font(12, "regular")', checklist_source)
         self.assertNotIn("measurement_fonts.get(", checklist_source)
-        tick_source = source[source.index("def diagnosis_progress_tick"):source.index("def draw_diagnosing")]
-        self.assertIn("title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", tick_source)
-        self.assertIn("subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", tick_source)
-        self.assertIn("icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", tick_source)
-        self.assertIn("action_top = checklist_bottom + 12", diagnosing_source)
+        apply_source = source[
+            source.index("def apply_diagnosis_snapshot_to_view"):source.index("def diagnosis_progress_tick")
+        ]
+        self.assertIn("title_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", apply_source)
+        self.assertIn("subtitle_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", apply_source)
+        self.assertIn("icon_y -= PC_AGENT_REMOVED_HEADER_HEIGHT", apply_source)
+        self.assertIn("action_top = checklist_bottom + 12", apply_source)
 
     def test_page_two_checklist_presentations_follow_latest_task_snapshot(self) -> None:
         definitions = agent.DiagnosisOrchestrator.TASK_DEFINITIONS
@@ -1234,6 +1245,212 @@ class AgentGoal1112Test(unittest.TestCase):
         )
         self.assertEqual(("시간 초과", "error"), agent.diagnosis_task_presentation("TIMED_OUT"))
         self.assertEqual(("오류", "error"), agent.diagnosis_event_presentation("TASK_FAILED"))
+
+    def test_page_two_uses_latest_four_events_and_terminal_action_state(self) -> None:
+        events = tuple(
+            agent.DiagnosisEvent(
+                diagnosis_id="diagnosis-live-view",
+                event_id=f"event-{index}",
+                event_type="TASK_STARTED" if index % 2 == 0 else "TASK_COMPLETED",
+                task_id=f"task-{index}",
+                component="gpu",
+                timestamp=f"2026-07-24T05:00:0{index}Z",
+                message=f"event message {index}",
+            )
+            for index in range(6)
+        )
+        snapshot = agent.DiagnosisRunSnapshot(
+            diagnosis_id="diagnosis-live-view",
+            state="RUNNING",
+            progress=55,
+            events=events,
+        )
+
+        visible = agent.diagnosis_event_presentations(snapshot)
+        self.assertEqual(("event-2", "event-3", "event-4", "event-5"), tuple(
+            event.event_id for event, _, _ in visible
+        ))
+        self.assertEqual(("진행 중", "정상 완료", "진행 중", "정상 완료"), tuple(
+            label for _, label, _ in visible
+        ))
+        self.assertEqual((), agent.diagnosis_event_presentations(snapshot, visible_count=0))
+        self.assertEqual("CANCEL", agent.diagnosis_action_state(snapshot, False))
+        self.assertEqual(
+            "RESULT_PENDING",
+            agent.diagnosis_action_state(
+                agent.DiagnosisRunSnapshot(state="PARTIALLY_COMPLETED", progress=100),
+                False,
+            ),
+        )
+        self.assertEqual("RESULT", agent.diagnosis_action_state(snapshot, True))
+        self.assertEqual(
+            "RETRY",
+            agent.diagnosis_action_state(agent.DiagnosisRunSnapshot(state="FAILED"), False),
+        )
+        self.assertEqual(
+            "CANCELLED",
+            agent.diagnosis_action_state(agent.DiagnosisRunSnapshot(state="CANCELLED"), False),
+        )
+
+    def test_page_two_snapshot_states_keep_all_panels_consistent(self) -> None:
+        task_specs = (
+            ("current_system_status", "system"),
+            ("windows_display_devices", "gpu"),
+            ("windows_display_drivers", "gpu"),
+            ("windows_graphics_events", "gpu"),
+            ("windows_whea_events", "system"),
+            ("symptom_correlation", "system"),
+            ("evidence_finalize", "system"),
+            ("final_classification", "system"),
+        )
+
+        def tasks(statuses: tuple[str, ...]) -> tuple[agent.DiagnosisTask, ...]:
+            return tuple(
+                agent.DiagnosisTask(
+                    task_id,
+                    component,
+                    10,
+                    status=status,
+                    evidence=({"status": "OK"},) if status == "COMPLETED" else (),
+                )
+                for (task_id, component), status in zip(task_specs, statuses, strict=True)
+            )
+
+        initial = agent.DiagnosisRunSnapshot(
+            diagnosis_id="diagnosis-initial",
+            state="RUNNING",
+            progress=0,
+            current_task_id="current_system_status",
+            tasks=tasks(("RUNNING",) + ("PENDING",) * 7),
+            events=(
+                agent.DiagnosisEvent(
+                    "diagnosis-initial",
+                    "event-start",
+                    "DIAGNOSIS_STARTED",
+                    None,
+                    "system",
+                    "2026-07-24T05:00:00Z",
+                    "진단을 시작했습니다.",
+                ),
+            ),
+        )
+        self.assertEqual(("초기 상태 확인", "running"), agent.diagnosis_component_presentation(initial, "cpu"))
+        self.assertEqual(("대기", "neutral"), agent.diagnosis_component_presentation(initial, "gpu"))
+        self.assertEqual("CANCEL", agent.diagnosis_action_state(initial, False))
+        self.assertEqual(("시작",), tuple(label for _, label, _ in agent.diagnosis_event_presentations(initial)))
+
+        middle_events = tuple(
+            agent.DiagnosisEvent(
+                "diagnosis-middle",
+                f"event-{index}",
+                event_type,
+                task_id,
+                component,
+                f"2026-07-24T05:00:0{index}Z",
+                event_type,
+            )
+            for index, (event_type, task_id, component) in enumerate((
+                ("DIAGNOSIS_STARTED", None, "system"),
+                ("TASK_COMPLETED", "current_system_status", "system"),
+                ("TASK_STARTED", "windows_display_devices", "gpu"),
+                ("TASK_COMPLETED", "windows_display_devices", "gpu"),
+                ("TASK_STARTED", "windows_display_drivers", "gpu"),
+            ))
+        )
+        middle = agent.DiagnosisRunSnapshot(
+            diagnosis_id="diagnosis-middle",
+            state="RUNNING",
+            progress=42,
+            current_task_id="windows_display_drivers",
+            tasks=tasks(("COMPLETED", "COMPLETED", "RUNNING") + ("PENDING",) * 5),
+            events=middle_events,
+        )
+        self.assertEqual(("검사 중", "running"), agent.diagnosis_component_presentation(middle, "gpu"))
+        self.assertEqual(
+            ("event-1", "event-2", "event-3", "event-4"),
+            tuple(event.event_id for event, _, _ in agent.diagnosis_event_presentations(middle)),
+        )
+        self.assertIn(
+            "GPU · 진행 중",
+            tuple(subtitle for _, _, subtitle, _ in agent.diagnosis_checklist_presentations(middle)),
+        )
+
+        terminal_events = middle_events + (
+            agent.DiagnosisEvent(
+                "diagnosis-terminal",
+                "event-terminal",
+                "DIAGNOSIS_COMPLETED",
+                None,
+                "system",
+                "2026-07-24T05:00:08Z",
+                "진단을 완료했습니다.",
+            ),
+        )
+        terminal = agent.DiagnosisRunSnapshot(
+            diagnosis_id="diagnosis-terminal",
+            state="PARTIALLY_COMPLETED",
+            progress=100,
+            current_task_id=None,
+            tasks=tasks((
+                "COMPLETED",
+                "COMPLETED",
+                "UNSUPPORTED",
+                "COMPLETED",
+                "COMPLETED",
+                "FAILED",
+                "COMPLETED",
+                "COMPLETED",
+            )),
+            events=terminal_events,
+        )
+        component_states = tuple(
+            agent.diagnosis_component_presentation(terminal, component)
+            for component in ("cpu", "gpu", "ram", "disk")
+        )
+        self.assertFalse(any(tone == "running" or label == "대기" for label, tone in component_states))
+        checklist = agent.diagnosis_checklist_presentations(terminal)
+        self.assertFalse(any(
+            tone == "running" or subtitle.endswith("대기")
+            for _, _, subtitle, tone in checklist
+        ))
+        self.assertEqual(
+            "event-terminal",
+            agent.diagnosis_event_presentations(terminal)[-1][0].event_id,
+        )
+        self.assertEqual("진단 완료", agent.diagnosis_event_presentations(terminal)[-1][1])
+        self.assertEqual("RESULT_PENDING", agent.diagnosis_action_state(terminal, False))
+        self.assertEqual("RESULT", agent.diagnosis_action_state(terminal, True))
+
+    def test_page_two_reuses_canvas_items_for_snapshot_refresh(self) -> None:
+        source = inspect.getsource(agent.show_log_viewer)
+        apply_source = source[
+            source.index("def apply_diagnosis_snapshot_to_view"):source.index("def diagnosis_progress_tick")
+        ]
+        action_source = source[
+            source.index("def render_diagnosis_action"):source.index("def apply_diagnosis_snapshot_to_view")
+        ]
+        icon_source = source[
+            source.index("def configure_status_icon"):source.index("def draw_status_icon")
+        ]
+        schedule_source = source[
+            source.index("def schedule_diagnosis_progress_tick"):source.index("def diagnosis_checklist_render_state")
+        ]
+        display_progress_source = source[
+            source.index("def diagnosis_display_progress"):source.index("def cancel_diagnosis_progress_tick")
+        ]
+        diagnosing_source = source[source.index("def draw_diagnosing"):source.index("def draw_result_icon")]
+
+        self.assertNotIn("canvas.create_image", apply_source)
+        self.assertNotIn("canvas.create_text", apply_source)
+        self.assertIn('["componentCards"] = component_card_items', diagnosing_source)
+        self.assertIn('["eventRows"] = event_row_items', diagnosing_source)
+        self.assertIn("for idx in range(4)", diagnosing_source)
+        self.assertIn('canvas.delete("diagnosis-action")', action_source)
+        self.assertIn('group_tag="diagnosis-action"', action_source)
+        self.assertIn('return "RESULT_PENDING"', inspect.getsource(agent.diagnosis_action_state))
+        self.assertIn("if spinner_item != item", icon_source)
+        self.assertIn('callback_state.get("diagnosisProgressAfterId") is not None', schedule_source)
+        self.assertIn('ui["autoAdvanceAt"] = time.monotonic() + 1.0', display_progress_source)
 
     def test_symptom_display_preserves_web_input_and_uses_standalone_summary(self) -> None:
         web_symptoms = ("게임 A에서만 화면이 멈춥니다.", "영상 편집 중 GPU 부하가 증가합니다.")
