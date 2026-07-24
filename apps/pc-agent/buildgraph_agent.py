@@ -253,6 +253,16 @@ PC_AGENT_DIAGNOSIS_STEPS = ("증상 확인", "하드웨어 진단", "결과 및 
 PC_AGENT_WINDOW_WIDTH = 1000
 PC_AGENT_WINDOW_HEIGHT = 740
 PC_AGENT_REMOVED_HEADER_HEIGHT = 56
+DIAGNOSIS_ACTION_GAP = 12
+DIAGNOSIS_ACTION_HEIGHT = 52
+DIAGNOSIS_PAGE_BOTTOM_PADDING = 12
+DIAGNOSIS_CHECKLIST_MAX_BOTTOM = (
+    PC_AGENT_WINDOW_HEIGHT
+    + PC_AGENT_REMOVED_HEADER_HEIGHT
+    - DIAGNOSIS_PAGE_BOTTOM_PADDING
+    - DIAGNOSIS_ACTION_GAP
+    - DIAGNOSIS_ACTION_HEIGHT
+)
 STANDALONE_INITIAL_DESCRIPTION = (
     "CPU, GPU, 메모리, 저장장치의 현재 상태를 자동으로 확인하고 있습니다.\n"
     "준비가 끝나면 아래 버튼으로 정밀 진단을 시작할 수 있습니다."
@@ -6852,23 +6862,28 @@ def show_log_viewer(
         list[tuple[str, str]],
         tuple[tuple[int, int, int], ...],
         int,
+        int,
+        int,
     ]:
         presentations = diagnosis_checklist_presentations(snapshot)
         labels = [(label, subtitle) for _, label, subtitle, _ in presentations]
-        title_font = measurement_font(13, "semibold")
-        subtitle_font = measurement_font(12, "regular")
-        title_line_height = int(title_font.metrics("linespace")) if title_font is not None else 16
-        subtitle_line_height = int(subtitle_font.metrics("linespace")) if subtitle_font is not None else 15
 
-        def fitted_checklist(title_lines: int, subtitle_lines: int) -> tuple[
+        def fitted_checklist(
+            title_size: int,
+            subtitle_size: int,
+            title_line_height: int,
+            subtitle_line_height: int,
+            title_lines: int,
+            subtitle_lines: int,
+        ) -> tuple[
             list[tuple[str, str]],
             tuple[tuple[int, int, int], ...],
             int,
         ]:
             rendered = [
                 (
-                    fitted_text(label, 13, 340, title_lines, "semibold"),
-                    fitted_text(subtitle, 12, 340, subtitle_lines),
+                    fitted_text(label, title_size, 340, title_lines, "semibold"),
+                    fitted_text(subtitle, subtitle_size, 340, subtitle_lines),
                 )
                 for label, subtitle in labels
             ]
@@ -6879,12 +6894,31 @@ def show_log_viewer(
             )
             return rendered, rows, bottom
 
-        rendered, rows, bottom = fitted_checklist(2, 2)
-        if bottom > 684:
-            rendered, rows, bottom = fitted_checklist(2, 1)
-        if bottom > 684:
-            rendered, rows, bottom = fitted_checklist(1, 1)
-        return presentations, rendered, rows, bottom
+        font_candidates = ((13, 12), (12, 11), (11, 10), (10, 9), (9, 8))
+        selected: tuple[list[tuple[str, str]], tuple[tuple[int, int, int], ...], int, int, int] | None = None
+        for title_size, subtitle_size in font_candidates:
+            title_font = measurement_font(title_size, "semibold")
+            subtitle_font = measurement_font(subtitle_size, "regular")
+            title_line_height = int(title_font.metrics("linespace")) if title_font is not None else title_size + 3
+            subtitle_line_height = (
+                int(subtitle_font.metrics("linespace")) if subtitle_font is not None else subtitle_size + 3
+            )
+            for title_lines, subtitle_lines in ((2, 2), (2, 1), (1, 1)):
+                rendered, rows, bottom = fitted_checklist(
+                    title_size,
+                    subtitle_size,
+                    title_line_height,
+                    subtitle_line_height,
+                    title_lines,
+                    subtitle_lines,
+                )
+                selected = rendered, rows, bottom, title_size, subtitle_size
+                if bottom <= DIAGNOSIS_CHECKLIST_MAX_BOTTOM:
+                    return presentations, rendered, rows, bottom, title_size, subtitle_size
+
+        assert selected is not None
+        rendered, rows, bottom, title_size, subtitle_size = selected
+        return presentations, rendered, rows, bottom, title_size, subtitle_size
 
     def render_diagnosis_action(
         snapshot: DiagnosisRunSnapshot,
@@ -7017,7 +7051,9 @@ def show_log_viewer(
                     fill=color,
                 )
 
-        presentations, rendered, rows, checklist_bottom = diagnosis_checklist_render_state(snapshot)
+        presentations, rendered, rows, checklist_bottom, title_size, subtitle_size = (
+            diagnosis_checklist_render_state(snapshot)
+        )
         checklist_rows = items.get("checklistRows")
         if isinstance(checklist_rows, list):
             for index, row_items in enumerate(checklist_rows):
@@ -7042,12 +7078,14 @@ def show_log_viewer(
                 canvas.itemconfigure(
                     row_items["title"],
                     text=rendered_label,
+                    font=font(title_size, "semibold"),
                     state="normal",
                 )
                 canvas.coords(row_items["subtitle"], 114, subtitle_y)
                 canvas.itemconfigure(
                     row_items["subtitle"],
                     text=rendered_subtitle,
+                    font=font(subtitle_size, "regular"),
                     fill=tone_color(tone),
                     state="normal",
                 )
@@ -7108,12 +7146,12 @@ def show_log_viewer(
                     state="normal",
                 )
 
-        action_top = checklist_bottom + 12
+        action_top = checklist_bottom + DIAGNOSIS_ACTION_GAP
         render_diagnosis_action(
             snapshot,
             result_available,
             action_top,
-            action_top + 52,
+            action_top + DIAGNOSIS_ACTION_HEIGHT,
             canvas_shifted,
         )
 
@@ -7233,7 +7271,9 @@ def show_log_viewer(
             }
         ui["diagnosisProgressItems"]["componentCards"] = component_card_items
 
-        checklist, checklist_text, checklist_rows, checklist_bottom = diagnosis_checklist_render_state(snapshot)
+        checklist, checklist_text, checklist_rows, checklist_bottom, title_size, subtitle_size = (
+            diagnosis_checklist_render_state(snapshot)
+        )
         checklist_card_item = round_rect(
             70,
             498,
@@ -7259,8 +7299,26 @@ def show_log_viewer(
             checklist_row_items.append({
                 "taskId": task_id,
                 "icon": draw_status_icon(96, icon_y, tone, 14),
-                "title": text(114, title_y, rendered_label, 13, colors["text"], "semibold", "nw", width=340),
-                "subtitle": text(114, subtitle_y, rendered_subtitle, 12, tone_color(tone), "regular", "nw", width=340),
+                "title": text(
+                    114,
+                    title_y,
+                    rendered_label,
+                    title_size,
+                    colors["text"],
+                    "semibold",
+                    "nw",
+                    width=340,
+                ),
+                "subtitle": text(
+                    114,
+                    subtitle_y,
+                    rendered_subtitle,
+                    subtitle_size,
+                    tone_color(tone),
+                    "regular",
+                    "nw",
+                    width=340,
+                ),
             })
         ui["diagnosisProgressItems"]["checklistRows"] = checklist_row_items
         ui["diagnosisProgressItems"]["checklistCard"] = checklist_card_item
